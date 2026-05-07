@@ -1,0 +1,19 @@
+node_modules
+.next
+.env
+.env.local
+.env.production
+*.log
+.vercel
+.DS_Store
+dist
+out
+tsconfig.tsbuildinfo
+
+# Editor / agent state
+.claude/
+
+# Customer data (test fixtures + snapshots — never check in customer data)
+data/*.csv
+data/*.json
+!data/.gitkeep

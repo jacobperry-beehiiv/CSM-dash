@@ -1,0 +1,34 @@
+name: sync
+
+# Pulls a fresh book-of-business snapshot from Metabase. The snapshot itself
+# isn't checked in — this job is here as a template for whoever wants to wire
+# it up to a deploy target (e.g. commit + redeploy, or push to S3).
+#
+# To enable: set repo secret METABASE_API_KEY, then uncomment one of the
+# schedule entries below.
+
+on:
+  workflow_dispatch:
+  # schedule:
+  #   - cron: "0 */2 * * *"   # every 2 hours
+  #   - cron: "0 13 * * 1-5"  # weekdays at 13:00 UTC
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run sync
+        env:
+          METABASE_URL: https://beehiiv.metabaseapp.com
+          METABASE_API_KEY: ${{ secrets.METABASE_API_KEY }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: snapshot
+          path: data/snapshot.json
+          retention-days: 7
