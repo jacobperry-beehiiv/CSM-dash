@@ -24,10 +24,10 @@ interface RunResult {
 }
 
 const FLAG_COLORS: Record<string, string> = {
-  A: "bg-blue-100 text-blue-800",
+  A: "bg-blue-100 text-blue-800 dark:text-blue-300",
   B: "bg-indigo-100 text-indigo-800",
-  C: "bg-amber-100 text-amber-800",
-  D: "bg-red-100 text-red-800",
+  C: "bg-amber-100 text-amber-800 dark:text-amber-300",
+  D: "bg-red-100 text-red-800 dark:text-red-300",
   E: "bg-orange-100 text-orange-800",
   F: "bg-purple-100 text-purple-800",
   G: "bg-rose-100 text-rose-800",
@@ -224,19 +224,19 @@ export function AtRiskTable({ data }: { data: RunResult }) {
 
   return (
     <div className="space-y-4">
-      <div className="text-xs text-gray-500">
+      <div className="text-xs text-muted">
         {data.accounts.length} flagged · {data.total_in_book} in book ·{" "}
         {data.excluded} excluded · generated {fmtDate(data.generated_at)}
       </div>
 
       {data.accounts.length > 0 ? (
-        <div className="flex flex-wrap items-center gap-2 px-3 py-2 bg-gray-50 border border-gray-200 rounded-md">
-          <span className="text-xs text-gray-600">
+        <div className="flex flex-wrap items-center gap-2 px-3 py-2 bg-canvas border border-border rounded-md">
+          <span className="text-xs text-muted">
             <strong>{selected.size}</strong> selected of {allKeys.length}
           </span>
           <button
             onClick={selectAll}
-            className="px-2 py-1 text-xs border border-gray-300 rounded-md bg-white hover:bg-gray-50"
+            className="px-2 py-1 text-xs border border-border-strong rounded-md bg-surface hover:bg-canvas"
           >
             {selected.size === allKeys.length ? "Deselect all" : "Select all"}
           </button>
@@ -244,14 +244,14 @@ export function AtRiskTable({ data }: { data: RunResult }) {
           <button
             onClick={bulkCompose}
             disabled={bulkBusy || selected.size === 0}
-            className="px-3 py-1 text-xs bg-gray-900 text-white rounded-md hover:bg-gray-700 disabled:opacity-50"
+            className="px-3 py-1 text-xs bg-accent text-accent-fg rounded-md hover:bg-accent-hover disabled:opacity-50"
           >
             ✉️ Open Gmail for {selected.size}
           </button>
           <button
             onClick={bulkResolve}
             disabled={bulkBusy || selected.size === 0}
-            className="px-3 py-1 text-xs border border-gray-300 rounded-md bg-white hover:bg-gray-50 disabled:opacity-50"
+            className="px-3 py-1 text-xs border border-border-strong rounded-md bg-surface hover:bg-canvas disabled:opacity-50"
           >
             ✓ Mark all flags resolved for {selected.size}
           </button>
@@ -259,7 +259,7 @@ export function AtRiskTable({ data }: { data: RunResult }) {
       ) : null}
 
       {bulkMessage ? (
-        <div className="text-xs text-gray-600 bg-blue-50 border border-blue-200 rounded-md px-3 py-2">
+        <div className="text-xs text-muted bg-blue-50 dark:bg-blue-500/10 border border-blue-200 dark:border-accent/30 rounded-md px-3 py-2">
           {bulkMessage}
         </div>
       ) : null}
@@ -269,7 +269,7 @@ export function AtRiskTable({ data }: { data: RunResult }) {
           No at-risk accounts in this view. Nicely done.
         </div>
       ) : (
-        <div className="rounded-lg border border-gray-200 bg-white">
+        <div className="rounded-xl border border-border bg-surface shadow-card">
           <table className="w-full text-sm table-fixed">
             <colgroup>
               <col className="w-8" />
@@ -284,18 +284,18 @@ export function AtRiskTable({ data }: { data: RunResult }) {
               <col className="w-[14%] hidden lg:table-cell" />
               <col className="w-[14%]" />
             </colgroup>
-            <thead className="bg-gray-50">
-              <tr className="text-left border-b border-gray-200">
+            <thead className="bg-canvas">
+              <tr className="text-left border-b border-border">
                 <th className="px-3 py-3"></th>
                 <th className="px-3 py-3"></th>
-                <th className="px-3 py-3 font-medium text-gray-600">Account</th>
-                <th className="px-3 py-3 font-medium text-gray-600 text-right">ARR</th>
-                <th className="px-3 py-3 font-medium text-gray-600">Last send</th>
-                <th className="px-3 py-3 font-medium text-gray-600">Last web post</th>
-                <th className="px-3 py-3 font-medium text-gray-600">Last login</th>
-                <th className="px-3 py-3 font-medium text-gray-600 text-right">% subs</th>
-                <th className="px-3 py-3 font-medium text-gray-600">Risk</th>
-                <th className="px-3 py-3 font-medium text-gray-600 hidden lg:table-cell">
+                <th className="px-3 py-3 font-medium text-muted">Account</th>
+                <th className="px-3 py-3 font-medium text-muted text-right">ARR</th>
+                <th className="px-3 py-3 font-medium text-muted">Last send</th>
+                <th className="px-3 py-3 font-medium text-muted">Last web post</th>
+                <th className="px-3 py-3 font-medium text-muted">Last login</th>
+                <th className="px-3 py-3 font-medium text-muted text-right">% subs</th>
+                <th className="px-3 py-3 font-medium text-muted">Risk</th>
+                <th className="px-3 py-3 font-medium text-muted hidden lg:table-cell">
                   Recommended action
                 </th>
                 <th className="px-3 py-3"></th>
@@ -312,26 +312,26 @@ export function AtRiskTable({ data }: { data: RunResult }) {
                 const lastSendDays = daysAgo(c.last_send);
                 const lastSendCls = flagCodes.has("A")
                   ? "text-red-600 font-semibold"
-                  : "text-gray-700";
+                  : "text-muted";
 
                 const lastLoginDays = daysAgo(c.last_log_in);
                 const lastLoginCls = flagCodes.has("B")
                   ? "text-red-600 font-semibold"
-                  : "text-gray-700";
+                  : "text-muted";
 
                 const subs = pctVal(c);
                 const subsCls = flagCodes.has("C")
                   ? "text-red-600 font-semibold"
                   : subs != null && subs > 90
                     ? "text-amber-600"
-                    : "text-gray-700";
+                    : "text-muted";
 
                 return (
                   <Fragment key={k}>
                     <tr
                       onClick={() => toggleExpanded(k)}
-                      className={`border-b border-gray-100 align-top cursor-pointer transition-colors ${
-                        isOpen ? "bg-blue-50/40" : "hover:bg-blue-50/30"
+                      className={`border-b border-border align-top cursor-pointer transition-colors ${
+                        isOpen ? "bg-blue-50 dark:bg-blue-500/40" : "hover:bg-blue-50 dark:bg-blue-500/30"
                       }`}
                     >
                       <td
@@ -342,11 +342,11 @@ export function AtRiskTable({ data }: { data: RunResult }) {
                           type="checkbox"
                           checked={isChecked}
                           onChange={() => toggleSelected(k)}
-                          className="h-4 w-4 rounded border-gray-300 cursor-pointer"
+                          className="h-4 w-4 rounded border-border-strong cursor-pointer"
                           aria-label={`Select ${c.company_name ?? "row"}`}
                         />
                       </td>
-                      <td className="px-3 py-3 text-gray-400 select-none">
+                      <td className="px-3 py-3 text-subtle select-none">
                         <span
                           className={`inline-block transition-transform ${
                             isOpen ? "rotate-90" : ""
@@ -356,10 +356,10 @@ export function AtRiskTable({ data }: { data: RunResult }) {
                         </span>
                       </td>
                       <td className="px-3 py-3 break-words">
-                        <div className="font-medium text-gray-900">
+                        <div className="font-medium text-fg">
                           {c.company_name ?? c.workspace_name}
                         </div>
-                        <div className="text-xs text-gray-500 truncate">
+                        <div className="text-xs text-muted truncate">
                           {c.customer_success_manager?.replace(/_/g, " ") ??
                             "unassigned"}
                         </div>
@@ -370,28 +370,28 @@ export function AtRiskTable({ data }: { data: RunResult }) {
                       <td className={`px-3 py-3 ${lastSendCls}`}>
                         <div>{fmtDate(c.last_send)}</div>
                         {lastSendDays != null ? (
-                          <div className="text-xs text-gray-500">
+                          <div className="text-xs text-muted">
                             {lastSendDays}d ago
                           </div>
                         ) : (
-                          <div className="text-xs text-gray-500">never</div>
+                          <div className="text-xs text-muted">never</div>
                         )}
                       </td>
-                      <td className="px-3 py-3 text-gray-700">
+                      <td className="px-3 py-3 text-muted">
                         {(() => {
                           const lp = c.workspace_id
                             ? lastPosts[c.workspace_id]
                             : undefined;
                           if (!lp) {
                             return (
-                              <span className="text-xs text-gray-400 italic">
+                              <span className="text-xs text-subtle italic">
                                 loading…
                               </span>
                             );
                           }
                           if (!lp.last_post_at) {
                             return (
-                              <span className="text-xs text-gray-500 italic">
+                              <span className="text-xs text-muted italic">
                                 never
                               </span>
                             );
@@ -403,7 +403,7 @@ export function AtRiskTable({ data }: { data: RunResult }) {
                                 {fmtDate(lp.last_post_at)}
                               </div>
                               {ago != null ? (
-                                <div className="text-xs text-gray-500">
+                                <div className="text-xs text-muted">
                                   {ago}d ago
                                 </div>
                               ) : null}
@@ -416,19 +416,19 @@ export function AtRiskTable({ data }: { data: RunResult }) {
                           <>
                             <div>{fmtDate(c.last_log_in)}</div>
                             {lastLoginDays != null ? (
-                              <div className="text-xs text-gray-500">
+                              <div className="text-xs text-muted">
                                 {lastLoginDays}d ago
                               </div>
                             ) : null}
                           </>
                         ) : (
-                          <span className="italic text-gray-500">14d+</span>
+                          <span className="italic text-muted">14d+</span>
                         )}
                       </td>
                       <td className={`px-3 py-3 text-right ${subsCls}`}>
                         <div>{fmtPct(subs)}</div>
                         {c.active_subs != null ? (
-                          <div className="text-xs text-gray-500">
+                          <div className="text-xs text-muted">
                             {fmtNumber(c.active_subs)}
                           </div>
                         ) : null}
@@ -439,7 +439,7 @@ export function AtRiskTable({ data }: { data: RunResult }) {
                           detail={c.property_risk_level_detail}
                         />
                       </td>
-                      <td className="px-3 py-3 text-gray-800 text-xs break-words hidden lg:table-cell">
+                      <td className="px-3 py-3 text-fg text-xs break-words hidden lg:table-cell">
                         {a.recommended_action}
                       </td>
                       <td className="px-3 py-3">
@@ -455,26 +455,26 @@ export function AtRiskTable({ data }: { data: RunResult }) {
                       </td>
                     </tr>
                     {isOpen && (
-                      <tr className="bg-blue-50/20 border-b border-gray-100">
+                      <tr className="bg-blue-50 dark:bg-blue-500/20 border-b border-border">
                         <td colSpan={11} className="px-6 py-4">
                           <CustomerDetailPanel
                             customer={c}
                             hideFeatureBreakdown
                             topSlot={
                               <div className="space-y-3">
-                                <div className="rounded-md border border-amber-200 bg-amber-50 p-3">
-                                  <h4 className="text-xs font-semibold uppercase tracking-wide text-amber-800 mb-2">
+                                <div className="rounded-md border border-amber-200 dark:border-amber-500/30 bg-amber-50 dark:bg-amber-500/10 p-3">
+                                  <h4 className="text-xs font-semibold uppercase tracking-wide text-amber-800 dark:text-amber-300 mb-2">
                                     Why this account is flagged
                                   </h4>
                                   <ul className="space-y-1">
                                     {a.flags.map((f) => (
                                       <li
                                         key={f.code}
-                                        className="text-sm text-gray-800"
+                                        className="text-sm text-fg"
                                       >
                                         <span
                                           className={`inline-block px-1.5 py-0.5 rounded text-xs font-semibold mr-2 ${
-                                            FLAG_COLORS[f.code] ?? "bg-gray-100"
+                                            FLAG_COLORS[f.code] ?? "bg-surface-2"
                                           }`}
                                         >
                                           {f.code} · {f.label}
@@ -508,7 +508,7 @@ export function AtRiskTable({ data }: { data: RunResult }) {
         </div>
       )}
 
-      <p className="text-xs text-gray-400">
+      <p className="text-xs text-subtle">
         Click a row to expand details. Red values are the at-risk triggers.
       </p>
 

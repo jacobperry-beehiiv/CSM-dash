@@ -54,13 +54,13 @@ export function AdGapSummary({ organizationId }: Props) {
   if (!organizationId) return null;
 
   return (
-    <div className="rounded-md border border-gray-200 bg-white p-3 space-y-3">
+    <div className="rounded-md border border-border bg-surface p-3 space-y-3">
       <div className="flex items-baseline justify-between">
-        <h4 className="text-xs font-semibold uppercase tracking-wide text-gray-500">
+        <h4 className="text-xs font-semibold uppercase tracking-wide text-muted">
           Ad Network Gap (last 90 days)
         </h4>
         {data ? (
-          <span className="text-[10px] text-gray-400">
+          <span className="text-[10px] text-subtle">
             {data.publications.length} pubs · {fmtNumber(data.total_subscribers)}{" "}
             subs
           </span>
@@ -70,21 +70,21 @@ export function AdGapSummary({ organizationId }: Props) {
       {!data && !loading && !error ? (
         <button
           onClick={run}
-          className="text-xs px-3 py-1.5 border border-gray-300 rounded-md hover:bg-gray-50"
+          className="text-xs px-3 py-1.5 border border-border-strong rounded-md hover:bg-canvas"
         >
           Run analysis
         </button>
       ) : null}
 
       {loading ? (
-        <div className="text-xs text-gray-500 flex items-center gap-2">
-          <span className="inline-block w-3 h-3 border-2 border-gray-300 border-t-gray-700 rounded-full animate-spin" />
+        <div className="text-xs text-muted flex items-center gap-2">
+          <span className="inline-block w-3 h-3 border-2 border-border-strong border-t-gray-700 rounded-full animate-spin" />
           Querying ad network…
         </div>
       ) : null}
 
       {error ? (
-        <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded p-2">
+        <div className="text-xs text-red-700 bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/30 rounded p-2">
           {error}
         </div>
       ) : null}
@@ -117,7 +117,7 @@ export function AdGapSummary({ organizationId }: Props) {
           </div>
 
           {data.zero_ad_sending_pubs.length > 0 ? (
-            <div className="rounded border border-amber-200 bg-amber-50 p-2 text-xs text-amber-900">
+            <div className="rounded border border-amber-200 dark:border-amber-500/30 bg-amber-50 dark:bg-amber-500/10 p-2 text-xs text-amber-900">
               <strong>{data.zero_ad_sending_pubs.length}</strong> actively-sending
               pub{data.zero_ad_sending_pubs.length === 1 ? "" : "s"} with zero ad
               placements:{" "}
@@ -130,13 +130,13 @@ export function AdGapSummary({ organizationId }: Props) {
           ) : null}
 
           <details className="text-xs">
-            <summary className="cursor-pointer text-blue-600 hover:underline">
+            <summary className="cursor-pointer text-blue-600 dark:text-blue-400 hover:underline">
               Per-publication breakdown
             </summary>
             <div className="mt-2 overflow-x-auto">
               <table className="w-full text-xs">
-                <thead className="text-gray-500">
-                  <tr className="text-left border-b border-gray-200">
+                <thead className="text-muted">
+                  <tr className="text-left border-b border-border">
                     <th className="px-2 py-1 font-medium">Publication</th>
                     <th className="px-2 py-1 font-medium text-right">Subs</th>
                     <th className="px-2 py-1 font-medium text-right">Sends</th>
@@ -148,7 +148,7 @@ export function AdGapSummary({ organizationId }: Props) {
                 </thead>
                 <tbody>
                   {data.publications.map((p) => (
-                    <tr key={p.publication_id} className="border-b border-gray-100">
+                    <tr key={p.publication_id} className="border-b border-border">
                       <td className="px-2 py-1">{p.publication_name}</td>
                       <td className="px-2 py-1 text-right">
                         {fmtNumber(p.subscribers)}
@@ -191,15 +191,15 @@ function Stat({
     <div
       className={`rounded border p-2 ${
         accent
-          ? "border-amber-200 bg-amber-50/60"
-          : "border-gray-200 bg-gray-50/40"
+          ? "border-amber-200 dark:border-amber-500/30 bg-amber-50 dark:bg-amber-500/60"
+          : "border-border bg-canvas/40"
       }`}
       title={tooltip}
     >
-      <div className="text-[10px] text-gray-500 uppercase tracking-wide flex items-center gap-1">
+      <div className="text-[10px] text-muted uppercase tracking-wide flex items-center gap-1">
         {label}
         {tooltip ? (
-          <span className="text-gray-400" aria-hidden>
+          <span className="text-subtle" aria-hidden>
             ⓘ
           </span>
         ) : null}

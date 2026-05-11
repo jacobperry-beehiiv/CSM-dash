@@ -10,12 +10,12 @@ export function AccountOutreach({ customer }: { customer: Customer }) {
   const suggestions = suggestTemplates(customer);
 
   return (
-    <div className="bg-white rounded-lg border border-gray-200 p-4">
-      <h3 className="font-semibold text-gray-900 mb-2">Outreach</h3>
-      <p className="text-sm text-gray-600">
+    <div className="bg-surface rounded-xl border border-border shadow-card p-4">
+      <h3 className="font-semibold text-fg mb-2">Outreach</h3>
+      <p className="text-sm text-muted">
         Suggested template{suggestions.length === 1 ? "" : "s"}:{" "}
         {suggestions.map((s, i) => (
-          <span key={s} className="font-medium text-gray-900">
+          <span key={s} className="font-medium text-fg">
             {i > 0 ? ", " : ""}
             {s}
           </span>
@@ -23,7 +23,7 @@ export function AccountOutreach({ customer }: { customer: Customer }) {
       </p>
       <button
         onClick={() => setOpen(true)}
-        className="mt-3 px-3 py-1.5 bg-gray-900 text-white rounded-md text-sm font-medium hover:bg-gray-700"
+        className="mt-3 px-3 py-1.5 bg-accent text-accent-fg rounded-md text-sm font-medium hover:bg-accent-hover"
       >
         Draft outreach
       </button>

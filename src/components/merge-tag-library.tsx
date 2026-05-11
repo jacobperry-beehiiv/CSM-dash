@@ -86,19 +86,19 @@ export function MergeTagLibrary({ defaultOpen = false, onInsert }: Props) {
   }
 
   return (
-    <div className="rounded-lg border border-gray-200 bg-white">
+    <div className="rounded-xl border border-border bg-surface shadow-card">
       <button
         onClick={() => setOpen((v) => !v)}
-        className="w-full flex items-center justify-between px-4 py-3 text-left hover:bg-gray-50"
+        className="w-full flex items-center justify-between px-4 py-3 text-left hover:bg-canvas"
         aria-expanded={open}
       >
         <div>
-          <div className="text-sm font-medium text-gray-900">
+          <div className="text-sm font-medium text-fg">
             Merge tag library
           </div>
-          <div className="text-xs text-gray-500 mt-0.5">
+          <div className="text-xs text-muted mt-0.5">
             Use{" "}
-            <code className="font-mono bg-gray-100 px-1 py-0.5 rounded">
+            <code className="font-mono bg-surface-2 px-1 py-0.5 rounded">
               {"{{token}}"}
             </code>{" "}
             in a subject or body to inject customer data at draft time.{" "}
@@ -106,7 +106,7 @@ export function MergeTagLibrary({ defaultOpen = false, onInsert }: Props) {
           </div>
         </div>
         <span
-          className={`text-gray-400 text-xl transition-transform ${
+          className={`text-subtle text-xl transition-transform ${
             open ? "rotate-90" : ""
           }`}
           aria-hidden
@@ -116,25 +116,25 @@ export function MergeTagLibrary({ defaultOpen = false, onInsert }: Props) {
       </button>
 
       {open ? (
-        <div className="border-t border-gray-200">
-          <div className="px-4 py-3 border-b border-gray-100 bg-gray-50/50 space-y-2">
-            <div className="text-xs text-gray-700">
+        <div className="border-t border-border">
+          <div className="px-4 py-3 border-b border-border bg-canvas/50 space-y-2">
+            <div className="text-xs text-muted">
               <strong>Syntax:</strong> double curly braces around the token
               name. Whitespace inside the braces is fine, so all of these
               behave identically:
             </div>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-2 text-xs">
-              <code className="font-mono bg-white border border-gray-200 px-2 py-1 rounded">
+              <code className="font-mono bg-surface border border-border px-2 py-1 rounded">
                 {"{{customer.name}}"}
               </code>
-              <code className="font-mono bg-white border border-gray-200 px-2 py-1 rounded">
+              <code className="font-mono bg-surface border border-border px-2 py-1 rounded">
                 {"{{ customer.name }}"}
               </code>
-              <code className="font-mono bg-white border border-gray-200 px-2 py-1 rounded">
+              <code className="font-mono bg-surface border border-border px-2 py-1 rounded">
                 {"{{   customer.name   }}"}
               </code>
             </div>
-            <div className="text-xs text-gray-600">
+            <div className="text-xs text-muted">
               Unknown tokens are left as-is so you can spot typos in the
               preview. Tags work in both the subject line and the rich-text
               body.
@@ -144,14 +144,14 @@ export function MergeTagLibrary({ defaultOpen = false, onInsert }: Props) {
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Search tags…"
-              className="w-full px-3 py-1.5 border border-gray-300 rounded-md text-sm bg-white"
+              className="w-full px-3 py-1.5 border border-border-strong rounded-md text-sm bg-surface"
             />
           </div>
 
           <div className="max-h-[480px] overflow-auto">
             <table className="w-full text-sm">
-              <thead className="bg-gray-50 sticky top-0">
-                <tr className="text-left text-xs text-gray-500 border-b border-gray-200">
+              <thead className="bg-canvas sticky top-0">
+                <tr className="text-left text-xs text-muted border-b border-border">
                   <th className="px-3 py-2 font-medium w-[28%]">Token</th>
                   <th className="px-3 py-2 font-medium w-[18%]">Label</th>
                   <th className="px-3 py-2 font-medium">Description</th>
@@ -166,7 +166,7 @@ export function MergeTagLibrary({ defaultOpen = false, onInsert }: Props) {
                   <tr>
                     <td
                       colSpan={5}
-                      className="px-3 py-6 text-center text-sm text-gray-500"
+                      className="px-3 py-6 text-center text-sm text-muted"
                     >
                       No tags match.
                     </td>
@@ -181,27 +181,27 @@ export function MergeTagLibrary({ defaultOpen = false, onInsert }: Props) {
                     return (
                       <tr
                         key={t.token}
-                        className="border-b border-gray-100 hover:bg-blue-50/30 align-top"
+                        className="border-b border-border hover:bg-blue-50 dark:bg-blue-500/30 align-top"
                       >
                         <td className="px-3 py-2">
-                          <code className="font-mono text-xs text-gray-900 bg-gray-100 px-1.5 py-0.5 rounded">
+                          <code className="font-mono text-xs text-fg bg-surface-2 px-1.5 py-0.5 rounded">
                             {`{{${t.token}}}`}
                           </code>
                         </td>
-                        <td className="px-3 py-2 text-gray-700">{t.label}</td>
-                        <td className="px-3 py-2 text-gray-600 text-xs">
+                        <td className="px-3 py-2 text-muted">{t.label}</td>
+                        <td className="px-3 py-2 text-muted text-xs">
                           {t.description}
                         </td>
-                        <td className="px-3 py-2 text-gray-700 break-words">
+                        <td className="px-3 py-2 text-muted break-words">
                           {example || (
-                            <span className="text-gray-400 italic">empty</span>
+                            <span className="text-subtle italic">empty</span>
                           )}
                         </td>
                         <td className="px-3 py-2 text-right">
                           {onInsert ? (
                             <button
                               onClick={() => onInsert(t.token)}
-                              className="px-2 py-1 text-xs border border-gray-300 rounded hover:bg-gray-50 whitespace-nowrap"
+                              className="px-2 py-1 text-xs border border-border-strong rounded hover:bg-canvas whitespace-nowrap"
                               title="Insert at cursor"
                             >
                               Insert
@@ -209,7 +209,7 @@ export function MergeTagLibrary({ defaultOpen = false, onInsert }: Props) {
                           ) : (
                             <button
                               onClick={() => copy(t.token)}
-                              className="px-2 py-1 text-xs border border-gray-300 rounded hover:bg-gray-50 whitespace-nowrap"
+                              className="px-2 py-1 text-xs border border-border-strong rounded hover:bg-canvas whitespace-nowrap"
                               title="Copy token to clipboard"
                             >
                               {copiedToken === t.token ? "Copied" : "Copy"}

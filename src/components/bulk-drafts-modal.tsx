@@ -35,8 +35,15 @@ interface GmailStatus {
   email?: string | null;
 }
 
+interface TemplateOption {
+  id: string;
+  label: string;
+}
+
 interface Props {
-  templateLabel: string;
+  templates: TemplateOption[];
+  templateId: string;
+  onTemplateChange: (id: string) => void;
   drafts: BulkDraft[];
   loading: boolean;
   loadingProgress: { done: number; total: number } | null;
@@ -57,7 +64,9 @@ interface Props {
  *      or that they want to review individually.
  */
 export function BulkDraftsModal({
-  templateLabel,
+  templates,
+  templateId,
+  onTemplateChange,
   drafts,
   loading,
   loadingProgress,
@@ -161,36 +170,52 @@ export function BulkDraftsModal({
       onClick={onClose}
     >
       <div
-        className="bg-white rounded-lg w-full max-w-3xl max-h-[90vh] overflow-hidden flex flex-col"
+        className="bg-surface rounded-lg w-full max-w-3xl max-h-[90vh] overflow-hidden flex flex-col"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-start justify-between p-4 border-b border-gray-200">
-          <div>
-            <h3 className="font-semibold text-gray-900">
+        <div className="flex items-start justify-between p-4 border-b border-border gap-4">
+          <div className="min-w-0 flex-1">
+            <h3 className="font-semibold text-fg">
               Bulk drafts ({drafts.length})
             </h3>
-            <p className="text-xs text-gray-500 mt-0.5">
-              Template: <code className="font-mono px-1 bg-gray-100 rounded">{templateLabel}</code>.
-              Click <strong>Open all</strong> to launch every draft in a new
-              tab, or open them individually below.
-            </p>
+            <div className="flex items-center gap-2 mt-1.5">
+              <label
+                htmlFor="bulk-template-select"
+                className="text-xs text-muted whitespace-nowrap"
+              >
+                Template:
+              </label>
+              <select
+                id="bulk-template-select"
+                value={templateId}
+                onChange={(e) => onTemplateChange(e.target.value)}
+                disabled={loading || templates.length === 0}
+                className="text-xs px-2 py-1 border border-border-strong rounded-md bg-surface max-w-full disabled:opacity-50"
+              >
+                {templates.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.label}
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
           <button
             onClick={onClose}
-            className="text-gray-400 hover:text-gray-600 text-xl leading-none"
+            className="text-subtle hover:text-muted text-xl leading-none flex-shrink-0"
             aria-label="Close"
           >
             ×
           </button>
         </div>
 
-        <div className="px-4 py-3 border-b border-gray-200 bg-gray-50 space-y-2">
+        <div className="px-4 py-3 border-b border-border bg-canvas space-y-2">
           <div className="flex flex-wrap items-center gap-2">
             {gmail?.connected ? (
               <button
                 onClick={createGmailDrafts}
                 disabled={loading || drafts.length === 0 || gmailBusy}
-                className="px-3 py-1.5 bg-gray-900 text-white rounded-md text-sm font-medium hover:bg-gray-700 disabled:opacity-50"
+                className="px-3 py-1.5 bg-accent text-accent-fg rounded-md text-sm font-medium hover:bg-accent-hover disabled:opacity-50"
               >
                 {gmailBusy
                   ? "Creating drafts…"
@@ -199,7 +224,7 @@ export function BulkDraftsModal({
             ) : (
               <a
                 href="/api/auth/google/start"
-                className="px-3 py-1.5 bg-gray-900 text-white rounded-md text-sm font-medium hover:bg-gray-700"
+                className="px-3 py-1.5 bg-accent text-accent-fg rounded-md text-sm font-medium hover:bg-accent-hover"
                 title="Connect Gmail to create drafts directly without opening tabs"
               >
                 Connect Gmail to create drafts directly
@@ -208,7 +233,7 @@ export function BulkDraftsModal({
             <button
               onClick={downloadCsv}
               disabled={loading || drafts.length === 0}
-              className="px-3 py-1.5 border border-gray-300 rounded-md text-sm hover:bg-gray-50 disabled:opacity-50"
+              className="px-3 py-1.5 border border-border-strong rounded-md text-sm hover:bg-canvas disabled:opacity-50"
               title="Download a CSV of every draft (email/subject/body) for use with mail-merge tools like YAMM."
             >
               ⬇ Download CSV
@@ -216,12 +241,12 @@ export function BulkDraftsModal({
             <button
               onClick={openAll}
               disabled={loading || drafts.length === 0}
-              className="px-3 py-1.5 border border-gray-300 rounded-md text-sm hover:bg-gray-50 disabled:opacity-50"
+              className="px-3 py-1.5 border border-border-strong rounded-md text-sm hover:bg-canvas disabled:opacity-50"
             >
               Open all in Gmail tabs
             </button>
           </div>
-          <div className="flex flex-wrap items-center gap-3 text-xs text-gray-600">
+          <div className="flex flex-wrap items-center gap-3 text-xs text-muted">
             {loading && loadingProgress ? (
               <span>
                 Building drafts… {loadingProgress.done}/{loadingProgress.total}
@@ -240,35 +265,35 @@ export function BulkDraftsModal({
         </div>
 
         {error ? (
-          <div className="m-4 bg-red-50 border border-red-200 rounded-md p-3 text-sm text-red-800">
+          <div className="m-4 bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/30 rounded-md p-3 text-sm text-red-800 dark:text-red-300">
             {error}
           </div>
         ) : null}
 
-        <div className="overflow-y-auto flex-1 divide-y divide-gray-100">
+        <div className="overflow-y-auto flex-1 divide-y divide-border">
           {drafts.length === 0 && !loading ? (
-            <p className="p-4 text-sm text-gray-500">No drafts to show.</p>
+            <p className="p-4 text-sm text-muted">No drafts to show.</p>
           ) : null}
           {drafts.map((d) => (
             <div
               key={d.compose_url}
-              className="p-3 hover:bg-gray-50/60 flex items-start gap-3"
+              className="p-3 hover:bg-canvas/60 flex items-start gap-3"
             >
               <div className="flex-1 min-w-0">
-                <div className="font-medium text-gray-900 truncate">
+                <div className="font-medium text-fg truncate">
                   {d.customer_label}
                 </div>
-                <div className="text-xs text-gray-500 truncate">
+                <div className="text-xs text-muted truncate">
                   To: {d.to}
                 </div>
-                <div className="text-xs text-gray-700 mt-1 truncate">
+                <div className="text-xs text-muted mt-1 truncate">
                   {d.subject}
                 </div>
               </div>
               <div className="flex items-center gap-1 flex-shrink-0">
                 <button
                   onClick={() => copy(d)}
-                  className="px-2 py-1 text-xs border border-gray-300 rounded-md hover:bg-gray-50"
+                  className="px-2 py-1 text-xs border border-border-strong rounded-md hover:bg-canvas"
                 >
                   {copyHit === d.compose_url ? "Copied" : "Copy"}
                 </button>
@@ -276,7 +301,7 @@ export function BulkDraftsModal({
                   href={d.compose_url}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="px-2 py-1 text-xs bg-gray-900 text-white rounded-md hover:bg-gray-700"
+                  className="px-2 py-1 text-xs bg-accent text-accent-fg rounded-md hover:bg-accent-hover"
                 >
                   Open
                 </a>
@@ -285,10 +310,10 @@ export function BulkDraftsModal({
           ))}
         </div>
 
-        <div className="px-4 py-3 border-t border-gray-200 flex justify-end">
+        <div className="px-4 py-3 border-t border-border flex justify-end">
           <button
             onClick={onClose}
-            className="px-3 py-1.5 border border-gray-300 rounded-md text-sm hover:bg-gray-50"
+            className="px-3 py-1.5 border border-border-strong rounded-md text-sm hover:bg-canvas"
           >
             Done
           </button>

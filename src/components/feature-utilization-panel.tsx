@@ -47,8 +47,8 @@ export function FeatureUtilizationPanel({ workspaceId }: Props) {
 
   if (loading) {
     return (
-      <div className="bg-white rounded-md border border-gray-200 p-3 flex items-center gap-2 text-sm text-gray-500">
-        <span className="inline-block w-3 h-3 border-2 border-gray-300 border-t-gray-700 rounded-full animate-spin" />
+      <div className="bg-surface rounded-md border border-border p-3 flex items-center gap-2 text-sm text-muted">
+        <span className="inline-block w-3 h-3 border-2 border-border-strong border-t-gray-700 rounded-full animate-spin" />
         Loading enterprise feature utilization…
       </div>
     );
@@ -56,7 +56,7 @@ export function FeatureUtilizationPanel({ workspaceId }: Props) {
 
   if (error) {
     return (
-      <div className="bg-red-50 border border-red-200 rounded-md p-3 text-sm text-red-800">
+      <div className="bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/30 rounded-md p-3 text-sm text-red-800 dark:text-red-300">
         Could not load feature utilization: {error}
       </div>
     );
@@ -65,12 +65,12 @@ export function FeatureUtilizationPanel({ workspaceId }: Props) {
   if (!data) return null;
 
   return (
-    <div className="bg-white rounded-md border border-gray-200 p-3 space-y-3">
+    <div className="bg-surface rounded-md border border-border p-3 space-y-3">
       <div className="flex items-baseline justify-between">
-        <h4 className="text-xs font-semibold uppercase tracking-wide text-gray-500">
+        <h4 className="text-xs font-semibold uppercase tracking-wide text-muted">
           Enterprise feature utilization
         </h4>
-        <span className="text-[10px] text-gray-400">
+        <span className="text-[10px] text-subtle">
           live · {fmtDate(data.generated_at)}
         </span>
       </div>
@@ -204,29 +204,29 @@ function Feature({
     <div
       className={`rounded border p-2.5 ${
         used
-          ? "border-emerald-200 bg-emerald-50/40"
-          : "border-gray-200 bg-gray-50/40"
+          ? "border-emerald-200 dark:border-emerald-500/30 bg-emerald-50 dark:bg-emerald-500/40"
+          : "border-border bg-canvas/40"
       }`}
     >
       <div className="flex items-center justify-between gap-2">
         <span
           className={`text-sm font-medium ${
-            used ? "text-gray-900" : "text-gray-500"
+            used ? "text-fg" : "text-muted"
           }`}
         >
           {name}
         </span>
         <div className="flex items-center gap-1">
           {activeBadge ? (
-            <span className="inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-100 text-emerald-700 border border-emerald-200">
+            <span className="inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-100 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-500/30">
               {activeBadge}
             </span>
           ) : null}
           <span
             className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold border ${
               used
-                ? "bg-emerald-100 text-emerald-700 border-emerald-200"
-                : "bg-gray-100 text-gray-500 border-gray-200"
+                ? "bg-emerald-100 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-500/30"
+                : "bg-surface-2 text-muted border-border"
             }`}
           >
             {used ? "Active" : "Not used"}
@@ -236,8 +236,8 @@ function Feature({
       <dl className="mt-1.5 space-y-0.5">
         {rows.map(([label, value]) => (
           <div key={label} className="flex justify-between text-xs">
-            <dt className="text-gray-500">{label}</dt>
-            <dd className="text-gray-800">{value}</dd>
+            <dt className="text-muted">{label}</dt>
+            <dd className="text-fg">{value}</dd>
           </div>
         ))}
       </dl>

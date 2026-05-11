@@ -130,40 +130,40 @@ export function OutreachModal({ customer, onClose, initialScenario }: Props) {
       onClick={onClose}
     >
       <div
-        className="bg-white rounded-lg w-full max-w-3xl max-h-[90vh] overflow-hidden flex flex-col"
+        className="bg-surface rounded-lg w-full max-w-3xl max-h-[90vh] overflow-hidden flex flex-col"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-start justify-between p-4 border-b border-gray-200">
+        <div className="flex items-start justify-between p-4 border-b border-border">
           <div>
-            <h3 className="font-semibold text-gray-900">
+            <h3 className="font-semibold text-fg">
               Draft outreach — {customer.company_name ?? customer.workspace_name}
             </h3>
-            <p className="text-xs text-gray-500 mt-0.5">
+            <p className="text-xs text-muted mt-0.5">
               To: {recipient || "—"}
               {customer.owner_email ? ` (${customer.owner_email})` : ""}
             </p>
           </div>
           <button
             onClick={onClose}
-            className="text-gray-400 hover:text-gray-600 text-xl leading-none"
+            className="text-subtle hover:text-muted text-xl leading-none"
             aria-label="Close"
           >
             ×
           </button>
         </div>
 
-        <div className="p-4 border-b border-gray-100">
+        <div className="p-4 border-b border-border">
           {loading ? (
-            <p className="text-sm text-gray-500">Loading templates…</p>
+            <p className="text-sm text-muted">Loading templates…</p>
           ) : error ? (
             <p className="text-sm text-red-600">Failed to load: {error}</p>
           ) : (
             <>
-              <label className="text-xs text-gray-500 block mb-1">Template</label>
+              <label className="text-xs text-muted block mb-1">Template</label>
               <select
                 value={chosenId}
                 onChange={(e) => setChosenId(e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
+                className="w-full px-3 py-2 border border-border-strong rounded-md text-sm"
               >
                 {templates.map((t) => (
                   <option key={t.id} value={t.id}>
@@ -173,14 +173,14 @@ export function OutreachModal({ customer, onClose, initialScenario }: Props) {
                 ))}
               </select>
               {template?.blurb ? (
-                <p className="text-xs text-gray-500 mt-2">{template.blurb}</p>
+                <p className="text-xs text-muted mt-2">{template.blurb}</p>
               ) : null}
               {template && template.tags.length > 0 ? (
                 <div className="flex flex-wrap gap-1 mt-2">
                   {template.tags.map((tag) => (
                     <span
                       key={tag}
-                      className="text-[10px] px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-700 border border-gray-200"
+                      className="text-[10px] px-1.5 py-0.5 rounded-full bg-surface-2 text-muted border border-border"
                     >
                       {tag}
                     </span>
@@ -194,26 +194,26 @@ export function OutreachModal({ customer, onClose, initialScenario }: Props) {
         {template ? (
           <div className="p-4 overflow-y-auto flex-1 space-y-3">
             <div>
-              <div className="text-xs text-gray-500 mb-1">Subject</div>
-              <div className="px-3 py-2 bg-gray-50 rounded-md text-sm font-medium">
+              <div className="text-xs text-muted mb-1">Subject</div>
+              <div className="px-3 py-2 bg-canvas rounded-md text-sm font-medium">
                 {subject}
               </div>
             </div>
             <div>
-              <div className="text-xs text-gray-500 mb-1">Body preview</div>
+              <div className="text-xs text-muted mb-1">Body preview</div>
               <div
-                className="px-3 py-2 bg-gray-50 rounded-md text-sm prose prose-sm max-w-none"
+                className="px-3 py-2 bg-canvas rounded-md text-sm prose prose-sm max-w-none"
                 dangerouslySetInnerHTML={{ __html: body_html }}
               />
             </div>
           </div>
         ) : null}
 
-        <div className="p-4 border-t border-gray-200 flex items-center gap-2 justify-end">
+        <div className="p-4 border-t border-border flex items-center gap-2 justify-end">
           <button
             onClick={copy}
             disabled={!template}
-            className="px-3 py-1.5 border border-gray-300 rounded-md text-sm hover:bg-gray-50 disabled:opacity-50"
+            className="px-3 py-1.5 border border-border-strong rounded-md text-sm hover:bg-canvas disabled:opacity-50"
           >
             Copy
           </button>
@@ -222,7 +222,7 @@ export function OutreachModal({ customer, onClose, initialScenario }: Props) {
               href={mailto}
               target="_blank"
               rel="noopener noreferrer"
-              className="px-3 py-1.5 bg-gray-900 text-white rounded-md text-sm font-medium hover:bg-gray-700"
+              className="px-3 py-1.5 bg-accent text-accent-fg rounded-md text-sm font-medium hover:bg-accent-hover"
             >
               Open in Gmail
             </a>

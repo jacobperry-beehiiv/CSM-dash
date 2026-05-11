@@ -91,15 +91,15 @@ export default function TiersPage() {
     <>
       <div className="mb-6 flex items-baseline justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Enterprise tiers</h1>
-          <p className="text-sm text-gray-500 mt-1">
+          <h1 className="text-3xl font-semibold text-fg tracking-tight">Enterprise tiers</h1>
+          <p className="text-sm text-muted mt-1">
             The subscriber-tier ladder Enterprise contracts use. Templates can
             reference{" "}
-            <code className="bg-gray-100 px-1 py-0.5 rounded">
+            <code className="bg-surface-2 px-1 py-0.5 rounded">
               {"{{customer.current_tier}}"}
             </code>
             ,{" "}
-            <code className="bg-gray-100 px-1 py-0.5 rounded">
+            <code className="bg-surface-2 px-1 py-0.5 rounded">
               {"{{customer.next_tier_1}}"}
             </code>
             , and the next 2-3 tiers above any customer's current cap.
@@ -108,21 +108,21 @@ export default function TiersPage() {
       </div>
 
       {error ? (
-        <div className="bg-red-50 border border-red-200 rounded-lg p-3 mb-3 text-sm text-red-800">
+        <div className="bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/30 rounded-lg p-3 mb-3 text-sm text-red-800 dark:text-red-300">
           {error}
         </div>
       ) : null}
       {message ? (
-        <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 mb-3 text-sm text-emerald-800">
+        <div className="bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-200 dark:border-emerald-500/30 rounded-lg p-3 mb-3 text-sm text-emerald-800 dark:text-emerald-300">
           {message}
         </div>
       ) : null}
 
       {loading ? (
-        <p className="text-sm text-gray-500">Loading tiers…</p>
+        <p className="text-sm text-muted">Loading tiers…</p>
       ) : (
         <>
-          <div className="rounded-lg border border-gray-200 bg-white overflow-hidden">
+          <div className="rounded-xl border border-border bg-surface shadow-card overflow-hidden">
             <table className="w-full text-sm table-fixed">
               <colgroup>
                 <col className="w-[14%]" />
@@ -132,21 +132,21 @@ export default function TiersPage() {
                 <col className="w-[24%]" />
                 <col className="w-[6%]" />
               </colgroup>
-              <thead className="bg-gray-50">
-                <tr className="text-left border-b border-gray-200">
-                  <th className="px-3 py-2 text-xs font-medium text-gray-600">
+              <thead className="bg-canvas">
+                <tr className="text-left border-b border-border">
+                  <th className="px-3 py-2 text-xs font-medium text-muted">
                     Tier label
                   </th>
-                  <th className="px-3 py-2 text-xs font-medium text-gray-600">
+                  <th className="px-3 py-2 text-xs font-medium text-muted">
                     Max subs
                   </th>
-                  <th className="px-3 py-2 text-xs font-medium text-gray-600">
+                  <th className="px-3 py-2 text-xs font-medium text-muted">
                     Monthly USD
                   </th>
-                  <th className="px-3 py-2 text-xs font-medium text-gray-600">
+                  <th className="px-3 py-2 text-xs font-medium text-muted">
                     Annual USD
                   </th>
-                  <th className="px-3 py-2 text-xs font-medium text-gray-600">
+                  <th className="px-3 py-2 text-xs font-medium text-muted">
                     Notes
                   </th>
                   <th className="px-3 py-2"></th>
@@ -157,21 +157,21 @@ export default function TiersPage() {
                   <tr>
                     <td
                       colSpan={6}
-                      className="px-3 py-6 text-center text-sm text-gray-500"
+                      className="px-3 py-6 text-center text-sm text-muted"
                     >
                       No tiers — click + Add tier below to create one.
                     </td>
                   </tr>
                 ) : null}
                 {tiers.map((t, i) => (
-                  <tr key={i} className="border-b border-gray-100 align-top">
+                  <tr key={i} className="border-b border-border align-top">
                     <td className="px-3 py-2">
                       <input
                         type="text"
                         value={t.name}
                         onChange={(e) => update(i, "name", e.target.value)}
                         placeholder="500K"
-                        className="w-full px-2 py-1 border border-gray-300 rounded-md text-sm font-medium"
+                        className="w-full px-2 py-1 border border-border-strong rounded-md text-sm font-medium"
                       />
                     </td>
                     <td className="px-3 py-2">
@@ -186,7 +186,7 @@ export default function TiersPage() {
                           )
                         }
                         placeholder="500000"
-                        className="w-full px-2 py-1 border border-gray-300 rounded-md text-sm"
+                        className="w-full px-2 py-1 border border-border-strong rounded-md text-sm"
                       />
                     </td>
                     <td className="px-3 py-2">
@@ -201,7 +201,7 @@ export default function TiersPage() {
                           )
                         }
                         placeholder="5000"
-                        className="w-full px-2 py-1 border border-gray-300 rounded-md text-sm"
+                        className="w-full px-2 py-1 border border-border-strong rounded-md text-sm"
                       />
                     </td>
                     <td className="px-3 py-2">
@@ -216,7 +216,7 @@ export default function TiersPage() {
                           )
                         }
                         placeholder="50000"
-                        className="w-full px-2 py-1 border border-gray-300 rounded-md text-sm"
+                        className="w-full px-2 py-1 border border-border-strong rounded-md text-sm"
                       />
                     </td>
                     <td className="px-3 py-2">
@@ -225,14 +225,14 @@ export default function TiersPage() {
                         value={t.notes ?? ""}
                         onChange={(e) => update(i, "notes", e.target.value)}
                         placeholder="(optional)"
-                        className="w-full px-2 py-1 border border-gray-300 rounded-md text-sm"
+                        className="w-full px-2 py-1 border border-border-strong rounded-md text-sm"
                       />
                     </td>
                     <td className="px-3 py-2">
                       <button
                         onClick={() => removeRow(i)}
                         title="Delete row"
-                        className="px-2 py-1 text-xs border border-red-300 text-red-700 rounded-md hover:bg-red-50"
+                        className="px-2 py-1 text-xs border border-red-300 text-red-700 rounded-md hover:bg-red-50 dark:bg-red-500/10"
                       >
                         ✕
                       </button>
@@ -246,24 +246,24 @@ export default function TiersPage() {
           <div className="flex flex-wrap items-center gap-2 mt-3">
             <button
               onClick={addRow}
-              className="px-3 py-1.5 border border-gray-300 rounded-md text-sm hover:bg-gray-50"
+              className="px-3 py-1.5 border border-border-strong rounded-md text-sm hover:bg-canvas"
             >
               + Add tier
             </button>
             <button
               onClick={save}
               disabled={saving}
-              className="px-3 py-1.5 bg-gray-900 text-white rounded-md text-sm font-medium hover:bg-gray-700 disabled:opacity-50"
+              className="px-3 py-1.5 bg-accent text-accent-fg rounded-md text-sm font-medium hover:bg-accent-hover disabled:opacity-50"
             >
               {saving ? "Saving…" : "Save ladder"}
             </button>
             <button
               onClick={load}
-              className="px-3 py-1.5 border border-gray-300 rounded-md text-sm hover:bg-gray-50"
+              className="px-3 py-1.5 border border-border-strong rounded-md text-sm hover:bg-canvas"
             >
               Reset
             </button>
-            <span className="text-xs text-gray-500 ml-auto">
+            <span className="text-xs text-muted ml-auto">
               Order is sub-count ascending — small tiers at the top.
             </span>
           </div>

@@ -102,16 +102,16 @@ export function AdNetworkFilter({ customers, onFilterChange }: Props) {
   ]);
 
   return (
-    <div className="rounded-md border border-gray-200 bg-white">
+    <div className="rounded-md border border-border bg-surface">
       <button
         onClick={() => setEnabled((v) => !v)}
-        className="w-full flex items-center justify-between px-3 py-2 text-left hover:bg-gray-50"
+        className="w-full flex items-center justify-between px-3 py-2 text-left hover:bg-canvas"
       >
-        <span className="text-sm font-medium text-gray-900">
+        <span className="text-sm font-medium text-fg">
           Ad-network filters
         </span>
         <span
-          className={`text-gray-400 transition-transform ${
+          className={`text-subtle transition-transform ${
             enabled ? "rotate-90" : ""
           }`}
           aria-hidden
@@ -121,29 +121,29 @@ export function AdNetworkFilter({ customers, onFilterChange }: Props) {
       </button>
 
       {enabled ? (
-        <div className="px-3 py-3 border-t border-gray-200 space-y-3">
+        <div className="px-3 py-3 border-t border-border space-y-3">
           {loading ? (
-            <div className="text-xs text-gray-500 flex items-center gap-2">
-              <span className="inline-block w-3 h-3 border-2 border-gray-300 border-t-gray-700 rounded-full animate-spin" />
+            <div className="text-xs text-muted flex items-center gap-2">
+              <span className="inline-block w-3 h-3 border-2 border-border-strong border-t-gray-700 rounded-full animate-spin" />
               Loading ad-network roll-up for {customers.length} customers…
             </div>
           ) : null}
 
           {error ? (
-            <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded p-2">
+            <div className="text-xs text-red-700 bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/30 rounded p-2">
               {error}
             </div>
           ) : null}
 
           {!loading && !error && Object.keys(data).length > 0 ? (
-            <div className="text-xs text-gray-500">
+            <div className="text-xs text-muted">
               Loaded {Object.keys(data).length} orgs from Postgres.
             </div>
           ) : null}
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <fieldset className="border border-gray-200 rounded-md p-2">
-              <legend className="text-xs text-gray-500 px-1">
+            <fieldset className="border border-border rounded-md p-2">
+              <legend className="text-xs text-muted px-1">
                 Last ad run
               </legend>
               <div className="flex items-center gap-2 flex-wrap">
@@ -154,7 +154,7 @@ export function AdNetworkFilter({ customers, onFilterChange }: Props) {
                       e.target.value as "any" | "in_last" | "not_in_last"
                     )
                   }
-                  className="px-2 py-1 border border-gray-300 rounded-md text-xs bg-white"
+                  className="px-2 py-1 border border-border-strong rounded-md text-xs bg-surface"
                 >
                   <option value="any">Any</option>
                   <option value="in_last">Has run in last…</option>
@@ -168,16 +168,16 @@ export function AdNetworkFilter({ customers, onFilterChange }: Props) {
                       onChange={(e) =>
                         setLastRunDays(Math.max(1, Number(e.target.value)))
                       }
-                      className="w-20 px-2 py-1 border border-gray-300 rounded-md text-xs"
+                      className="w-20 px-2 py-1 border border-border-strong rounded-md text-xs"
                     />
-                    <span className="text-xs text-gray-600">days</span>
+                    <span className="text-xs text-muted">days</span>
                   </>
                 ) : null}
               </div>
             </fieldset>
 
-            <fieldset className="border border-gray-200 rounded-md p-2">
-              <legend className="text-xs text-gray-500 px-1">
+            <fieldset className="border border-border rounded-md p-2">
+              <legend className="text-xs text-muted px-1">
                 Ad revenue (lifetime)
               </legend>
               <div className="flex items-center gap-2 flex-wrap">
@@ -186,7 +186,7 @@ export function AdNetworkFilter({ customers, onFilterChange }: Props) {
                   onChange={(e) =>
                     setRevenueMode(e.target.value as "any" | "over" | "under")
                   }
-                  className="px-2 py-1 border border-gray-300 rounded-md text-xs bg-white"
+                  className="px-2 py-1 border border-border-strong rounded-md text-xs bg-surface"
                 >
                   <option value="any">Any</option>
                   <option value="over">Earned over…</option>
@@ -194,14 +194,14 @@ export function AdNetworkFilter({ customers, onFilterChange }: Props) {
                 </select>
                 {revenueMode !== "any" ? (
                   <>
-                    <span className="text-xs text-gray-600">$</span>
+                    <span className="text-xs text-muted">$</span>
                     <input
                       type="number"
                       value={revenueAmount}
                       onChange={(e) =>
                         setRevenueAmount(Math.max(0, Number(e.target.value)))
                       }
-                      className="w-28 px-2 py-1 border border-gray-300 rounded-md text-xs"
+                      className="w-28 px-2 py-1 border border-border-strong rounded-md text-xs"
                     />
                   </>
                 ) : null}

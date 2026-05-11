@@ -69,7 +69,7 @@ export function DeliverabilityPanel({ initial }: { initial: RunResult }) {
 
   return (
     <div className="space-y-4">
-      <div className="text-xs text-gray-500">
+      <div className="text-xs text-muted">
         {data.alerts.length} flagged · {data.total_posts_yesterday} posts on{" "}
         {data.target_date} · generated {fmtDate(data.generated_at)}
       </div>
@@ -80,7 +80,7 @@ export function DeliverabilityPanel({ initial }: { initial: RunResult }) {
           {data.total_posts_yesterday} posts.
         </div>
       ) : (
-        <div className="rounded-lg border border-gray-200 bg-white">
+        <div className="rounded-xl border border-border bg-surface shadow-card">
           <table className="w-full text-sm table-fixed">
             <colgroup>
               <col className="w-8" />
@@ -91,18 +91,18 @@ export function DeliverabilityPanel({ initial }: { initial: RunResult }) {
               <col className="w-[12%] hidden lg:table-cell" />
               <col className="w-[12%]" />
             </colgroup>
-            <thead className="bg-gray-50">
-              <tr className="text-left border-b border-gray-200">
+            <thead className="bg-canvas">
+              <tr className="text-left border-b border-border">
                 <th className="px-3 py-3"></th>
-                <th className="px-3 py-3 font-medium text-gray-600">Severity</th>
-                <th className="px-3 py-3 font-medium text-gray-600">Workspace</th>
-                <th className="px-3 py-3 font-medium text-gray-600 hidden md:table-cell">
+                <th className="px-3 py-3 font-medium text-muted">Severity</th>
+                <th className="px-3 py-3 font-medium text-muted">Workspace</th>
+                <th className="px-3 py-3 font-medium text-muted hidden md:table-cell">
                   Subject
                 </th>
-                <th className="px-3 py-3 font-medium text-gray-600 text-right">
+                <th className="px-3 py-3 font-medium text-muted text-right">
                   Sent
                 </th>
-                <th className="px-3 py-3 font-medium text-gray-600 hidden lg:table-cell">
+                <th className="px-3 py-3 font-medium text-muted hidden lg:table-cell">
                   CSM
                 </th>
                 <th className="px-3 py-3"></th>
@@ -124,15 +124,15 @@ export function DeliverabilityPanel({ initial }: { initial: RunResult }) {
                   <Fragment key={k}>
                     <tr
                       onClick={() => toggle(k)}
-                      className={`border-b border-gray-100 align-top cursor-pointer transition-colors ${
+                      className={`border-b border-border align-top cursor-pointer transition-colors ${
                         isOpen
                           ? critical
-                            ? "bg-red-50/60"
-                            : "bg-amber-50/60"
-                          : "hover:bg-blue-50/30"
+                            ? "bg-red-50 dark:bg-red-500/60"
+                            : "bg-amber-50 dark:bg-amber-500/60"
+                          : "hover:bg-blue-50 dark:bg-blue-500/30"
                       }`}
                     >
-                      <td className="px-3 py-3 text-gray-400 select-none">
+                      <td className="px-3 py-3 text-subtle select-none">
                         <span
                           className={`inline-block transition-transform ${
                             isOpen ? "rotate-90" : ""
@@ -147,22 +147,22 @@ export function DeliverabilityPanel({ initial }: { initial: RunResult }) {
                         />
                       </td>
                       <td className="px-3 py-3 break-words">
-                        <div className="font-medium text-gray-900">
+                        <div className="font-medium text-fg">
                           {alert.post.workspace_name}
                         </div>
-                        <div className="text-xs text-gray-500 truncate">
+                        <div className="text-xs text-muted truncate">
                           {alert.post.newsletter}
                         </div>
                       </td>
-                      <td className="px-3 py-3 text-gray-700 italic break-words hidden md:table-cell">
+                      <td className="px-3 py-3 text-muted italic break-words hidden md:table-cell">
                         &ldquo;{alert.post.subject}&rdquo;
                       </td>
                       <td className="px-3 py-3 text-right">
                         {fmtNumber(alert.post.sent)}
                       </td>
-                      <td className="px-3 py-3 text-gray-600 hidden lg:table-cell break-words">
+                      <td className="px-3 py-3 text-muted hidden lg:table-cell break-words">
                         {alert.csm?.replace(/_/g, " ") ?? (
-                          <span className="text-gray-400 italic">unassigned</span>
+                          <span className="text-subtle italic">unassigned</span>
                         )}
                       </td>
                       <td
@@ -177,7 +177,7 @@ export function DeliverabilityPanel({ initial }: { initial: RunResult }) {
                               rel="noopener noreferrer"
                               title="Masquerade into workspace"
                               aria-label="Masquerade"
-                              className="px-2 py-1 text-xs border border-gray-300 rounded-md hover:bg-gray-50"
+                              className="px-2 py-1 text-xs border border-border-strong rounded-md hover:bg-canvas"
                             >
                               👤
                             </a>
@@ -189,7 +189,7 @@ export function DeliverabilityPanel({ initial }: { initial: RunResult }) {
                               rel="noopener noreferrer"
                               title="Open Metabase dashboard for this publication"
                               aria-label="Open Metabase"
-                              className="px-2 py-1 text-xs border border-gray-300 rounded-md hover:bg-gray-50"
+                              className="px-2 py-1 text-xs border border-border-strong rounded-md hover:bg-canvas"
                             >
                               📊
                             </a>
@@ -199,8 +199,8 @@ export function DeliverabilityPanel({ initial }: { initial: RunResult }) {
                     </tr>
                     {isOpen && (
                       <tr
-                        className={`border-b border-gray-100 ${
-                          critical ? "bg-red-50/30" : "bg-amber-50/30"
+                        className={`border-b border-border ${
+                          critical ? "bg-red-50 dark:bg-red-500/30" : "bg-amber-50 dark:bg-amber-500/30"
                         }`}
                       >
                         <td colSpan={7} className="px-6 py-4">
@@ -216,7 +216,7 @@ export function DeliverabilityPanel({ initial }: { initial: RunResult }) {
         </div>
       )}
 
-      <p className="text-xs text-gray-400">
+      <p className="text-xs text-subtle">
         Click a row to see flag details and full metric breakdown.
       </p>
     </div>
@@ -226,12 +226,12 @@ export function DeliverabilityPanel({ initial }: { initial: RunResult }) {
 function DeliverabilityDetail({ alert }: { alert: DeliverabilityAlert }) {
   return (
     <div className="space-y-3">
-      <div className="text-xs text-gray-600">
+      <div className="text-xs text-muted">
         Sent {fmtDate(alert.post.sent_date)} · {fmtNumber(alert.post.sent)}{" "}
         recipients · {alert.post.newsletter}
       </div>
 
-      <div className="grid grid-cols-2 md:grid-cols-6 gap-2 bg-white rounded-md border border-gray-200 p-3">
+      <div className="grid grid-cols-2 md:grid-cols-6 gap-2 bg-surface rounded-md border border-border p-3">
         <Metric label="Delivered" value={fmtRate(alert.post.delivery_rate)} />
         <Metric label="Open" value={fmtRate(alert.post.open_rate)} />
         <Metric label="Click" value={fmtRate(alert.post.ctr)} />
@@ -240,8 +240,8 @@ function DeliverabilityDetail({ alert }: { alert: DeliverabilityAlert }) {
         <Metric label="Spam" value={fmtRate(alert.post.spam_rate, 3)} />
       </div>
 
-      <div className="bg-white rounded-md border border-gray-200 p-3">
-        <h4 className="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-2">
+      <div className="bg-surface rounded-md border border-border p-3">
+        <h4 className="text-xs font-semibold uppercase tracking-wide text-muted mb-2">
           Flags ({alert.flags.length})
         </h4>
         <ul className="space-y-1.5">
@@ -256,7 +256,7 @@ function DeliverabilityDetail({ alert }: { alert: DeliverabilityAlert }) {
               >
                 ▸
               </span>
-              <span className="text-gray-800 break-words">{f.message}</span>
+              <span className="text-fg break-words">{f.message}</span>
             </li>
           ))}
         </ul>
@@ -268,8 +268,8 @@ function DeliverabilityDetail({ alert }: { alert: DeliverabilityAlert }) {
 function Metric({ label, value }: { label: string; value: string }) {
   return (
     <div>
-      <div className="text-xs text-gray-500">{label}</div>
-      <div className="font-medium text-gray-900">{value}</div>
+      <div className="text-xs text-muted">{label}</div>
+      <div className="font-medium text-fg">{value}</div>
     </div>
   );
 }

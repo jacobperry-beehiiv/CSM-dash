@@ -44,14 +44,14 @@ export function SettingsSidebar() {
               href={s.href}
               className={`block rounded-md px-3 py-2 text-sm whitespace-nowrap md:whitespace-normal transition-colors ${
                 active
-                  ? "bg-gray-900 text-white"
-                  : "text-gray-700 hover:bg-gray-100"
+                  ? "bg-accent text-accent-fg"
+                  : "text-muted hover:bg-surface-2"
               }`}
             >
               <div className="font-medium">{s.label}</div>
               <div
                 className={`text-xs mt-0.5 hidden md:block ${
-                  active ? "text-gray-300" : "text-gray-500"
+                  active ? "text-subtle" : "text-muted"
                 }`}
               >
                 {s.description}

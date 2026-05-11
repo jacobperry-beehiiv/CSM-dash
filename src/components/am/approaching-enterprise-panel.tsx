@@ -19,22 +19,22 @@ const BUCKETS: Bucket[] = [
   {
     label: "≥100% — over cap",
     test: (p) => p >= 100,
-    color: "bg-red-50 border-red-200 text-red-900",
+    color: "bg-red-50 dark:bg-red-500/10 border-red-200 dark:border-red-500/30 text-red-900",
   },
   {
     label: "95–99%",
     test: (p) => p >= 95 && p < 100,
-    color: "bg-red-50 border-red-200 text-red-900",
+    color: "bg-red-50 dark:bg-red-500/10 border-red-200 dark:border-red-500/30 text-red-900",
   },
   {
     label: "90–94%",
     test: (p) => p >= 90 && p < 95,
-    color: "bg-amber-50 border-amber-200 text-amber-900",
+    color: "bg-amber-50 dark:bg-amber-500/10 border-amber-200 dark:border-amber-500/30 text-amber-900",
   },
   {
     label: "85–89%",
     test: (p) => p >= 85 && p < 90,
-    color: "bg-amber-50 border-amber-200 text-amber-900",
+    color: "bg-amber-50 dark:bg-amber-500/10 border-amber-200 dark:border-amber-500/30 text-amber-900",
   },
   {
     label: "80–84%",
@@ -105,9 +105,9 @@ export function ApproachingEnterprisePanel({ rows }: Props) {
           placeholder="Search workspace / owner…"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          className="px-3 py-2 border border-gray-300 rounded-lg text-sm flex-1 min-w-[220px]"
+          className="px-3 py-2 border border-border-strong rounded-lg text-sm flex-1 min-w-[220px]"
         />
-        <span className="text-xs text-gray-500 ml-auto">
+        <span className="text-xs text-muted ml-auto">
           {totalAtOrAbove75} of {rows.length} q13268 rows at ≥75% of plan limit
         </span>
       </div>
@@ -138,7 +138,7 @@ export function ApproachingEnterprisePanel({ rows }: Props) {
                   <col className="w-[10%]" />
                 </colgroup>
                 <thead>
-                  <tr className="text-xs text-gray-500 border-y border-gray-200 text-left">
+                  <tr className="text-xs text-muted border-y border-border text-left">
                     <th className="px-3 py-2 font-medium">Workspace</th>
                     <th className="px-3 py-2 font-medium">Plan</th>
                     <th className="px-3 py-2 font-medium text-right">Price</th>
@@ -157,35 +157,35 @@ export function ApproachingEnterprisePanel({ rows }: Props) {
                     return (
                       <tr
                         key={r.organization_id ?? r.workspace_name ?? Math.random()}
-                        className="border-b border-gray-100 hover:bg-blue-50/40 align-top"
+                        className="border-b border-border hover:bg-blue-50 dark:bg-blue-500/40 align-top"
                       >
                         <td className="px-3 py-2 break-words">
-                          <div className="font-medium text-gray-900">
+                          <div className="font-medium text-fg">
                             {r.workspace_name ?? "—"}
                           </div>
-                          <div className="text-xs text-gray-500 truncate">
+                          <div className="text-xs text-muted truncate">
                             {r.owner_name ?? r.owner_email ?? ""}
                           </div>
                         </td>
-                        <td className="px-3 py-2 text-gray-700">
+                        <td className="px-3 py-2 text-muted">
                           {r.plan_name ?? "—"}
                         </td>
-                        <td className="px-3 py-2 text-right text-gray-700">
+                        <td className="px-3 py-2 text-right text-muted">
                           {priceLabel(r)}
                         </td>
-                        <td className="px-3 py-2 text-right text-gray-700">
+                        <td className="px-3 py-2 text-right text-muted">
                           <div>{fmtNumber(r.total_subscriptions)}</div>
-                          <div className="text-xs text-gray-500">
+                          <div className="text-xs text-muted">
                             / {fmtNumber(r.max_subscriptions)}
                           </div>
                         </td>
                         <td className="px-3 py-2 text-right font-semibold">
                           {fmtPct(p)}
                         </td>
-                        <td className="px-3 py-2 text-gray-700 text-xs">
+                        <td className="px-3 py-2 text-muted text-xs">
                           {fmtDate(r.last_send)}
                         </td>
-                        <td className="px-3 py-2 text-gray-700 text-xs">
+                        <td className="px-3 py-2 text-muted text-xs">
                           {fmtDate(r.last_payment_at)}
                         </td>
                         <td className="px-3 py-2 text-right">
@@ -196,7 +196,7 @@ export function ApproachingEnterprisePanel({ rows }: Props) {
                                 target="_blank"
                                 rel="noopener noreferrer"
                                 title="Masquerade into workspace"
-                                className="px-2 py-1 text-xs border border-gray-300 rounded-md hover:bg-gray-50"
+                                className="px-2 py-1 text-xs border border-border-strong rounded-md hover:bg-canvas"
                               >
                                 👤
                               </a>
@@ -207,7 +207,7 @@ export function ApproachingEnterprisePanel({ rows }: Props) {
                                   r.owner_email
                                 )}`}
                                 title={`Email ${r.owner_email}`}
-                                className="px-2 py-1 text-xs border border-gray-300 rounded-md hover:bg-gray-50"
+                                className="px-2 py-1 text-xs border border-border-strong rounded-md hover:bg-canvas"
                               >
                                 ✉️
                               </a>
@@ -223,9 +223,9 @@ export function ApproachingEnterprisePanel({ rows }: Props) {
           ))}
         </div>
       )}
-      <p className="text-xs text-gray-400 mt-2">
+      <p className="text-xs text-subtle mt-2">
         Source: Metabase q13268. Filter:{" "}
-        <code className="font-mono bg-gray-100 px-1 rounded">
+        <code className="font-mono bg-surface-2 px-1 rounded">
           percent_to ≥ 0.75
         </code>
         . Refresh the page to re-fetch (10-min in-process cache).

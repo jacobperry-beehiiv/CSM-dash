@@ -11,7 +11,6 @@ import type { CustomerWithMetrics, Segment } from "@/lib/types";
 
 import { TabBar } from "@/components/tab-bar";
 import { CustomerTable } from "@/components/customer-table";
-import { MetricCards } from "@/components/metric-cards";
 import { AtRiskTable } from "@/components/at-risk-table";
 import { RenewalPanel } from "@/components/renewal-panel";
 import { DeliverabilityPanel } from "@/components/deliverability-panel";
@@ -51,7 +50,7 @@ async function DeliverabilityTab({ csm }: { csm: string | null }) {
     return <DeliverabilityPanel initial={result} />;
   } catch (e) {
     return (
-      <div className="bg-red-50 border border-red-200 rounded-lg p-4 text-sm text-red-800">
+      <div className="bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/30 rounded-lg p-4 text-sm text-red-800 dark:text-red-300">
         Live deliverability run failed:{" "}
         {e instanceof Error ? e.message : "unknown"}
       </div>
@@ -84,12 +83,7 @@ export default async function CsmPage({
 
     if (tab === "book") {
       const fullBook = filterCustomers(all, { csm }).map(withUtilization);
-      body = (
-        <>
-          <MetricCards customers={fullBook} />
-          <CustomerTable initialCustomers={fullBook} csms={csms} />
-        </>
-      );
+      body = <CustomerTable initialCustomers={fullBook} csms={csms} />;
     } else if (tab === "renewals") {
       body = (
         <>
@@ -119,7 +113,7 @@ export default async function CsmPage({
       );
     } else {
       body = (
-        <div className="text-sm text-gray-500">Unknown tab: {tab}</div>
+        <div className="text-sm text-muted">Unknown tab: {tab}</div>
       );
     }
   } catch (e) {
@@ -129,13 +123,13 @@ export default async function CsmPage({
   return (
     <>
       <div className="mb-6">
-        <h1 className="text-2xl font-bold text-gray-900">CSM dashboard</h1>
-        <p className="text-sm text-gray-500 mt-1">
+        <h1 className="text-3xl font-semibold text-fg tracking-tight">CSM dashboard</h1>
+        <p className="text-sm text-muted mt-1">
           {tab === "book"
             ? "Full assigned book — Enterprise + Growth"
             : "Enterprise book of business"}{" "}
           · live data from{" "}
-          <code className="bg-gray-100 px-1 py-0.5 rounded">{source}</code>
+          <code className="bg-surface-2 px-1 py-0.5 rounded">{source}</code>
           {csm ? <> · CSM: <strong>{csm.replace(/_/g, " ")}</strong></> : null}
         </p>
       </div>
@@ -143,8 +137,8 @@ export default async function CsmPage({
       <TabBar tabs={TABS} defaultTab="book" />
 
       {error ? (
-        <div className="bg-red-50 border border-red-200 rounded-lg p-4">
-          <p className="text-red-800 font-medium">Failed to load data</p>
+        <div className="bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/30 rounded-lg p-4">
+          <p className="text-red-800 dark:text-red-300 font-medium">Failed to load data</p>
           <p className="text-red-600 text-sm mt-1">{error}</p>
         </div>
       ) : (

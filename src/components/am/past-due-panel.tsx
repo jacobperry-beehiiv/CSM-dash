@@ -41,10 +41,10 @@ function makeBuckets(maxArr: number): BucketRange[] {
       min: lo,
       max: hi,
       toneClass: isTop
-        ? "bg-red-50 border-red-200 text-red-900"
+        ? "bg-red-50 dark:bg-red-500/10 border-red-200 dark:border-red-500/30 text-red-900"
         : lo >= 25_000
-          ? "bg-amber-50 border-amber-200 text-amber-900"
-          : "bg-gray-50 border-gray-200 text-gray-800",
+          ? "bg-amber-50 dark:bg-amber-500/10 border-amber-200 dark:border-amber-500/30 text-amber-900"
+          : "bg-canvas border-border text-fg",
     });
   }
   return ranges;
@@ -140,7 +140,7 @@ export function PastDuePanel({ rows }: Props) {
       </div>
 
       {droppedCount > 0 ? (
-        <div className="bg-amber-50 border border-amber-200 rounded-md p-3 text-sm text-amber-900 mb-4">
+        <div className="bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/30 rounded-md p-3 text-sm text-amber-900 mb-4">
           {droppedCount} row{droppedCount === 1 ? "" : "s"} from q24620 fell
           outside the ARR buckets (likely due to negative or non-numeric{" "}
           <code className="font-mono px-1 bg-amber-100 rounded">arr_cents</code>
@@ -149,20 +149,20 @@ export function PastDuePanel({ rows }: Props) {
       ) : null}
 
       <div className="flex flex-wrap items-center gap-2 mb-4">
-        <span className="text-xs text-gray-600">
+        <span className="text-xs text-muted">
           <strong>{selected.size}</strong> selected
         </span>
         <button
           onClick={() =>
             setSelected(new Set(rows.map((r, i) => rowKey(r, i))))
           }
-          className="px-2 py-1 text-xs border border-gray-300 rounded-md bg-white hover:bg-gray-50"
+          className="px-2 py-1 text-xs border border-border-strong rounded-md bg-surface hover:bg-canvas"
         >
           Select all
         </button>
         <button
           onClick={() => setSelected(new Set())}
-          className="px-2 py-1 text-xs border border-gray-300 rounded-md bg-white hover:bg-gray-50"
+          className="px-2 py-1 text-xs border border-border-strong rounded-md bg-surface hover:bg-canvas"
         >
           Clear
         </button>
@@ -170,7 +170,7 @@ export function PastDuePanel({ rows }: Props) {
           onClick={() =>
             setSelected(new Set(enterpriseRows.map((r, i) => rowKey(r, i))))
           }
-          className="px-2 py-1 text-xs border border-gray-300 rounded-md bg-white hover:bg-gray-50"
+          className="px-2 py-1 text-xs border border-border-strong rounded-md bg-surface hover:bg-canvas"
         >
           Select Enterprise only
         </button>
@@ -178,7 +178,7 @@ export function PastDuePanel({ rows }: Props) {
         <button
           onClick={() => setComposeOpen(true)}
           disabled={!settings || selected.size === 0}
-          className="px-3 py-1.5 bg-gray-900 text-white rounded-md text-sm font-medium hover:bg-gray-700 disabled:opacity-50"
+          className="px-3 py-1.5 bg-accent text-accent-fg rounded-md text-sm font-medium hover:bg-accent-hover disabled:opacity-50"
           title="Send a Slack message about the selected past-due accounts"
         >
           📣 Slack the past-due channel
@@ -202,10 +202,10 @@ export function PastDuePanel({ rows }: Props) {
               toneClass={bucket.toneClass}
               defaultOpen
             >
-              <div className="px-3 py-1.5 border-b border-gray-100 flex justify-end">
+              <div className="px-3 py-1.5 border-b border-border flex justify-end">
                 <button
                   onClick={() => selectAllIn(list)}
-                  className="text-xs text-blue-600 hover:underline"
+                  className="text-xs text-blue-600 dark:text-blue-400 hover:underline"
                 >
                   Select all in tier
                 </button>
@@ -221,7 +221,7 @@ export function PastDuePanel({ rows }: Props) {
                   <col className="w-[12%]" />
                 </colgroup>
                 <thead>
-                  <tr className="text-xs text-gray-500 border-b border-gray-200 text-left">
+                  <tr className="text-xs text-muted border-b border-border text-left">
                     <th className="px-3 py-2"></th>
                     <th className="px-3 py-2 font-medium">Customer</th>
                     <th className="px-3 py-2 font-medium">Plan</th>
@@ -240,29 +240,29 @@ export function PastDuePanel({ rows }: Props) {
                     return (
                       <tr
                         key={k}
-                        className="border-b border-gray-100 hover:bg-blue-50/40 align-top"
+                        className="border-b border-border hover:bg-blue-50 dark:bg-blue-500/40 align-top"
                       >
                         <td className="px-3 py-2">
                           <input
                             type="checkbox"
                             checked={selected.has(k)}
                             onChange={() => toggleSelected(k)}
-                            className="h-4 w-4 rounded border-gray-300 cursor-pointer"
+                            className="h-4 w-4 rounded border-border-strong cursor-pointer"
                             aria-label={`Select ${r.email ?? "row"}`}
                           />
                         </td>
                         <td className="px-3 py-2 break-words">
-                          <div className="font-medium text-gray-900">
+                          <div className="font-medium text-fg">
                             {r.email ?? "—"}
                           </div>
-                          <div className="text-xs text-gray-500 truncate font-mono">
+                          <div className="text-xs text-muted truncate font-mono">
                             {r.customer_id ?? ""}
                           </div>
                         </td>
-                        <td className="px-3 py-2 text-gray-700 break-words">
+                        <td className="px-3 py-2 text-muted break-words">
                           <div>{r.price_name ?? "—"}</div>
                           {isEnt ? (
-                            <span className="inline-block mt-0.5 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-100 text-emerald-700">
+                            <span className="inline-block mt-0.5 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-100 text-emerald-700 dark:text-emerald-300">
                               ENT
                             </span>
                           ) : null}
@@ -273,17 +273,17 @@ export function PastDuePanel({ rows }: Props) {
                         <td className="px-3 py-2 text-right text-red-700 font-medium">
                           {fmtCompactCurrency(r.charge_amount_dollars)}
                           {r.failure_code ? (
-                            <div className="text-[10px] text-gray-500">
+                            <div className="text-[10px] text-muted">
                               {r.failure_code}
                             </div>
                           ) : null}
                         </td>
-                        <td className="px-3 py-2 text-gray-700 text-xs">
+                        <td className="px-3 py-2 text-muted text-xs">
                           {fmtDate(r.charge_attempted_at)}
                         </td>
-                        <td className="px-3 py-2 text-gray-700 break-words">
+                        <td className="px-3 py-2 text-muted break-words">
                           {r.customer_success_manager?.replace(/_/g, " ") ?? (
-                            <span className="text-gray-400 italic">
+                            <span className="text-subtle italic">
                               unassigned
                             </span>
                           )}
@@ -298,7 +298,7 @@ export function PastDuePanel({ rows }: Props) {
         </div>
       )}
 
-      <p className="text-xs text-gray-400 mt-2">
+      <p className="text-xs text-subtle mt-2">
         Source: Metabase q24620 — past-due subscriptions with customer details.
         ARR / charge amounts converted from cents.
       </p>
@@ -327,11 +327,11 @@ function Stat({
     <div
       className={`rounded-lg border p-3 ${
         accent
-          ? "bg-amber-50 border-amber-200"
-          : "bg-white border-gray-200"
+          ? "bg-amber-50 dark:bg-amber-500/10 border-amber-200 dark:border-amber-500/30"
+          : "bg-surface border-border"
       }`}
     >
-      <p className="text-xs text-gray-500">{label}</p>
+      <p className="text-xs text-muted">{label}</p>
       <p className="text-lg font-semibold mt-0.5">{value}</p>
     </div>
   );
@@ -407,21 +407,21 @@ function SlackCompose({
       onClick={onClose}
     >
       <div
-        className="bg-white rounded-lg w-full max-w-2xl max-h-[90vh] overflow-hidden flex flex-col"
+        className="bg-surface rounded-lg w-full max-w-2xl max-h-[90vh] overflow-hidden flex flex-col"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-start justify-between p-4 border-b border-gray-200">
+        <div className="flex items-start justify-between p-4 border-b border-border">
           <div>
-            <h3 className="font-semibold text-gray-900">
+            <h3 className="font-semibold text-fg">
               Slack the past-due channel
             </h3>
-            <p className="text-xs text-gray-500 mt-0.5">
+            <p className="text-xs text-muted mt-0.5">
               {rows.length} account{rows.length === 1 ? "" : "s"} selected.
             </p>
           </div>
           <button
             onClick={onClose}
-            className="text-gray-400 hover:text-gray-600 text-xl leading-none"
+            className="text-subtle hover:text-muted text-xl leading-none"
             aria-label="Close"
           >
             ×
@@ -430,7 +430,7 @@ function SlackCompose({
 
         <div className="p-4 space-y-3 overflow-y-auto flex-1">
           <div>
-            <label className="text-xs text-gray-500 block mb-1">
+            <label className="text-xs text-muted block mb-1">
               Channel ID (e.g. C0AMK142WUR)
             </label>
             <input
@@ -438,43 +438,43 @@ function SlackCompose({
               value={channel}
               onChange={(e) => setChannel(e.target.value)}
               placeholder="C0AMK142WUR"
-              className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm font-mono"
+              className="w-full px-3 py-2 border border-border-strong rounded-md text-sm font-mono"
             />
           </div>
 
           <div>
-            <label className="text-xs text-gray-500 block mb-1">Message</label>
+            <label className="text-xs text-muted block mb-1">Message</label>
             <textarea
               value={text}
               onChange={(e) => setText(e.target.value)}
               rows={14}
-              className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm font-mono"
+              className="w-full px-3 py-2 border border-border-strong rounded-md text-sm font-mono"
             />
           </div>
 
           {error ? (
-            <div className="bg-red-50 border border-red-200 rounded-md p-3 text-sm text-red-800">
+            <div className="bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/30 rounded-md p-3 text-sm text-red-800 dark:text-red-300">
               {error}
             </div>
           ) : null}
           {result ? (
-            <div className="bg-emerald-50 border border-emerald-200 rounded-md p-3 text-sm text-emerald-800">
+            <div className="bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-200 dark:border-emerald-500/30 rounded-md p-3 text-sm text-emerald-800 dark:text-emerald-300">
               {result}
             </div>
           ) : null}
         </div>
 
-        <div className="p-4 border-t border-gray-200 flex items-center gap-2 justify-end">
+        <div className="p-4 border-t border-border flex items-center gap-2 justify-end">
           <button
             onClick={onClose}
-            className="px-3 py-1.5 border border-gray-300 rounded-md text-sm hover:bg-gray-50"
+            className="px-3 py-1.5 border border-border-strong rounded-md text-sm hover:bg-canvas"
           >
             Cancel
           </button>
           <button
             onClick={send}
             disabled={busy || !channel || !text}
-            className="px-3 py-1.5 bg-gray-900 text-white rounded-md text-sm font-medium hover:bg-gray-700 disabled:opacity-50"
+            className="px-3 py-1.5 bg-accent text-accent-fg rounded-md text-sm font-medium hover:bg-accent-hover disabled:opacity-50"
           >
             {busy ? "Sending…" : "Send to Slack"}
           </button>

@@ -32,33 +32,80 @@ npm run dev
 
 Open <http://localhost:3000>.
 
-## Deploying to Vercel + Neon
+## Deploying
 
-The dashboard is fully serverless-ready. Persistent state (Gmail tokens,
-settings, templates, tier ladder, flag resolutions, customer overrides) is
-written to a single `csm_kv` Postgres table when `DATABASE_URL` is set;
-without it, those land in JSON files under `data/` (fine locally, broken on
-Vercel).
+Two external accounts are required: **GitHub** (where the code lives) and
+**Vercel** (where it runs). Postgres is provisioned from inside Vercel as
+part of step 3 — no Neon dashboard, no separate signup.
 
-1. **Push to GitHub.** Standard `git init && git remote add origin … && git push -u origin main`.
-2. **Provision Postgres.** Free option: [Neon](https://neon.tech). Create a
-   project, copy the pooled connection string. Vercel Postgres / Supabase
-   work identically.
-3. **Import to Vercel.** New Project → pick the GitHub repo → Framework
-   detected as Next.js. Add the env vars from `.env.example`:
-   - `DATABASE_URL` — Neon connection string
-   - `METABASE_URL`, `METABASE_API_KEY`
-   - `DATA_SOURCE=metabase` (snapshot mode needs a writable filesystem)
-   - `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`
-   - the two `NEXT_PUBLIC_*` link templates
-4. **Deploy.** First deploy auto-creates the `csm_kv` table on first write.
-5. **Wire OAuth callback.** In Google Cloud Console → Credentials → your OAuth
-   client, add `https://<your-vercel-domain>/api/auth/google/callback` to
-   Authorized redirect URIs. Each CSM then connects their own Gmail at
-   `/settings/gmail`.
+### 1. Push to GitHub
 
-The Mission Control page is the entry point — link to it from your existing
-internal portal (auth happens there; the dashboard itself does not gate access).
+```bash
+gh repo create beehiiv/csm-dash --private --source=. --remote=origin --push
+```
+
+Or do it through the web: create an empty private repo, then `git remote add origin … && git push -u origin main`.
+
+### 2. Import the repo into Vercel
+
+[vercel.com/new](https://vercel.com/new) → "Import Git Repository" → pick
+the repo. Framework auto-detects as Next.js. Don't click "Deploy" yet —
+add the env vars first.
+
+### 3. Add a Vercel Postgres database
+
+In the Vercel project settings → **Storage** tab → **Create Database** →
+**Postgres**. One click; Vercel auto-injects `DATABASE_URL` into the
+project's environment. The `csm_kv` table auto-creates on first write.
+
+### 4. Add the remaining env vars
+
+In the project settings → **Environment Variables**, paste these (copy
+values from your local `.env.local`):
+
+```
+DATA_SOURCE=metabase
+METABASE_URL=https://beehiiv.metabaseapp.com
+METABASE_API_KEY=<your key>
+AUTH_SECRET=<run: openssl rand -base64 33>
+GOOGLE_CLIENT_ID=<your Google OAuth client ID>
+GOOGLE_CLIENT_SECRET=<your Google OAuth client secret>
+NEXT_PUBLIC_MASQUERADE_URL_TEMPLATE=https://app.beehiiv.com/system_admin/users/masquerade?email={email}
+NEXT_PUBLIC_METABASE_PUB_URL_TEMPLATE=https://beehiiv.metabaseapp.com/question/3401-all-with-filters?company_%252F_workspace_search={workspace_name}
+```
+
+`DATABASE_URL` is already populated by step 3. The Google client ID/secret
+is shared between Gmail draft creation and NextAuth sign-in.
+
+### 5. Deploy
+
+Click **Deploy**. First build takes ~90s. You'll get a
+`https://<project>.vercel.app` URL.
+
+### 6. Register the Vercel URL with Google
+
+In [Google Cloud Console → Credentials](https://console.cloud.google.com/apis/credentials),
+open your OAuth 2.0 Client and add both redirect URIs under
+**Authorized redirect URIs**:
+
+```
+https://<your-vercel-domain>/api/auth/callback/google     ← NextAuth sign-in
+https://<your-vercel-domain>/api/auth/google/callback     ← per-CSM Gmail
+```
+
+That's it. Open the Vercel URL → sign in with Google (`@beehiiv.com` only)
+→ optionally connect Gmail at `/settings/gmail` → start drafting.
+
+### Updating data
+
+Two paths:
+
+- **`DATA_SOURCE=metabase`** (recommended for prod): every page hit reads
+  live from Metabase q10600. No manual sync needed; ~60s cold but cached
+  for 60s after that. This is the default in the deploy steps above.
+- **`DATA_SOURCE=snapshot`** (for local offline work): commit a fresh
+  `data/snapshot.json` produced by `npm run sync`. Vercel's filesystem is
+  read-only at runtime, so snapshot mode in prod requires re-deploying.
 
 ## Architecture
 

@@ -88,23 +88,29 @@ export default async function MissionControl({
 
   return (
     <>
-      <div className="mb-6">
-        <h1 className="text-2xl font-bold text-gray-900">Mission Control</h1>
-        <p className="text-sm text-gray-500 mt-1">
-          Portfolio overview · data from{" "}
-          <code className="bg-gray-100 px-1 py-0.5 rounded">{source}</code>
-          {csm ? <> · CSM: <strong>{csm.replace(/_/g, " ")}</strong></> : null}
+      <div className="mb-10">
+        <h1 className="text-[40px] leading-[1.1] font-semibold text-fg tracking-tight">
+          Portfolio overview
+        </h1>
+        <p className="text-[15px] text-muted mt-3">
+          Data from{" "}
+          <code className="bg-surface-2 px-1.5 py-0.5 rounded text-fg font-mono text-[13px]">
+            {source}
+          </code>
+          {csm ? (
+            <> · CSM <strong className="text-fg">{csm.replace(/_/g, " ")}</strong></>
+          ) : null}
         </p>
       </div>
 
       {error && (
-        <div className="bg-red-50 border border-red-200 rounded-lg p-4 mb-6">
-          <p className="text-red-800 font-medium">Failed to load data</p>
+        <div className="bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/30 rounded-lg p-4 mb-6">
+          <p className="text-red-800 dark:text-red-300 font-medium">Failed to load data</p>
           <p className="text-red-600 text-sm mt-1">{error}</p>
         </div>
       )}
 
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
         <Stat label="Accounts" value={String(book.length)} />
         <Stat label="Total ARR" value={fmtCompactCurrency(totalArr)} />
         <Stat label="Enterprise" value={String(entCount)} />
@@ -161,9 +167,11 @@ export default async function MissionControl({
 
 function Stat({ label, value }: { label: string; value: string }) {
   return (
-    <div className="bg-white rounded-lg border border-gray-200 p-4">
-      <p className="text-sm text-gray-500">{label}</p>
-      <p className="text-2xl font-semibold mt-1">{value}</p>
+    <div className="bg-surface rounded-xl border border-border shadow-card px-5 py-5">
+      <p className="text-[13px] text-muted">{label}</p>
+      <p className="text-[28px] leading-tight font-semibold mt-1 text-fg tracking-tight">
+        {value}
+      </p>
     </div>
   );
 }
@@ -173,30 +181,27 @@ function Tile({
   title,
   metric,
   detail,
-  tone,
 }: {
   href: string;
   title: string;
   metric: string;
   detail: string;
-  tone: "ok" | "warn" | "info";
+  tone?: "ok" | "warn" | "info";
 }) {
-  const toneCls =
-    tone === "warn"
-      ? "border-amber-300 hover:border-amber-400 hover:bg-amber-50/50"
-      : tone === "info"
-        ? "border-blue-200 hover:border-blue-300 hover:bg-blue-50/50"
-        : "border-gray-200 hover:border-gray-300 hover:bg-gray-50";
   return (
     <Link
       href={href}
-      className={`block rounded-lg border bg-white p-5 transition-colors ${toneCls}`}
+      className="group block rounded-xl border border-border shadow-card bg-surface p-6 hover:shadow-card-lg hover:border-border-strong transition-all"
     >
-      <div className="flex items-baseline justify-between">
-        <h3 className="font-medium text-gray-900">{title}</h3>
-        <span className="text-3xl font-semibold text-gray-900">{metric}</span>
+      <div className="flex items-baseline justify-between gap-4">
+        <h3 className="text-[15px] font-medium text-fg tracking-tight">
+          {title}
+        </h3>
+        <span className="text-4xl font-semibold text-fg tracking-tight">
+          {metric}
+        </span>
       </div>
-      <p className="text-sm text-gray-500 mt-1">{detail}</p>
+      <p className="text-[13.5px] text-muted mt-2 leading-relaxed">{detail}</p>
     </Link>
   );
 }

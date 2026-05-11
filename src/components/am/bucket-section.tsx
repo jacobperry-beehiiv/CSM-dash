@@ -6,7 +6,7 @@ interface Props {
   label: string;
   count: number;
   detail?: string;
-  toneClass: string; // e.g. "bg-red-50 border-red-200 text-red-900"
+  toneClass: string; // e.g. "bg-red-50 dark:bg-red-500/10 border-red-200 dark:border-red-500/30 text-red-900"
   defaultOpen?: boolean;
   children: React.ReactNode;
 }
@@ -35,7 +35,7 @@ export function BucketSection({
       >
         <div className="flex items-baseline gap-3">
           <span
-            className={`text-gray-700 transition-transform ${
+            className={`text-muted transition-transform ${
               open ? "rotate-90" : ""
             }`}
             aria-hidden
@@ -49,7 +49,7 @@ export function BucketSection({
           </span>
         </div>
       </button>
-      {open ? <div className="bg-white">{children}</div> : null}
+      {open ? <div className="bg-surface">{children}</div> : null}
     </div>
   );
 }

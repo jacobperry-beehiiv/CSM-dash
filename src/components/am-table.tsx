@@ -26,8 +26,8 @@ const COHORT_LABEL: Record<Cohort, string> = {
 };
 
 const COHORT_STYLE: Record<Cohort, string> = {
-  "approaching-cap": "bg-red-100 text-red-800 border-red-200",
-  "approaching-ent": "bg-amber-100 text-amber-800 border-amber-200",
+  "approaching-cap": "bg-red-100 text-red-800 dark:text-red-300 border-red-200 dark:border-red-500/30",
+  "approaching-ent": "bg-amber-100 text-amber-800 dark:text-amber-300 border-amber-200 dark:border-amber-500/30",
 };
 
 const ENT_SUB_THRESHOLD = 100_000;
@@ -112,7 +112,7 @@ export function AmTable({ rows, csms }: Props) {
           placeholder="Search company / contact..."
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          className="px-3 py-2 border border-gray-300 rounded-lg text-sm flex-1 min-w-[200px]"
+          className="px-3 py-2 border border-border-strong rounded-lg text-sm flex-1 min-w-[200px]"
         />
         <CsmSelector csms={csms} />
         {(["all", "approaching-cap", "approaching-ent"] as const).map((opt) => (
@@ -121,8 +121,8 @@ export function AmTable({ rows, csms }: Props) {
             onClick={() => setCohortFilter(opt)}
             className={`px-3 py-2 rounded-lg text-sm font-medium border whitespace-nowrap ${
               cohortFilter === opt
-                ? "bg-gray-900 text-white border-gray-900"
-                : "bg-white text-gray-600 border-gray-300 hover:bg-gray-50"
+                ? "bg-accent text-accent-fg border-gray-900"
+                : "bg-surface text-muted border-border-strong hover:bg-canvas"
             }`}
           >
             {opt === "all"
@@ -134,7 +134,7 @@ export function AmTable({ rows, csms }: Props) {
         ))}
       </div>
 
-      <div className="rounded-lg border border-gray-200 bg-white">
+      <div className="rounded-xl border border-border bg-surface shadow-card">
         <table className="w-full text-sm table-fixed">
           <colgroup>
             <col className="w-8" />
@@ -147,16 +147,16 @@ export function AmTable({ rows, csms }: Props) {
             <col className="w-[10%] hidden lg:table-cell" />
             <col className="w-[16%]" />
           </colgroup>
-          <thead className="bg-gray-50">
-            <tr className="text-left border-b border-gray-200">
+          <thead className="bg-canvas">
+            <tr className="text-left border-b border-border">
               <th className="px-3 py-3"></th>
-              <th className="px-3 py-3 font-medium text-gray-600">Account</th>
-              <th className="px-3 py-3 font-medium text-gray-600">Cohort</th>
-              <th className="px-3 py-3 font-medium text-gray-600">Plan</th>
-              <th className="px-3 py-3 font-medium text-gray-600 text-right">Subs</th>
-              <th className="px-3 py-3 font-medium text-gray-600 text-right">% limit</th>
-              <th className="px-3 py-3 font-medium text-gray-600 text-right">ARR</th>
-              <th className="px-3 py-3 font-medium text-gray-600 hidden lg:table-cell">CSM</th>
+              <th className="px-3 py-3 font-medium text-muted">Account</th>
+              <th className="px-3 py-3 font-medium text-muted">Cohort</th>
+              <th className="px-3 py-3 font-medium text-muted">Plan</th>
+              <th className="px-3 py-3 font-medium text-muted text-right">Subs</th>
+              <th className="px-3 py-3 font-medium text-muted text-right">% limit</th>
+              <th className="px-3 py-3 font-medium text-muted text-right">ARR</th>
+              <th className="px-3 py-3 font-medium text-muted hidden lg:table-cell">CSM</th>
               <th className="px-3 py-3"></th>
             </tr>
           </thead>
@@ -179,11 +179,11 @@ export function AmTable({ rows, csms }: Props) {
                 <Fragment key={k}>
                   <tr
                     onClick={() => toggleExpanded(k)}
-                    className={`border-b border-gray-100 hover:bg-blue-50/40 align-top cursor-pointer transition-colors ${
-                      isOpen ? "bg-blue-50/40" : ""
+                    className={`border-b border-border hover:bg-blue-50 dark:bg-blue-500/40 align-top cursor-pointer transition-colors ${
+                      isOpen ? "bg-blue-50 dark:bg-blue-500/40" : ""
                     }`}
                   >
-                    <td className="px-3 py-2.5 text-gray-400 select-none">
+                    <td className="px-3 py-2.5 text-subtle select-none">
                       <span
                         className={`inline-block transition-transform ${
                           isOpen ? "rotate-90" : ""
@@ -193,10 +193,10 @@ export function AmTable({ rows, csms }: Props) {
                       </span>
                     </td>
                     <td className="px-3 py-2.5 break-words">
-                      <div className="font-medium text-gray-900">
+                      <div className="font-medium text-fg">
                         {c.company_name ?? c.workspace_name ?? "—"}
                       </div>
-                      <div className="text-xs text-gray-500 truncate">
+                      <div className="text-xs text-muted truncate">
                         {c.property_main_contact ?? c.owner_email ?? ""}
                       </div>
                     </td>
@@ -207,15 +207,15 @@ export function AmTable({ rows, csms }: Props) {
                         {COHORT_LABEL[cohort]}
                       </span>
                     </td>
-                    <td className="px-3 py-2.5 text-gray-700 break-words">
+                    <td className="px-3 py-2.5 text-muted break-words">
                       <div>{c.stripe_plan ?? "—"}</div>
                       {c.interval ? (
-                        <div className="text-xs text-gray-500">{c.interval}</div>
+                        <div className="text-xs text-muted">{c.interval}</div>
                       ) : null}
                     </td>
                     <td className="px-3 py-2.5 text-right">
                       <div>{fmtNumber(c.active_subs)}</div>
-                      <div className="text-xs text-gray-500">{subDetail}</div>
+                      <div className="text-xs text-muted">{subDetail}</div>
                     </td>
                     <td className={`px-3 py-2.5 text-right ${utilColor}`}>
                       {fmtPct(u)}
@@ -223,9 +223,9 @@ export function AmTable({ rows, csms }: Props) {
                     <td className="px-3 py-2.5 text-right">
                       {fmtCompactCurrency(c.arr)}
                     </td>
-                    <td className="px-3 py-2.5 text-gray-700 hidden lg:table-cell break-words">
+                    <td className="px-3 py-2.5 text-muted hidden lg:table-cell break-words">
                       {c.customer_success_manager?.replace(/_/g, " ") ?? (
-                        <span className="text-gray-400 italic">unassigned</span>
+                        <span className="text-subtle italic">unassigned</span>
                       )}
                     </td>
                     <td className="px-3 py-2.5">
@@ -236,7 +236,7 @@ export function AmTable({ rows, csms }: Props) {
                     </td>
                   </tr>
                   {isOpen && (
-                    <tr className="bg-blue-50/20 border-b border-gray-100">
+                    <tr className="bg-blue-50 dark:bg-blue-500/20 border-b border-border">
                       <td colSpan={9} className="px-6 py-4">
                         <CustomerDetailPanel customer={c} />
                       </td>
@@ -248,13 +248,13 @@ export function AmTable({ rows, csms }: Props) {
           </tbody>
         </table>
         {filtered.length === 0 && (
-          <div className="text-center text-gray-500 py-8 text-sm">
+          <div className="text-center text-muted py-8 text-sm">
             No accounts match the current filter.
           </div>
         )}
       </div>
 
-      <p className="text-xs text-gray-400 mt-2">
+      <p className="text-xs text-subtle mt-2">
         Showing {filtered.length} of {rows.length} accounts. Click a row for full
         details.
       </p>
@@ -287,11 +287,11 @@ function Card({
     <div
       className={`rounded-lg border p-4 ${
         accent
-          ? "bg-amber-50 border-amber-200"
-          : "bg-white border-gray-200"
+          ? "bg-amber-50 dark:bg-amber-500/10 border-amber-200 dark:border-amber-500/30"
+          : "bg-surface border-border"
       }`}
     >
-      <p className="text-sm text-gray-500">{label}</p>
+      <p className="text-sm text-muted">{label}</p>
       <p className="text-2xl font-semibold mt-1">{value}</p>
     </div>
   );

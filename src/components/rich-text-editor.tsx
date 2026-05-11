@@ -50,8 +50,8 @@ export function RichTextEditor({ value, onChange, placeholder }: Props) {
   }
 
   return (
-    <div className="border border-gray-300 rounded-md overflow-hidden">
-      <div className="flex flex-wrap gap-1 px-2 py-1 border-b border-gray-200 bg-gray-50 text-xs">
+    <div className="border border-border-strong rounded-md overflow-hidden">
+      <div className="flex flex-wrap gap-1 px-2 py-1 border-b border-border bg-canvas text-xs">
         <ToolButton onClick={() => exec("bold")} label="B" tip="Bold" bold />
         <ToolButton onClick={() => exec("italic")} label="I" tip="Italic" italic />
         <ToolButton onClick={() => exec("underline")} label="U" tip="Underline" underline />
@@ -100,7 +100,7 @@ function ToolButton({
       type="button"
       onClick={onClick}
       title={tip}
-      className={`px-2 py-1 rounded hover:bg-white border border-transparent hover:border-gray-300 ${
+      className={`px-2 py-1 rounded hover:bg-surface border border-transparent hover:border-border-strong ${
         bold ? "font-bold" : ""
       } ${italic ? "italic" : ""} ${underline ? "underline" : ""}`}
     >

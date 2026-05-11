@@ -68,40 +68,40 @@ function GmailSettingsInner() {
 
   return (
     <div className="space-y-4">
-      <section className="bg-white rounded-lg border border-gray-200 p-4 space-y-3">
-        <h2 className="text-sm font-semibold text-gray-900">
+      <section className="bg-surface rounded-xl border border-border shadow-card p-4 space-y-3">
+        <h2 className="text-sm font-semibold text-fg">
           Your Gmail connection
         </h2>
-        <p className="text-xs text-gray-500">
+        <p className="text-xs text-muted">
           Each CSM connects their own Google account. Drafts created from
           this browser land in <strong>your</strong> Gmail Drafts folder —
           never anyone else&rsquo;s. The connection is identified by a
           per-browser session cookie, so signing out of one browser
           doesn&rsquo;t affect another. Scope:{" "}
-          <code className="font-mono px-1 bg-gray-100 rounded">
+          <code className="font-mono px-1 bg-surface-2 rounded">
             gmail.compose
           </code>{" "}
           (drafts only — the dashboard cannot send mail on your behalf).
         </p>
 
         {errParam ? (
-          <div className="bg-red-50 border border-red-200 rounded-md p-3 text-sm text-red-800">
+          <div className="bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/30 rounded-md p-3 text-sm text-red-800 dark:text-red-300">
             OAuth error: <code className="font-mono">{errParam}</code>
           </div>
         ) : null}
         {justConnected ? (
-          <div className="bg-emerald-50 border border-emerald-200 rounded-md p-3 text-sm text-emerald-800">
+          <div className="bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-200 dark:border-emerald-500/30 rounded-md p-3 text-sm text-emerald-800 dark:text-emerald-300">
             Connected ✓
           </div>
         ) : null}
         {message ? (
-          <div className="bg-blue-50 border border-blue-200 rounded-md p-3 text-sm text-blue-800">
+          <div className="bg-blue-50 dark:bg-blue-500/10 border border-blue-200 dark:border-accent/30 rounded-md p-3 text-sm text-blue-800 dark:text-blue-300">
             {message}
           </div>
         ) : null}
 
         {status === null ? (
-          <p className="text-sm text-gray-500">Loading…</p>
+          <p className="text-sm text-muted">Loading…</p>
         ) : status.connected ? (
           <div className="space-y-2">
             <div className="flex items-center gap-2 text-sm">
@@ -110,28 +110,28 @@ function GmailSettingsInner() {
               <strong className="font-mono">{status.email}</strong>
             </div>
             {status.scope ? (
-              <p className="text-[11px] text-gray-500 break-all">
+              <p className="text-[11px] text-muted break-all">
                 Scopes: {status.scope}
               </p>
             ) : null}
             <div className="flex flex-wrap items-center gap-2 pt-2">
               <a
                 href="/api/auth/google/start"
-                className="px-3 py-1.5 border border-gray-300 rounded-md text-sm hover:bg-gray-50"
+                className="px-3 py-1.5 border border-border-strong rounded-md text-sm hover:bg-canvas"
               >
                 Connect a different account
               </a>
               <button
                 onClick={() => disconnect(false)}
                 disabled={busy}
-                className="px-3 py-1.5 border border-gray-300 rounded-md text-sm hover:bg-gray-50 disabled:opacity-50"
+                className="px-3 py-1.5 border border-border-strong rounded-md text-sm hover:bg-canvas disabled:opacity-50"
               >
                 Sign out of this browser
               </button>
               <button
                 onClick={() => disconnect(true)}
                 disabled={busy}
-                className="px-3 py-1.5 border border-red-300 text-red-700 rounded-md text-sm hover:bg-red-50 disabled:opacity-50"
+                className="px-3 py-1.5 border border-red-300 text-red-700 rounded-md text-sm hover:bg-red-50 dark:bg-red-500/10 disabled:opacity-50"
                 title="Removes the token from disk so it can no longer be used to create drafts."
               >
                 Disconnect &amp; forget
@@ -146,7 +146,7 @@ function GmailSettingsInner() {
             </div>
             <a
               href="/api/auth/google/start"
-              className="inline-block px-3 py-1.5 bg-gray-900 text-white rounded-md text-sm font-medium hover:bg-gray-700"
+              className="inline-block px-3 py-1.5 bg-accent text-accent-fg rounded-md text-sm font-medium hover:bg-accent-hover"
             >
               Connect Gmail
             </a>
@@ -155,16 +155,16 @@ function GmailSettingsInner() {
       </section>
 
       {status && status.connected_emails.length > 0 ? (
-        <section className="bg-white rounded-lg border border-gray-200 p-4 space-y-2">
-          <h2 className="text-sm font-semibold text-gray-900">
+        <section className="bg-surface rounded-xl border border-border shadow-card p-4 space-y-2">
+          <h2 className="text-sm font-semibold text-fg">
             Other connected accounts on this server
           </h2>
-          <p className="text-xs text-gray-500">
+          <p className="text-xs text-muted">
             Tokens for these accounts are saved on disk. Switching takes
             effect for this browser only — drafts will be created in the
             chosen mailbox.
           </p>
-          <ul className="divide-y divide-gray-100">
+          <ul className="divide-y divide-border">
             {status.connected_emails.map((email) => {
               const active = email === status.email;
               return (
@@ -172,14 +172,14 @@ function GmailSettingsInner() {
                   key={email}
                   className="flex items-center justify-between py-2 text-sm"
                 >
-                  <span className="font-mono text-gray-800">{email}</span>
+                  <span className="font-mono text-fg">{email}</span>
                   <button
                     onClick={() => (active ? null : switchTo(email))}
                     disabled={busy || active}
                     className={`px-2 py-1 text-xs rounded-md border ${
                       active
-                        ? "bg-emerald-50 border-emerald-200 text-emerald-700"
-                        : "border-gray-300 hover:bg-gray-50"
+                        ? "bg-emerald-50 dark:bg-emerald-500/10 border-emerald-200 dark:border-emerald-500/30 text-emerald-700 dark:text-emerald-300"
+                        : "border-border-strong hover:bg-canvas"
                     }`}
                   >
                     {active ? "Active" : "Switch"}
@@ -191,18 +191,18 @@ function GmailSettingsInner() {
         </section>
       ) : null}
 
-      <section className="bg-white rounded-lg border border-gray-200 p-4 space-y-2">
-        <h2 className="text-sm font-semibold text-gray-900">
+      <section className="bg-surface rounded-xl border border-border shadow-card p-4 space-y-2">
+        <h2 className="text-sm font-semibold text-fg">
           First-time setup (admin only — one per deployment)
         </h2>
-        <ol className="list-decimal list-inside text-sm text-gray-700 space-y-1">
+        <ol className="list-decimal list-inside text-sm text-muted space-y-1">
           <li>
             Create an OAuth 2.0 Client ID in{" "}
             <a
               href="https://console.cloud.google.com/apis/credentials"
               target="_blank"
               rel="noopener noreferrer"
-              className="text-blue-600 hover:underline"
+              className="text-blue-600 dark:text-blue-400 hover:underline"
             >
               Google Cloud Console &rarr; Credentials
             </a>
@@ -210,7 +210,7 @@ function GmailSettingsInner() {
           </li>
           <li>
             Add{" "}
-            <code className="font-mono px-1 bg-gray-100 rounded">
+            <code className="font-mono px-1 bg-surface-2 rounded">
               http://localhost:3000/api/auth/google/callback
             </code>{" "}
             (and any deployed URLs) to{" "}
@@ -218,22 +218,22 @@ function GmailSettingsInner() {
           </li>
           <li>
             Drop{" "}
-            <code className="font-mono px-1 bg-gray-100 rounded">
+            <code className="font-mono px-1 bg-surface-2 rounded">
               GOOGLE_CLIENT_ID
             </code>{" "}
             +{" "}
-            <code className="font-mono px-1 bg-gray-100 rounded">
+            <code className="font-mono px-1 bg-surface-2 rounded">
               GOOGLE_CLIENT_SECRET
             </code>{" "}
             into{" "}
-            <code className="font-mono px-1 bg-gray-100 rounded">
+            <code className="font-mono px-1 bg-surface-2 rounded">
               .env.local
             </code>
             , restart the dev server.
           </li>
           <li>
             On the OAuth consent screen, add the{" "}
-            <code className="font-mono px-1 bg-gray-100 rounded">
+            <code className="font-mono px-1 bg-surface-2 rounded">
               gmail.compose
             </code>{" "}
             scope. If your project is in <em>Testing</em>, add each CSM as a
@@ -249,7 +249,7 @@ function GmailSettingsInner() {
 
 export default function GmailSettingsPage() {
   return (
-    <Suspense fallback={<p className="text-sm text-gray-500">Loading…</p>}>
+    <Suspense fallback={<p className="text-sm text-muted">Loading…</p>}>
       <GmailSettingsInner />
     </Suspense>
   );

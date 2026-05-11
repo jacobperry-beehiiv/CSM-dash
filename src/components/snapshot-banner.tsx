@@ -39,7 +39,7 @@ export function SnapshotBanner({ generatedAt, rowCount }: Props) {
   }
 
   return (
-    <div className="flex items-center gap-2 text-xs text-gray-500">
+    <div className="flex items-center gap-2 text-xs text-muted">
       {generatedAt ? (
         <>
           <span>
@@ -53,7 +53,7 @@ export function SnapshotBanner({ generatedAt, rowCount }: Props) {
       <button
         onClick={refresh}
         disabled={refreshing}
-        className="px-2 py-0.5 border border-gray-300 rounded hover:bg-gray-50 disabled:opacity-60"
+        className="px-2 py-0.5 border border-border-strong rounded hover:bg-canvas disabled:opacity-60"
       >
         {refreshing ? "Refreshing… (~60s)" : "Refresh"}
       </button>

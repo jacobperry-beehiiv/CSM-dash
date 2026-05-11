@@ -21,14 +21,16 @@ export function MetricCards({ customers }: { customers: CustomerWithMetrics[] })
   ];
 
   return (
-    <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+    <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
       {cards.map((card) => (
         <div
           key={card.label}
-          className="bg-white rounded-lg border border-gray-200 p-4"
+          className="bg-surface rounded-xl border border-border shadow-card px-5 py-5"
         >
-          <p className="text-sm text-gray-500">{card.label}</p>
-          <p className="text-2xl font-semibold mt-1">{card.value}</p>
+          <p className="text-[13px] text-muted">{card.label}</p>
+          <p className="text-[28px] leading-tight font-semibold mt-1 text-fg tracking-tight">
+            {card.value}
+          </p>
         </div>
       ))}
     </div>

@@ -92,7 +92,7 @@ export function CustomerDetailPanel({
         {c.workspace_id ? (
           <Link
             href={`/account/${encodeURIComponent(c.workspace_id)}`}
-            className="text-blue-600 hover:underline"
+            className="text-blue-600 dark:text-blue-400 hover:underline"
           >
             Open full account view →
           </Link>
@@ -104,8 +104,8 @@ export function CustomerDetailPanel({
 
 function Stat({ label, value }: { label: string; value: string }) {
   return (
-    <div className="bg-white rounded-md border border-gray-200 p-3">
-      <p className="text-xs text-gray-500">{label}</p>
+    <div className="bg-surface rounded-md border border-border p-3">
+      <p className="text-xs text-muted">{label}</p>
       <p className="text-lg font-semibold mt-0.5">{value}</p>
     </div>
   );
@@ -119,8 +119,8 @@ function Section({
   children: React.ReactNode;
 }) {
   return (
-    <div className="bg-white rounded-md border border-gray-200 p-3">
-      <h4 className="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-2">
+    <div className="bg-surface rounded-md border border-border p-3">
+      <h4 className="text-xs font-semibold uppercase tracking-wide text-muted mb-2">
         {title}
       </h4>
       <dl className="space-y-1">{children}</dl>
@@ -137,8 +137,8 @@ function Row({
 }) {
   return (
     <div className="flex justify-between gap-3 text-sm">
-      <dt className="text-gray-500 whitespace-nowrap">{label}</dt>
-      <dd className="text-gray-900 text-right break-words min-w-0">{value}</dd>
+      <dt className="text-muted whitespace-nowrap">{label}</dt>
+      <dd className="text-fg text-right break-words min-w-0">{value}</dd>
     </div>
   );
 }

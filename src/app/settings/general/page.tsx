@@ -84,25 +84,25 @@ export default function GeneralSettingsPage() {
   return (
     <>
       {error ? (
-        <div className="bg-red-50 border border-red-200 rounded-lg p-3 mb-3 text-sm text-red-800">
+        <div className="bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/30 rounded-lg p-3 mb-3 text-sm text-red-800 dark:text-red-300">
           {error}
         </div>
       ) : null}
       {message ? (
-        <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 mb-3 text-sm text-emerald-800">
+        <div className="bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-200 dark:border-emerald-500/30 rounded-lg p-3 mb-3 text-sm text-emerald-800 dark:text-emerald-300">
           {message}
         </div>
       ) : null}
 
       {loading ? (
-        <p className="text-sm text-gray-500">Loading…</p>
+        <p className="text-sm text-muted">Loading…</p>
       ) : (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          <section className="bg-white rounded-lg border border-gray-200 p-4">
-            <h2 className="text-sm font-semibold text-gray-900 mb-1">
+          <section className="bg-surface rounded-xl border border-border shadow-card p-4">
+            <h2 className="text-sm font-semibold text-fg mb-1">
               Flag re-raise periods
             </h2>
-            <p className="text-xs text-gray-500 mb-3">
+            <p className="text-xs text-muted mb-3">
               When you mark a flag resolved (the &ldquo;I&rsquo;ve reached
               out&rdquo; checkbox), it stays hidden for this many days. After
               the period elapses, the flag re-fires automatically so the
@@ -110,16 +110,16 @@ export default function GeneralSettingsPage() {
               &ldquo;never re-raise&rdquo; (manual unresolve required).
             </p>
             <table className="w-full text-sm">
-              <thead className="text-xs text-gray-500">
-                <tr className="text-left border-b border-gray-200">
+              <thead className="text-xs text-muted">
+                <tr className="text-left border-b border-border">
                   <th className="px-2 py-1 font-medium">Flag</th>
                   <th className="px-2 py-1 font-medium w-24">Days</th>
                 </tr>
               </thead>
               <tbody>
                 {FLAG_ORDER.map((code) => (
-                  <tr key={code} className="border-b border-gray-100">
-                    <td className="px-2 py-2 text-gray-800">
+                  <tr key={code} className="border-b border-border">
+                    <td className="px-2 py-2 text-fg">
                       {FLAG_LABELS[code]}
                     </td>
                     <td className="px-2 py-2">
@@ -130,7 +130,7 @@ export default function GeneralSettingsPage() {
                         onChange={(e) =>
                           setFlagPeriod(code, Number(e.target.value))
                         }
-                        className="w-20 px-2 py-1 border border-gray-300 rounded-md text-sm"
+                        className="w-20 px-2 py-1 border border-border-strong rounded-md text-sm"
                       />
                     </td>
                   </tr>
@@ -139,11 +139,11 @@ export default function GeneralSettingsPage() {
             </table>
           </section>
 
-          <section className="bg-white rounded-lg border border-gray-200 p-4">
-            <h2 className="text-sm font-semibold text-gray-900 mb-1">
+          <section className="bg-surface rounded-xl border border-border shadow-card p-4">
+            <h2 className="text-sm font-semibold text-fg mb-1">
               Thresholds
             </h2>
-            <p className="text-xs text-gray-500 mb-3">
+            <p className="text-xs text-muted mb-3">
               Trip-points the at-risk engine and table colorings use.
             </p>
             <ThresholdRow
@@ -192,13 +192,13 @@ export default function GeneralSettingsPage() {
         <button
           onClick={save}
           disabled={saving || loading}
-          className="px-3 py-1.5 bg-gray-900 text-white rounded-md text-sm font-medium hover:bg-gray-700 disabled:opacity-50"
+          className="px-3 py-1.5 bg-accent text-accent-fg rounded-md text-sm font-medium hover:bg-accent-hover disabled:opacity-50"
         >
           {saving ? "Saving…" : "Save settings"}
         </button>
         <button
           onClick={load}
-          className="px-3 py-1.5 border border-gray-300 rounded-md text-sm hover:bg-gray-50"
+          className="px-3 py-1.5 border border-border-strong rounded-md text-sm hover:bg-canvas"
         >
           Reset
         </button>
@@ -219,16 +219,16 @@ function ThresholdRow({
   suffix: string;
 }) {
   return (
-    <div className="flex items-center justify-between gap-3 border-b border-gray-100 py-1.5 last:border-b-0">
-      <label className="text-sm text-gray-700">{label}</label>
+    <div className="flex items-center justify-between gap-3 border-b border-border py-1.5 last:border-b-0">
+      <label className="text-sm text-muted">{label}</label>
       <div className="flex items-center gap-1">
         <input
           type="number"
           value={value}
           onChange={(e) => onChange(Number(e.target.value))}
-          className="w-20 px-2 py-1 border border-gray-300 rounded-md text-sm"
+          className="w-20 px-2 py-1 border border-border-strong rounded-md text-sm"
         />
-        <span className="text-xs text-gray-500">{suffix}</span>
+        <span className="text-xs text-muted">{suffix}</span>
       </div>
     </div>
   );

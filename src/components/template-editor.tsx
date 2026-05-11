@@ -166,17 +166,17 @@ export function TemplateEditor({
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
       <div className="space-y-3">
         <div>
-          <label className="text-xs text-gray-500 block mb-1">Label</label>
+          <label className="text-xs text-muted block mb-1">Label</label>
           <input
             type="text"
             value={label}
             onChange={(e) => setLabel(e.target.value)}
             placeholder="Renewal — 30 days out"
-            className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
+            className="w-full px-3 py-2 border border-border-strong rounded-md text-sm"
           />
         </div>
         <div>
-          <label className="text-xs text-gray-500 block mb-1">
+          <label className="text-xs text-muted block mb-1">
             Blurb (when to use it)
           </label>
           <input
@@ -184,11 +184,11 @@ export function TemplateEditor({
             value={blurb}
             onChange={(e) => setBlurb(e.target.value)}
             placeholder="Short description"
-            className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
+            className="w-full px-3 py-2 border border-border-strong rounded-md text-sm"
           />
         </div>
         <div>
-          <label className="text-xs text-gray-500 block mb-1">
+          <label className="text-xs text-muted block mb-1">
             Tags (comma-separated)
           </label>
           <input
@@ -196,18 +196,18 @@ export function TemplateEditor({
             value={tagsInput}
             onChange={(e) => setTagsInput(e.target.value)}
             placeholder="renewal, annual, escalation"
-            className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
+            className="w-full px-3 py-2 border border-border-strong rounded-md text-sm"
           />
         </div>
         <div>
-          <label className="text-xs text-gray-500 block mb-1">Subject</label>
+          <label className="text-xs text-muted block mb-1">Subject</label>
           <input
             ref={subjectRef}
             type="text"
             value={subject}
             onChange={(e) => setSubject(e.target.value)}
             placeholder="{{customer.name}} renewal — quick sync this week?"
-            className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm font-medium"
+            className="w-full px-3 py-2 border border-border-strong rounded-md text-sm font-medium"
           />
           <button
             type="button"
@@ -217,24 +217,24 @@ export function TemplateEditor({
               );
               if (token) insertMergeTagIntoSubject(token);
             }}
-            className="text-xs mt-1 text-blue-600 hover:underline"
+            className="text-xs mt-1 text-blue-600 dark:text-blue-400 hover:underline"
           >
             + Insert merge tag
           </button>
         </div>
         <div>
           <div className="flex items-center justify-between mb-1">
-            <label className="text-xs text-gray-500">Body</label>
+            <label className="text-xs text-muted">Body</label>
             <button
               type="button"
               onClick={() => setShowMergeMenu((v) => !v)}
-              className="text-xs text-blue-600 hover:underline"
+              className="text-xs text-blue-600 dark:text-blue-400 hover:underline"
             >
               {showMergeMenu ? "Hide" : "+ Merge tag"}
             </button>
           </div>
           {showMergeMenu ? (
-            <div className="mb-2 max-h-48 overflow-auto border border-gray-200 rounded-md p-2 bg-gray-50 grid grid-cols-1 gap-1 text-xs">
+            <div className="mb-2 max-h-48 overflow-auto border border-border rounded-md p-2 bg-canvas grid grid-cols-1 gap-1 text-xs">
               {MERGE_TAGS.map((t) => (
                 <button
                   key={t.token}
@@ -243,12 +243,12 @@ export function TemplateEditor({
                     insertMergeTagIntoBody(t.token);
                     setShowMergeMenu(false);
                   }}
-                  className="text-left px-2 py-1 hover:bg-white rounded"
+                  className="text-left px-2 py-1 hover:bg-surface rounded"
                 >
-                  <code className="font-mono text-gray-900">
+                  <code className="font-mono text-fg">
                     {`{{${t.token}}}`}
                   </code>{" "}
-                  <span className="text-gray-500">— {t.label}</span>
+                  <span className="text-muted">— {t.label}</span>
                 </button>
               ))}
             </div>
@@ -268,13 +268,13 @@ export function TemplateEditor({
           <button
             onClick={save}
             disabled={busy || !label || !subject || !bodyHtml}
-            className="px-3 py-1.5 bg-gray-900 text-white rounded-md text-sm font-medium hover:bg-gray-700 disabled:opacity-50"
+            className="px-3 py-1.5 bg-accent text-accent-fg rounded-md text-sm font-medium hover:bg-accent-hover disabled:opacity-50"
           >
             {busy ? "Saving…" : initial ? "Save changes" : "Create template"}
           </button>
           <button
             onClick={onCancel}
-            className="px-3 py-1.5 border border-gray-300 rounded-md text-sm hover:bg-gray-50"
+            className="px-3 py-1.5 border border-border-strong rounded-md text-sm hover:bg-canvas"
           >
             Cancel
           </button>
@@ -282,7 +282,7 @@ export function TemplateEditor({
             <button
               onClick={remove}
               disabled={busy}
-              className="ml-auto px-3 py-1.5 border border-red-300 text-red-700 rounded-md text-sm hover:bg-red-50 disabled:opacity-50"
+              className="ml-auto px-3 py-1.5 border border-red-300 text-red-700 rounded-md text-sm hover:bg-red-50 dark:bg-red-500/10 disabled:opacity-50"
             >
               Delete
             </button>
@@ -292,30 +292,30 @@ export function TemplateEditor({
 
       <div className="space-y-3">
         <div>
-          <h4 className="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-1">
+          <h4 className="text-xs font-semibold uppercase tracking-wide text-muted mb-1">
             Preview
           </h4>
-          <p className="text-[11px] text-gray-500">
+          <p className="text-[11px] text-muted">
             Rendered against an example customer (Jane Doe @ Example Co, $100K
             ARR, 50% of tier).
           </p>
         </div>
-        <div className="rounded-md border border-gray-200 bg-white p-3">
-          <div className="text-xs text-gray-500 mb-1">Subject</div>
-          <div className="px-3 py-2 bg-gray-50 rounded text-sm font-medium">
+        <div className="rounded-md border border-border bg-surface p-3">
+          <div className="text-xs text-muted mb-1">Subject</div>
+          <div className="px-3 py-2 bg-canvas rounded text-sm font-medium">
             {previewSubject || (
-              <span className="text-gray-400 italic">empty</span>
+              <span className="text-subtle italic">empty</span>
             )}
           </div>
         </div>
-        <div className="rounded-md border border-gray-200 bg-white p-3">
-          <div className="text-xs text-gray-500 mb-1">Body</div>
+        <div className="rounded-md border border-border bg-surface p-3">
+          <div className="text-xs text-muted mb-1">Body</div>
           <div
-            className="px-3 py-2 bg-gray-50 rounded text-sm prose prose-sm max-w-none"
+            className="px-3 py-2 bg-canvas rounded text-sm prose prose-sm max-w-none"
             dangerouslySetInnerHTML={{
               __html:
                 previewBody ||
-                '<span class="text-gray-400 italic">empty</span>',
+                '<span class="text-subtle italic">empty</span>',
             }}
           />
         </div>

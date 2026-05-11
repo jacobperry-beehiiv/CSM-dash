@@ -58,51 +58,51 @@ export function AdGapPanel() {
           placeholder="Org name fragment (e.g. Milk Road)"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          className="px-3 py-1.5 border border-gray-300 rounded-md text-sm w-64"
+          className="px-3 py-1.5 border border-border-strong rounded-md text-sm w-64"
         />
         <input
           type="text"
           placeholder="or org ID"
           value={orgId}
           onChange={(e) => setOrgId(e.target.value)}
-          className="px-3 py-1.5 border border-gray-300 rounded-md text-sm w-56"
+          className="px-3 py-1.5 border border-border-strong rounded-md text-sm w-56"
         />
-        <label className="text-sm text-gray-600">
+        <label className="text-sm text-muted">
           From
           <input
             type="date"
             value={start}
             onChange={(e) => setStart(e.target.value)}
-            className="ml-2 px-3 py-1 border border-gray-300 rounded-md text-sm"
+            className="ml-2 px-3 py-1 border border-border-strong rounded-md text-sm"
           />
         </label>
-        <label className="text-sm text-gray-600">
+        <label className="text-sm text-muted">
           To
           <input
             type="date"
             value={end}
             onChange={(e) => setEnd(e.target.value)}
-            className="ml-2 px-3 py-1 border border-gray-300 rounded-md text-sm"
+            className="ml-2 px-3 py-1 border border-border-strong rounded-md text-sm"
           />
         </label>
         <button
           onClick={() => run()}
           disabled={loading}
-          className="px-4 py-1.5 bg-gray-900 text-white rounded-md text-sm font-medium hover:bg-gray-700 disabled:opacity-50"
+          className="px-4 py-1.5 bg-accent text-accent-fg rounded-md text-sm font-medium hover:bg-accent-hover disabled:opacity-50"
         >
           {loading ? "Running…" : "Analyze"}
         </button>
       </div>
 
       {error && (
-        <div className="bg-red-50 border border-red-200 rounded-lg p-4 text-sm text-red-800">
+        <div className="bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/30 rounded-lg p-4 text-sm text-red-800 dark:text-red-300">
           {error}
         </div>
       )}
 
       {data && !report && data.matches.length > 1 && (
-        <div className="bg-white border border-gray-200 rounded-lg p-4">
-          <p className="text-sm text-gray-600 mb-2">
+        <div className="bg-surface border border-border rounded-lg p-4">
+          <p className="text-sm text-muted mb-2">
             Multiple orgs match. Pick one:
           </p>
           <div className="space-y-1">
@@ -110,10 +110,10 @@ export function AdGapPanel() {
               <button
                 key={m.id}
                 onClick={() => run(m.id)}
-                className="block text-left w-full px-3 py-2 rounded hover:bg-gray-50 text-sm"
+                className="block text-left w-full px-3 py-2 rounded hover:bg-canvas text-sm"
               >
                 <span className="font-medium">{m.name}</span>{" "}
-                <span className="text-gray-500 text-xs ml-2">
+                <span className="text-muted text-xs ml-2">
                   {m.owner_email ?? ""} · {m.id}
                 </span>
               </button>
@@ -123,17 +123,17 @@ export function AdGapPanel() {
       )}
 
       {data && !report && data.matches.length === 0 && (
-        <div className="text-sm text-gray-500">No matching organizations.</div>
+        <div className="text-sm text-muted">No matching organizations.</div>
       )}
 
       {report && (
         <div className="space-y-6">
-          <div className="bg-white border border-gray-200 rounded-lg p-4">
+          <div className="bg-surface border border-border rounded-lg p-4">
             <div className="flex items-baseline justify-between">
               <h3 className="text-lg font-semibold">
                 {report.organization_name}
               </h3>
-              <span className="text-xs text-gray-500">
+              <span className="text-xs text-muted">
                 {report.owner_email} · {report.organization_id}
               </span>
             </div>
@@ -157,18 +157,18 @@ export function AdGapPanel() {
             </div>
           </div>
 
-          <div className="bg-white border border-gray-200 rounded-lg">
+          <div className="bg-surface border border-border rounded-lg">
             <table className="w-full text-sm table-auto">
-              <thead className="bg-gray-50">
-                <tr className="text-left border-b border-gray-200">
-                  <th className="px-3 py-2 font-medium text-gray-600">Publication</th>
-                  <th className="px-3 py-2 font-medium text-gray-600 text-right">Subs</th>
-                  <th className="px-3 py-2 font-medium text-gray-600 text-right">Sends</th>
-                  <th className="px-3 py-2 font-medium text-gray-600 text-center">Enrolled</th>
-                  <th className="px-3 py-2 font-medium text-gray-600 text-right">Accepted</th>
-                  <th className="px-3 py-2 font-medium text-gray-600 text-right">Missed</th>
-                  <th className="px-3 py-2 font-medium text-gray-600 text-right">Fill</th>
-                  <th className="px-3 py-2 font-medium text-gray-600 text-right">Revenue</th>
+              <thead className="bg-canvas">
+                <tr className="text-left border-b border-border">
+                  <th className="px-3 py-2 font-medium text-muted">Publication</th>
+                  <th className="px-3 py-2 font-medium text-muted text-right">Subs</th>
+                  <th className="px-3 py-2 font-medium text-muted text-right">Sends</th>
+                  <th className="px-3 py-2 font-medium text-muted text-center">Enrolled</th>
+                  <th className="px-3 py-2 font-medium text-muted text-right">Accepted</th>
+                  <th className="px-3 py-2 font-medium text-muted text-right">Missed</th>
+                  <th className="px-3 py-2 font-medium text-muted text-right">Fill</th>
+                  <th className="px-3 py-2 font-medium text-muted text-right">Revenue</th>
                 </tr>
               </thead>
               <tbody>
@@ -177,7 +177,7 @@ export function AdGapPanel() {
                   return (
                     <tr
                       key={p.publication_id}
-                      className={`border-b border-gray-100 ${zeroAd ? "font-semibold bg-amber-50/50" : ""}`}
+                      className={`border-b border-border ${zeroAd ? "font-semibold bg-amber-50 dark:bg-amber-500/50" : ""}`}
                     >
                       <td className="px-3 py-2">{p.publication_name}</td>
                       <td className="px-3 py-2 text-right">
@@ -207,7 +207,7 @@ export function AdGapPanel() {
           </div>
 
           {report.zero_ad_sending_pubs.length > 0 && (
-            <div className="bg-amber-50 border border-amber-200 rounded-lg p-4">
+            <div className="bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/30 rounded-lg p-4">
               <h4 className="font-semibold text-amber-900">
                 {report.zero_ad_sending_pubs.length} actively-sending publications
                 with zero ad placements
@@ -236,7 +236,7 @@ export function AdGapPanel() {
 function Stat({ label, value }: { label: string; value: string }) {
   return (
     <div>
-      <div className="text-xs text-gray-500">{label}</div>
+      <div className="text-xs text-muted">{label}</div>
       <div className="text-xl font-semibold mt-0.5">{value}</div>
     </div>
   );

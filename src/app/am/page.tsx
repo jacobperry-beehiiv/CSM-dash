@@ -49,7 +49,7 @@ async function ApproachingTab() {
     return <ApproachingEnterprisePanel rows={rows} />;
   } catch (e) {
     return (
-      <div className="bg-red-50 border border-red-200 rounded-lg p-4 text-sm text-red-800">
+      <div className="bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/30 rounded-lg p-4 text-sm text-red-800 dark:text-red-300">
         Approaching-Enterprise feed (q13268) failed:{" "}
         {e instanceof Error ? e.message : "unknown"}
       </div>
@@ -63,7 +63,7 @@ async function PastDueTab() {
     return <PastDuePanel rows={rows} />;
   } catch (e) {
     return (
-      <div className="bg-red-50 border border-red-200 rounded-lg p-4 text-sm text-red-800">
+      <div className="bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/30 rounded-lg p-4 text-sm text-red-800 dark:text-red-300">
         Past-Due feed (q24620) failed:{" "}
         {e instanceof Error ? e.message : "unknown"}
       </div>
@@ -100,7 +100,7 @@ export default async function AmPage({
       body = (
         <Suspense
           fallback={
-            <div className="text-sm text-gray-500">
+            <div className="text-sm text-muted">
               Loading from Metabase q13268…
             </div>
           }
@@ -112,7 +112,7 @@ export default async function AmPage({
       body = (
         <Suspense
           fallback={
-            <div className="text-sm text-gray-500">
+            <div className="text-sm text-muted">
               Loading from Metabase q24620…
             </div>
           }
@@ -121,11 +121,11 @@ export default async function AmPage({
         </Suspense>
       );
     } else {
-      body = <div className="text-sm text-gray-500">Unknown tab: {tab}</div>;
+      body = <div className="text-sm text-muted">Unknown tab: {tab}</div>;
     }
   } catch (e) {
     body = (
-      <div className="bg-red-50 border border-red-200 rounded-lg p-4 text-sm text-red-800">
+      <div className="bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/30 rounded-lg p-4 text-sm text-red-800 dark:text-red-300">
         Failed to load: {e instanceof Error ? e.message : "Unknown"}
       </div>
     );
@@ -134,8 +134,8 @@ export default async function AmPage({
   return (
     <>
       <div className="mb-6">
-        <h1 className="text-2xl font-bold text-gray-900">AM dashboard</h1>
-        <p className="text-sm text-gray-500 mt-1">
+        <h1 className="text-3xl font-semibold text-fg tracking-tight">AM dashboard</h1>
+        <p className="text-sm text-muted mt-1">
           Three account cohorts that need an AM touch — Enterprise customers
           near their cap, Growth customers approaching the Enterprise threshold,
           and any past-due account regardless of plan.

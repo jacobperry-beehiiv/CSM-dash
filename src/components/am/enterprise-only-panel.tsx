@@ -23,17 +23,17 @@ const BUCKETS: Bucket[] = [
   {
     label: "≥100% — over cap",
     test: (p) => p >= 100,
-    color: "bg-red-50 border-red-200 text-red-900",
+    color: "bg-red-50 dark:bg-red-500/10 border-red-200 dark:border-red-500/30 text-red-900",
   },
   {
     label: "95–99%",
     test: (p) => p >= 95 && p < 100,
-    color: "bg-red-50 border-red-200 text-red-900",
+    color: "bg-red-50 dark:bg-red-500/10 border-red-200 dark:border-red-500/30 text-red-900",
   },
   {
     label: "90–94%",
     test: (p) => p >= 90 && p < 95,
-    color: "bg-amber-50 border-amber-200 text-amber-900",
+    color: "bg-amber-50 dark:bg-amber-500/10 border-amber-200 dark:border-amber-500/30 text-amber-900",
   },
   {
     label: "85–89%",
@@ -77,9 +77,9 @@ export function EnterpriseOnlyPanel({ rows, csms }: Props) {
   return (
     <>
       <div className="flex items-center gap-3 mb-4 text-sm">
-        <span className="text-xs text-gray-500">Filter:</span>
+        <span className="text-xs text-muted">Filter:</span>
         <CsmSelector csms={csms} />
-        <span className="text-xs text-gray-500 ml-auto">
+        <span className="text-xs text-muted ml-auto">
           {rows.length} Enterprise account{rows.length === 1 ? "" : "s"} at ≥85% of cap
         </span>
       </div>
@@ -109,7 +109,7 @@ export function EnterpriseOnlyPanel({ rows, csms }: Props) {
                   <col className="w-[12%]" />
                 </colgroup>
                 <thead>
-                  <tr className="text-xs text-gray-500 border-y border-gray-200 text-left">
+                  <tr className="text-xs text-muted border-y border-border text-left">
                     <th className="px-3 py-2 font-medium">Account</th>
                     <th className="px-3 py-2 font-medium text-right">% of cap</th>
                     <th className="px-3 py-2 font-medium text-right">Subs / cap</th>
@@ -123,31 +123,31 @@ export function EnterpriseOnlyPanel({ rows, csms }: Props) {
                   {list.map((c) => (
                     <tr
                       key={c.workspace_id ?? c.workspace_name ?? Math.random()}
-                      className="border-b border-gray-100 hover:bg-blue-50/40 align-top"
+                      className="border-b border-border hover:bg-blue-50 dark:bg-blue-500/40 align-top"
                     >
                       <td className="px-3 py-2 break-words">
-                        <div className="font-medium text-gray-900">
+                        <div className="font-medium text-fg">
                           {c.company_name ?? c.workspace_name ?? "—"}
                         </div>
-                        <div className="text-xs text-gray-500 truncate">
+                        <div className="text-xs text-muted truncate">
                           {c.property_main_contact ?? c.owner_email ?? ""}
                         </div>
                       </td>
                       <td className="px-3 py-2 text-right font-semibold">
                         {fmtPct(pct(c))}
                       </td>
-                      <td className="px-3 py-2 text-right text-gray-700">
+                      <td className="px-3 py-2 text-right text-muted">
                         <div>{fmtNumber(c.active_subs)}</div>
-                        <div className="text-xs text-gray-500">
+                        <div className="text-xs text-muted">
                           / {fmtNumber(c.max_subscriptions)}
                         </div>
                       </td>
-                      <td className="px-3 py-2 text-right text-gray-700">
+                      <td className="px-3 py-2 text-right text-muted">
                         {priceLabel(c)}
                       </td>
-                      <td className="px-3 py-2 text-gray-700 break-words">
+                      <td className="px-3 py-2 text-muted break-words">
                         {c.customer_success_manager?.replace(/_/g, " ") ?? (
-                          <span className="text-gray-400 italic">unassigned</span>
+                          <span className="text-subtle italic">unassigned</span>
                         )}
                       </td>
                       <td className="px-3 py-2 text-right">

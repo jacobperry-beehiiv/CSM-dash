@@ -7,7 +7,7 @@ import { CsmSelector } from "./csm-selector";
 export function PageCsmFilter({ csms }: { csms: string[] }) {
   return (
     <div className="flex items-center gap-2 mb-4">
-      <span className="text-xs text-gray-500">CSM:</span>
+      <span className="text-xs text-muted">CSM:</span>
       <CsmSelector csms={csms} />
     </div>
   );

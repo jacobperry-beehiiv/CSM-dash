@@ -56,19 +56,19 @@ const BUCKETS: Bucket[] = [
   {
     label: "Past due",
     detail: "renewal date in the past",
-    color: "bg-red-50 border-red-200 text-red-900",
+    color: "bg-red-50 dark:bg-red-500/10 border-red-200 dark:border-red-500/30 text-red-900",
     match: (d) => d < 0,
   },
   {
     label: "≤ 30 days",
     detail: "in the next 30 days",
-    color: "bg-red-50 border-red-200 text-red-900",
+    color: "bg-red-50 dark:bg-red-500/10 border-red-200 dark:border-red-500/30 text-red-900",
     match: (d) => d >= 0 && d <= 30,
   },
   {
     label: "31–60 days",
     detail: "31–60 days out",
-    color: "bg-amber-50 border-amber-200 text-amber-900",
+    color: "bg-amber-50 dark:bg-amber-500/10 border-amber-200 dark:border-amber-500/30 text-amber-900",
     match: (d) => d > 30 && d <= 60,
   },
   {
@@ -144,11 +144,11 @@ export function RenewalPanel({ customers }: Props) {
 
   const cadencePicker = (
     <div className="flex items-center gap-2 mb-4">
-      <label className="text-xs text-gray-500">Cadence:</label>
+      <label className="text-xs text-muted">Cadence:</label>
       <select
         value={intervalFilter}
         onChange={(e) => setIntervalFilter(e.target.value)}
-        className="px-2 py-1 border border-gray-300 rounded-md text-sm bg-white"
+        className="px-2 py-1 border border-border-strong rounded-md text-sm bg-surface"
       >
         <option value="">All cadences ({customers.filter((c) => c.interval).length})</option>
         {intervals.map((i) => {
@@ -190,7 +190,7 @@ export function RenewalPanel({ customers }: Props) {
                 {list.length} account{list.length === 1 ? "" : "s"} · {bucket.detail}
               </span>
             </div>
-            <table className="w-full text-sm bg-white table-fixed">
+            <table className="w-full text-sm bg-surface table-fixed">
               <colgroup>
                 <col className="w-8" />
                 <col className="w-[36%]" />
@@ -201,7 +201,7 @@ export function RenewalPanel({ customers }: Props) {
                 <col className="w-[16%]" />
               </colgroup>
               <thead>
-                <tr className="text-left border-y border-gray-200 text-xs text-gray-500">
+                <tr className="text-left border-y border-border text-xs text-muted">
                   <th className="px-3 py-2"></th>
                   <th className="px-3 py-2 font-medium">Account</th>
                   <th className="px-3 py-2 font-medium text-right">ARR</th>
@@ -219,11 +219,11 @@ export function RenewalPanel({ customers }: Props) {
                     <Fragment key={k}>
                       <tr
                         onClick={() => toggleExpanded(k)}
-                        className={`border-b border-gray-100 align-top cursor-pointer transition-colors ${
-                          isOpen ? "bg-blue-50/40" : "hover:bg-blue-50/40"
+                        className={`border-b border-border align-top cursor-pointer transition-colors ${
+                          isOpen ? "bg-blue-50 dark:bg-blue-500/40" : "hover:bg-blue-50 dark:bg-blue-500/40"
                         }`}
                       >
-                        <td className="px-3 py-2 text-gray-400 select-none">
+                        <td className="px-3 py-2 text-subtle select-none">
                           <span
                             className={`inline-block transition-transform ${
                               isOpen ? "rotate-90" : ""
@@ -233,28 +233,28 @@ export function RenewalPanel({ customers }: Props) {
                           </span>
                         </td>
                         <td className="px-3 py-2 break-words">
-                          <div className="font-medium text-gray-900">
+                          <div className="font-medium text-fg">
                             {c.company_name ?? c.workspace_name ?? "—"}
                           </div>
-                          <div className="text-xs text-gray-500 truncate">
+                          <div className="text-xs text-muted truncate">
                             {c.property_main_contact ?? c.owner_email ?? ""}
                           </div>
                         </td>
                         <td className="px-3 py-2 text-right font-medium">
                           {fmtCompactCurrency(c.arr)}
                         </td>
-                        <td className="px-3 py-2 text-gray-700">
+                        <td className="px-3 py-2 text-muted">
                           <div>{fmtDate(date ?? null)}</div>
                           {c.interval ? (
-                            <div className="text-xs text-gray-500">
+                            <div className="text-xs text-muted">
                               {c.interval === "month" ? "monthly" : c.interval}
                             </div>
                           ) : null}
                         </td>
-                        <td className="px-3 py-2 font-medium text-gray-900">
+                        <td className="px-3 py-2 font-medium text-fg">
                           {days}
                         </td>
-                        <td className="px-3 py-2 text-gray-600 hidden lg:table-cell break-words">
+                        <td className="px-3 py-2 text-muted hidden lg:table-cell break-words">
                           {c.customer_success_manager?.replace(/_/g, " ") ?? "—"}
                         </td>
                         <td className="px-3 py-2">
@@ -262,7 +262,7 @@ export function RenewalPanel({ customers }: Props) {
                         </td>
                       </tr>
                       {isOpen && (
-                        <tr className="bg-blue-50/20 border-b border-gray-100">
+                        <tr className="bg-blue-50 dark:bg-blue-500/20 border-b border-border">
                           <td colSpan={7} className="px-6 py-4">
                             <CustomerDetailPanel customer={c} />
                           </td>

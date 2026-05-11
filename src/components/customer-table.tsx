@@ -1,10 +1,11 @@
 "use client";
 
-import { Fragment, useCallback, useMemo, useState } from "react";
+import { Fragment, useCallback, useMemo, useRef, useState } from "react";
 import type { Customer, CustomerWithMetrics } from "@/lib/types";
 import { StatusBadge } from "./status-badge";
 import { RiskLevelChip } from "./risk-level-chip";
 import { FilterBar } from "./filter-bar";
+import { MetricCards } from "./metric-cards";
 import { OutreachModal } from "./outreach-modal";
 import { CustomerDetailPanel } from "./customer-detail-panel";
 import { RowActions } from "./row-actions";
@@ -74,7 +75,12 @@ export function CustomerTable({
   const [bulkMessage, setBulkMessage] = useState<string | null>(null);
   const [bulkModalOpen, setBulkModalOpen] = useState(false);
   const [bulkDrafts, setBulkDrafts] = useState<BulkDraft[]>([]);
-  const [bulkTemplateLabel, setBulkTemplateLabel] = useState("");
+  const [bulkTemplates, setBulkTemplates] = useState<StoredTemplate[]>([]);
+  const [bulkTemplateId, setBulkTemplateId] = useState<string>("");
+  const [bulkTargets, setBulkTargets] = useState<CustomerWithMetrics[]>([]);
+  const [bulkLadder, setBulkLadder] = useState<
+    Awaited<ReturnType<typeof getTierLadder>>
+  >([]);
   const [bulkProgress, setBulkProgress] = useState<{
     done: number;
     total: number;
@@ -176,6 +182,138 @@ export function CustomerTable({
       .trim();
   }
 
+  function csvEscape(v: unknown): string {
+    if (v == null) return "";
+    return `"${String(v).replace(/"/g, '""')}"`;
+  }
+
+  /** Export the currently-filtered list to a CSV download. */
+  function exportFilteredCsv() {
+    if (filtered.length === 0) return;
+    const columns: Array<{ header: string; pick: (c: CustomerWithMetrics) => unknown }> = [
+      { header: "Company", pick: (c) => c.company_name ?? "" },
+      { header: "Workspace", pick: (c) => c.workspace_name ?? "" },
+      { header: "Workspace ID", pick: (c) => c.workspace_id ?? "" },
+      { header: "CSM", pick: (c) => c.customer_success_manager ?? "" },
+      { header: "Owner email", pick: (c) => c.owner_email ?? "" },
+      { header: "Plan", pick: (c) => c.stripe_plan ?? "" },
+      { header: "Cadence", pick: (c) => c.interval ?? "" },
+      { header: "ARR", pick: (c) => c.arr ?? 0 },
+      { header: "MRR", pick: (c) => c.mrr ?? 0 },
+      { header: "Active subs", pick: (c) => c.active_subs ?? 0 },
+      { header: "Max subs", pick: (c) => c.max_subscriptions ?? "" },
+      {
+        header: "% of tier",
+        pick: (c) =>
+          c.utilization_pct == null ? "" : `${c.utilization_pct.toFixed(1)}%`,
+      },
+      { header: "Renewal date", pick: (c) => c.renewal_date ?? "" },
+      { header: "Next charge", pick: (c) => c.next_invoice ?? c.renewal_date ?? "" },
+      { header: "Last send", pick: (c) => c.last_send ?? "" },
+      { header: "Last log in", pick: (c) => c.last_log_in ?? "" },
+      { header: "Last contacted", pick: (c) => c.property_notes_last_contacted ?? "" },
+      { header: "Risk level", pick: (c) => c.property_risk_level ?? "" },
+      { header: "Risk detail", pick: (c) => c.property_risk_level_detail ?? "" },
+      { header: "Engagement", pick: (c) => c.company_engagement ?? "" },
+    ];
+    const header = columns.map((col) => csvEscape(col.header)).join(",");
+    const rows = filtered.map((c) =>
+      columns.map((col) => csvEscape(col.pick(c))).join(",")
+    );
+    const ts = new Date().toISOString().slice(0, 10);
+    const blob = new Blob(["﻿" + [header, ...rows].join("\n")], {
+      type: "text/csv;charset=utf-8",
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `csm-book-${ts}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  // Cache per-org ad-gap reports across template re-renders so swapping
+  // templates inside the modal doesn't re-hit the API. Cleared each time
+  // bulkDraft() opens the modal fresh.
+  const adGapCacheRef = useRef<Record<string, AdGapReport | null>>({});
+
+  async function fetchAdGapForTargets(
+    targets: CustomerWithMetrics[]
+  ): Promise<Record<string, AdGapReport | null>> {
+    const today = new Date().toISOString().slice(0, 10);
+    const start = new Date(Date.now() - 90 * 86400_000)
+      .toISOString()
+      .slice(0, 10);
+    const cache = adGapCacheRef.current;
+    const queue = targets
+      .map((c) => c.workspace_id)
+      .filter((id): id is string => Boolean(id))
+      .filter((id) => !(id in cache));
+
+    if (queue.length === 0) return cache;
+
+    let cursor = 0;
+    let completed = 0;
+    async function worker() {
+      while (cursor < queue.length) {
+        const idx = cursor++;
+        const id = queue[idx];
+        try {
+          const r = await fetch(
+            `/api/ad-gap?organization_id=${encodeURIComponent(id)}&start=${start}&end=${today}`
+          );
+          const j = await r.json();
+          cache[id] = j?.report ?? null;
+        } catch {
+          cache[id] = null;
+        }
+        completed++;
+        setBulkProgress({ done: completed, total: queue.length });
+      }
+    }
+    await Promise.all(
+      Array.from({ length: Math.min(4, queue.length) }, () => worker())
+    );
+    return cache;
+  }
+
+  async function buildDraftsFor(
+    tpl: StoredTemplate,
+    targets: CustomerWithMetrics[],
+    ladder: Awaited<ReturnType<typeof getTierLadder>>
+  ): Promise<BulkDraft[]> {
+    const usesAdGap = /customer\.(ad_revenue_actual|ad_revenue_potential|ad_revenue_gap|ad_zero_pubs)/.test(
+      tpl.subject + tpl.body_html
+    );
+    const adGapByOrg = usesAdGap ? await fetchAdGapForTargets(targets) : {};
+
+    const drafts: BulkDraft[] = [];
+    for (const c of targets) {
+      if (!c.owner_email) continue;
+      const adGap = c.workspace_id ? adGapByOrg[c.workspace_id] ?? null : null;
+      const composeUrl =
+        usesAdGap && adGap
+          ? composeUrlWithAdGap(tpl, c, ladder, adGap)
+          : composeUrlForTemplate(tpl, c, ladder);
+      if (!composeUrl) continue;
+      const ctx = { ladder, adGap };
+      const subject = applyMergeTags(tpl.subject, c, ctx);
+      const body_html = applyMergeTags(tpl.body_html, c, ctx);
+      const body_text = htmlToText(body_html);
+      drafts.push({
+        customer_label: c.company_name ?? c.workspace_name ?? c.owner_email,
+        to: c.owner_email,
+        subject,
+        body_text,
+        body_html,
+        compose_url: composeUrl,
+      });
+    }
+    return drafts;
+  }
+
   /**
    * Pre-builds a draft for every selected customer and hands the list to
    * the modal. We don't open tabs from here — popup blockers kill all but
@@ -193,10 +331,12 @@ export function CustomerTable({
       return;
     }
 
+    adGapCacheRef.current = {};
     setBulkBusy(true);
     setBulkMessage(null);
     setBulkError(null);
     setBulkDrafts([]);
+    setBulkTargets(targets);
     setBulkProgress({ done: 0, total: targets.length });
     setBulkModalOpen(true);
 
@@ -208,6 +348,8 @@ export function CustomerTable({
         }),
         getTierLadder().catch(() => []),
       ]);
+      setBulkTemplates(templates);
+      setBulkLadder(ladder);
       const wantedId = autoTemplateId();
       const tpl =
         templates.find((t) => t.id === wantedId) ??
@@ -217,71 +359,9 @@ export function CustomerTable({
         setBulkError("No templates available — visit /settings/templates.");
         return;
       }
-      setBulkTemplateLabel(tpl.label);
+      setBulkTemplateId(tpl.id);
 
-      const usesAdGap = /customer\.(ad_revenue_actual|ad_revenue_potential|ad_revenue_gap|ad_zero_pubs)/.test(
-        tpl.subject + tpl.body_html
-      );
-
-      // Pre-fetch ad-gap reports if the template needs them (concurrency 4).
-      let adGapByOrg: Record<string, AdGapReport | null> = {};
-      if (usesAdGap) {
-        const today = new Date().toISOString().slice(0, 10);
-        const start = new Date(Date.now() - 90 * 86400_000)
-          .toISOString()
-          .slice(0, 10);
-        const queue = targets
-          .map((c) => c.workspace_id)
-          .filter((id): id is string => Boolean(id));
-
-        const results = new Map<string, AdGapReport | null>();
-        let cursor = 0;
-        let completed = 0;
-        async function worker() {
-          while (cursor < queue.length) {
-            const idx = cursor++;
-            const id = queue[idx];
-            try {
-              const r = await fetch(
-                `/api/ad-gap?organization_id=${encodeURIComponent(id)}&start=${start}&end=${today}`
-              );
-              const j = await r.json();
-              results.set(id, j?.report ?? null);
-            } catch {
-              results.set(id, null);
-            }
-            completed++;
-            setBulkProgress({ done: completed, total: queue.length });
-          }
-        }
-        await Promise.all(
-          Array.from({ length: Math.min(4, queue.length) }, () => worker())
-        );
-        adGapByOrg = Object.fromEntries(results);
-      }
-
-      const drafts: BulkDraft[] = [];
-      for (const c of targets) {
-        if (!c.owner_email) continue;
-        const adGap = c.workspace_id ? adGapByOrg[c.workspace_id] ?? null : null;
-        const composeUrl =
-          usesAdGap && adGap
-            ? composeUrlWithAdGap(tpl, c, ladder, adGap)
-            : composeUrlForTemplate(tpl, c, ladder);
-        if (!composeUrl) continue;
-        const ctx = { ladder, adGap };
-        const subject = applyMergeTags(tpl.subject, c, ctx);
-        const body_html = applyMergeTags(tpl.body_html, c, ctx);
-        const body_text = htmlToText(body_html);
-        drafts.push({
-          customer_label: c.company_name ?? c.workspace_name ?? c.owner_email,
-          to: c.owner_email,
-          subject,
-          body_text,
-          body_html,
-          compose_url: composeUrl,
-        });
-      }
+      const drafts = await buildDraftsFor(tpl, targets, ladder);
       setBulkDrafts(drafts);
       setBulkProgress(null);
 
@@ -295,6 +375,33 @@ export function CustomerTable({
         `Bulk draft failed: ${e instanceof Error ? e.message : "unknown"}`
       );
     } finally {
+      setBulkBusy(false);
+    }
+  }
+
+  /** Re-render every draft against a different template (in-modal swap). */
+  async function changeBulkTemplate(nextId: string) {
+    if (nextId === bulkTemplateId) return;
+    const tpl = bulkTemplates.find((t) => t.id === nextId);
+    if (!tpl) return;
+    setBulkTemplateId(nextId);
+    setBulkBusy(true);
+    setBulkError(null);
+    setBulkProgress({ done: 0, total: bulkTargets.length });
+    try {
+      const drafts = await buildDraftsFor(tpl, bulkTargets, bulkLadder);
+      setBulkDrafts(drafts);
+      if (drafts.length === 0) {
+        setBulkError(
+          "No drafts generated — selected accounts may be missing owner emails."
+        );
+      }
+    } catch (e) {
+      setBulkError(
+        `Re-render failed: ${e instanceof Error ? e.message : "unknown"}`
+      );
+    } finally {
+      setBulkProgress(null);
       setBulkBusy(false);
     }
   }
@@ -313,10 +420,10 @@ export function CustomerTable({
       case "company_name":
         return (
           <div className="min-w-0">
-            <div className="font-medium text-gray-900 break-words">
+            <div className="font-medium text-fg break-words">
               {c.company_name || c.workspace_name || "-"}
             </div>
-            <div className="text-xs text-gray-500 truncate">
+            <div className="text-xs text-muted truncate">
               {c.workspace_name || ""}
             </div>
           </div>
@@ -333,7 +440,7 @@ export function CustomerTable({
             ? "text-red-600"
             : ratio < 0.67
               ? "text-amber-600"
-              : "text-emerald-700";
+              : "text-emerald-700 dark:text-emerald-300";
         return (
           <span className={`font-medium ${color}`}>
             {active}/{total}
@@ -369,7 +476,7 @@ export function CustomerTable({
             ? "bg-purple-100 text-purple-800 border-purple-200"
             : cadenceLabel === "monthly"
               ? "bg-sky-100 text-sky-800 border-sky-200"
-              : "bg-gray-100 text-gray-700 border-gray-200";
+              : "bg-surface-2 text-muted border-border";
         return (
           <div className="flex flex-col gap-0.5">
             <span className={color}>{fmtDate(date)}</span>
@@ -385,11 +492,11 @@ export function CustomerTable({
       }
       case "last_send":
         return (
-          <span className="text-gray-600 text-xs">{fmtDate(c.last_send)}</span>
+          <span className="text-muted text-xs">{fmtDate(c.last_send)}</span>
         );
       case "property_notes_last_contacted":
         return (
-          <span className="text-gray-600 text-xs">
+          <span className="text-muted text-xs">
             {fmtDate(c.property_notes_last_contacted ?? null)}
           </span>
         );
@@ -400,6 +507,7 @@ export function CustomerTable({
 
   return (
     <>
+      <MetricCards customers={filtered} />
       <FilterBar
         search={search}
         onSearchChange={setSearch}
@@ -417,8 +525,8 @@ export function CustomerTable({
         />
       </div>
 
-      <div className="flex flex-wrap items-center gap-2 px-3 py-2 mb-3 bg-gray-50 border border-gray-200 rounded-md">
-        <span className="text-xs text-gray-600">
+      <div className="flex flex-wrap items-center gap-2 px-3 py-2 mb-3 bg-canvas border border-border rounded-md">
+        <span className="text-xs text-muted">
           <strong>{selected.size}</strong> selected of {filtered.length}
         </span>
         <button
@@ -427,7 +535,7 @@ export function CustomerTable({
             const allSelected = allKeys.every((k) => selected.has(k));
             setSelected(allSelected ? new Set() : new Set(allKeys));
           }}
-          className="px-2 py-1 text-xs border border-gray-300 rounded-md bg-white hover:bg-gray-50"
+          className="px-2 py-1 text-xs border border-border-strong rounded-md bg-surface hover:bg-canvas"
         >
           {filtered.length > 0 &&
           filtered.every((c, i) => selected.has(rowKey(c, i)))
@@ -437,13 +545,13 @@ export function CustomerTable({
         <button
           onClick={() => setSelected(new Set())}
           disabled={selected.size === 0}
-          className="px-2 py-1 text-xs border border-gray-300 rounded-md bg-white hover:bg-gray-50 disabled:opacity-50"
+          className="px-2 py-1 text-xs border border-border-strong rounded-md bg-surface hover:bg-canvas disabled:opacity-50"
         >
           Clear
         </button>
-        <span className="text-xs text-gray-500 ml-2">
+        <span className="text-xs text-muted ml-2">
           Template auto-pick:{" "}
-          <code className="font-mono bg-white border border-gray-200 px-1 rounded">
+          <code className="font-mono bg-surface border border-border px-1 rounded">
             {adNetworkPredicate
               ? "ad-revenue-opportunity"
               : featurePredicate
@@ -453,9 +561,17 @@ export function CustomerTable({
         </span>
         <div className="flex-1" />
         <button
+          onClick={exportFilteredCsv}
+          disabled={filtered.length === 0}
+          className="px-3 py-1 text-xs border border-border-strong rounded-md bg-surface hover:bg-surface-2 disabled:opacity-50"
+          title="Download the current filtered list as a CSV"
+        >
+          ⬇ Export {filtered.length} to CSV
+        </button>
+        <button
           onClick={bulkDraft}
           disabled={bulkBusy || selected.size === 0}
-          className="px-3 py-1 text-xs bg-gray-900 text-white rounded-md hover:bg-gray-700 disabled:opacity-50"
+          className="px-3 py-1 text-xs bg-accent text-accent-fg rounded-md hover:bg-accent-hover disabled:opacity-50"
         >
           {bulkBusy
             ? "Drafting…"
@@ -463,11 +579,11 @@ export function CustomerTable({
         </button>
       </div>
       {bulkMessage ? (
-        <div className="text-xs text-gray-600 bg-blue-50 border border-blue-200 rounded-md px-3 py-2 mb-3">
+        <div className="text-xs text-muted bg-blue-50 dark:bg-blue-500/10 border border-blue-200 dark:border-accent/30 rounded-md px-3 py-2 mb-3">
           {bulkMessage}
         </div>
       ) : null}
-      <div className="rounded-lg border border-gray-200 bg-white">
+      <div className="rounded-xl border border-border bg-surface shadow-card">
         <table className="w-full text-sm table-fixed">
           <colgroup>
             <col className="w-8" />
@@ -478,14 +594,14 @@ export function CustomerTable({
             <col className="w-[12%]" />
           </colgroup>
           <thead>
-            <tr className="bg-gray-50 border-b border-gray-200">
+            <tr className="bg-canvas border-b border-border">
               <th className="px-3 py-3 w-8"></th>
               <th className="px-3 py-3 w-8"></th>
               {COLUMNS.map((col) => (
                 <th
                   key={col.key}
                   onClick={() => toggleSort(col.key)}
-                  className={`px-3 py-3 font-medium text-gray-600 cursor-pointer hover:bg-gray-100 select-none ${
+                  className={`px-3 py-3 font-medium text-muted cursor-pointer hover:bg-surface-2 select-none ${
                     col.align === "right" ? "text-right" : "text-left"
                   } ${SHOW_CLASS[col.showAt ?? "always"]}`}
                 >
@@ -508,8 +624,8 @@ export function CustomerTable({
                 <Fragment key={k}>
                   <tr
                     onClick={() => toggleExpanded(k)}
-                    className={`border-b border-gray-100 cursor-pointer transition-colors align-top ${
-                      isOpen ? "bg-blue-50/40" : "hover:bg-blue-50/30"
+                    className={`border-b border-border cursor-pointer transition-colors align-top ${
+                      isOpen ? "bg-blue-50 dark:bg-blue-500/40" : "hover:bg-blue-50 dark:bg-blue-500/30"
                     }`}
                   >
                     <td
@@ -527,11 +643,11 @@ export function CustomerTable({
                             return next;
                           })
                         }
-                        className="h-4 w-4 rounded border-gray-300 cursor-pointer"
+                        className="h-4 w-4 rounded border-border-strong cursor-pointer"
                         aria-label={`Select ${c.company_name ?? "row"}`}
                       />
                     </td>
-                    <td className="px-3 py-2.5 text-gray-400 select-none">
+                    <td className="px-3 py-2.5 text-subtle select-none">
                       <span
                         className={`inline-block transition-transform ${
                           isOpen ? "rotate-90" : ""
@@ -555,7 +671,7 @@ export function CustomerTable({
                     </td>
                   </tr>
                   {isOpen && (
-                    <tr className="bg-blue-50/20 border-b border-gray-100">
+                    <tr className="bg-blue-50 dark:bg-blue-500/20 border-b border-border">
                       <td colSpan={COLUMNS.length + 3} className="px-6 py-4">
                         <CustomerDetailPanel customer={c} />
                       </td>
@@ -567,12 +683,12 @@ export function CustomerTable({
           </tbody>
         </table>
         {filtered.length === 0 && (
-          <div className="text-center text-gray-500 py-8">
+          <div className="text-center text-muted py-8">
             No customers match your filters
           </div>
         )}
       </div>
-      <p className="text-xs text-gray-400 mt-2">
+      <p className="text-xs text-subtle mt-2">
         Showing {filtered.length} of {initialCustomers.length} customers · click a
         row to expand feature usage
       </p>
@@ -581,7 +697,9 @@ export function CustomerTable({
       )}
       {bulkModalOpen ? (
         <BulkDraftsModal
-          templateLabel={bulkTemplateLabel}
+          templates={bulkTemplates.map((t) => ({ id: t.id, label: t.label }))}
+          templateId={bulkTemplateId}
+          onTemplateChange={changeBulkTemplate}
           drafts={bulkDrafts}
           loading={bulkBusy}
           loadingProgress={bulkProgress}

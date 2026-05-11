@@ -63,7 +63,7 @@ export function RowActions({ customer, onDraft }: Props) {
           rel="noopener noreferrer"
           title="Masquerade into workspace"
           aria-label="Masquerade"
-          className="px-2 py-1 text-xs border border-gray-300 rounded-md hover:bg-gray-50 inline-flex items-center"
+          className="px-2 py-1 text-xs border border-border-strong rounded-md hover:bg-canvas inline-flex items-center"
         >
           <span aria-hidden>👤</span>
         </a>
@@ -74,7 +74,7 @@ export function RowActions({ customer, onDraft }: Props) {
           disabled={emailing}
           title={`Email ${customer.owner_email}`}
           aria-label="Quick email"
-          className="px-2 py-1 text-xs border border-gray-300 rounded-md hover:bg-gray-50 inline-flex items-center disabled:opacity-50"
+          className="px-2 py-1 text-xs border border-border-strong rounded-md hover:bg-canvas inline-flex items-center disabled:opacity-50"
         >
           <span aria-hidden>{emailing ? "…" : "✉️"}</span>
         </button>
@@ -82,7 +82,7 @@ export function RowActions({ customer, onDraft }: Props) {
       <button
         onClick={() => onDraft(customer)}
         title="Draft outreach (template picker)"
-        className="px-2 py-1 text-xs border border-gray-300 rounded-md hover:bg-gray-50"
+        className="px-2 py-1 text-xs border border-border-strong rounded-md hover:bg-canvas"
       >
         Draft
       </button>

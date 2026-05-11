@@ -34,10 +34,10 @@ export default async function AccountPage({
   return (
     <>
       <div className="mb-6">
-        <h1 className="text-2xl font-bold text-gray-900">
+        <h1 className="text-3xl font-semibold text-fg tracking-tight">
           {c.company_name ?? c.workspace_name}
         </h1>
-        <p className="text-sm text-gray-500 mt-1">
+        <p className="text-sm text-muted mt-1">
           {c.workspace_name} · {c.stripe_plan ?? "—"} · CSM:{" "}
           {c.customer_success_manager?.replace(/_/g, " ") ?? "unassigned"}
         </p>
@@ -130,8 +130,8 @@ export default async function AccountPage({
 
 function Stat({ label, value }: { label: string; value: string }) {
   return (
-    <div className="bg-white rounded-lg border border-gray-200 p-4">
-      <p className="text-sm text-gray-500">{label}</p>
+    <div className="bg-surface rounded-xl border border-border shadow-card p-4">
+      <p className="text-sm text-muted">{label}</p>
       <p className="text-2xl font-semibold mt-1">{value}</p>
     </div>
   );
@@ -145,8 +145,8 @@ function Section({
   children: React.ReactNode;
 }) {
   return (
-    <div className="bg-white rounded-lg border border-gray-200 p-4">
-      <h3 className="font-semibold text-gray-900 mb-2">{title}</h3>
+    <div className="bg-surface rounded-xl border border-border shadow-card p-4">
+      <h3 className="font-semibold text-fg mb-2">{title}</h3>
       <dl className="space-y-1.5">{children}</dl>
     </div>
   );
@@ -161,8 +161,8 @@ function Row({
 }) {
   return (
     <div className="flex justify-between gap-4 text-sm">
-      <dt className="text-gray-500 whitespace-nowrap">{label}</dt>
-      <dd className="text-gray-900 text-right">{value}</dd>
+      <dt className="text-muted whitespace-nowrap">{label}</dt>
+      <dd className="text-fg text-right">{value}</dd>
     </div>
   );
 }

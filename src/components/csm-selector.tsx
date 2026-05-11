@@ -26,7 +26,7 @@ export function CsmSelector({ csms }: Props) {
     <select
       value={current}
       onChange={(e) => set(e.target.value)}
-      className="px-2 py-1 border border-gray-300 rounded-md text-sm bg-white"
+      className="px-2 py-1 border border-border-strong rounded-md text-sm bg-surface"
     >
       <option value="">All CSMs</option>
       {csms.map((c) => (

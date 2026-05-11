@@ -17,11 +17,11 @@ const STATE_LABEL: Record<FeatureState, string> = {
 };
 
 const STATE_STYLES: Record<FeatureState, string> = {
-  active: "bg-emerald-100 text-emerald-700 border-emerald-200",
-  completed: "bg-emerald-100 text-emerald-700 border-emerald-200",
-  started: "bg-amber-100 text-amber-800 border-amber-200",
-  inactive: "bg-gray-100 text-gray-500 border-gray-200",
-  unknown: "bg-gray-50 text-gray-400 border-gray-200",
+  active: "bg-emerald-100 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-500/30",
+  completed: "bg-emerald-100 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-500/30",
+  started: "bg-amber-100 text-amber-800 dark:text-amber-300 border-amber-200 dark:border-amber-500/30",
+  inactive: "bg-surface-2 text-muted border-border",
+  unknown: "bg-canvas text-subtle border-border",
 };
 
 export function FeatureBreakdown({ customer }: { customer: Customer }) {
@@ -42,10 +42,10 @@ export function FeatureBreakdown({ customer }: { customer: Customer }) {
   return (
     <div className="space-y-3">
       <div className="flex items-baseline gap-4 text-sm">
-        <span className="font-medium text-gray-900">
+        <span className="font-medium text-fg">
           {customer.company_name ?? customer.workspace_name}
         </span>
-        <span className="text-gray-500">
+        <span className="text-muted">
           {active.length} active · {inactive.length} not in use or started
         </span>
       </div>
@@ -54,9 +54,9 @@ export function FeatureBreakdown({ customer }: { customer: Customer }) {
         {grouped.map(({ group, items }) => (
           <div
             key={group}
-            className="rounded-md border border-gray-200 bg-white p-3"
+            className="rounded-md border border-border bg-surface p-3"
           >
-            <h4 className="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-2">
+            <h4 className="text-xs font-semibold uppercase tracking-wide text-muted mb-2">
               {group}
             </h4>
             <ul className="space-y-1.5">
@@ -67,16 +67,16 @@ export function FeatureBreakdown({ customer }: { customer: Customer }) {
                     <div
                       className={
                         f.state === "active" || f.state === "completed"
-                          ? "text-gray-900"
+                          ? "text-fg"
                           : f.state === "unknown"
-                            ? "text-gray-400 italic"
-                            : "text-gray-600"
+                            ? "text-subtle italic"
+                            : "text-muted"
                       }
                     >
                       {f.label}
                     </div>
                     {f.detail ? (
-                      <div className="text-xs text-gray-500 mt-0.5">
+                      <div className="text-xs text-muted mt-0.5">
                         {f.detail}
                       </div>
                     ) : null}

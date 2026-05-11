@@ -27,7 +27,7 @@ export function FilterBar({
         placeholder="Search company or workspace..."
         value={search}
         onChange={(e) => onSearchChange(e.target.value)}
-        className="px-3 py-2 border border-gray-300 rounded-lg text-sm flex-1 min-w-[220px] focus:outline-none focus:ring-2 focus:ring-blue-500"
+        className="px-3.5 py-2 bg-surface border border-border rounded-lg text-sm flex-1 min-w-[220px] text-fg placeholder:text-subtle focus:outline-none focus:ring-2 focus:ring-accent focus:border-accent"
       />
       <CsmSelector csms={csms} />
     </div>
