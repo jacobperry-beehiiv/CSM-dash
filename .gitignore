@@ -13,7 +13,9 @@ tsconfig.tsbuildinfo
 # Editor / agent state
 .claude/
 
-# Customer data (test fixtures + snapshots — never check in customer data)
+# Customer data (test fixtures + plaintext snapshots — never check in raw
+# customer data). The ENCRYPTED snapshot IS committed; see snapshot-crypto.
 data/*.csv
 data/*.json
 !data/.gitkeep
+!data/snapshot.enc.json

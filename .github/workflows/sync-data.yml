@@ -1,0 +1,65 @@
+name: sync-data
+
+# Pulls the latest book of business from Metabase, encrypts it with
+# SNAPSHOT_ENCRYPTION_KEY, and commits data/snapshot.enc.json back to the
+# repo. Vercel's GitHub integration sees the new commit and auto-redeploys
+# with the fresh data.
+#
+# Trigger:
+#   • automatically twice daily (08:00 and 16:00 UTC, weekdays)
+#   • manually via the "Run workflow" button on this workflow's page
+#
+# Required repo secrets:
+#   • METABASE_API_KEY
+#   • SNAPSHOT_ENCRYPTION_KEY  (32-byte base64; same one set in Vercel env)
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Twice daily on weekdays — morning + early afternoon ET-ish.
+    - cron: "0 8,16 * * 1-5"
+
+permissions:
+  # We need write access to push the encrypted snapshot back to the repo.
+  contents: write
+
+concurrency:
+  # Don't let two scheduled runs (or a manual + a scheduled) race each
+  # other and produce a merge conflict on snapshot.enc.json.
+  group: sync-data
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Need a token that can push back, not the default read-only one.
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - name: Sync + encrypt snapshot
+        run: npm run sync
+        env:
+          METABASE_URL: https://beehiiv.metabaseapp.com
+          METABASE_API_KEY: ${{ secrets.METABASE_API_KEY }}
+          SNAPSHOT_ENCRYPTION_KEY: ${{ secrets.SNAPSHOT_ENCRYPTION_KEY }}
+
+      - name: Commit + push encrypted snapshot
+        run: |
+          if git diff --quiet -- data/snapshot.enc.json; then
+            echo "snapshot.enc.json unchanged — nothing to commit"
+            exit 0
+          fi
+          git config user.name  "csm-dash-bot"
+          git config user.email "csm-dash-bot@users.noreply.github.com"
+          git add data/snapshot.enc.json
+          git commit -m "chore(data): refresh encrypted snapshot ($(date -u +%FT%TZ))"
+          git push

@@ -96,16 +96,40 @@ https://<your-vercel-domain>/api/auth/google/callback     ← per-CSM Gmail
 That's it. Open the Vercel URL → sign in with Google (`@beehiiv.com` only)
 → optionally connect Gmail at `/settings/gmail` → start drafting.
 
-### Updating data
+### How customer data lives
 
-Two paths:
+The book of business is committed to the repo as an AES-256-GCM-encrypted
+file at `data/snapshot.enc.json`. The runtime decrypts on read using a
+symmetric key from `SNAPSHOT_ENCRYPTION_KEY`. The plaintext snapshot
+(`data/snapshot.json`) stays gitignored — only the encrypted envelope is
+ever pushed.
 
-- **`DATA_SOURCE=metabase`** (recommended for prod): every page hit reads
-  live from Metabase q10600. No manual sync needed; ~60s cold but cached
-  for 60s after that. This is the default in the deploy steps above.
-- **`DATA_SOURCE=snapshot`** (for local offline work): commit a fresh
-  `data/snapshot.json` produced by `npm run sync`. Vercel's filesystem is
-  read-only at runtime, so snapshot mode in prod requires re-deploying.
+**Refresh paths**:
+
+- **Scheduled** — `.github/workflows/sync-data.yml` runs twice every
+  weekday (08:00 + 16:00 UTC), pulls Metabase q10600, encrypts, commits
+  back to `main`. Vercel auto-redeploys on the new commit.
+- **Manual** — same workflow, "Run workflow" button on the Actions tab.
+  Useful for "I just changed a CSM assignment in HubSpot and want it
+  reflected now."
+- **Local** — `npm run sync` produces the encrypted file too, useful for
+  smoke-testing the encrypt/decrypt round-trip. Pass `SYNC_PLAINTEXT=1`
+  if you want the unencrypted JSON for debugging (it's gitignored).
+
+**Required secrets**:
+
+| Secret | Where |
+|---|---|
+| `METABASE_API_KEY` | GitHub Actions + Vercel + `.env.local` |
+| `SNAPSHOT_ENCRYPTION_KEY` (32-byte base64) | GitHub Actions + Vercel + `.env.local` — same value all three places |
+
+Generate the encryption key once with:
+```bash
+openssl rand -base64 32
+```
+**Don't rotate it casually** — old commits in the repo will become
+undecryptable. If you do rotate, run a fresh sync immediately so the new
+key has a valid file to decrypt.
 
 ## Architecture
 
