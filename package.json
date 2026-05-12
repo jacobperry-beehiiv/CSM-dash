@@ -8,9 +8,9 @@
     "start": "next start",
     "lint": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
-    "sync": "tsx --env-file=.env.local scripts/sync.ts",
-    "run:deliverability": "tsx --env-file=.env.local scripts/run-deliverability.ts",
-    "run:at-risk": "tsx --env-file=.env.local scripts/run-at-risk.ts"
+    "sync": "tsx --env-file-if-exists=.env.local scripts/sync.ts",
+    "run:deliverability": "tsx --env-file-if-exists=.env.local scripts/run-deliverability.ts",
+    "run:at-risk": "tsx --env-file-if-exists=.env.local scripts/run-at-risk.ts"
   },
   "dependencies": {
     "jsonwebtoken": "^9.0.3",
