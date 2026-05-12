@@ -22,18 +22,27 @@ function relativeTime(iso: string): string {
 
 export function SnapshotBanner({ generatedAt, rowCount }: Props) {
   const [refreshing, setRefreshing] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   async function refresh() {
     setRefreshing(true);
+    setMessage(null);
     setError(null);
     try {
       const res = await fetch("/api/sync", { method: "POST" });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error ?? "sync failed");
-      window.location.reload();
+      // Sync runs in a GitHub Action (read-only filesystem on Vercel means
+      // we can't write the snapshot in-process). Don't reload — Vercel
+      // auto-redeploys when the action commits, ~2 min from now.
+      setMessage(
+        json.message ??
+          "Sync triggered. Fresh data live in ~2 min after the deploy."
+      );
     } catch (e) {
       setError(e instanceof Error ? e.message : "Unknown error");
+    } finally {
       setRefreshing(false);
     }
   }
@@ -54,9 +63,13 @@ export function SnapshotBanner({ generatedAt, rowCount }: Props) {
         onClick={refresh}
         disabled={refreshing}
         className="px-2 py-0.5 border border-border-strong rounded hover:bg-canvas disabled:opacity-60"
+        title="Triggers the sync-data GitHub Action; site auto-redeploys when it finishes."
       >
-        {refreshing ? "Refreshing… (~60s)" : "Refresh"}
+        {refreshing ? "Triggering…" : "Refresh"}
       </button>
+      {message ? (
+        <span className="text-emerald-700 dark:text-emerald-300">{message}</span>
+      ) : null}
       {error ? <span className="text-red-600">{error}</span> : null}
     </div>
   );
