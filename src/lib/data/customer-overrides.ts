@@ -18,12 +18,16 @@ export type OverrideMap = Record<string, CustomerOverride>;
 
 const KEY = "customer-overrides";
 
-let cache: OverrideMap | null = null;
-
+/**
+ * No module-level cache here. The previous "load once, keep forever"
+ * pattern caused stale reads on Vercel's warm-pool model: when one
+ * isolate handled the POST and updated its in-memory cache, other warm
+ * isolates kept returning the pre-write map forever — so cadence
+ * toggles appeared to "revert" on refresh. The map is small and KV
+ * reads against Postgres are sub-ms, so just always read fresh.
+ */
 export async function loadOverrides(): Promise<OverrideMap> {
-  if (cache) return cache;
-  cache = (await kvGet<OverrideMap>(KEY)) ?? {};
-  return cache;
+  return (await kvGet<OverrideMap>(KEY)) ?? {};
 }
 
 export async function setOverride(
@@ -44,7 +48,6 @@ export async function setOverride(
     map[workspaceId] = current;
   }
   await kvSet(KEY, map);
-  cache = map;
   return map;
 }
 

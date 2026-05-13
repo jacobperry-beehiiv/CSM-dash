@@ -11,14 +11,25 @@ export function getDataSource(): DataSource {
   return "snapshot";
 }
 
-let cache: { source: DataSource; data: Customer[]; expires: number } | null = null;
+/**
+ * Cache holds the RAW customer set (no overrides applied). Overrides are
+ * re-applied on every loadCustomers() call from a fresh KV read, so a
+ * cadence toggle on one isolate is visible to every other isolate
+ * immediately — even if the customer-list cache is still warm there.
+ *
+ * The decrypt + parse for `snapshot` mode is the slow part (~50-200ms);
+ * keeping the raw rows in memory for 60s makes warm-isolate request
+ * latency negligible. Override application is just an `.map()` over the
+ * array, microseconds.
+ */
+let rawCache: { source: DataSource; data: Customer[]; expires: number } | null = null;
 const CACHE_TTL_MS = 60_000;
 
-export async function loadCustomers(): Promise<Customer[]> {
+async function loadRawCustomers(): Promise<Customer[]> {
   const source = getDataSource();
   const now = Date.now();
-  if (cache && cache.source === source && cache.expires > now) {
-    return cache.data;
+  if (rawCache && rawCache.source === source && rawCache.expires > now) {
+    return rawCache.data;
   }
 
   let raw: Customer[];
@@ -29,17 +40,19 @@ export async function loadCustomers(): Promise<Customer[]> {
     raw = rows.map(metabaseRowToCustomer);
   }
 
-  // Apply per-customer overrides (cadence flips set on the drill-in page).
-  const overrides = await loadOverrides();
-  const data = raw.map((c) => applyOverride(c, overrides));
-
-  cache = { source, data, expires: now + CACHE_TTL_MS };
-  return data;
+  rawCache = { source, data: raw, expires: now + CACHE_TTL_MS };
+  return raw;
 }
 
-/** Bust the loadCustomers cache — call after writing a customer override. */
+export async function loadCustomers(): Promise<Customer[]> {
+  const raw = await loadRawCustomers();
+  const overrides = await loadOverrides();
+  return raw.map((c) => applyOverride(c, overrides));
+}
+
+/** Bust the loadCustomers raw cache — only useful for snapshot rotation. */
 export function invalidateCustomerCache() {
-  cache = null;
+  rawCache = null;
 }
 
 export async function dataSourceMeta(): Promise<{

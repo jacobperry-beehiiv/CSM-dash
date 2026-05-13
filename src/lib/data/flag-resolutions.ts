@@ -17,17 +17,15 @@ export type ResolutionMap = Record<string, Partial<Record<RiskFlagCode, FlagReso
 
 const KEY = "flag-resolutions";
 
-let memCache: ResolutionMap | null = null;
-
+/**
+ * No module-level cache (same reasoning as customer-overrides.ts). On
+ * Vercel's warm-isolate pool, an eternally-cached map causes resolutions
+ * marked on one isolate to be invisible to other warm isolates for the
+ * lifetime of the process — meaning "Mark resolved" checkboxes appeared
+ * to revert when the page reloaded on a different isolate.
+ */
 export async function loadResolutions(): Promise<ResolutionMap> {
-  if (memCache) return memCache;
-  memCache = (await kvGet<ResolutionMap>(KEY)) ?? {};
-  return memCache;
-}
-
-async function persist(map: ResolutionMap) {
-  await kvSet(KEY, map);
-  memCache = map;
+  return (await kvGet<ResolutionMap>(KEY)) ?? {};
 }
 
 export async function setResolution(
@@ -52,7 +50,7 @@ export async function setResolution(
   } else {
     map[workspaceId] = forWorkspace;
   }
-  await persist(map);
+  await kvSet(KEY, map);
   return map;
 }
 
