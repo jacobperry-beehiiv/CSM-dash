@@ -12,8 +12,27 @@ import { suggestTemplates } from "@/lib/templates/templates";
 import type { StoredTemplate } from "@/lib/templates/store";
 import { getTierLadder } from "@/lib/tiers/client";
 import type { LastPostRow } from "@/lib/engines/last-post-batch";
-import type { AtRiskAccount, Customer, RiskFlag } from "@/lib/types";
+import type {
+  AtRiskAccount,
+  Customer,
+  RiskFlag,
+  RiskFlagCode,
+} from "@/lib/types";
 import type { TemplateScenario } from "@/lib/templates/templates";
+
+// Short, human-readable label per flag code — drives the filter chips.
+// Order matters: the strip renders flags in this declared order so the
+// most-common codes (A/B/C/G/H) come first.
+const FLAG_META: Array<{ code: RiskFlagCode; label: string; description: string }> = [
+  { code: "A", label: "Dormant", description: "Last send >10 days ago or never" },
+  { code: "B", label: "Inactive", description: "No login in last 14 days" },
+  { code: "C", label: "Under tier", description: "Below 75% of subscriber cap" },
+  { code: "G", label: "CSM-flagged", description: "Yellow / Red in HubSpot" },
+  { code: "H", label: "Stale contact", description: "Last contact >45 days ago" },
+  { code: "D", label: "Frustration", description: "Negative-sentiment Gmail signal" },
+  { code: "E", label: "No contact", description: "No outbound in 90+ days (Gmail)" },
+  { code: "F", label: "News", description: "Notable news on contact / company" },
+];
 
 interface RunResult {
   csm_name: string | null;
@@ -66,18 +85,60 @@ export function AtRiskTable({ data }: { data: RunResult }) {
   const [bulkBusy, setBulkBusy] = useState(false);
   const [bulkMessage, setBulkMessage] = useState<string | null>(null);
 
+  // Flag filter state. Empty pickedFlags = no filter (show all accounts).
+  // combine = "any" matches accounts with at least one picked flag;
+  // "all" requires every picked flag to be present.
+  const [pickedFlags, setPickedFlags] = useState<Set<RiskFlagCode>>(new Set());
+  const [combine, setCombine] = useState<"any" | "all">("any");
+
+  function toggleFlag(code: RiskFlagCode) {
+    setPickedFlags((prev) => {
+      const next = new Set(prev);
+      if (next.has(code)) next.delete(code);
+      else next.add(code);
+      return next;
+    });
+  }
+
+  // Per-flag count across the whole result so the chip can show "(N)".
+  // Independent of the active filter — always reflects the underlying data.
+  const flagCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const a of data.accounts) {
+      for (const f of a.flags) {
+        counts[f.code] = (counts[f.code] ?? 0) + 1;
+      }
+    }
+    return counts;
+  }, [data.accounts]);
+
+  const accounts = useMemo(() => {
+    if (pickedFlags.size === 0) return data.accounts;
+    return data.accounts.filter((a) => {
+      const codes = new Set(a.flags.map((f) => f.code));
+      if (combine === "any") {
+        for (const code of pickedFlags) if (codes.has(code)) return true;
+        return false;
+      }
+      for (const code of pickedFlags) if (!codes.has(code)) return false;
+      return true;
+    });
+  }, [data.accounts, pickedFlags, combine]);
+
   const allKeys = useMemo(
     () =>
-      data.accounts
+      accounts
         .map((a, i) => a.customer.workspace_id ?? `${i}`)
         .filter((k): k is string => Boolean(k)),
-    [data.accounts]
+    [accounts]
   );
 
   // Lazy-loaded "last published web post" per workspace. ClickHouse query
   // runs once for all visible accounts on mount, then caches in-process.
   const [lastPosts, setLastPosts] = useState<Record<string, LastPostRow>>({});
   useEffect(() => {
+    // Use unfiltered set so the cache is populated for any account the
+    // user might filter in/out of view later.
     const ids = data.accounts
       .map((a) => a.customer.workspace_id)
       .filter((x): x is string => Boolean(x));
@@ -150,7 +211,7 @@ export function AtRiskTable({ data }: { data: RunResult }) {
     setBulkBusy(true);
     setBulkMessage(null);
     let n = 0;
-    for (const a of data.accounts) {
+    for (const a of accounts) {
       const k = a.customer.workspace_id;
       if (!k || !selected.has(k)) continue;
       for (const f of a.flags) {
@@ -189,7 +250,7 @@ export function AtRiskTable({ data }: { data: RunResult }) {
       ]);
       const templates = templatesRes;
       let opened = 0;
-      for (const a of data.accounts) {
+      for (const a of accounts) {
         const k = a.customer.workspace_id;
         if (!k || !selected.has(k)) continue;
         const tplId = suggestedTemplate(a.flags);
@@ -222,14 +283,114 @@ export function AtRiskTable({ data }: { data: RunResult }) {
     }
   }
 
+  const filterActive = pickedFlags.size > 0;
+  const modeLabel = combine === "any" ? "any of" : "all of";
+
   return (
     <div className="space-y-4">
       <div className="text-xs text-muted">
-        {data.accounts.length} flagged · {data.total_in_book} in book ·{" "}
-        {data.excluded} excluded · generated {fmtDate(data.generated_at)}
+        {filterActive ? (
+          <>
+            <strong className="text-fg">{accounts.length}</strong> of{" "}
+            {data.accounts.length} flagged accounts match the filter
+          </>
+        ) : (
+          <>{data.accounts.length} flagged</>
+        )}
+        {" · "}
+        {data.total_in_book} in book · {data.excluded} excluded · generated{" "}
+        {fmtDate(data.generated_at)}
       </div>
 
       {data.accounts.length > 0 ? (
+        <div className="rounded-md border border-border bg-surface p-3 space-y-2">
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            <span className="text-muted font-medium">Filter by flag:</span>
+            <div
+              role="radiogroup"
+              aria-label="Combine mode"
+              className="inline-flex rounded-md border border-border overflow-hidden"
+            >
+              <button
+                role="radio"
+                aria-checked={combine === "any"}
+                onClick={() => setCombine("any")}
+                className={`px-2.5 py-1 ${
+                  combine === "any"
+                    ? "bg-accent text-accent-fg font-medium"
+                    : "bg-surface text-muted hover:text-fg"
+                }`}
+              >
+                any
+              </button>
+              <button
+                role="radio"
+                aria-checked={combine === "all"}
+                onClick={() => setCombine("all")}
+                className={`px-2.5 py-1 border-l border-border ${
+                  combine === "all"
+                    ? "bg-accent text-accent-fg font-medium"
+                    : "bg-surface text-muted hover:text-fg"
+                }`}
+              >
+                all
+              </button>
+            </div>
+            {filterActive ? (
+              <button
+                onClick={() => setPickedFlags(new Set())}
+                className="text-accent hover:underline ml-auto"
+              >
+                Clear ({pickedFlags.size} selected · {modeLabel})
+              </button>
+            ) : (
+              <span className="text-subtle ml-auto">
+                no flags selected — showing every flagged account
+              </span>
+            )}
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {FLAG_META.map(({ code, label, description }) => {
+              const checked = pickedFlags.has(code);
+              const count = flagCounts[code] ?? 0;
+              const dim = count === 0;
+              return (
+                <button
+                  key={code}
+                  onClick={() => toggleFlag(code)}
+                  disabled={dim}
+                  title={`${code} — ${description}`}
+                  className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-md text-xs border transition-colors ${
+                    checked
+                      ? "bg-accent-soft border-accent text-fg font-medium"
+                      : dim
+                      ? "bg-surface-2 border-border text-subtle cursor-not-allowed"
+                      : "bg-surface border-border text-muted hover:text-fg hover:border-border-strong"
+                  }`}
+                >
+                  <span
+                    className={`inline-flex items-center justify-center w-5 h-5 rounded text-[10px] font-semibold ${
+                      FLAG_COLORS[code] ?? "bg-surface-2"
+                    } ${dim ? "opacity-50" : ""}`}
+                  >
+                    {code}
+                  </span>
+                  <span>{label}</span>
+                  <span
+                    className={`tabular-nums text-[11px] ${
+                      dim ? "text-subtle" : "text-muted"
+                    }`}
+                  >
+                    {count}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      ) : null}
+
+      {data.accounts.length > 0 && accounts.length > 0 ? (
         <div className="flex flex-wrap items-center gap-2 px-3 py-2 bg-canvas border border-border rounded-md">
           <span className="text-xs text-muted">
             <strong>{selected.size}</strong> selected of {allKeys.length}
@@ -268,6 +429,11 @@ export function AtRiskTable({ data }: { data: RunResult }) {
         <div className="bg-green-50 border border-green-200 rounded-lg p-4 text-sm text-green-800">
           No at-risk accounts in this view. Nicely done.
         </div>
+      ) : accounts.length === 0 ? (
+        <div className="bg-canvas border border-border rounded-lg p-4 text-sm text-muted">
+          No flagged accounts match the current filter. Clear or loosen the
+          filter to see results.
+        </div>
       ) : (
         <div className="rounded-xl border border-border bg-surface shadow-card">
           <table className="w-full text-sm table-fixed">
@@ -302,7 +468,7 @@ export function AtRiskTable({ data }: { data: RunResult }) {
               </tr>
             </thead>
             <tbody>
-              {data.accounts.map((a, i) => {
+              {accounts.map((a, i) => {
                 const k = a.customer.workspace_id ?? `${i}`;
                 const isOpen = expanded.has(k);
                 const isChecked = selected.has(k);
