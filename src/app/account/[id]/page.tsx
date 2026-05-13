@@ -1,5 +1,6 @@
 import { notFound } from "next/navigation";
 import { loadCustomers } from "@/lib/data/load-customers";
+import { lastContacted } from "@/lib/customer-helpers";
 import { fmtCompactCurrency, fmtDate, fmtNumber, fmtPct } from "@/components/format";
 import { RiskLevelChip } from "@/components/risk-level-chip";
 import { AccountOutreach } from "@/components/account-outreach";
@@ -72,7 +73,11 @@ export default async function AccountPage({
           <Row label="Last log in" value={fmtDate(c.last_log_in)} />
           <Row
             label="Last contacted"
-            value={fmtDate(c.property_notes_last_contacted ?? null)}
+            value={
+              <span title={`Source: ${lastContacted(c).source}`}>
+                {fmtDate(lastContacted(c).date)}
+              </span>
+            }
           />
         </Section>
         <Section title="Goals">

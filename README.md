@@ -122,6 +122,7 @@ ever pushed.
 |---|---|
 | `METABASE_API_KEY` | GitHub Actions + Vercel + `.env.local` |
 | `SNAPSHOT_ENCRYPTION_KEY` (32-byte base64) | GitHub Actions + Vercel + `.env.local` — same value all three places |
+| `HUBSPOT_ACCESS_TOKEN` (Private App `pat-na1-…`) | GitHub Actions + Vercel + `.env.local`. Optional but recommended — enables the "Last contacted" column to reflect HubSpot's company-level activity rollup (emails / calls / meetings / notes across all contacts) instead of just the narrow `notes_last_contacted` field. Create at HubSpot Settings → Integrations → Private Apps with scopes `crm.objects.companies.read` + `crm.schemas.companies.read`. |
 
 Generate the encryption key once with:
 ```bash

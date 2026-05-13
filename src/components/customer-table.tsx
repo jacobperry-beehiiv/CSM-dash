@@ -13,6 +13,7 @@ import { AdNetworkFilter } from "./ad-network-filter";
 import { FeatureUtilizationFilter } from "./feature-utilization-filter";
 import { fmtCompactCurrency, fmtDate, fmtNumber, daysUntil } from "./format";
 import { featureCounts } from "@/lib/features";
+import { lastContacted } from "@/lib/customer-helpers";
 import { composeUrlForTemplate, composeUrlWithAdGap } from "@/lib/links";
 import type { StoredTemplate } from "@/lib/templates/store";
 import type { AdGapReport } from "@/lib/types";
@@ -211,7 +212,8 @@ export function CustomerTable({
       { header: "Next charge", pick: (c) => c.next_invoice ?? c.renewal_date ?? "" },
       { header: "Last send", pick: (c) => c.last_send ?? "" },
       { header: "Last log in", pick: (c) => c.last_log_in ?? "" },
-      { header: "Last contacted", pick: (c) => c.property_notes_last_contacted ?? "" },
+      { header: "Last contacted", pick: (c) => lastContacted(c).date ?? "" },
+      { header: "Last contacted source", pick: (c) => lastContacted(c).source },
       { header: "Risk level", pick: (c) => c.property_risk_level ?? "" },
       { header: "Risk detail", pick: (c) => c.property_risk_level_detail ?? "" },
       { header: "Engagement", pick: (c) => c.company_engagement ?? "" },
@@ -494,12 +496,19 @@ export function CustomerTable({
         return (
           <span className="text-muted text-xs">{fmtDate(c.last_send)}</span>
         );
-      case "property_notes_last_contacted":
+      case "property_notes_last_contacted": {
+        // Resolve max(HubSpot activity rollup, notes_last_contacted). The
+        // legacy column key is preserved so the existing sort still works.
+        const lc = lastContacted(c);
         return (
-          <span className="text-muted text-xs">
-            {fmtDate(c.property_notes_last_contacted ?? null)}
+          <span
+            className="text-muted text-xs"
+            title={lc.date ? `Source: ${lc.source}` : "No HubSpot activity recorded"}
+          >
+            {fmtDate(lc.date)}
           </span>
         );
+      }
       default:
         return "-";
     }
@@ -713,5 +722,8 @@ export function CustomerTable({
 
 function pickSortValue(c: CustomerWithMetrics, key: SortKey): unknown {
   if (key === "features_enabled") return featureCounts(c).active;
+  // Sort the "Last contacted" column by the merged date, not the raw
+  // narrow HubSpot field, so what the user sees and sorts on match.
+  if (key === "property_notes_last_contacted") return lastContacted(c).date;
   return c[key as keyof CustomerWithMetrics];
 }

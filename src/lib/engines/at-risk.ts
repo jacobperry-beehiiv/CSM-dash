@@ -1,6 +1,7 @@
 import { loadCustomers } from "../data/load-customers";
 import { loadResolutions } from "../data/flag-resolutions";
 import { loadSettings, reRaisePeriodMs } from "../data/settings";
+import { lastContacted } from "../customer-helpers";
 import type {
   AtRiskAccount,
   Customer,
@@ -82,17 +83,22 @@ export function flagC(c: Customer): RiskFlag | null {
 }
 
 // ─── Flag H: stale contact (last_contacted exceeds threshold) ───────
+// Reads through lastContacted() which merges HubSpot's broader activity
+// rollup with the narrower notes_last_contacted field. A null here is a
+// stronger "we have no record of contact across any HubSpot activity
+// type" signal than the legacy implementation produced.
 export function flagH(
   c: Customer,
   thresholdDays: number,
   now = new Date()
 ): RiskFlag | null {
-  const last = parseDate(c.property_notes_last_contacted);
+  const resolved = lastContacted(c);
+  const last = parseDate(resolved.date);
   if (!last) {
     return {
       code: "H",
       label: "Stale contact",
-      detail: "No HubSpot last-contacted date on file.",
+      detail: "No HubSpot activity recorded across any contact at this company.",
     };
   }
   const days = daysBetween(last, now);
@@ -100,7 +106,7 @@ export function flagH(
     return {
       code: "H",
       label: "Stale contact",
-      detail: `Last contacted ${days} days ago (threshold ${thresholdDays}d).`,
+      detail: `Last contacted ${days} days ago via ${resolved.source} (threshold ${thresholdDays}d).`,
     };
   }
   return null;

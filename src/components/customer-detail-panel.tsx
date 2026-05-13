@@ -1,5 +1,6 @@
 import Link from "next/link";
 import type { Customer } from "@/lib/types";
+import { lastContacted } from "@/lib/customer-helpers";
 import { fmtCompactCurrency, fmtDate, fmtNumber } from "./format";
 import { RiskLevelChip } from "./risk-level-chip";
 import { FeatureBreakdown } from "./feature-breakdown";
@@ -71,7 +72,11 @@ export function CustomerDetailPanel({
           <Row label="Last log in" value={fmtDate(c.last_log_in)} />
           <Row
             label="Last contacted"
-            value={fmtDate(c.property_notes_last_contacted ?? null)}
+            value={
+              <span title={`Source: ${lastContacted(c).source}`}>
+                {fmtDate(lastContacted(c).date)}
+              </span>
+            }
           />
         </Section>
         <Section title="Contact">

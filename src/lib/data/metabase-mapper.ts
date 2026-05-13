@@ -70,5 +70,22 @@ export function metabaseRowToCustomer(
       (row.have_started_t4_recommendations as boolean | null) ?? null,
     completed_t4_recommendations:
       (row.completed_t4_recommendations as boolean | null) ?? null,
+    // q10600 surfaces the HubSpot company record ID under a few possible
+    // column names depending on which HubSpot table the question joins
+    // against. Accept all known variants — the sync-time enrichment step
+    // (src/lib/integrations/hubspot.ts) requires this to call the
+    // HubSpot batch-read endpoint.
+    hubspot_company_id:
+      (row.hubspot_company_id as string | null) ??
+      (row.hs_object_id as string | null) ??
+      (row.property_hs_object_id as string | null) ??
+      (row.company_id_hubspot as string | null) ??
+      null,
+    // Populated by sync.ts after HubSpot enrichment — not present on raw
+    // Metabase rows. Keep here so snapshot.enc.json round-trips cleanly
+    // through this mapper after enrichment writes it.
+    last_activity_at: (row.last_activity_at as string | null) ?? null,
+    last_activity_source:
+      (row.last_activity_source as string | null) ?? null,
   };
 }

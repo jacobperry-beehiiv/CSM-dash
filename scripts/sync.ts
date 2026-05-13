@@ -19,10 +19,30 @@ import path from "node:path";
 
 import { runSavedQuestion } from "../src/lib/metabase";
 import { encryptSnapshot } from "../src/lib/data/snapshot-crypto";
+import { fetchLastActivity } from "../src/lib/integrations/hubspot";
 
 const QUESTION_ID = 10600;
 const PLAINTEXT_PATH = path.join(process.cwd(), "data/snapshot.json");
 const ENCRYPTED_PATH = path.join(process.cwd(), "data/snapshot.enc.json");
+
+/**
+ * Column names q10600 might expose the HubSpot company ID under. We accept
+ * any of them so the question can be edited without a sync deploy.
+ */
+const COMPANY_ID_KEYS = [
+  "hubspot_company_id",
+  "hs_object_id",
+  "property_hs_object_id",
+  "company_id_hubspot",
+] as const;
+
+function pickCompanyId(row: Record<string, unknown>): string | null {
+  for (const k of COMPANY_ID_KEYS) {
+    const v = row[k];
+    if (v != null && v !== "") return String(v);
+  }
+  return null;
+}
 
 async function main() {
   if (!process.env.METABASE_URL) {
@@ -44,6 +64,50 @@ async function main() {
   const rows = await runSavedQuestion(QUESTION_ID);
   const elapsed = ((Date.now() - started) / 1000).toFixed(1);
   console.error(`[sync] fetched ${rows.length} rows in ${elapsed}s`);
+
+  // ─── HubSpot enrichment ─────────────────────────────────────────────
+  // For every row that exposes a HubSpot company ID, look up the most-
+  // recent activity across HubSpot's three rollup properties and stamp
+  // it onto the row. Soft-fails: if HUBSPOT_ACCESS_TOKEN is unset or the
+  // API errors, sync continues with the un-enriched rows.
+  if (process.env.HUBSPOT_ACCESS_TOKEN) {
+    const enrichStarted = Date.now();
+    const idToRow = new Map<string, Record<string, unknown>>();
+    for (const r of rows as Record<string, unknown>[]) {
+      const id = pickCompanyId(r);
+      if (id) idToRow.set(id, r);
+    }
+    const ids = [...idToRow.keys()];
+    console.error(`[sync] enriching ${ids.length} rows from HubSpot…`);
+    try {
+      const activity = await fetchLastActivity(ids);
+      let filled = 0;
+      for (const [id, row] of idToRow) {
+        const hit = activity.get(id);
+        // Always stash the company ID on the row even if HubSpot had no
+        // activity for it — useful for future enrichment + debugging.
+        row.hubspot_company_id = id;
+        if (hit) {
+          row.last_activity_at = hit.last_activity_at;
+          row.last_activity_source = hit.source;
+          filled++;
+        }
+      }
+      const enrichElapsed = ((Date.now() - enrichStarted) / 1000).toFixed(1);
+      console.error(
+        `[sync] HubSpot enriched ${filled}/${ids.length} rows in ${enrichElapsed}s`
+      );
+    } catch (e) {
+      console.error(
+        `[sync] HubSpot enrichment failed (continuing without):`,
+        e instanceof Error ? e.message : e
+      );
+    }
+  } else {
+    console.error(
+      "[sync] HUBSPOT_ACCESS_TOKEN not set — skipping HubSpot enrichment"
+    );
+  }
 
   const payload = {
     generated_at: new Date().toISOString(),

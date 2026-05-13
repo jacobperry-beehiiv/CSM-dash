@@ -1,4 +1,5 @@
 import type { AdGapReport, Customer } from "../types";
+import { lastContacted } from "../customer-helpers";
 import type { EnterpriseTier } from "../tiers/store";
 import {
   fmtTier,
@@ -188,8 +189,11 @@ export const MERGE_TAGS: MergeTag[] = [
   {
     token: "customer.last_contacted",
     label: "Last contacted",
-    description: "HubSpot 'notes_last_contacted' date.",
-    resolve: (c) => fmtDate(c.property_notes_last_contacted ?? null),
+    description:
+      "Most-recent activity across any HubSpot contact at this company " +
+      "(emails / calls / meetings / notes). Falls back to the legacy " +
+      "notes_last_contacted field when HubSpot enrichment isn't available.",
+    resolve: (c) => fmtDate(lastContacted(c).date),
   },
   {
     token: "customer.next_charge",

@@ -38,6 +38,19 @@ export interface Customer {
   next_invoice?: string | null;
   have_started_t4_recommendations?: boolean | null;
   completed_t4_recommendations?: boolean | null;
+
+  // ─── HubSpot direct-API enrichment (set by scripts/sync.ts) ──────────
+  // The company's HubSpot record ID, pulled from Metabase q10600. Required
+  // by the sync-time enrichment step in src/lib/integrations/hubspot.ts.
+  hubspot_company_id?: string | null;
+  // Most-recent of HubSpot's notes_last_activity_date,
+  // notes_last_contacted, and hs_last_sales_activity_timestamp — captures
+  // emails / calls / meetings / notes across ALL contacts at the company
+  // rather than just the narrow "manual contact note" the legacy field
+  // covered. ISO date string, set when sync.ts ran with HUBSPOT_ACCESS_TOKEN.
+  last_activity_at?: string | null;
+  /** Which raw field won the max() that produced last_activity_at. Tooltip. */
+  last_activity_source?: string | null;
 }
 
 export interface CustomerWithMetrics extends Customer {
