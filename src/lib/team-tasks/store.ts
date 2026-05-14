@@ -11,24 +11,26 @@ import {
  * the store fresh — no module-level cache here so concurrent edits from
  * different CSMs (different Vercel isolates) don't see stale data, the
  * same pitfall we hit on customer overrides earlier.
+ *
+ * Roster semantics:
+ *   - On first-ever read (KV empty) we seed with DEFAULT_TEAM_MEMBERS.
+ *   - On every subsequent read the stored list is canonical — no merge
+ *     with defaults, so admins can permanently remove someone via
+ *     /settings/team without them resurrecting on the next hydrate.
+ *   - Tasks' assignment maps stay keyed by member id; an orphaned id
+ *     (member removed) just stops rendering. If the member is later
+ *     re-added with the same id, their checkbox state comes back.
  */
 
 const KEY = "csm:team-tasks:v1";
 
-/** Hydrate stored data, backfilling new fields and merging the latest
- *  default roster so newly-added team members appear as fresh columns. */
 function hydrate(stored: Partial<TeamTaskList> | null): TeamTaskList {
   const tasks = (stored?.tasks ?? []) as TeamTask[];
-  // Merge the default roster with whatever was stored, preserving any
-  // custom labels/ids that came in via writes. Stored members win on id
-  // collision so we don't clobber a renamed label.
-  const byId = new Map<string, TeamMember>();
-  for (const m of DEFAULT_TEAM_MEMBERS) byId.set(m.id, m);
-  for (const m of stored?.members ?? []) byId.set(m.id, m);
-  return {
-    tasks,
-    members: [...byId.values()],
-  };
+  const members =
+    Array.isArray(stored?.members) && stored.members.length > 0
+      ? (stored.members as TeamMember[])
+      : DEFAULT_TEAM_MEMBERS;
+  return { tasks, members };
 }
 
 export async function getTeamTasks(): Promise<TeamTaskList> {
@@ -52,4 +54,17 @@ export async function saveTeamTasks(
   };
   await kvSet(KEY, cleaned);
   return cleaned;
+}
+
+/**
+ * Replace the team roster without disturbing tasks. Reads the latest
+ * state, swaps in the new member list, writes back atomically. Used by
+ * /settings/team so an admin edit doesn't race with a CSM autosaving
+ * task changes from the dashboard.
+ */
+export async function saveTeamMembers(
+  members: TeamMember[]
+): Promise<TeamTaskList> {
+  const current = await getTeamTasks();
+  return saveTeamTasks({ ...current, members });
 }

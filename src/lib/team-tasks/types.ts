@@ -59,6 +59,33 @@ export const DEFAULT_TEAM_MEMBERS: TeamMember[] = [
   { id: "hayden", label: "Hayden" },
 ];
 
+/**
+ * Generate a stable `id` for a new team member from their display label.
+ * Lowercased, alphanumerics-and-hyphens only; collisions get a numeric
+ * suffix. The id never changes after creation — renaming `label` is
+ * free and preserves every existing task's checkbox state.
+ */
+export function newMemberId(
+  label: string,
+  existingIds: Iterable<string>
+): string {
+  const base =
+    label
+      .toLowerCase()
+      .normalize("NFKD")
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 32) || "member";
+  const taken = new Set(existingIds);
+  if (!taken.has(base)) return base;
+  for (let i = 2; i < 1000; i++) {
+    const candidate = `${base}-${i}`;
+    if (!taken.has(candidate)) return candidate;
+  }
+  // Pathological fallback — fall back to a random suffix.
+  return `${base}-${Math.random().toString(36).slice(2, 6)}`;
+}
+
 /** Cycle a single cell through unchecked → checked → na → unchecked. */
 export function nextAssignmentState(current: AssignmentState): AssignmentState {
   if (current === "unchecked") return "checked";

@@ -10,6 +10,11 @@ const SECTIONS: Array<{ href: string; label: string; description: string }> = [
     description: "At-risk re-raise periods + table colorings.",
   },
   {
+    href: "/settings/team",
+    label: "Team",
+    description: "Roster powering the open-asks tracker columns.",
+  },
+  {
     href: "/settings/templates",
     label: "Outreach templates",
     description: "Subjects, rich-text bodies, tags.",
