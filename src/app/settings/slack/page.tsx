@@ -1,7 +1,13 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { DEFAULTS, type SettingsShape } from "@/lib/data/settings-types";
+import {
+  DEFAULTS,
+  newChannelId,
+  PAST_DUE_CHANNEL_ID,
+  type SettingsShape,
+  type SlackChannel,
+} from "@/lib/data/settings-types";
 
 export default function SlackSettingsPage() {
   const [settings, setSettings] = useState<SettingsShape>(DEFAULTS);
@@ -9,6 +15,15 @@ export default function SlackSettingsPage() {
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  // Inline-form state for adding a new CSM. Both fields collected up
+  // front so we don't end up with an empty Slack ID column waiting to
+  // be filled (the old prompt() flow's failure mode).
+  const [draftCsmHandle, setDraftCsmHandle] = useState("");
+  const [draftCsmSlackId, setDraftCsmSlackId] = useState("");
+  // Inline form for adding a new Slack channel destination.
+  const [draftChannelLabel, setDraftChannelLabel] = useState("");
+  const [draftChannelId, setDraftChannelId] = useState("");
 
   useEffect(() => {
     fetch("/api/settings")
@@ -39,14 +54,61 @@ export default function SlackSettingsPage() {
     }
   }
 
-  function setSlack<K extends keyof SettingsShape["slack"]>(
-    key: K,
-    value: SettingsShape["slack"][K]
-  ) {
+  function patchChannel(id: string, patch: Partial<SlackChannel>) {
     setSettings((prev) => ({
       ...prev,
-      slack: { ...prev.slack, [key]: value },
+      slack: {
+        ...prev.slack,
+        channels: prev.slack.channels.map((c) =>
+          c.id === id ? { ...c, ...patch } : c
+        ),
+      },
     }));
+  }
+
+  function removeChannel(id: string) {
+    if (id === PAST_DUE_CHANNEL_ID) {
+      // Past-due is the one channel code paths still hardcode against —
+      // keep it pinned so /am's "Send to Slack" button never lands on a
+      // missing-config error. Admins can still blank out its channel ID
+      // if they don't want it active.
+      setError("The Past-due channel is reserved and can't be removed.");
+      return;
+    }
+    setSettings((prev) => ({
+      ...prev,
+      slack: {
+        ...prev.slack,
+        channels: prev.slack.channels.filter((c) => c.id !== id),
+      },
+    }));
+  }
+
+  function addChannel() {
+    const label = draftChannelLabel.trim();
+    if (!label) {
+      setError("Channel needs a label.");
+      return;
+    }
+    setError(null);
+    setSettings((prev) => {
+      const id = newChannelId(
+        label,
+        prev.slack.channels.map((c) => c.id)
+      );
+      const seed: SlackChannel = {
+        id,
+        label,
+        channel_id: draftChannelId.trim(),
+        template: "",
+      };
+      return {
+        ...prev,
+        slack: { ...prev.slack, channels: [...prev.slack.channels, seed] },
+      };
+    });
+    setDraftChannelLabel("");
+    setDraftChannelId("");
   }
 
   function setCsmId(csm: string, userId: string) {
@@ -58,11 +120,25 @@ export default function SlackSettingsPage() {
     });
   }
 
-  function addCsmRow() {
-    const csm = prompt("CSM internal handle (e.g. Jacob_Perry)");
-    if (csm && csm.trim()) {
-      setCsmId(csm.trim(), "");
+  function addCsm() {
+    const handle = draftCsmHandle.trim();
+    const slackId = draftCsmSlackId.trim();
+    if (!handle) {
+      setError("CSM handle is required.");
+      return;
     }
+    if (!slackId) {
+      setError("Slack user ID is required (e.g. U02ABC123).");
+      return;
+    }
+    if (settings.slack.csm_user_ids[handle]) {
+      setError(`A mapping for ${handle} already exists — edit it in the table below.`);
+      return;
+    }
+    setError(null);
+    setCsmId(handle, slackId);
+    setDraftCsmHandle("");
+    setDraftCsmSlackId("");
   }
 
   if (loading) return <p className="text-sm text-muted">Loading…</p>;
@@ -82,58 +158,117 @@ export default function SlackSettingsPage() {
         </div>
       ) : null}
 
-      <section className="bg-surface rounded-xl border border-border shadow-card p-4 space-y-3">
-        <h2 className="text-sm font-semibold text-fg">
-          Past-due Slack alert
-        </h2>
-        <p className="text-xs text-muted">
-          Channel and default message used by the AM &rarr; Past Due tab&rsquo;s
-          &ldquo;Slack the past-due channel&rdquo; button. The send dialog lets
-          you tweak the message before sending; this is just the starting
-          point.
-        </p>
+      <section className="bg-surface rounded-xl border border-border shadow-card p-4 space-y-4">
         <div>
-          <label className="text-xs text-muted block mb-1">
-            Default channel ID
-          </label>
-          <input
-            type="text"
-            value={settings.slack.past_due_channel}
-            onChange={(e) => setSlack("past_due_channel", e.target.value)}
-            placeholder="C0AMK142WUR"
-            className="w-full px-3 py-2 border border-border-strong rounded-md text-sm font-mono"
-          />
-        </div>
-        <div>
-          <label className="text-xs text-muted block mb-1">
-            Default message template
-          </label>
-          <textarea
-            value={settings.slack.past_due_template}
-            onChange={(e) => setSlack("past_due_template", e.target.value)}
-            rows={10}
-            className="w-full px-3 py-2 border border-border-strong rounded-md text-sm font-mono"
-          />
-          <p className="text-[11px] text-muted mt-1">
-            Slack mrkdwn. Available tokens:{" "}
-            <code className="font-mono bg-surface-2 px-1 rounded">{"{{total_arr}}"}</code>,{" "}
-            <code className="font-mono bg-surface-2 px-1 rounded">{"{{count}}"}</code>,{" "}
-            <code className="font-mono bg-surface-2 px-1 rounded">{"{{count_plural}}"}</code>,{" "}
-            <code className="font-mono bg-surface-2 px-1 rounded">{"{{account_list}}"}</code>.
+          <h2 className="text-sm font-semibold text-fg">Slack channels</h2>
+          <p className="text-xs text-muted mt-1">
+            One row per alert type. Add as many as you need — wire
+            different alerts to different channels by giving each a
+            stable id (e.g.{" "}
+            <code className="font-mono bg-surface-2 px-1 rounded">past_due</code>,{" "}
+            <code className="font-mono bg-surface-2 px-1 rounded">at_risk</code>).
+            App code looks each up by id; renaming the label is free.
           </p>
+        </div>
+
+        <div className="space-y-3">
+          {settings.slack.channels.map((c) => (
+            <div
+              key={c.id}
+              className="border border-border rounded-md p-3 space-y-2 bg-canvas/30"
+            >
+              <div className="flex flex-wrap items-center gap-2">
+                <input
+                  type="text"
+                  value={c.label}
+                  onChange={(e) => patchChannel(c.id, { label: e.target.value })}
+                  className="flex-1 min-w-[160px] px-2 py-1 border border-border-strong rounded-md text-sm font-medium"
+                  placeholder="Channel label"
+                />
+                <code className="text-[11px] text-subtle font-mono">{c.id}</code>
+                <button
+                  onClick={() => removeChannel(c.id)}
+                  className="text-subtle hover:text-red-600 text-sm px-1"
+                  title={
+                    c.id === PAST_DUE_CHANNEL_ID
+                      ? "Reserved channel — can't be removed."
+                      : "Remove this channel"
+                  }
+                  disabled={c.id === PAST_DUE_CHANNEL_ID}
+                >
+                  ✕
+                </button>
+              </div>
+              <div>
+                <label className="text-xs text-muted block mb-1">
+                  Slack channel ID
+                </label>
+                <input
+                  type="text"
+                  value={c.channel_id}
+                  onChange={(e) =>
+                    patchChannel(c.id, { channel_id: e.target.value })
+                  }
+                  placeholder="C0AMK142WUR"
+                  className="w-full px-3 py-2 border border-border-strong rounded-md text-sm font-mono"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-muted block mb-1">
+                  Default message template
+                </label>
+                <textarea
+                  value={c.template}
+                  onChange={(e) =>
+                    patchChannel(c.id, { template: e.target.value })
+                  }
+                  rows={c.id === PAST_DUE_CHANNEL_ID ? 8 : 5}
+                  placeholder="Slack mrkdwn — {{token}}s render server-side."
+                  className="w-full px-3 py-2 border border-border-strong rounded-md text-sm font-mono"
+                />
+                {c.id === PAST_DUE_CHANNEL_ID ? (
+                  <p className="text-[11px] text-muted mt-1">
+                    Past-due tokens:{" "}
+                    <code className="font-mono bg-surface-2 px-1 rounded">{"{{total_arr}}"}</code>,{" "}
+                    <code className="font-mono bg-surface-2 px-1 rounded">{"{{count}}"}</code>,{" "}
+                    <code className="font-mono bg-surface-2 px-1 rounded">{"{{count_plural}}"}</code>,{" "}
+                    <code className="font-mono bg-surface-2 px-1 rounded">{"{{account_list}}"}</code>.
+                  </p>
+                ) : null}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div className="border-t border-border pt-3 space-y-2">
+          <p className="text-xs font-medium text-muted">Add a new channel</p>
+          <div className="flex flex-wrap items-stretch gap-2">
+            <input
+              type="text"
+              value={draftChannelLabel}
+              onChange={(e) => setDraftChannelLabel(e.target.value)}
+              placeholder="Label (e.g. At-risk alerts)"
+              className="flex-1 min-w-[200px] px-3 py-2 border border-border-strong rounded-md text-sm"
+            />
+            <input
+              type="text"
+              value={draftChannelId}
+              onChange={(e) => setDraftChannelId(e.target.value)}
+              placeholder="Slack channel ID (e.g. C0AMK142WUR)"
+              className="flex-1 min-w-[200px] px-3 py-2 border border-border-strong rounded-md text-sm font-mono"
+            />
+            <button
+              onClick={addChannel}
+              className="px-3 py-2 bg-accent text-accent-fg rounded-md text-sm font-medium hover:bg-accent-hover"
+            >
+              + Add channel
+            </button>
+          </div>
         </div>
       </section>
 
       <section className="bg-surface rounded-xl border border-border shadow-card p-4 space-y-3">
-        <div className="flex items-baseline justify-between">
-          <h2 className="text-sm font-semibold text-fg">CSM Slack IDs</h2>
-          <button
-            onClick={addCsmRow}
-            className="px-2 py-1 text-xs border border-border-strong rounded-md hover:bg-canvas"
-          >
-            + Add CSM
-          </button>
-        </div>
+        <h2 className="text-sm font-semibold text-fg">CSM Slack IDs</h2>
         <p className="text-xs text-muted">
           Map each CSM&rsquo;s internal handle (the Metabase{" "}
           <code className="font-mono bg-surface-2 px-1 rounded">
@@ -141,12 +276,36 @@ export default function SlackSettingsPage() {
           </code>{" "}
           format, e.g.{" "}
           <code className="font-mono bg-surface-2 px-1 rounded">Jacob_Perry</code>
-          ) to their Slack user ID. Used by the past-due alert to render an
-          actual @mention rather than a plain name.
+          ) to their Slack user ID. Used by alerts to render an actual
+          @mention rather than a plain name.
         </p>
+
+        <div className="flex flex-wrap items-stretch gap-2 border border-border rounded-md p-2 bg-canvas/30">
+          <input
+            type="text"
+            value={draftCsmHandle}
+            onChange={(e) => setDraftCsmHandle(e.target.value)}
+            placeholder="CSM handle (e.g. Jacob_Perry)"
+            className="flex-1 min-w-[180px] px-3 py-2 border border-border-strong rounded-md text-sm font-mono"
+          />
+          <input
+            type="text"
+            value={draftCsmSlackId}
+            onChange={(e) => setDraftCsmSlackId(e.target.value)}
+            placeholder="Slack user ID (e.g. U02ABC123)"
+            className="flex-1 min-w-[180px] px-3 py-2 border border-border-strong rounded-md text-sm font-mono"
+          />
+          <button
+            onClick={addCsm}
+            className="px-3 py-2 bg-accent text-accent-fg rounded-md text-sm font-medium hover:bg-accent-hover"
+          >
+            + Add CSM
+          </button>
+        </div>
+
         {csms.length === 0 ? (
           <p className="text-xs text-subtle italic">
-            No CSM mappings yet — click + Add CSM.
+            No CSM mappings yet.
           </p>
         ) : (
           <table className="w-full text-sm">

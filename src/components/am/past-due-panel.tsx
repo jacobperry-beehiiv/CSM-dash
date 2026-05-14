@@ -3,7 +3,11 @@
 import { useEffect, useMemo, useState } from "react";
 import type { PastDueRow } from "@/lib/engines/am-cohorts";
 import { fmtCurrency, fmtDate } from "../format";
-import type { SettingsShape } from "@/lib/data/settings-types";
+import {
+  findSlackChannel,
+  PAST_DUE_CHANNEL_ID,
+  type SettingsShape,
+} from "@/lib/data/settings-types";
 import { BucketSection } from "./bucket-section";
 
 interface Props {
@@ -373,9 +377,13 @@ function SlackCompose({
   settings: SettingsShape;
   onClose: () => void;
 }) {
-  const [channel, setChannel] = useState(settings.slack.past_due_channel);
+  // Resolve the past-due channel config from the channels[] list. Falls
+  // back to empty strings if /settings/slack hasn't been visited yet —
+  // the user can still type the channel id directly in the dialog.
+  const pastDueCfg = findSlackChannel(settings.slack, PAST_DUE_CHANNEL_ID);
+  const [channel, setChannel] = useState(pastDueCfg?.channel_id ?? "");
   const [text, setText] = useState(() =>
-    renderSlackTemplate(settings.slack.past_due_template, rows, settings)
+    renderSlackTemplate(pastDueCfg?.template ?? "", rows, settings)
   );
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<string | null>(null);
