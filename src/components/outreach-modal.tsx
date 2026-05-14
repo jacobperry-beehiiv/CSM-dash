@@ -51,6 +51,49 @@ export function OutreachModal({ customer, onClose, initialScenario }: Props) {
     [customer]
   );
 
+  // Build the recipient picker: owner_email + every HubSpot contact whose
+  // primary associated company is this customer's. Owner is default-checked.
+  const recipientOptions = useMemo(() => {
+    const seen = new Set<string>();
+    const out: { email: string; name: string | null; isOwner: boolean }[] = [];
+    if (customer.owner_email) {
+      const key = customer.owner_email.toLowerCase();
+      seen.add(key);
+      out.push({
+        email: customer.owner_email,
+        name: customer.property_main_contact ?? null,
+        isOwner: true,
+      });
+    }
+    for (const c of customer.hubspot_contacts ?? []) {
+      if (!c.email) continue;
+      const key = c.email.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ email: c.email, name: c.name, isOwner: false });
+    }
+    return out;
+  }, [customer]);
+
+  const [selectedRecipients, setSelectedRecipients] = useState<Set<string>>(
+    () => new Set(recipientOptions.filter((r) => r.isOwner).map((r) => r.email.toLowerCase()))
+  );
+
+  function toggleRecipient(email: string) {
+    const key = email.toLowerCase();
+    setSelectedRecipients((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
+
+  const recipientEmails = recipientOptions
+    .filter((r) => selectedRecipients.has(r.email.toLowerCase()))
+    .map((r) => r.email);
+  const toLine = recipientEmails.join(", ");
+
   useEffect(() => {
     let cancelled = false;
     Promise.all([
@@ -114,13 +157,12 @@ export function OutreachModal({ customer, onClose, initialScenario }: Props) {
     : "";
   const body_text = body_html ? htmlToText(body_html) : "";
 
-  const recipient =
-    customer.property_main_contact ?? customer.owner_email ?? "";
-  const mailto = template
-    ? `https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(
-        customer.owner_email ?? ""
-      )}&su=${encodeURIComponent(subject)}&body=${encodeURIComponent(body_text)}`
-    : "";
+  const mailto =
+    template && toLine
+      ? `https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(
+          toLine
+        )}&su=${encodeURIComponent(subject)}&body=${encodeURIComponent(body_text)}`
+      : "";
 
   async function copy() {
     if (!template) return;
@@ -137,23 +179,61 @@ export function OutreachModal({ customer, onClose, initialScenario }: Props) {
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-start justify-between p-4 border-b border-border">
-          <div>
+          <div className="min-w-0 flex-1">
             <h3 className="font-semibold text-fg">
               Draft outreach — {customer.company_name ?? customer.workspace_name}
             </h3>
-            <p className="text-xs text-muted mt-0.5">
-              To: {recipient || "—"}
-              {customer.owner_email ? ` (${customer.owner_email})` : ""}
+            <p className="text-xs text-muted mt-0.5 truncate">
+              To: {toLine || "(no recipients selected)"}
             </p>
           </div>
           <button
             onClick={onClose}
-            className="text-subtle hover:text-muted text-xl leading-none"
+            className="text-subtle hover:text-muted text-xl leading-none flex-shrink-0"
             aria-label="Close"
           >
             ×
           </button>
         </div>
+
+        {recipientOptions.length > 0 ? (
+          <div className="px-4 py-3 border-b border-border bg-canvas">
+            <div className="text-xs text-muted mb-2">
+              Recipients ({recipientEmails.length} selected)
+            </div>
+            <ul className="grid grid-cols-1 sm:grid-cols-2 gap-x-3 gap-y-1">
+              {recipientOptions.map((r) => {
+                const checked = selectedRecipients.has(r.email.toLowerCase());
+                return (
+                  <li key={r.email} className="text-xs">
+                    <label className="flex items-center gap-2 cursor-pointer py-0.5">
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() => toggleRecipient(r.email)}
+                        className="h-3.5 w-3.5 rounded border-border-strong cursor-pointer"
+                      />
+                      <span className="truncate">
+                        {r.name ? (
+                          <>
+                            <span className="text-fg">{r.name}</span>
+                            <span className="text-subtle"> · </span>
+                          </>
+                        ) : null}
+                        <span className="text-muted">{r.email}</span>
+                        {r.isOwner ? (
+                          <span className="ml-1 text-[10px] uppercase tracking-wide text-subtle">
+                            owner
+                          </span>
+                        ) : null}
+                      </span>
+                    </label>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        ) : null}
 
         <div className="p-4 border-b border-border">
           {loading ? (

@@ -307,13 +307,33 @@ export function CustomerTable({
       const subject = applyMergeTags(tpl.subject, c, ctx);
       const body_html = applyMergeTags(tpl.body_html, c, ctx);
       const body_text = htmlToText(body_html);
+      // Build the recipient picker: owner_email is the default-checked
+      // entry, then every HubSpot contact whose primary associated
+      // company is this customer's company. Deduped by lowercased email.
+      const ownerEmail = c.owner_email;
+      const seen = new Set<string>([ownerEmail.toLowerCase()]);
+      const recipients: BulkDraft["recipients"] = [
+        { email: ownerEmail, name: c.property_main_contact ?? null, default: true },
+      ];
+      for (const contact of c.hubspot_contacts ?? []) {
+        if (!contact.email) continue;
+        const key = contact.email.toLowerCase();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        recipients.push({
+          email: contact.email,
+          name: contact.name,
+          default: false,
+        });
+      }
       drafts.push({
-        customer_label: c.company_name ?? c.workspace_name ?? c.owner_email,
-        to: c.owner_email,
+        customer_label: c.company_name ?? c.workspace_name ?? ownerEmail,
+        to: ownerEmail,
         subject,
         body_text,
         body_html,
         compose_url: composeUrl,
+        recipients,
       });
     }
     return drafts;

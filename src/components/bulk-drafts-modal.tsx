@@ -1,15 +1,41 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+
+export interface BulkDraftRecipient {
+  email: string;
+  name: string | null;
+  /** True for the customer's owner_email (default-checked). */
+  default: boolean;
+}
 
 export interface BulkDraft {
   customer_label: string;
+  /** Default recipient list (the customer's owner_email when present),
+   *  used as the initial selection when the modal first renders.
+   *  Comma-separated to match how a Gmail compose `to=` field is built. */
   to: string;
   subject: string;
   body_text: string;
   /** Rich-HTML body — Gmail API drafts use this; CSV/Open-in-Gmail fall back to body_text. */
   body_html?: string;
+  /** Compose URL with the *default* `to` baked in. The modal recomputes
+   *  this live whenever the user toggles recipients. */
   compose_url: string;
+  /** Every viable recipient for this customer (owner_email + every
+   *  HubSpot contact whose primary associated company is this one).
+   *  The modal lets the user check/uncheck each before opening tabs /
+   *  creating Gmail drafts. */
+  recipients: BulkDraftRecipient[];
+}
+
+function buildGmailComposeUrl(
+  to: string,
+  subject: string,
+  body: string
+): string {
+  const params = new URLSearchParams({ view: "cm", fs: "1", to, su: subject, body });
+  return `https://mail.google.com/mail/?${params.toString()}`;
 }
 
 function csvEscape(s: string): string {
@@ -78,6 +104,91 @@ export function BulkDraftsModal({
   const [gmail, setGmail] = useState<GmailStatus | null>(null);
   const [gmailBusy, setGmailBusy] = useState(false);
   const [gmailMessage, setGmailMessage] = useState<string | null>(null);
+  // Per-draft recipient selection. Keyed by the draft's compose_url
+  // (stable across re-renders for a single open-of-modal). Set of
+  // lowercased email addresses.
+  const [recipientSelection, setRecipientSelection] = useState<
+    Record<string, Set<string>>
+  >({});
+  // Which drafts have the recipient list expanded inline.
+  const [expandedRecipients, setExpandedRecipients] = useState<Set<string>>(
+    new Set()
+  );
+
+  // Initialise selection from each draft's default recipients when the
+  // drafts list arrives / changes. Drafts already-keyed are preserved so
+  // a user's manual toggles survive a template re-render.
+  useEffect(() => {
+    setRecipientSelection((prev) => {
+      const next = { ...prev };
+      for (const d of drafts) {
+        if (next[d.compose_url]) continue;
+        const defaults = d.recipients
+          .filter((r) => r.default)
+          .map((r) => r.email.toLowerCase());
+        // Fallback: if nothing is marked default, pick the first recipient.
+        const seed =
+          defaults.length > 0
+            ? defaults
+            : d.recipients[0]
+              ? [d.recipients[0].email.toLowerCase()]
+              : [];
+        next[d.compose_url] = new Set(seed);
+      }
+      return next;
+    });
+  }, [drafts]);
+
+  /** Resolve the live `to:` string (comma-separated) for a draft based
+   *  on current selection state. Falls back to the draft's stored `to`
+   *  when no selection has been initialised yet. */
+  function liveTo(d: BulkDraft): string {
+    const sel = recipientSelection[d.compose_url];
+    if (!sel) return d.to;
+    const emails = d.recipients
+      .filter((r) => sel.has(r.email.toLowerCase()))
+      .map((r) => r.email);
+    return emails.join(", ");
+  }
+
+  function liveComposeUrl(d: BulkDraft): string {
+    const to = liveTo(d);
+    if (!to) return d.compose_url;
+    return buildGmailComposeUrl(to, d.subject, d.body_text);
+  }
+
+  function toggleRecipient(draftKey: string, email: string) {
+    const e = email.toLowerCase();
+    setRecipientSelection((prev) => {
+      const next = { ...prev };
+      const cur = new Set(next[draftKey] ?? []);
+      if (cur.has(e)) cur.delete(e);
+      else cur.add(e);
+      next[draftKey] = cur;
+      return next;
+    });
+  }
+
+  function toggleExpand(draftKey: string) {
+    setExpandedRecipients((prev) => {
+      const next = new Set(prev);
+      if (next.has(draftKey)) next.delete(draftKey);
+      else next.add(draftKey);
+      return next;
+    });
+  }
+
+  /** Drafts the user actually wants to act on right now — at least one
+   *  selected recipient. Used by every "send to all" path so unchecking
+   *  every recipient excludes the draft entirely. */
+  const actionableDrafts = useMemo(
+    () =>
+      drafts
+        .map((d) => ({ ...d, to: liveTo(d), compose_url: liveComposeUrl(d) }))
+        .filter((d) => d.to.length > 0),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [drafts, recipientSelection]
+  );
 
   // Lazy-load Gmail connection status when the modal mounts
   useEffect(() => {
@@ -97,7 +208,7 @@ export function BulkDraftsModal({
 
   function openAll() {
     let opened = 0;
-    for (const d of drafts) {
+    for (const d of actionableDrafts) {
       const w = window.open(d.compose_url, "_blank", "noopener,noreferrer");
       if (w) opened++;
     }
@@ -106,7 +217,7 @@ export function BulkDraftsModal({
 
   function downloadCsv() {
     const header = ["email", "subject", "body"].join(",");
-    const lines = drafts.map((d) =>
+    const lines = actionableDrafts.map((d) =>
       [csvEscape(d.to), csvEscape(d.subject), csvEscape(d.body_text)].join(",")
     );
     const ts = new Date().toISOString().slice(0, 10);
@@ -118,7 +229,7 @@ export function BulkDraftsModal({
   }
 
   async function createGmailDrafts() {
-    if (drafts.length === 0) return;
+    if (actionableDrafts.length === 0) return;
     setGmailBusy(true);
     setGmailMessage(null);
     try {
@@ -126,7 +237,7 @@ export function BulkDraftsModal({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          drafts: drafts.map((d) => ({
+          drafts: actionableDrafts.map((d) => ({
             to: d.to,
             subject: d.subject,
             body_html: d.body_html ?? d.body_text,
@@ -152,12 +263,12 @@ export function BulkDraftsModal({
     }
   }
 
-  async function copy(d: BulkDraft) {
+  async function copy(d: BulkDraft, hitKey: string) {
     try {
       await navigator.clipboard.writeText(
         `To: ${d.to}\nSubject: ${d.subject}\n\n${d.body_text}`
       );
-      setCopyHit(d.compose_url);
+      setCopyHit(hitKey);
       setTimeout(() => setCopyHit(null), 1200);
     } catch {
       /* clipboard blocked — silent */
@@ -214,12 +325,12 @@ export function BulkDraftsModal({
             {gmail?.connected ? (
               <button
                 onClick={createGmailDrafts}
-                disabled={loading || drafts.length === 0 || gmailBusy}
+                disabled={loading || actionableDrafts.length === 0 || gmailBusy}
                 className="px-3 py-1.5 bg-accent text-accent-fg rounded-md text-sm font-medium hover:bg-accent-hover disabled:opacity-50"
               >
                 {gmailBusy
                   ? "Creating drafts…"
-                  : `📥 Create ${drafts.length} drafts in ${gmail.email ?? "Gmail"}`}
+                  : `📥 Create ${actionableDrafts.length} drafts in ${gmail.email ?? "Gmail"}`}
               </button>
             ) : (
               <a
@@ -232,7 +343,7 @@ export function BulkDraftsModal({
             )}
             <button
               onClick={downloadCsv}
-              disabled={loading || drafts.length === 0}
+              disabled={loading || actionableDrafts.length === 0}
               className="px-3 py-1.5 border border-border-strong rounded-md text-sm hover:bg-canvas disabled:opacity-50"
               title="Download a CSV of every draft (email/subject/body) for use with mail-merge tools like YAMM."
             >
@@ -240,7 +351,7 @@ export function BulkDraftsModal({
             </button>
             <button
               onClick={openAll}
-              disabled={loading || drafts.length === 0}
+              disabled={loading || actionableDrafts.length === 0}
               className="px-3 py-1.5 border border-border-strong rounded-md text-sm hover:bg-canvas disabled:opacity-50"
             >
               Open all in Gmail tabs
@@ -274,40 +385,108 @@ export function BulkDraftsModal({
           {drafts.length === 0 && !loading ? (
             <p className="p-4 text-sm text-muted">No drafts to show.</p>
           ) : null}
-          {drafts.map((d) => (
-            <div
-              key={d.compose_url}
-              className="p-3 hover:bg-canvas/60 flex items-start gap-3"
-            >
-              <div className="flex-1 min-w-0">
-                <div className="font-medium text-fg truncate">
-                  {d.customer_label}
+          {drafts.map((d) => {
+            const draftKey = d.compose_url;
+            const sel = recipientSelection[draftKey] ?? new Set();
+            const liveToStr = liveTo(d);
+            const liveUrl = liveComposeUrl(d);
+            const isExpanded = expandedRecipients.has(draftKey);
+            const hasContactsBeyondDefault = d.recipients.some((r) => !r.default);
+            return (
+              <div key={draftKey} className="p-3 hover:bg-canvas/60">
+                <div className="flex items-start gap-3">
+                  <div className="flex-1 min-w-0">
+                    <div className="font-medium text-fg truncate">
+                      {d.customer_label}
+                    </div>
+                    <div className="text-xs text-muted truncate flex items-center gap-1.5">
+                      <span className="truncate">To: {liveToStr || "(none)"}</span>
+                      {d.recipients.length > 0 ? (
+                        <button
+                          type="button"
+                          onClick={() => toggleExpand(draftKey)}
+                          className="text-[10px] uppercase tracking-wide text-accent hover:underline whitespace-nowrap flex-shrink-0"
+                          title="Toggle which contacts to include"
+                        >
+                          {isExpanded
+                            ? "Hide"
+                            : hasContactsBeyondDefault
+                              ? `+${d.recipients.length - 1} contact${d.recipients.length - 1 === 1 ? "" : "s"}`
+                              : "Edit"}
+                        </button>
+                      ) : null}
+                    </div>
+                    <div className="text-xs text-muted mt-1 truncate">
+                      {d.subject}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1 flex-shrink-0">
+                    <button
+                      onClick={() =>
+                        copy(
+                          { ...d, to: liveToStr, compose_url: liveUrl },
+                          draftKey
+                        )
+                      }
+                      className="px-2 py-1 text-xs border border-border-strong rounded-md hover:bg-canvas"
+                    >
+                      {copyHit === draftKey ? "Copied" : "Copy"}
+                    </button>
+                    <a
+                      href={liveUrl}
+                      onClick={(e) => {
+                        if (!liveToStr) {
+                          e.preventDefault();
+                        }
+                      }}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className={`px-2 py-1 text-xs rounded-md ${
+                        liveToStr
+                          ? "bg-accent text-accent-fg hover:bg-accent-hover"
+                          : "bg-surface-2 text-subtle cursor-not-allowed"
+                      }`}
+                    >
+                      Open
+                    </a>
+                  </div>
                 </div>
-                <div className="text-xs text-muted truncate">
-                  To: {d.to}
-                </div>
-                <div className="text-xs text-muted mt-1 truncate">
-                  {d.subject}
-                </div>
+                {isExpanded && d.recipients.length > 0 ? (
+                  <ul className="mt-2 ml-1 grid grid-cols-1 sm:grid-cols-2 gap-x-3 gap-y-1">
+                    {d.recipients.map((r) => {
+                      const checked = sel.has(r.email.toLowerCase());
+                      return (
+                        <li key={r.email} className="text-xs">
+                          <label className="flex items-center gap-2 cursor-pointer py-0.5">
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={() => toggleRecipient(draftKey, r.email)}
+                              className="h-3.5 w-3.5 rounded border-border-strong cursor-pointer"
+                            />
+                            <span className="truncate">
+                              {r.name ? (
+                                <>
+                                  <span className="text-fg">{r.name}</span>
+                                  <span className="text-subtle"> · </span>
+                                </>
+                              ) : null}
+                              <span className="text-muted">{r.email}</span>
+                              {r.default ? (
+                                <span className="ml-1 text-[10px] uppercase tracking-wide text-subtle">
+                                  owner
+                                </span>
+                              ) : null}
+                            </span>
+                          </label>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                ) : null}
               </div>
-              <div className="flex items-center gap-1 flex-shrink-0">
-                <button
-                  onClick={() => copy(d)}
-                  className="px-2 py-1 text-xs border border-border-strong rounded-md hover:bg-canvas"
-                >
-                  {copyHit === d.compose_url ? "Copied" : "Copy"}
-                </button>
-                <a
-                  href={d.compose_url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="px-2 py-1 text-xs bg-accent text-accent-fg rounded-md hover:bg-accent-hover"
-                >
-                  Open
-                </a>
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
 
         <div className="px-4 py-3 border-t border-border flex justify-end">
