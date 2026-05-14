@@ -7,7 +7,7 @@ import { CustomerDetailPanel } from "./customer-detail-panel";
 import { RowActions } from "./row-actions";
 import { RiskLevelChip } from "./risk-level-chip";
 import { FlagResolutionCheckboxes } from "./flag-resolution-checkboxes";
-import { ChipMultiSelect, FilterBar, SearchInput, SegmentToggle } from "./filters";
+import { ChipMultiSelect, FilterBar, FilterPanel, SearchInput, SegmentToggle } from "./filters";
 import { CsmSelector } from "./csm-selector";
 import { composeUrlForTemplate } from "@/lib/links";
 import { suggestTemplates } from "@/lib/templates/templates";
@@ -336,45 +336,57 @@ export function AtRiskTable({
       </div>
 
       {data.accounts.length > 0 ? (
-        <div className="rounded-md border border-border bg-surface p-3 space-y-2">
-          <div className="flex flex-wrap items-center gap-2 text-xs">
-            <span className="text-muted font-medium">Filter by flag:</span>
-            <SegmentToggle
-              variant="compact"
-              ariaLabel="Combine mode"
-              options={[
-                { value: "any", label: "any" },
-                { value: "all", label: "all" },
-              ]}
-              value={combine}
-              onChange={(v) => setCombine(v)}
-            />
-            {filterActive ? (
-              <button
-                onClick={() => setPickedFlags(new Set())}
-                className="text-accent hover:underline ml-auto"
-              >
-                Clear ({pickedFlags.size} selected · {modeLabel})
-              </button>
-            ) : (
-              <span className="text-subtle ml-auto">
-                no flags selected — showing every flagged account
+        <FilterPanel
+          title="Filter by flag"
+          defaultOpen={filterActive}
+          trailing={
+            filterActive ? (
+              <span>
+                {pickedFlags.size} selected · {modeLabel}
               </span>
-            )}
+            ) : null
+          }
+        >
+          <div className="space-y-2">
+            <div className="flex flex-wrap items-center gap-2 text-xs">
+              <span className="text-muted font-medium">Combine:</span>
+              <SegmentToggle
+                variant="compact"
+                ariaLabel="Combine mode"
+                options={[
+                  { value: "any", label: "any" },
+                  { value: "all", label: "all" },
+                ]}
+                value={combine}
+                onChange={(v) => setCombine(v)}
+              />
+              {filterActive ? (
+                <button
+                  onClick={() => setPickedFlags(new Set())}
+                  className="text-accent hover:underline ml-auto"
+                >
+                  Clear ({pickedFlags.size} selected · {modeLabel})
+                </button>
+              ) : (
+                <span className="text-subtle ml-auto">
+                  no flags selected — showing every flagged account
+                </span>
+              )}
+            </div>
+            <ChipMultiSelect
+              options={FLAG_META.map(({ code, label, description }) => ({
+                value: code,
+                label,
+                description: `${code} — ${description}`,
+                badge: code,
+                badgeClass: FLAG_COLORS[code] ?? "bg-surface-2",
+              }))}
+              selected={pickedFlags}
+              onToggle={toggleFlag}
+              countMap={flagCounts}
+            />
           </div>
-          <ChipMultiSelect
-            options={FLAG_META.map(({ code, label, description }) => ({
-              value: code,
-              label,
-              description: `${code} — ${description}`,
-              badge: code,
-              badgeClass: FLAG_COLORS[code] ?? "bg-surface-2",
-            }))}
-            selected={pickedFlags}
-            onToggle={toggleFlag}
-            countMap={flagCounts}
-          />
-        </div>
+        </FilterPanel>
       ) : null}
 
       {data.accounts.length > 0 && accounts.length > 0 ? (

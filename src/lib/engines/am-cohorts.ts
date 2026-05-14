@@ -1,9 +1,27 @@
 import { runSavedQuestion } from "../metabase";
+import { kvGet, kvSet } from "../storage/kv";
 
 /**
- * Cohort fetchers for the AM dashboard tabs that pull from existing
- * Metabase saved questions. Each call is cached in-process for 10 min so
- * tab switches are instant after the first hit.
+ * Cohort fetchers for the AM dashboard tabs.
+ *
+ * Each cohort runs a Metabase saved question (q13268 / q24620) against
+ * the live warehouse. Those queries take 30–90s on first hit, which
+ * makes the /am page feel sluggish — especially on Vercel where each
+ * cold isolate would otherwise pay the full cost.
+ *
+ * Caching strategy (in order of preference):
+ *
+ *   1. **In-process memo** (~10 min TTL) — fastest. Subsequent calls
+ *      from the same isolate are zero-cost.
+ *   2. **Postgres KV** (~30 min TTL) — shared across isolates. After
+ *      one isolate populates it, every other isolate (warm or cold)
+ *      reads from KV in <50ms.
+ *   3. **Stale-while-revalidate** — if the KV value is past its TTL but
+ *      not too far past, serve it immediately and kick off a background
+ *      Metabase refresh. Means the user never waits on Metabase except
+ *      on the very first ever load.
+ *   4. **Live Metabase fetch** — fallback when nothing is cached or
+ *      the cached value is too old to use.
  *
  * Column mappings reflect the actual q13268 / q24620 schemas (probed
  * against the live Metabase).
@@ -62,11 +80,25 @@ export interface PastDueRow {
 
 const APPROACHING_ENT_QUESTION_ID = 13268;
 const PAST_DUE_QUESTION_ID = 24620;
-const TTL_MS = 10 * 60 * 1000;
+/** In-process memo TTL — fast path for repeat hits from the same isolate. */
+const MEMO_TTL_MS = 10 * 60 * 1000;
+/** KV cache TTL — fresh enough to be useful, long enough to make cold
+ *  isolates feel snappy. */
+const KV_FRESH_TTL_MS = 30 * 60 * 1000;
+/** Hard cap on how stale we'll serve before forcing a synchronous
+ *  Metabase refresh. Past this we'd rather make the user wait than
+ *  trust the data. */
+const KV_STALE_LIMIT_MS = 6 * 60 * 60 * 1000;
 
-let approachingCache: { expires: number; data: ApproachingEntRow[] } | null =
-  null;
-let pastDueCache: { expires: number; data: PastDueRow[] } | null = null;
+interface CachedCohort<T> {
+  expires: number;
+  /** Timestamp the data was generated — used for the stale check. */
+  generated_at: number;
+  data: T[];
+}
+
+let approachingMemo: CachedCohort<ApproachingEntRow> | null = null;
+let pastDueMemo: CachedCohort<PastDueRow> | null = null;
 
 function asStr(v: unknown): string | null {
   return v == null ? null : String(v);
@@ -85,15 +117,8 @@ function asBool(v: unknown): boolean | null {
   return null;
 }
 
-export async function loadApproachingEnterprise(): Promise<ApproachingEntRow[]> {
-  const now = Date.now();
-  if (approachingCache && approachingCache.expires > now) {
-    return approachingCache.data;
-  }
-  const rows = (await runSavedQuestion(APPROACHING_ENT_QUESTION_ID)) as Array<
-    Record<string, unknown>
-  >;
-  const data: ApproachingEntRow[] = rows.map((row) => ({
+function mapApproaching(row: Record<string, unknown>): ApproachingEntRow {
+  return {
     organization_id: asStr(row.organization_id),
     workspace_name: asStr(row.workspace_name),
     owner_email: asStr(row.owner_email),
@@ -117,18 +142,11 @@ export async function loadApproachingEnterprise(): Promise<ApproachingEntRow[]> 
     direct_sponsorships_enabled: asBool(row.direct_sponsorships_enabled),
     ad_placement: asBool(row.ad_placement),
     raw: row,
-  }));
-  approachingCache = { expires: now + TTL_MS, data };
-  return data;
+  };
 }
 
-export async function loadPastDue(): Promise<PastDueRow[]> {
-  const now = Date.now();
-  if (pastDueCache && pastDueCache.expires > now) return pastDueCache.data;
-  const rows = (await runSavedQuestion(PAST_DUE_QUESTION_ID)) as Array<
-    Record<string, unknown>
-  >;
-  const data: PastDueRow[] = rows.map((row) => ({
+function mapPastDue(row: Record<string, unknown>): PastDueRow {
+  return {
     customer_success_manager: asStr(row.customer_success_manager),
     customer_id: asStr(row.customer_id),
     email: asStr(row.email),
@@ -143,7 +161,112 @@ export async function loadPastDue(): Promise<PastDueRow[]> {
     failure_message: asStr(row.failure_message),
     auto_upgrade: asStr(row.auto_upgrade),
     raw: row,
-  }));
-  pastDueCache = { expires: now + TTL_MS, data };
+  };
+}
+
+interface KvEntry<T> {
+  generated_at: number;
+  data: T[];
+}
+
+/**
+ * Three-tier cache: in-process memo → Postgres KV → live Metabase.
+ * Stale entries from KV are returned immediately while a background
+ * refresh kicks off, so the user never sees a spinner for known data.
+ */
+async function loadCohort<T>(
+  questionId: number,
+  kvKey: string,
+  mapRow: (row: Record<string, unknown>) => T,
+  memo: CachedCohort<T> | null,
+  setMemo: (next: CachedCohort<T>) => void
+): Promise<T[]> {
+  const now = Date.now();
+
+  // Tier 1: in-process memo.
+  if (memo && memo.expires > now) return memo.data;
+
+  // Tier 2: cross-isolate Postgres KV.
+  let kvHit: KvEntry<T> | null = null;
+  try {
+    kvHit = await kvGet<KvEntry<T>>(kvKey);
+  } catch (e) {
+    // KV read failed (Postgres down etc.) — fall through to a live fetch.
+    console.error(`[am-cohorts] KV read failed for ${kvKey}:`, e);
+  }
+
+  if (kvHit) {
+    const age = now - kvHit.generated_at;
+    if (age <= KV_FRESH_TTL_MS) {
+      // Fresh enough — populate memo and return.
+      setMemo({
+        expires: now + MEMO_TTL_MS,
+        generated_at: kvHit.generated_at,
+        data: kvHit.data,
+      });
+      return kvHit.data;
+    }
+    if (age <= KV_STALE_LIMIT_MS) {
+      // Stale but not ancient — serve it immediately, refresh in
+      // background so the next caller gets fresh data. We deliberately
+      // don't await this; failures are non-fatal (the next request will
+      // try again).
+      void refreshAndStore(questionId, kvKey, mapRow).catch((e) =>
+        console.error(`[am-cohorts] background refresh of ${kvKey} failed:`, e)
+      );
+      setMemo({
+        expires: now + MEMO_TTL_MS,
+        generated_at: kvHit.generated_at,
+        data: kvHit.data,
+      });
+      return kvHit.data;
+    }
+    // Past the stale limit — fall through to a synchronous refresh.
+  }
+
+  // Tier 3: live Metabase fetch.
+  const data = await refreshAndStore(questionId, kvKey, mapRow);
+  setMemo({ expires: now + MEMO_TTL_MS, generated_at: now, data });
   return data;
+}
+
+async function refreshAndStore<T>(
+  questionId: number,
+  kvKey: string,
+  mapRow: (row: Record<string, unknown>) => T
+): Promise<T[]> {
+  const rows = (await runSavedQuestion(questionId)) as Array<
+    Record<string, unknown>
+  >;
+  const data = rows.map(mapRow);
+  try {
+    await kvSet<KvEntry<T>>(kvKey, { generated_at: Date.now(), data });
+  } catch (e) {
+    console.error(`[am-cohorts] KV write failed for ${kvKey}:`, e);
+  }
+  return data;
+}
+
+export async function loadApproachingEnterprise(): Promise<ApproachingEntRow[]> {
+  return loadCohort<ApproachingEntRow>(
+    APPROACHING_ENT_QUESTION_ID,
+    "am-cohorts:approaching-ent:v1",
+    mapApproaching,
+    approachingMemo,
+    (next) => {
+      approachingMemo = next;
+    }
+  );
+}
+
+export async function loadPastDue(): Promise<PastDueRow[]> {
+  return loadCohort<PastDueRow>(
+    PAST_DUE_QUESTION_ID,
+    "am-cohorts:past-due:v1",
+    mapPastDue,
+    pastDueMemo,
+    (next) => {
+      pastDueMemo = next;
+    }
+  );
 }

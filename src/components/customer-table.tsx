@@ -10,7 +10,6 @@ import { MetricCards } from "./metric-cards";
 import { OutreachModal } from "./outreach-modal";
 import { CustomerDetailPanel } from "./customer-detail-panel";
 import { RowActions } from "./row-actions";
-import { AdNetworkFilter } from "./ad-network-filter";
 import { FeatureUtilizationFilter } from "./feature-utilization-filter";
 import { fmtCurrency, fmtDate, fmtNumber, daysUntil } from "./format";
 import { featureCounts } from "@/lib/features";
@@ -67,9 +66,6 @@ export function CustomerTable({
   const [sortKey, setSortKey] = useState<SortKey>("arr");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
   const [search, setSearch] = useState("");
-  const [adNetworkPredicate, setAdNetworkPredicate] = useState<
-    ((c: Customer) => boolean) | null
-  >(null);
   const [featurePredicate, setFeaturePredicate] = useState<
     ((c: Customer) => boolean) | null
   >(null);
@@ -92,13 +88,6 @@ export function CustomerTable({
   } | null>(null);
   const [bulkError, setBulkError] = useState<string | null>(null);
 
-  const onAdNetworkFilterChange = useCallback(
-    (predicate: ((c: Customer) => boolean) | null) => {
-      setAdNetworkPredicate(() => predicate);
-    },
-    []
-  );
-
   const onFeatureFilterChange = useCallback(
     (predicate: ((c: Customer) => boolean) | null) => {
       setFeaturePredicate(() => predicate);
@@ -118,9 +107,6 @@ export function CustomerTable({
           c.property_main_contact?.toLowerCase().includes(q)
       );
     }
-    if (adNetworkPredicate) {
-      list = list.filter(adNetworkPredicate);
-    }
     if (featurePredicate) {
       list = list.filter(featurePredicate);
     }
@@ -139,14 +125,7 @@ export function CustomerTable({
       return sortDir === "asc" ? na - nb : nb - na;
     });
     return list;
-  }, [
-    initialCustomers,
-    search,
-    adNetworkPredicate,
-    featurePredicate,
-    sortKey,
-    sortDir,
-  ]);
+  }, [initialCustomers, search, featurePredicate, sortKey, sortDir]);
 
   function toggleSort(key: SortKey) {
     if (sortKey === key) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
@@ -166,7 +145,6 @@ export function CustomerTable({
   // ─── Bulk-draft helpers ────────────────────────────────────────────
   /** Pick the template id auto-aligned with whichever filter is active. */
   function autoTemplateId(): string {
-    if (adNetworkPredicate) return "ad-revenue-opportunity";
     if (featurePredicate) return "feature-not-using";
     return "general-checkin";
   }
@@ -560,10 +538,6 @@ export function CustomerTable({
           customers={initialCustomers}
           onFilterChange={onFeatureFilterChange}
         />
-        <AdNetworkFilter
-          customers={initialCustomers}
-          onFilterChange={onAdNetworkFilterChange}
-        />
       </div>
 
       <div className="flex flex-wrap items-center gap-2 px-3 py-2 mb-3 bg-canvas border border-border rounded-md">
@@ -593,11 +567,7 @@ export function CustomerTable({
         <span className="text-xs text-muted ml-2">
           Template auto-pick:{" "}
           <code className="font-mono bg-surface border border-border px-1 rounded">
-            {adNetworkPredicate
-              ? "ad-revenue-opportunity"
-              : featurePredicate
-                ? "feature-not-using"
-                : "general-checkin"}
+            {featurePredicate ? "feature-not-using" : "general-checkin"}
           </code>
         </span>
         <div className="flex-1" />
