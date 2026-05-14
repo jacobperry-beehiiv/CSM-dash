@@ -71,9 +71,13 @@ async function main() {
   // ─── HubSpot enrichment ─────────────────────────────────────────────
   // For every row that exposes a HubSpot company ID, look up the most-
   // recent activity across HubSpot's three rollup properties and stamp
-  // it onto the row. Soft-fails: if HUBSPOT_ACCESS_TOKEN is unset or the
+  // it onto the row. Soft-fails: if neither HUBSPOT_ACCESS_TOKEN nor
+  // HUBSPOT_CLIENT_ID+HUBSPOT_CLIENT_SECRET are set, or the HubSpot
   // API errors, sync continues with the un-enriched rows.
-  if (process.env.HUBSPOT_ACCESS_TOKEN) {
+  const hasHubSpotAuth =
+    !!process.env.HUBSPOT_ACCESS_TOKEN ||
+    (!!process.env.HUBSPOT_CLIENT_ID && !!process.env.HUBSPOT_CLIENT_SECRET);
+  if (hasHubSpotAuth) {
     const enrichStarted = Date.now();
     const typedRows = rows as Record<string, unknown>[];
 
@@ -145,7 +149,8 @@ async function main() {
     }
   } else {
     console.error(
-      "[sync] HUBSPOT_ACCESS_TOKEN not set — skipping HubSpot enrichment"
+      "[sync] HubSpot auth not configured (set HUBSPOT_ACCESS_TOKEN or " +
+        "HUBSPOT_CLIENT_ID+HUBSPOT_CLIENT_SECRET) — skipping HubSpot enrichment"
     );
   }
 

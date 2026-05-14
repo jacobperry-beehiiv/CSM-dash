@@ -1,7 +1,7 @@
 /**
- * HubSpot Private-App-token CRM client. Used by scripts/sync.ts to enrich
- * each customer row with `last_activity_at` — the most-recent activity
- * across emails/calls/meetings/notes for ALL contacts at the company.
+ * HubSpot CRM client. Used by scripts/sync.ts to enrich each customer
+ * row with `last_activity_at` — the most-recent activity across
+ * emails/calls/meetings/notes for ALL contacts at the company.
  *
  * Why this exists: q10600 surfaces HubSpot's narrow `notes_last_contacted`
  * property, which CSMs almost never set manually. The company-level
@@ -9,32 +9,109 @@
  * populated and is what HubSpot itself uses for "last activity" in its
  * own UI.
  *
- * Two lookup paths:
+ * Auth: supports two credential paths, checked in order:
+ *
+ *   1. **Private App access token** — paste `pat-na1-…` into
+ *      HUBSPOT_ACCESS_TOKEN. Simplest, never expires.
+ *
+ *   2. **OAuth client_credentials grant** — set HUBSPOT_CLIENT_ID +
+ *      HUBSPOT_CLIENT_SECRET. The integration calls HubSpot's
+ *      /oauth/v1/token endpoint to mint a short-lived bearer token
+ *      (~30 min lifetime), caches it in-process until ~30s before
+ *      expiry, then re-mints. No user redirect, no refresh tokens.
+ *      Used when the HubSpot integration was provisioned as an OAuth
+ *      app instead of a Private App.
+ *
+ * Lookup paths:
  *   • fetchLastActivity(companyIds) — for snapshots that already have a
  *     hubspot_company_id column (faster: 1 batch call per ~100 ids)
  *   • fetchLastActivityByEmail(emails) — for snapshots that only carry
  *     contact emails (q10600 today). Walks contact → primary company →
  *     activity rollup. 2 batch calls per ~100 emails.
  *
- * Setup:
- *   1. HubSpot Settings → Integrations → Private Apps → Create
- *   2. Scopes:
- *        - crm.objects.companies.read
- *        - crm.schemas.companies.read
- *        - crm.objects.contacts.read    (only for the by-email lookup)
- *   3. Paste the token into HUBSPOT_ACCESS_TOKEN (env)
+ * Required scopes:
+ *   - crm.objects.companies.read
+ *   - crm.schemas.companies.read
+ *   - crm.objects.contacts.read    (only for the by-email lookup)
  *
- * Rate limits: Private Apps are capped at 100 requests / 10 seconds per
- * portal. We batch up to 100 IDs per call (the HubSpot batch endpoint's
- * own cap) and add a small inter-batch delay as a guardrail.
+ * Rate limits: 100 requests / 10 seconds per portal. We batch up to
+ * 100 IDs per call and add a small inter-batch delay as a guardrail.
  */
 
 const COMPANY_BATCH_ENDPOINT =
   "https://api.hubapi.com/crm/v3/objects/companies/batch/read";
 const CONTACT_BATCH_ENDPOINT =
   "https://api.hubapi.com/crm/v3/objects/contacts/batch/read";
+const OAUTH_TOKEN_ENDPOINT = "https://api.hubapi.com/oauth/v1/token";
 const BATCH_SIZE = 100;
 const INTER_BATCH_DELAY_MS = 100;
+/** Refresh the OAuth token this many ms before its declared expiry. */
+const OAUTH_REFRESH_SLACK_MS = 30_000;
+
+let cachedOauthToken: { token: string; expiresAt: number } | null = null;
+
+/**
+ * Resolve a bearer token for the HubSpot REST API. Tries the Private
+ * App static token first, then falls back to minting one via OAuth
+ * client_credentials. Throws a clear error if neither path is configured.
+ */
+async function getAccessToken(): Promise<string> {
+  // Path A: static Private App token
+  const staticToken = process.env.HUBSPOT_ACCESS_TOKEN;
+  if (staticToken) return staticToken;
+
+  // Path B: OAuth client_credentials
+  const clientId = process.env.HUBSPOT_CLIENT_ID;
+  const clientSecret = process.env.HUBSPOT_CLIENT_SECRET;
+  if (!clientId || !clientSecret) {
+    throw new Error(
+      "HubSpot auth is not configured. Set either HUBSPOT_ACCESS_TOKEN " +
+        "(Private App `pat-na1-…`) or HUBSPOT_CLIENT_ID + " +
+        "HUBSPOT_CLIENT_SECRET (OAuth client_credentials)."
+    );
+  }
+
+  const now = Date.now();
+  if (cachedOauthToken && cachedOauthToken.expiresAt > now + OAUTH_REFRESH_SLACK_MS) {
+    return cachedOauthToken.token;
+  }
+
+  // HubSpot's client_credentials grant requires explicit scope. Pass the
+  // exact list the integration needs; the OAuth app in HubSpot must have
+  // these scopes enabled or the token request fails with BAD_SCOPES.
+  const scope = [
+    "crm.objects.companies.read",
+    "crm.schemas.companies.read",
+    "crm.objects.contacts.read",
+  ].join(" ");
+  const body = new URLSearchParams({
+    grant_type: "client_credentials",
+    client_id: clientId,
+    client_secret: clientSecret,
+    scope,
+  });
+  const res = await fetch(OAUTH_TOKEN_ENDPOINT, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: body.toString(),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(
+      `HubSpot OAuth token exchange failed (${res.status}): ${text.slice(0, 300)}`
+    );
+  }
+  const json = (await res.json()) as {
+    access_token: string;
+    expires_in: number;
+    token_type?: string;
+  };
+  cachedOauthToken = {
+    token: json.access_token,
+    expiresAt: now + (json.expires_in ?? 1800) * 1000,
+  };
+  return json.access_token;
+}
 
 const ACTIVITY_PROPS = [
   "notes_last_activity_date",
@@ -70,13 +147,7 @@ export interface CompanyActivity {
 export async function fetchLastActivity(
   companyIds: string[]
 ): Promise<Map<string, CompanyActivity>> {
-  const token = process.env.HUBSPOT_ACCESS_TOKEN;
-  if (!token) {
-    throw new Error(
-      "HUBSPOT_ACCESS_TOKEN is not set — create a Private App in HubSpot " +
-        "with crm.objects.companies.read scope and export the token."
-    );
-  }
+  const token = await getAccessToken();
   const result = new Map<string, CompanyActivity>();
   const unique = [...new Set(companyIds.filter(Boolean))];
   if (unique.length === 0) return result;
@@ -145,13 +216,7 @@ interface ContactBatchResponse {
 export async function fetchLastActivityByEmail(
   emails: string[]
 ): Promise<Map<string, CompanyActivity>> {
-  const token = process.env.HUBSPOT_ACCESS_TOKEN;
-  if (!token) {
-    throw new Error(
-      "HUBSPOT_ACCESS_TOKEN is not set — create a Private App in HubSpot " +
-        "with crm.objects.companies.read + crm.objects.contacts.read scopes."
-    );
-  }
+  const token = await getAccessToken();
 
   const unique = [
     ...new Set(
