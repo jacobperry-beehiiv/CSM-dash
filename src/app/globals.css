@@ -113,13 +113,40 @@ html {
   background: var(--canvas);
 }
 
+/*
+ * Typography
+ *   - Body: Satoshi (geometric humanist, friendlier than Inter)
+ *   - Display: Clash Grotesk (modern grotesque) for every heading
+ *
+ * Both ship from Fontshare via the <link> in layout.tsx. If the CDN is
+ * blocked or the user is offline we fall back gracefully to the system
+ * stack rather than a FOIT — Satoshi/Clash are close enough to those
+ * fallbacks that layout shift is minimal.
+ */
 body {
   background: var(--canvas);
   color: var(--fg);
-  font-family: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI",
+  font-family: "Satoshi", ui-sans-serif, system-ui, -apple-system, "Segoe UI",
     Roboto, "Helvetica Neue", sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  font-family: "Clash Grotesk", ui-sans-serif, system-ui, -apple-system,
+    "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  /* Clash Grotesk runs slightly wider than Inter at the same size —
+   * tighten the default tracking back to where the Inter version sat. */
+  letter-spacing: -0.01em;
+}
+
+/* Tailwind utility for ad-hoc display type (big stat numbers, hero
+ * marketing copy, …) when the markup isn't an h1-h6. Pair with the
+ * existing `font-semibold` etc. weight classes. */
+.font-display {
+  font-family: "Clash Grotesk", ui-sans-serif, system-ui, -apple-system,
+    "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  letter-spacing: -0.01em;
 }
 
 .shadow-card {

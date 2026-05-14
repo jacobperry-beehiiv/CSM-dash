@@ -6,6 +6,7 @@ import { dataSourceMeta } from "@/lib/data/load-customers";
 import { SnapshotBanner } from "@/components/snapshot-banner";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { UserMenu } from "@/components/user-menu";
+import { BeehiivLogo } from "@/components/beehiiv-logo";
 
 export const metadata: Metadata = {
   title: "CSM Mission Control — beehiiv",
@@ -44,6 +45,18 @@ export default function RootLayout({
     <html lang="en" className="h-full antialiased">
       <head>
         <script dangerouslySetInnerHTML={{ __html: themeInit }} />
+        {/* Self-hosted-friendly font CDN. Satoshi powers body text;
+            Clash Grotesk powers headings. Both come from Fontshare
+            (Indian Type Foundry) — free for commercial use. */}
+        <link
+          rel="preconnect"
+          href="https://api.fontshare.com"
+          crossOrigin="anonymous"
+        />
+        <link
+          href="https://api.fontshare.com/v2/css?f[]=satoshi@400,500,700,900&f[]=clash-grotesk@400,500,600,700&display=swap"
+          rel="stylesheet"
+        />
       </head>
       <body className="min-h-full bg-canvas text-fg">
         <header className="border-b border-border bg-canvas/85 backdrop-blur-md sticky top-0 z-20">
@@ -51,9 +64,10 @@ export default function RootLayout({
             <div className="flex items-center gap-10">
               <Link
                 href="/"
-                className="text-[15px] font-semibold text-fg whitespace-nowrap tracking-tight"
+                aria-label="Mission Control — home"
+                className="text-fg hover:opacity-80 transition-opacity"
               >
-                Mission Control
+                <BeehiivLogo className="h-7 w-7" />
               </Link>
               <nav className="flex items-center gap-6 text-[13.5px]">
                 {NAV.map((n) => (

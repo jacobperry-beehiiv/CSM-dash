@@ -1,6 +1,7 @@
 import { Suspense } from "react";
 import { redirect } from "next/navigation";
 import { auth, signIn } from "@/auth";
+import { BeehiivLogo } from "@/components/beehiiv-logo";
 
 export const dynamic = "force-dynamic";
 
@@ -27,10 +28,8 @@ export default async function LoginPage({
     <div className="min-h-[80vh] flex items-center justify-center px-6">
       <div className="w-full max-w-md bg-surface border border-border rounded-2xl shadow-card-lg p-8 space-y-6">
         <div>
-          <h1 className="text-2xl font-semibold text-fg tracking-tight">
-            Mission Control
-          </h1>
-          <p className="text-sm text-muted mt-1">
+          <BeehiivLogo className="h-10 w-10 text-fg" />
+          <p className="text-sm text-muted mt-4">
             Sign in with your beehiiv Google account to continue.
           </p>
         </div>
