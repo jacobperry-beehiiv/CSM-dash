@@ -51,6 +51,23 @@ export interface Customer {
   last_activity_at?: string | null;
   /** Which raw field won the max() that produced last_activity_at. Tooltip. */
   last_activity_source?: string | null;
+  /**
+   * Contacts whose primary associated company in HubSpot is this customer's
+   * company. Populated at sync time by src/lib/integrations/hubspot.ts.
+   * The contact with is_primary=true is the company's pinned primary contact
+   * (hs_primary_contact_id). Used by the customer detail panel to show
+   * "who at this company is HubSpot tracking?" beyond just owner_email.
+   */
+  hubspot_contacts?: HubSpotContactRef[] | null;
+}
+
+export interface HubSpotContactRef {
+  id: string;
+  email: string | null;
+  name: string | null;
+  job_title: string | null;
+  last_activity_at: string | null;
+  is_primary: boolean;
 }
 
 export interface CustomerWithMetrics extends Customer {

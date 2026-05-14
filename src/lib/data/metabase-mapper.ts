@@ -87,5 +87,12 @@ export function metabaseRowToCustomer(
     last_activity_at: (row.last_activity_at as string | null) ?? null,
     last_activity_source:
       (row.last_activity_source as string | null) ?? null,
+    // Set by scripts/sync.ts after HubSpot enrichment; pass through
+    // unchanged when present so re-mapping the snapshot keeps the field.
+    hubspot_contacts:
+      (row.hubspot_contacts as
+        | import("../types").HubSpotContactRef[]
+        | null
+        | undefined) ?? null,
   };
 }

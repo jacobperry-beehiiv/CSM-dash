@@ -4,6 +4,7 @@ import { lastContacted } from "@/lib/customer-helpers";
 import { fmtCurrency, fmtDate, fmtNumber, fmtPct } from "@/components/format";
 import { RiskLevelChip } from "@/components/risk-level-chip";
 import { AccountOutreach } from "@/components/account-outreach";
+import { HubSpotContactsSection } from "@/components/hubspot-contacts-section";
 
 export const dynamic = "force-dynamic";
 
@@ -127,6 +128,8 @@ export default async function AccountPage({
           />
         </Section>
       </div>
+
+      <HubSpotContactsSection contacts={c.hubspot_contacts} />
 
       <AccountOutreach customer={c} />
     </>

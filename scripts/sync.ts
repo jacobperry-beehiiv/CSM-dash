@@ -116,6 +116,9 @@ async function main() {
           if (hit) {
             row.last_activity_at = hit.last_activity_at;
             row.last_activity_source = hit.source;
+            if (hit.contacts && hit.contacts.length > 0) {
+              row.hubspot_contacts = hit.contacts;
+            }
             filled++;
           }
         }
@@ -129,6 +132,9 @@ async function main() {
           if (hit) {
             row.last_activity_at = hit.last_activity_at;
             row.last_activity_source = hit.source;
+            if (hit.contacts && hit.contacts.length > 0) {
+              row.hubspot_contacts = hit.contacts;
+            }
             filled++;
           }
         }

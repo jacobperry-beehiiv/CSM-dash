@@ -42,7 +42,14 @@ const COMPANY_BATCH_ENDPOINT =
   "https://api.hubapi.com/crm/v3/objects/companies/batch/read";
 const CONTACT_BATCH_ENDPOINT =
   "https://api.hubapi.com/crm/v3/objects/contacts/batch/read";
+/** v4 associations endpoint — the v3 batch read silently drops the `associations`
+ * field, so we read company → contact links separately here. typeId 2 =
+ * "Contact with Primary Company", which is the label we surface to CSMs. */
+const COMPANY_TO_CONTACTS_ASSOC_ENDPOINT =
+  "https://api.hubapi.com/crm/v4/associations/companies/contacts/batch/read";
 const OAUTH_TOKEN_ENDPOINT = "https://api.hubapi.com/oauth/v1/token";
+/** HubSpot association typeId for "Contact with Primary Company". */
+const PRIMARY_COMPANY_ASSOC_TYPE_ID = 2;
 const BATCH_SIZE = 100;
 const INTER_BATCH_DELAY_MS = 100;
 /** Refresh the OAuth token this many ms before its declared expiry. */
@@ -121,7 +128,18 @@ const ACTIVITY_PROPS = [
 
 type ActivityProp = (typeof ACTIVITY_PROPS)[number];
 
-interface BatchReadResponse {
+const CONTACT_PROPS = [
+  "email",
+  "firstname",
+  "lastname",
+  "jobtitle",
+  "notes_last_activity_date",
+  "associatedcompanyid",
+] as const;
+
+type ContactProp = (typeof CONTACT_PROPS)[number];
+
+interface CompanyBatchReadResponse {
   status: "COMPLETE" | "PENDING";
   results: Array<{
     id: string;
@@ -131,11 +149,42 @@ interface BatchReadResponse {
   errors?: Array<{ status: string; message: string }>;
 }
 
+interface AssociationBatchReadResponse {
+  status: "COMPLETE" | "PENDING";
+  results: Array<{
+    from: { id: string };
+    to: Array<{
+      toObjectId: number;
+      associationTypes: Array<{
+        category: string;
+        typeId: number;
+        label: string | null;
+      }>;
+    }>;
+  }>;
+}
+
+export interface HubSpotContact {
+  id: string;
+  email: string | null;
+  name: string | null;
+  job_title: string | null;
+  last_activity_at: string | null;
+  is_primary: boolean;
+}
+
 export interface CompanyActivity {
   /** Most-recent of the three HubSpot activity properties, as ISO string. */
   last_activity_at: string | null;
   /** Which raw HubSpot property produced the winning value — used for the UI tooltip. */
   source: ActivityProp | null;
+  /**
+   * Contacts whose primary associated company is this one. First entry,
+   * if any, is the company's primary contact (`is_primary: true`); rest
+   * are alphabetical by name. Populated by fetchLastActivity when the
+   * HubSpot Private App has crm.objects.contacts.read scope.
+   */
+  contacts?: HubSpotContact[];
 }
 
 /**
@@ -152,6 +201,9 @@ export async function fetchLastActivity(
   const unique = [...new Set(companyIds.filter(Boolean))];
   if (unique.length === 0) return result;
 
+  // Pass 1: pull company activity rollup properties. The v3 batch endpoint
+  // silently drops the `associations` field, so contact associations are
+  // fetched separately in Pass 2 via the v4 associations API.
   for (let i = 0; i < unique.length; i += BATCH_SIZE) {
     const slice = unique.slice(i, i + BATCH_SIZE);
     if (i > 0) await sleep(INTER_BATCH_DELAY_MS);
@@ -165,7 +217,7 @@ export async function fetchLastActivity(
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          properties: ACTIVITY_PROPS,
+          properties: [...ACTIVITY_PROPS],
           inputs: slice.map((id) => ({ id })),
         }),
       });
@@ -185,14 +237,157 @@ export async function fetchLastActivity(
       continue;
     }
 
-    const json = (await res.json()) as BatchReadResponse;
+    const json = (await res.json()) as CompanyBatchReadResponse;
     for (const company of json.results ?? []) {
       const winner = pickLatest(company.properties);
-      if (winner) result.set(company.id, winner);
+      result.set(company.id, {
+        last_activity_at: winner?.last_activity_at ?? null,
+        source: winner?.source ?? null,
+      });
+    }
+  }
+
+  // Pass 2: fetch contacts whose primary associated company is one of these.
+  // Uses the v4 associations batch endpoint, filtered to typeId 2 ("Contact
+  // with Primary Company") so we surface only contacts that HubSpot considers
+  // primarily attached to this company (not random associations).
+  const companyToContactIds = new Map<string, string[]>();
+  for (let i = 0; i < unique.length; i += BATCH_SIZE) {
+    const slice = unique.slice(i, i + BATCH_SIZE);
+    if (i > 0) await sleep(INTER_BATCH_DELAY_MS);
+
+    let res: Response;
+    try {
+      res = await fetch(COMPANY_TO_CONTACTS_ASSOC_ENDPOINT, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ inputs: slice.map((id) => ({ id })) }),
+      });
+    } catch (e) {
+      console.error(
+        `[hubspot] associations batch ${i / BATCH_SIZE} network error:`,
+        e instanceof Error ? e.message : e
+      );
+      continue;
+    }
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      console.error(
+        `[hubspot] associations batch ${i / BATCH_SIZE} HTTP ${res.status}: ${body.slice(0, 200)}`
+      );
+      continue;
+    }
+    const json = (await res.json()) as AssociationBatchReadResponse;
+    for (const row of json.results ?? []) {
+      const ids = row.to
+        .filter((t) =>
+          t.associationTypes.some(
+            (a) => a.typeId === PRIMARY_COMPANY_ASSOC_TYPE_ID
+          )
+        )
+        .map((t) => String(t.toObjectId));
+      if (ids.length > 0) companyToContactIds.set(row.from.id, ids);
+    }
+  }
+
+  // Pass 3: batch-fetch contact details for every associated contact.
+  // Dedupe across companies to minimise calls when contacts overlap.
+  const allContactIds = [
+    ...new Set([...companyToContactIds.values()].flat()),
+  ];
+  if (allContactIds.length > 0) {
+    const contactById = await fetchContactsBatch(token, allContactIds);
+    for (const [companyId, ids] of companyToContactIds) {
+      let slot = result.get(companyId);
+      if (!slot) {
+        slot = { last_activity_at: null, source: null };
+        result.set(companyId, slot);
+      }
+      const contacts: HubSpotContact[] = ids
+        .map((id) => contactById.get(id))
+        .filter((c): c is HubSpotContact => Boolean(c));
+      // Sort: most-recently-active first, falling back to alphabetical.
+      contacts.sort((a, b) => {
+        const at = a.last_activity_at ? Date.parse(a.last_activity_at) : 0;
+        const bt = b.last_activity_at ? Date.parse(b.last_activity_at) : 0;
+        if (at !== bt) return bt - at;
+        return (a.name ?? a.email ?? "").localeCompare(b.name ?? b.email ?? "");
+      });
+      if (contacts.length > 0) slot.contacts = contacts;
     }
   }
 
   return result;
+}
+
+interface RawContactReadResponse {
+  status: "COMPLETE" | "PENDING";
+  results: Array<{
+    id: string;
+    properties: Partial<Record<ContactProp, string | null>>;
+  }>;
+  errors?: Array<{ status: string; message: string }>;
+}
+
+async function fetchContactsBatch(
+  token: string,
+  ids: string[]
+): Promise<Map<string, HubSpotContact>> {
+  const out = new Map<string, HubSpotContact>();
+  for (let i = 0; i < ids.length; i += BATCH_SIZE) {
+    const slice = ids.slice(i, i + BATCH_SIZE);
+    if (i > 0) await sleep(INTER_BATCH_DELAY_MS);
+    let res: Response;
+    try {
+      res = await fetch(CONTACT_BATCH_ENDPOINT, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          properties: CONTACT_PROPS,
+          inputs: slice.map((id) => ({ id })),
+        }),
+      });
+    } catch (e) {
+      console.error(
+        `[hubspot] contact details batch ${i / BATCH_SIZE} network error:`,
+        e instanceof Error ? e.message : e
+      );
+      continue;
+    }
+    if (!res.ok && res.status !== 207) {
+      const body = await res.text().catch(() => "");
+      console.error(
+        `[hubspot] contact details batch ${i / BATCH_SIZE} HTTP ${res.status}: ${body.slice(0, 200)}`
+      );
+      continue;
+    }
+    const json = (await res.json()) as RawContactReadResponse;
+    for (const c of json.results ?? []) {
+      const p = c.properties ?? {};
+      const first = p.firstname ?? "";
+      const last = p.lastname ?? "";
+      const name = (first + " " + last).trim() || null;
+      out.set(c.id, {
+        id: c.id,
+        email: p.email ?? null,
+        name,
+        job_title: p.jobtitle ?? null,
+        last_activity_at: p.notes_last_activity_date ?? null,
+        // We don't have a reliable "is primary contact for company" flag
+        // from this endpoint; the company side carries hs_primary_contact_id
+        // but it's not always populated. Leaving false for now — the UI
+        // sorts by recency anyway.
+        is_primary: false,
+      });
+    }
+  }
+  return out;
 }
 
 interface ContactBatchResponse {

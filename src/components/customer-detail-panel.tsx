@@ -7,6 +7,7 @@ import { FeatureBreakdown } from "./feature-breakdown";
 import { FeatureUtilizationPanel } from "./feature-utilization-panel";
 import { AdGapSummary } from "./ad-gap-summary";
 import { CadenceToggle } from "./cadence-toggle";
+import { HubSpotContactsSection } from "./hubspot-contacts-section";
 
 interface Props {
   customer: Customer;
@@ -86,6 +87,8 @@ export function CustomerDetailPanel({
           <Row label="CSM" value={c.customer_success_manager?.replace(/_/g, " ") ?? "—"} />
         </Section>
       </div>
+
+      <HubSpotContactsSection contacts={c.hubspot_contacts} />
 
       {hideFeatureBreakdown ? null : <FeatureBreakdown customer={c} />}
 
