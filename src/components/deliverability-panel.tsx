@@ -1,9 +1,11 @@
 "use client";
 
-import { Fragment, useEffect, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { SeverityBadge } from "./status-badge";
 import { fmtDate, fmtNumber, fmtRate } from "./format";
 import { masqueradeUrl, metabasePubUrl } from "@/lib/links";
+import { FilterBar, SearchInput } from "./filters";
+import { CsmSelector } from "./csm-selector";
 import type { Customer, DeliverabilityAlert } from "@/lib/types";
 
 interface RunResult {
@@ -53,9 +55,16 @@ function useOwnerEmailMap(alerts: DeliverabilityAlert[]): Map<string, string> {
   return map;
 }
 
-export function DeliverabilityPanel({ initial }: { initial: RunResult }) {
+export function DeliverabilityPanel({
+  initial,
+  csms,
+}: {
+  initial: RunResult;
+  csms: string[];
+}) {
   const data = initial;
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [search, setSearch] = useState("");
   const ownerEmailByWorkspace = useOwnerEmailMap(data.alerts);
 
   function toggle(k: string) {
@@ -67,17 +76,52 @@ export function DeliverabilityPanel({ initial }: { initial: RunResult }) {
     });
   }
 
+  /** Search filters by workspace name / subject — same shape as the
+   *  other tabs so the filter strip stays consistent. */
+  const alerts = useMemo(() => {
+    if (!search) return data.alerts;
+    const q = search.toLowerCase();
+    return data.alerts.filter(
+      (a) =>
+        a.post.workspace_name.toLowerCase().includes(q) ||
+        a.post.subject.toLowerCase().includes(q)
+    );
+  }, [data.alerts, search]);
+
   return (
     <div className="space-y-4">
+      <FilterBar>
+        <SearchInput
+          value={search}
+          onChange={setSearch}
+          placeholder="Search workspace or subject…"
+        />
+        <CsmSelector csms={csms} />
+      </FilterBar>
       <div className="text-xs text-muted">
-        {data.alerts.length} flagged · {data.total_posts_yesterday} posts on{" "}
-        {data.target_date} · generated {fmtDate(data.generated_at)}
+        {search ? (
+          <>
+            <strong className="text-fg">{alerts.length}</strong> of{" "}
+            {data.alerts.length} flagged match the filter
+          </>
+        ) : (
+          <>{data.alerts.length} flagged</>
+        )}
+        {" · "}
+        {data.total_posts_yesterday} posts on {data.target_date} · generated{" "}
+        {fmtDate(data.generated_at)}
       </div>
 
-      {data.alerts.length === 0 ? (
+      {alerts.length === 0 ? (
         <div className="bg-green-50 border border-green-200 rounded-lg p-4 text-sm text-green-800">
-          No red flags for {data.target_date}. Analyzed{" "}
-          {data.total_posts_yesterday} posts.
+          {search ? (
+            <>No alerts match &ldquo;{search}&rdquo;.</>
+          ) : (
+            <>
+              No red flags for {data.target_date}. Analyzed{" "}
+              {data.total_posts_yesterday} posts.
+            </>
+          )}
         </div>
       ) : (
         <div className="rounded-xl border border-border bg-surface shadow-card">
@@ -109,7 +153,7 @@ export function DeliverabilityPanel({ initial }: { initial: RunResult }) {
               </tr>
             </thead>
             <tbody>
-              {data.alerts.map((alert, i) => {
+              {alerts.map((alert, i) => {
                 const k = `${alert.post.post_id}-${i}`;
                 const isOpen = expanded.has(k);
                 const critical = alert.flags.some((f) => f.severity === "critical");

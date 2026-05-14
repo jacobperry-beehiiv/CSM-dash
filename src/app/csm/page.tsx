@@ -16,8 +16,6 @@ import { RenewalPanel } from "@/components/renewal-panel";
 import { DeliverabilityPanel } from "@/components/deliverability-panel";
 import { DeliverabilityBanner } from "@/components/deliverability-banner";
 import { DeliverabilityLoading } from "@/components/deliverability-loading";
-import { FilterBar } from "@/components/filters";
-import { CsmSelector } from "@/components/csm-selector";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -45,10 +43,16 @@ function withUtilization(c: import("@/lib/types").Customer): CustomerWithMetrics
   };
 }
 
-async function DeliverabilityTab({ csm }: { csm: string | null }) {
+async function DeliverabilityTab({
+  csm,
+  csms,
+}: {
+  csm: string | null;
+  csms: string[];
+}) {
   try {
     const result = await runDeliverabilityCheck({ csmName: csm });
-    return <DeliverabilityPanel initial={result} />;
+    return <DeliverabilityPanel initial={result} csms={csms} />;
   } catch (e) {
     return (
       <div className="bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/30 rounded-lg p-4 text-sm text-red-800 dark:text-red-300">
@@ -86,29 +90,16 @@ export default async function CsmPage({
       const fullBook = filterCustomers(all, { csm }).map(withUtilization);
       body = <CustomerTable initialCustomers={fullBook} csms={csms} />;
     } else if (tab === "renewals") {
-      body = (
-        <>
-          <FilterBar><span className="text-xs text-muted">CSM:</span><CsmSelector csms={csms} /></FilterBar>
-          <RenewalPanel customers={book} />
-        </>
-      );
+      body = <RenewalPanel customers={book} csms={csms} />;
     } else if (tab === "at-risk") {
       const result = await runAtRiskCheck({ customers: book, csmName: null });
-      body = (
-        <>
-          <FilterBar><span className="text-xs text-muted">CSM:</span><CsmSelector csms={csms} /></FilterBar>
-          <AtRiskTable data={result} />
-        </>
-      );
+      body = <AtRiskTable data={result} csms={csms} />;
     } else if (tab === "deliverability") {
       const canRunLive = source === "metabase" || source === "snapshot";
       body = canRunLive ? (
-        <>
-          <FilterBar><span className="text-xs text-muted">CSM:</span><CsmSelector csms={csms} /></FilterBar>
-          <Suspense fallback={<DeliverabilityLoading />}>
-            <DeliverabilityTab csm={csm} />
-          </Suspense>
-        </>
+        <Suspense fallback={<DeliverabilityLoading />}>
+          <DeliverabilityTab csm={csm} csms={csms} />
+        </Suspense>
       ) : (
         <DeliverabilityBanner source={source} />
       );

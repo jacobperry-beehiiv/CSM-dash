@@ -6,7 +6,8 @@ import { fmtCurrency, fmtDate, daysUntil } from "./format";
 import { OutreachModal } from "./outreach-modal";
 import { CustomerDetailPanel } from "./customer-detail-panel";
 import { RowActions } from "./row-actions";
-import { FilterBar, SelectFilter } from "./filters";
+import { FilterBar, SearchInput, SelectFilter } from "./filters";
+import { CsmSelector } from "./csm-selector";
 
 /**
  * Computes the customer's next renewal/charge date.
@@ -44,6 +45,7 @@ function nextRenewalDate(c: Customer): string | null {
 
 interface Props {
   customers: Customer[];
+  csms: string[];
 }
 
 interface Bucket {
@@ -88,10 +90,11 @@ function intervalLabel(raw: string): string {
   return raw.charAt(0).toUpperCase() + raw.slice(1);
 }
 
-export function RenewalPanel({ customers }: Props) {
+export function RenewalPanel({ customers, csms }: Props) {
   const [selected, setSelected] = useState<Customer | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [intervalFilter, setIntervalFilter] = useState<string>("");
+  const [search, setSearch] = useState("");
 
   // Reset row-level state when the underlying customer set changes (CSM
   // filter / segment switch). Without this, "expanded" keeps stale
@@ -104,6 +107,7 @@ export function RenewalPanel({ customers }: Props) {
   useEffect(() => {
     setExpanded(new Set());
     setIntervalFilter("");
+    setSearch("");
   }, [customerSignature]);
 
   function toggleExpanded(key: string) {
@@ -124,9 +128,21 @@ export function RenewalPanel({ customers }: Props) {
   }, [customers]);
 
   const filtered = useMemo(() => {
-    if (!intervalFilter) return customers;
-    return customers.filter((c) => c.interval === intervalFilter);
-  }, [customers, intervalFilter]);
+    let list = customers;
+    if (intervalFilter) {
+      list = list.filter((c) => c.interval === intervalFilter);
+    }
+    if (search) {
+      const q = search.toLowerCase();
+      list = list.filter(
+        (c) =>
+          c.company_name?.toLowerCase().includes(q) ||
+          c.workspace_name?.toLowerCase().includes(q) ||
+          c.owner_email?.toLowerCase().includes(q)
+      );
+    }
+    return list;
+  }, [customers, intervalFilter, search]);
 
   const buckets = useMemo(() => {
     return BUCKETS.map((b) => {
@@ -145,6 +161,12 @@ export function RenewalPanel({ customers }: Props) {
 
   const cadencePicker = (
     <FilterBar>
+      <SearchInput
+        value={search}
+        onChange={setSearch}
+        placeholder="Search company or workspace…"
+      />
+      <CsmSelector csms={csms} />
       <SelectFilter
         label="Cadence"
         value={intervalFilter}

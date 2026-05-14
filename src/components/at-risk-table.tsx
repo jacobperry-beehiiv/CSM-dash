@@ -7,7 +7,8 @@ import { CustomerDetailPanel } from "./customer-detail-panel";
 import { RowActions } from "./row-actions";
 import { RiskLevelChip } from "./risk-level-chip";
 import { FlagResolutionCheckboxes } from "./flag-resolution-checkboxes";
-import { ChipMultiSelect, SegmentToggle } from "./filters";
+import { ChipMultiSelect, FilterBar, SearchInput, SegmentToggle } from "./filters";
+import { CsmSelector } from "./csm-selector";
 import { composeUrlForTemplate } from "@/lib/links";
 import { suggestTemplates } from "@/lib/templates/templates";
 import { isVisibleToCsm, type StoredTemplate } from "@/lib/templates/types";
@@ -77,7 +78,13 @@ function pctVal(c: Customer): number | null {
     : c.percent_of_max_subs * 100;
 }
 
-export function AtRiskTable({ data }: { data: RunResult }) {
+export function AtRiskTable({
+  data,
+  csms,
+}: {
+  data: RunResult;
+  csms: string[];
+}) {
   const viewerEmail = useViewerEmail();
   const [outreachFor, setOutreachFor] = useState<{
     customer: Customer;
@@ -87,6 +94,10 @@ export function AtRiskTable({ data }: { data: RunResult }) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
   const [bulkMessage, setBulkMessage] = useState<string | null>(null);
+  // Client-side search across the already-flagged accounts. Matches the
+  // shape of the All-assigned tab's FilterBar so the two filter strips
+  // look identical.
+  const [search, setSearch] = useState("");
 
   // Flag filter state. Empty pickedFlags = no filter (show all accounts).
   // combine = "any" matches accounts with at least one picked flag;
@@ -116,8 +127,17 @@ export function AtRiskTable({ data }: { data: RunResult }) {
   }, [data.accounts]);
 
   const accounts = useMemo(() => {
-    if (pickedFlags.size === 0) return data.accounts;
-    return data.accounts.filter((a) => {
+    let list = data.accounts;
+    if (search) {
+      const q = search.toLowerCase();
+      list = list.filter(({ customer: c }) =>
+        (c.company_name?.toLowerCase().includes(q) ||
+          c.workspace_name?.toLowerCase().includes(q) ||
+          c.owner_email?.toLowerCase().includes(q)) ?? false
+      );
+    }
+    if (pickedFlags.size === 0) return list;
+    return list.filter((a) => {
       const codes = new Set(a.flags.map((f) => f.code));
       if (combine === "any") {
         for (const code of pickedFlags) if (codes.has(code)) return true;
@@ -126,7 +146,7 @@ export function AtRiskTable({ data }: { data: RunResult }) {
       for (const code of pickedFlags) if (!codes.has(code)) return false;
       return true;
     });
-  }, [data.accounts, pickedFlags, combine]);
+  }, [data.accounts, pickedFlags, combine, search]);
 
   const allKeys = useMemo(
     () =>
@@ -293,8 +313,16 @@ export function AtRiskTable({ data }: { data: RunResult }) {
 
   return (
     <div className="space-y-4">
+      <FilterBar>
+        <SearchInput
+          value={search}
+          onChange={setSearch}
+          placeholder="Search company or workspace…"
+        />
+        <CsmSelector csms={csms} />
+      </FilterBar>
       <div className="text-xs text-muted">
-        {filterActive ? (
+        {filterActive || search ? (
           <>
             <strong className="text-fg">{accounts.length}</strong> of{" "}
             {data.accounts.length} flagged accounts match the filter
