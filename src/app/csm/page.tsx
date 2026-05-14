@@ -18,6 +18,7 @@ import { DeliverabilityBanner } from "@/components/deliverability-banner";
 import { DeliverabilityLoading } from "@/components/deliverability-loading";
 import { FilterBar } from "@/components/filters";
 import { CsmSelector } from "@/components/csm-selector";
+import { TeamTasksButton } from "@/components/team-tasks-button";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -123,16 +124,19 @@ export default async function CsmPage({
 
   return (
     <>
-      <div className="mb-6">
-        <h1 className="text-3xl font-semibold text-fg tracking-tight">CSM dashboard</h1>
-        <p className="text-sm text-muted mt-1">
-          {tab === "book"
-            ? "Full assigned book — Enterprise + Growth"
-            : "Enterprise book of business"}{" "}
-          · live data from{" "}
-          <code className="bg-surface-2 px-1 py-0.5 rounded">{source}</code>
-          {csm ? <> · CSM: <strong>{csm.replace(/_/g, " ")}</strong></> : null}
-        </p>
+      <div className="mb-6 flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-3xl font-semibold text-fg tracking-tight">CSM dashboard</h1>
+          <p className="text-sm text-muted mt-1">
+            {tab === "book"
+              ? "Full assigned book — Enterprise + Growth"
+              : "Enterprise book of business"}{" "}
+            · live data from{" "}
+            <code className="bg-surface-2 px-1 py-0.5 rounded">{source}</code>
+            {csm ? <> · CSM: <strong>{csm.replace(/_/g, " ")}</strong></> : null}
+          </p>
+        </div>
+        <TeamTasksButton />
       </div>
 
       <TabBar tabs={TABS} defaultTab="book" />
