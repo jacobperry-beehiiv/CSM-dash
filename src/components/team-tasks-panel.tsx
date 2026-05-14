@@ -19,6 +19,9 @@ import {
  * Autosaves to /api/team-tasks 800ms after the last change. Concurrent
  * edits from different CSMs are last-write-wins on the whole list; the
  * volumes are tiny enough that contention is unlikely.
+ *
+ * Embedded inline on the mission-control root page rather than in a
+ * modal so the team's open asks are visible without an extra click.
  */
 
 const PRIORITY_OPTIONS: { value: TaskPriority; label: string; bg: string }[] = [
@@ -85,7 +88,7 @@ function renderDetails(value: string | null): React.ReactNode {
   });
 }
 
-export function TeamTasksModal({ onClose }: { onClose: () => void }) {
+export function TeamTasksPanel() {
   const [list, setList] = useState<TeamTaskList | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [savedAt, setSavedAt] = useState<string | null>(null);
@@ -94,7 +97,7 @@ export function TeamTasksModal({ onClose }: { onClose: () => void }) {
   const [detailsEditingId, setDetailsEditingId] = useState<string | null>(null);
 
   // Track which row was edited last so the autosave debounce can fire on
-  // unmount (e.g. user closes the modal mid-keystroke).
+  // unmount.
   const dirtyRef = useRef<TeamTaskList | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -152,13 +155,12 @@ export function TeamTasksModal({ onClose }: { onClose: () => void }) {
     [save]
   );
 
-  // Flush pending save on unmount so closing the modal mid-keystroke
-  // doesn't lose the last edit.
+  // Flush pending save on unmount so navigating away mid-keystroke
+  // doesn't drop the last edit.
   useEffect(() => {
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current);
       if (dirtyRef.current) {
-        // Fire-and-forget — we're tearing down anyway.
         void fetch("/api/team-tasks", {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
@@ -212,39 +214,18 @@ export function TeamTasksModal({ onClose }: { onClose: () => void }) {
   const hiddenCount = list ? list.tasks.length - visibleTasks.length : 0;
 
   return (
-    <div
-      className="fixed inset-0 bg-black/40 z-30 flex items-center justify-center p-4"
-      onClick={onClose}
-    >
-      <div
-        className="bg-surface rounded-lg w-full max-w-6xl max-h-[90vh] overflow-hidden flex flex-col"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-start justify-between p-4 border-b border-border">
-          <div>
-            <h3 className="font-semibold text-fg">Team tasks</h3>
-            <p className="text-xs text-muted mt-0.5">
-              Shared cross-team ask list. Click any cell to cycle
-              ☐ → ✓ → N/A → ☐. Autosaves.
-            </p>
-          </div>
-          <button
-            onClick={onClose}
-            className="text-subtle hover:text-muted text-xl leading-none flex-shrink-0"
-            aria-label="Close"
-          >
-            ×
-          </button>
+    <section className="bg-surface rounded-xl border border-border shadow-card overflow-hidden">
+      <header className="px-5 py-4 border-b border-border flex flex-wrap items-center gap-4">
+        <div className="min-w-0">
+          <h2 className="text-[17px] font-semibold text-fg tracking-tight">
+            Team tasks
+          </h2>
+          <p className="text-[13px] text-muted mt-0.5">
+            Shared cross-team ask list. Click any cell to cycle
+            ☐ → ✓ → N/A → ☐.
+          </p>
         </div>
-
-        <div className="px-4 py-2 border-b border-border bg-canvas flex flex-wrap items-center gap-3">
-          <button
-            onClick={addTask}
-            disabled={!list}
-            className="px-3 py-1.5 bg-accent text-accent-fg rounded-md text-sm font-medium hover:bg-accent-hover disabled:opacity-50"
-          >
-            + Add task
-          </button>
+        <div className="ml-auto flex items-center gap-3">
           <label className="flex items-center gap-1.5 text-xs text-muted cursor-pointer">
             <input
               type="checkbox"
@@ -257,75 +238,83 @@ export function TeamTasksModal({ onClose }: { onClose: () => void }) {
               <span className="text-subtle">({hiddenCount} hidden)</span>
             ) : null}
           </label>
-          <div className="ml-auto text-xs text-muted">
+          <span className="text-xs text-muted min-w-[80px] text-right">
             {saving ? (
               <span>Saving…</span>
             ) : loadError ? (
               <span className="text-red-600">{loadError}</span>
             ) : savedAt ? (
               <span className="text-subtle">
-                Saved {new Date(savedAt).toLocaleTimeString([], {
+                Saved{" "}
+                {new Date(savedAt).toLocaleTimeString([], {
                   hour: "numeric",
                   minute: "2-digit",
                 })}
               </span>
             ) : null}
-          </div>
+          </span>
+          <button
+            onClick={addTask}
+            disabled={!list}
+            className="px-3 py-1.5 bg-accent text-accent-fg rounded-md text-sm font-medium hover:bg-accent-hover disabled:opacity-50"
+          >
+            + Add task
+          </button>
         </div>
+      </header>
 
-        <div className="overflow-auto flex-1">
-          {!list && !loadError ? (
-            <div className="p-8 text-sm text-muted text-center">Loading…</div>
-          ) : null}
-          {list ? (
-            <table className="w-full text-sm border-collapse">
-              <thead className="sticky top-0 z-10 bg-accent text-accent-fg">
-                <tr>
-                  <Th className="text-left w-[26%]">Ask</Th>
-                  <Th className="text-left w-[10%]">Due date</Th>
-                  <Th className="text-left w-[8%]">LOE</Th>
-                  <Th className="text-left w-[9%]">Priority</Th>
-                  <Th className="text-left w-[20%]">Details</Th>
-                  {list.members.map((m) => (
-                    <Th key={m.id} className="text-center w-[3.5%]">
-                      {m.label}
-                    </Th>
-                  ))}
-                  <Th className="w-[3%]" />
-                </tr>
-              </thead>
-              <tbody>
-                {visibleTasks.map((t) => (
-                  <TaskRow
-                    key={t.id}
-                    task={t}
-                    members={list.members}
-                    isDetailsEditing={detailsEditingId === t.id}
-                    onStartEditDetails={() => setDetailsEditingId(t.id)}
-                    onStopEditDetails={() => setDetailsEditingId(null)}
-                    onPatch={(p) => patchTask(t.id, p)}
-                    onCycle={(memberId) => cycleAssignment(t.id, memberId)}
-                    onDelete={() => deleteTask(t.id)}
-                  />
+      <div className="overflow-auto">
+        {!list && !loadError ? (
+          <div className="p-8 text-sm text-muted text-center">Loading…</div>
+        ) : null}
+        {list ? (
+          <table className="w-full text-sm border-collapse">
+            <thead className="sticky top-0 z-10 bg-accent text-accent-fg">
+              <tr>
+                <Th className="text-left w-[24%]">Ask</Th>
+                <Th className="text-left w-[10%]">Due date</Th>
+                <Th className="text-left w-[8%]">LOE</Th>
+                <Th className="text-left w-[9%]">Priority</Th>
+                <Th className="text-left w-[20%]">Details</Th>
+                {list.members.map((m) => (
+                  <Th key={m.id} className="text-center w-[3.5%]">
+                    {m.label}
+                  </Th>
                 ))}
-                {visibleTasks.length === 0 ? (
-                  <tr>
-                    <td
-                      colSpan={5 + list.members.length + 1}
-                      className="text-center text-muted text-sm py-8"
-                    >
-                      {hideCompleted && hiddenCount > 0
-                        ? `All ${hiddenCount} tasks complete. Uncheck "Hide completed" to review.`
-                        : 'No tasks yet — click "Add task" to start.'}
-                    </td>
-                  </tr>
-                ) : null}
-              </tbody>
-            </table>
-          ) : null}
-        </div>
+                <Th className="w-[3%]" />
+              </tr>
+            </thead>
+            <tbody>
+              {visibleTasks.map((t) => (
+                <TaskRow
+                  key={t.id}
+                  task={t}
+                  members={list.members}
+                  isDetailsEditing={detailsEditingId === t.id}
+                  onStartEditDetails={() => setDetailsEditingId(t.id)}
+                  onStopEditDetails={() => setDetailsEditingId(null)}
+                  onPatch={(p) => patchTask(t.id, p)}
+                  onCycle={(memberId) => cycleAssignment(t.id, memberId)}
+                  onDelete={() => deleteTask(t.id)}
+                />
+              ))}
+              {visibleTasks.length === 0 ? (
+                <tr>
+                  <td
+                    colSpan={5 + list.members.length + 1}
+                    className="text-center text-muted text-sm py-8"
+                  >
+                    {hideCompleted && hiddenCount > 0
+                      ? `All ${hiddenCount} tasks complete. Uncheck "Hide completed" to review.`
+                      : 'No tasks yet — click "Add task" to start.'}
+                  </td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
+        ) : null}
       </div>
-    </div>
+    </section>
   );
 }
 
@@ -463,7 +452,7 @@ function TaskRow({
                 ? "✓"
                 : state === "na"
                   ? "N/A"
-                  : " "}
+                  : " "}
             </button>
           </td>
         );
