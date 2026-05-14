@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { StoredTemplate } from "@/lib/templates/store";
+import type { StoredTemplate } from "@/lib/templates/types";
 import { MERGE_TAGS, applyMergeTags } from "@/lib/templates/merge-tags";
 import type { Customer } from "@/lib/types";
 import { RichTextEditor } from "./rich-text-editor";

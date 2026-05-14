@@ -9,7 +9,7 @@ import { RiskLevelChip } from "./risk-level-chip";
 import { FlagResolutionCheckboxes } from "./flag-resolution-checkboxes";
 import { composeUrlForTemplate } from "@/lib/links";
 import { suggestTemplates } from "@/lib/templates/templates";
-import { isVisibleToCsm, type StoredTemplate } from "@/lib/templates/store";
+import { isVisibleToCsm, type StoredTemplate } from "@/lib/templates/types";
 import { useViewerEmail } from "@/lib/auth-client";
 import { getTierLadder } from "@/lib/tiers/client";
 import type { LastPostRow } from "@/lib/engines/last-post-batch";

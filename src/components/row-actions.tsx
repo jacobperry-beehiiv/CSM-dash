@@ -4,7 +4,7 @@ import { useState } from "react";
 import type { Customer } from "@/lib/types";
 import { composeUrlForTemplate, masqueradeUrl } from "@/lib/links";
 import { suggestTemplates } from "@/lib/templates/templates";
-import { isVisibleToCsm, type StoredTemplate } from "@/lib/templates/store";
+import { isVisibleToCsm, type StoredTemplate } from "@/lib/templates/types";
 import { getTierLadder } from "@/lib/tiers/client";
 import { useViewerEmail } from "@/lib/auth-client";
 

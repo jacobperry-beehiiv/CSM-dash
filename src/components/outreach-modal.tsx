@@ -7,7 +7,7 @@ import {
   type TemplateScenario,
 } from "@/lib/templates/templates";
 import { applyMergeTags } from "@/lib/templates/merge-tags";
-import { isVisibleToCsm, type StoredTemplate } from "@/lib/templates/store";
+import { isVisibleToCsm, type StoredTemplate } from "@/lib/templates/types";
 import { useViewerEmail } from "@/lib/auth-client";
 import { getTierLadder } from "@/lib/tiers/client";
 import type { EnterpriseTier } from "@/lib/tiers/store";
