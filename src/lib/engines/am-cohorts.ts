@@ -1,27 +1,25 @@
 import { runSavedQuestion } from "../metabase";
 import { kvGet, kvSet } from "../storage/kv";
+import { readCohortSnapshot } from "../data/cohort-snapshots";
 
 /**
  * Cohort fetchers for the AM dashboard tabs.
  *
- * Each cohort runs a Metabase saved question (q13268 / q24620) against
- * the live warehouse. Those queries take 30–90s on first hit, which
- * makes the /am page feel sluggish — especially on Vercel where each
- * cold isolate would otherwise pay the full cost.
+ * Each cohort comes from a Metabase saved question (q13268 / q24620)
+ * that takes 30–90s on the live warehouse. To keep /am snappy we layer
+ * four caches, checked in order:
  *
- * Caching strategy (in order of preference):
- *
- *   1. **In-process memo** (~10 min TTL) — fastest. Subsequent calls
- *      from the same isolate are zero-cost.
- *   2. **Postgres KV** (~30 min TTL) — shared across isolates. After
- *      one isolate populates it, every other isolate (warm or cold)
- *      reads from KV in <50ms.
- *   3. **Stale-while-revalidate** — if the KV value is past its TTL but
- *      not too far past, serve it immediately and kick off a background
- *      Metabase refresh. Means the user never waits on Metabase except
- *      on the very first ever load.
- *   4. **Live Metabase fetch** — fallback when nothing is cached or
- *      the cached value is too old to use.
+ *   1. **Snapshot file on disk** (data/<cohort>.enc.json) — written by
+ *      scripts/sync.ts twice daily. Read in a few ms; always available
+ *      in production. Primary path 99% of the time.
+ *   2. **In-process memo** (~10 min TTL) — cuts the snapshot decrypt
+ *      cost on repeat hits in the same isolate.
+ *   3. **Postgres KV** (~30 min fresh, up to 6h stale) — shared cross-
+ *      isolate cache. Only used when the file snapshot is missing
+ *      (e.g. local dev before sync has been run) — populated lazily on
+ *      live fetches.
+ *   4. **Live Metabase fetch** — last resort. Only fires if the file
+ *      doesn't exist AND the KV is empty or ancient.
  *
  * Column mappings reflect the actual q13268 / q24620 schemas (probed
  * against the live Metabase).
@@ -80,12 +78,14 @@ export interface PastDueRow {
 
 const APPROACHING_ENT_QUESTION_ID = 13268;
 const PAST_DUE_QUESTION_ID = 24620;
+const APPROACHING_SNAPSHOT_BASENAME = "approaching-enterprise";
+const PAST_DUE_SNAPSHOT_BASENAME = "past-due";
 /** In-process memo TTL — fast path for repeat hits from the same isolate. */
 const MEMO_TTL_MS = 10 * 60 * 1000;
-/** KV cache TTL — fresh enough to be useful, long enough to make cold
- *  isolates feel snappy. */
+/** KV cache TTL — only used in environments without the snapshot file
+ *  (local dev before `npm run sync`). Snapshot reads take precedence. */
 const KV_FRESH_TTL_MS = 30 * 60 * 1000;
-/** Hard cap on how stale we'll serve before forcing a synchronous
+/** Hard cap on how stale we'll serve KV before forcing a synchronous
  *  Metabase refresh. Past this we'd rather make the user wait than
  *  trust the data. */
 const KV_STALE_LIMIT_MS = 6 * 60 * 60 * 1000;
@@ -170,12 +170,14 @@ interface KvEntry<T> {
 }
 
 /**
- * Three-tier cache: in-process memo → Postgres KV → live Metabase.
- * Stale entries from KV are returned immediately while a background
- * refresh kicks off, so the user never sees a spinner for known data.
+ * Four-tier cache: snapshot file → in-process memo → Postgres KV →
+ * live Metabase. The snapshot is the happy path in production
+ * (written by scripts/sync.ts twice daily); the rest exist so the
+ * dashboard keeps working in environments without a sync run.
  */
 async function loadCohort<T>(
   questionId: number,
+  snapshotBasename: string,
   kvKey: string,
   mapRow: (row: Record<string, unknown>) => T,
   memo: CachedCohort<T> | null,
@@ -186,19 +188,41 @@ async function loadCohort<T>(
   // Tier 1: in-process memo.
   if (memo && memo.expires > now) return memo.data;
 
-  // Tier 2: cross-isolate Postgres KV.
+  // Tier 2: snapshot file written by sync.ts. This is the production
+  // happy path — `npm run sync` writes data/<basename>.enc.json twice
+  // daily, the file ships in the repo, and the dashboard reads it in
+  // a few ms with no network round-trip.
+  try {
+    const snap = await readCohortSnapshot(snapshotBasename);
+    if (snap && Array.isArray(snap.rows)) {
+      const data = snap.rows.map(mapRow);
+      setMemo({
+        expires: now + MEMO_TTL_MS,
+        generated_at: new Date(snap.generated_at).getTime() || now,
+        data,
+      });
+      return data;
+    }
+  } catch (e) {
+    console.error(
+      `[am-cohorts] snapshot read failed for ${snapshotBasename}:`,
+      e instanceof Error ? e.message : e
+    );
+  }
+
+  // Tier 3: cross-isolate Postgres KV. Only relevant in environments
+  // where sync hasn't run yet — once a live fetch succeeds we populate
+  // this so concurrent isolates skip the slow path.
   let kvHit: KvEntry<T> | null = null;
   try {
     kvHit = await kvGet<KvEntry<T>>(kvKey);
   } catch (e) {
-    // KV read failed (Postgres down etc.) — fall through to a live fetch.
     console.error(`[am-cohorts] KV read failed for ${kvKey}:`, e);
   }
 
   if (kvHit) {
     const age = now - kvHit.generated_at;
     if (age <= KV_FRESH_TTL_MS) {
-      // Fresh enough — populate memo and return.
       setMemo({
         expires: now + MEMO_TTL_MS,
         generated_at: kvHit.generated_at,
@@ -207,10 +231,7 @@ async function loadCohort<T>(
       return kvHit.data;
     }
     if (age <= KV_STALE_LIMIT_MS) {
-      // Stale but not ancient — serve it immediately, refresh in
-      // background so the next caller gets fresh data. We deliberately
-      // don't await this; failures are non-fatal (the next request will
-      // try again).
+      // Stale-but-not-ancient: serve immediately, refresh in background.
       void refreshAndStore(questionId, kvKey, mapRow).catch((e) =>
         console.error(`[am-cohorts] background refresh of ${kvKey} failed:`, e)
       );
@@ -221,10 +242,9 @@ async function loadCohort<T>(
       });
       return kvHit.data;
     }
-    // Past the stale limit — fall through to a synchronous refresh.
   }
 
-  // Tier 3: live Metabase fetch.
+  // Tier 4: live Metabase fetch — last resort.
   const data = await refreshAndStore(questionId, kvKey, mapRow);
   setMemo({ expires: now + MEMO_TTL_MS, generated_at: now, data });
   return data;
@@ -250,6 +270,7 @@ async function refreshAndStore<T>(
 export async function loadApproachingEnterprise(): Promise<ApproachingEntRow[]> {
   return loadCohort<ApproachingEntRow>(
     APPROACHING_ENT_QUESTION_ID,
+    APPROACHING_SNAPSHOT_BASENAME,
     "am-cohorts:approaching-ent:v1",
     mapApproaching,
     approachingMemo,
@@ -262,6 +283,7 @@ export async function loadApproachingEnterprise(): Promise<ApproachingEntRow[]> 
 export async function loadPastDue(): Promise<PastDueRow[]> {
   return loadCohort<PastDueRow>(
     PAST_DUE_QUESTION_ID,
+    PAST_DUE_SNAPSHOT_BASENAME,
     "am-cohorts:past-due:v1",
     mapPastDue,
     pastDueMemo,

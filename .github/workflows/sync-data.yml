@@ -52,14 +52,25 @@ jobs:
           METABASE_API_KEY: ${{ secrets.METABASE_API_KEY }}
           SNAPSHOT_ENCRYPTION_KEY: ${{ secrets.SNAPSHOT_ENCRYPTION_KEY }}
 
-      - name: Commit + push encrypted snapshot
+      - name: Commit + push encrypted snapshots
         run: |
-          if git diff --quiet -- data/snapshot.enc.json; then
-            echo "snapshot.enc.json unchanged — nothing to commit"
-            exit 0
-          fi
+          # Stage every snapshot file that exists. Cohort syncs are
+          # soft-fail in sync.ts, so any one of these may be missing on
+          # a given run — skip rather than error.
           git config user.name  "csm-dash-bot"
           git config user.email "csm-dash-bot@users.noreply.github.com"
-          git add data/snapshot.enc.json
-          git commit -m "chore(data): refresh encrypted snapshot ($(date -u +%FT%TZ))"
+          for f in \
+            data/snapshot.enc.json \
+            data/approaching-enterprise.enc.json \
+            data/past-due.enc.json
+          do
+            if [ -f "$f" ]; then
+              git add "$f"
+            fi
+          done
+          if git diff --staged --quiet; then
+            echo "All snapshots unchanged — nothing to commit"
+            exit 0
+          fi
+          git commit -m "chore(data): refresh encrypted snapshots ($(date -u +%FT%TZ))"
           git push

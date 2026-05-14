@@ -19,6 +19,7 @@ import path from "node:path";
 
 import { runSavedQuestion } from "../src/lib/metabase";
 import { encryptSnapshot } from "../src/lib/data/snapshot-crypto";
+import { writeCohortSnapshot } from "../src/lib/data/cohort-snapshots";
 import {
   fetchLastActivity,
   fetchLastActivityByEmail,
@@ -27,6 +28,17 @@ import {
 const QUESTION_ID = 10600;
 const PLAINTEXT_PATH = path.join(process.cwd(), "data/snapshot.json");
 const ENCRYPTED_PATH = path.join(process.cwd(), "data/snapshot.enc.json");
+
+/**
+ * Additional Metabase saved questions pre-computed by sync so the /am
+ * tabs can read from disk instead of waiting 30–90s on a live query.
+ * Each entry pairs a saved-question ID with the basename used by the
+ * cohort-snapshot reader.
+ */
+const COHORT_QUESTIONS: Array<{ id: number; basename: string; label: string }> = [
+  { id: 13268, basename: "approaching-enterprise", label: "approaching-enterprise" },
+  { id: 24620, basename: "past-due", label: "past-due" },
+];
 
 /**
  * Column names q10600 might expose the HubSpot company ID under. We accept
@@ -178,6 +190,38 @@ async function main() {
     await writeFile(outPath, JSON.stringify(envelope, null, 2), "utf8");
   }
   console.error(`[sync] wrote ${outPath}`);
+
+  // ─── AM cohort snapshots ───────────────────────────────────────────
+  // Pre-compute the slow /am tabs (q13268 + q24620) so they read from
+  // disk in <50ms instead of waiting on a live Metabase query. Each
+  // cohort soft-fails independently — a failure here never blocks the
+  // main book of business from shipping.
+  for (const cohort of COHORT_QUESTIONS) {
+    const started = Date.now();
+    try {
+      console.error(`[sync] pulling q${cohort.id} (${cohort.label})…`);
+      const cohortRows = await runSavedQuestion(cohort.id);
+      const written = await writeCohortSnapshot(
+        cohort.basename,
+        {
+          generated_at: new Date().toISOString(),
+          question_id: cohort.id,
+          row_count: cohortRows.length,
+          rows: cohortRows,
+        },
+        { plaintext: usePlaintext }
+      );
+      const elapsed = ((Date.now() - started) / 1000).toFixed(1);
+      console.error(
+        `[sync] wrote ${written} (${cohortRows.length} rows, ${elapsed}s)`
+      );
+    } catch (e) {
+      console.error(
+        `[sync] cohort q${cohort.id} (${cohort.label}) failed (continuing):`,
+        e instanceof Error ? e.message : e
+      );
+    }
+  }
 }
 
 main().catch((err) => {
