@@ -1,5 +1,6 @@
 import { DB, runNativeQuery } from "../metabase";
 import { loadCustomers } from "../data/load-customers";
+import { readDeliverabilitySnapshot } from "../data/deliverability-snapshot";
 import { analyzePost } from "../thresholds";
 import type {
   DeliverabilityAlert,
@@ -95,58 +96,84 @@ function toInClause(ids: string[]): string {
   return ids.map((id) => `'${id.replace(/'/g, "''")}'`).join(",");
 }
 
+/**
+ * ClickHouse + Metabase choke on very large IN(...) clauses — a 2000-id
+ * spam query consistently 60s-timed-out during the snapshot sync. Chunk
+ * the IDs into batches and concatenate the results, then de-dupe by id
+ * in the caller's join step (existing joinRows logic handles dupes via
+ * a Map keyed by id).
+ */
+const POST_ID_CHUNK_SIZE = 200;
+
+async function runChunked<T>(
+  ids: string[],
+  buildSql: (chunk: string[]) => string
+): Promise<T[]> {
+  if (ids.length === 0) return [];
+  const out: T[] = [];
+  for (let i = 0; i < ids.length; i += POST_ID_CHUNK_SIZE) {
+    const slice = ids.slice(i, i + POST_ID_CHUNK_SIZE);
+    const rows = (await runNativeQuery(
+      DB.CLICKHOUSE_ADHOC,
+      buildSql(slice)
+    )) as unknown as T[];
+    for (const r of rows) out.push(r);
+  }
+  return out;
+}
+
 async function fetchMetrics(postIds: string[]): Promise<Q2Row[]> {
-  if (postIds.length === 0) return [];
-  const inClause = toInClause(postIds);
-  const sql = `
-    SELECT
-      sendable_id,
-      sum(unique_subscriber_sent) AS unique_subscriber_sent,
-      sum(unique_subscriber_delivered) AS unique_subscriber_delivered,
-      sum(unique_subscriber_opened) AS unique_subscriber_opened,
-      sum(unique_subscriber_clicked) AS unique_subscriber_clicked,
-      sum(unique_subscriber_hard_bounced) AS unique_subscriber_hard_bounced,
-      sum(unique_subscriber_soft_bounced) AS unique_subscriber_soft_bounced
-    FROM default.fact_sendables_by_type_v1
-    WHERE sendable_type = 'Post'
-      AND message_type = 'campaign'
-      AND sendable_id IN (${inClause})
-    GROUP BY sendable_id
-  `;
-  return (await runNativeQuery(DB.CLICKHOUSE_ADHOC, sql)) as unknown as Q2Row[];
+  return runChunked<Q2Row>(postIds, (chunk) => {
+    const inClause = toInClause(chunk);
+    return `
+      SELECT
+        sendable_id,
+        sum(unique_subscriber_sent) AS unique_subscriber_sent,
+        sum(unique_subscriber_delivered) AS unique_subscriber_delivered,
+        sum(unique_subscriber_opened) AS unique_subscriber_opened,
+        sum(unique_subscriber_clicked) AS unique_subscriber_clicked,
+        sum(unique_subscriber_hard_bounced) AS unique_subscriber_hard_bounced,
+        sum(unique_subscriber_soft_bounced) AS unique_subscriber_soft_bounced
+      FROM default.fact_sendables_by_type_v1
+      WHERE sendable_type = 'Post'
+        AND message_type = 'campaign'
+        AND sendable_id IN (${inClause})
+      GROUP BY sendable_id
+    `;
+  });
 }
 
 async function fetchUnsubs(postIds: string[]): Promise<Q3Row[]> {
-  if (postIds.length === 0) return [];
-  const inClause = toInClause(postIds);
-  // Schema migration (May 2026): state_events_unsubscribe_post_id moved to
-  // swarm_clickpipes and `subscription_id` was renamed to `trackable_id`.
-  const sql = `
-    SELECT
-      toString(unsubscribe_post_id) AS unsubscribe_post_id,
-      countDistinct(trackable_id) AS unsubs
-    FROM swarm_clickpipes.state_events_unsubscribe_post_id
-    WHERE unsubscribe_post_id IN (${inClause})
-    GROUP BY unsubscribe_post_id
-  `;
-  return (await runNativeQuery(DB.CLICKHOUSE_ADHOC, sql)) as unknown as Q3Row[];
+  return runChunked<Q3Row>(postIds, (chunk) => {
+    const inClause = toInClause(chunk);
+    // Schema migration (May 2026): state_events_unsubscribe_post_id moved to
+    // swarm_clickpipes and `subscription_id` was renamed to `trackable_id`.
+    return `
+      SELECT
+        toString(unsubscribe_post_id) AS unsubscribe_post_id,
+        countDistinct(trackable_id) AS unsubs
+      FROM swarm_clickpipes.state_events_unsubscribe_post_id
+      WHERE unsubscribe_post_id IN (${inClause})
+      GROUP BY unsubscribe_post_id
+    `;
+  });
 }
 
 async function fetchSpam(postIds: string[]): Promise<Q4Row[]> {
-  if (postIds.length === 0) return [];
-  const inClause = toInClause(postIds);
-  const sql = `
-    SELECT
-      toString(sendable_id) AS sendable_id,
-      countDistinct(subscriber_id) AS spam_reports
-    FROM default.sendgrid_v1
-    WHERE sendable_type = 'Post'
-      AND message_type = 'campaign'
-      AND event IN ('spamreport', 'fbl_spam', 'spam')
-      AND sendable_id IN (${inClause})
-    GROUP BY sendable_id
-  `;
-  return (await runNativeQuery(DB.CLICKHOUSE_ADHOC, sql)) as unknown as Q4Row[];
+  return runChunked<Q4Row>(postIds, (chunk) => {
+    const inClause = toInClause(chunk);
+    return `
+      SELECT
+        toString(sendable_id) AS sendable_id,
+        countDistinct(subscriber_id) AS spam_reports
+      FROM default.sendgrid_v1
+      WHERE sendable_type = 'Post'
+        AND message_type = 'campaign'
+        AND event IN ('spamreport', 'fbl_spam', 'spam')
+        AND sendable_id IN (${inClause})
+      GROUP BY sendable_id
+    `;
+  });
 }
 
 function joinRows(
@@ -215,6 +242,49 @@ async function fetchCsmOwnership(): Promise<Map<string, string>> {
   return map;
 }
 
+/**
+ * Pre-compute the joined post-metrics rows for the entire lookback
+ * window. Used by scripts/sync.ts to write data/deliverability.enc.json
+ * — the dashboard then reads from disk and applies thresholds + filters
+ * at request time, so threshold tweaks take effect without a resync.
+ *
+ * Deliberately does NOT pre-compute spam reports. The sendgrid_v1
+ * table queries 60s-time-out for 15-day-wide IN clauses even when
+ * chunked; the spam column is fetched at runtime for just the
+ * target-date subset of post IDs (small + fast).
+ *
+ * No CSM filter or target-date filter is applied here; the caller
+ * narrows at read time.
+ */
+export async function fetchDeliverabilityPosts(
+  lookbackDays: number = LOOKBACK_DAYS
+): Promise<PostMetricsRow[]> {
+  const posts = await fetchPosts(lookbackDays);
+  const postIds = posts.map((p) => p.post_id);
+
+  const safe = async <T>(p: Promise<T[]>, label: string): Promise<T[]> => {
+    try {
+      return await p;
+    } catch (e) {
+      console.error(
+        `[deliverability] ${label} failed:`,
+        e instanceof Error ? e.message : e
+      );
+      return [];
+    }
+  };
+
+  const [metrics, unsubs] = await Promise.all([
+    safe(fetchMetrics(postIds), "metrics"),
+    safe(fetchUnsubs(postIds), "unsubs"),
+  ]);
+
+  // Skip spam at sync time — see header comment. joinRows will leave
+  // spam_reports = 0 / spam_rate = 0 on every row, and the runtime
+  // path overlays live spam data for the target-date subset.
+  return joinRows(posts, metrics, unsubs, []);
+}
+
 export interface DeliverabilityRunOptions {
   /** Limit to one CSM's book (uses CSM_NAME env by default). Pass null for all. */
   csmName?: string | null;
@@ -239,23 +309,32 @@ export interface DeliverabilityRunResult {
   generated_at: string;
 }
 
-// In-process cache so once-per-process runs serve subsequent UI loads
-// instantly. ClickHouse roundtrips can be 30–60s; the underlying data only
-// changes once a day so a 10-min TTL is plenty. Keyed by lookback+date so
-// the same key serves all CSM filters off one fetch.
+// In-process cache so repeat hits within the same isolate are
+// instant. Keyed by lookback only (CSM + target date are applied
+// client-side over the cached joined posts).
 interface CacheEntry {
   expires: number;
   pending: Promise<{
-    allPosts: Q1Row[];
-    metrics: Q2Row[];
-    unsubs: Q3Row[];
-    spam: Q4Row[];
+    joinedPosts: PostMetricsRow[];
     csmByOrg: Map<string, string>;
-    targetDate: string;
   }>;
 }
 const runCache = new Map<string, CacheEntry>();
 const RUN_CACHE_TTL_MS = 10 * 60 * 1000;
+
+/**
+ * Get the joined post-metrics rows for the lookback window. Tries the
+ * snapshot file written by sync.ts first; falls back to a live
+ * ClickHouse fetch only if the file is missing (local dev before
+ * sync has been run).
+ */
+async function getJoinedPosts(lookback: number): Promise<PostMetricsRow[]> {
+  const snap = await readDeliverabilitySnapshot();
+  if (snap && Array.isArray(snap.posts)) return snap.posts;
+  // No snapshot — fall back to a live fetch. Slow path, but keeps
+  // local dev working before `npm run sync` has been run.
+  return fetchDeliverabilityPosts(lookback);
+}
 
 export async function runDeliverabilityCheck(
   opts: DeliverabilityRunOptions = {}
@@ -265,49 +344,59 @@ export async function runDeliverabilityCheck(
   const lookback = opts.lookbackDays ?? LOOKBACK_DAYS;
   const targetDate = opts.targetDate ?? yesterdayUtc();
 
-  const cacheKey = `${lookback}|${targetDate}`;
+  const cacheKey = `${lookback}`;
   const now = Date.now();
   let entry = runCache.get(cacheKey);
   if (!entry || entry.expires < now) {
     entry = {
       expires: now + RUN_CACHE_TTL_MS,
       pending: (async () => {
-        const [allPosts, csmByOrg] = await Promise.all([
-          fetchPosts(lookback),
+        const [joinedPosts, csmByOrg] = await Promise.all([
+          getJoinedPosts(lookback),
           fetchCsmOwnership(),
         ]);
-        const targetPosts = allPosts.filter((p) => p.sent_date === targetDate);
-        const targetIds = targetPosts.map((p) => p.post_id);
-        const safe = async <T>(p: Promise<T[]>, label: string): Promise<T[]> => {
-          try {
-            return await p;
-          } catch (e) {
-            console.error(
-              `[deliverability] ${label} failed:`,
-              e instanceof Error ? e.message : e
-            );
-            return [];
-          }
-        };
-        const [metrics, unsubs, spam] = await Promise.all([
-          safe(fetchMetrics(targetIds), "metrics"),
-          safe(fetchUnsubs(targetIds), "unsubs"),
-          safe(fetchSpam(targetIds), "spam"),
-        ]);
-        return { allPosts, metrics, unsubs, spam, csmByOrg, targetDate };
+        return { joinedPosts, csmByOrg };
       })(),
     };
     runCache.set(cacheKey, entry);
   }
 
-  const { allPosts, metrics, unsubs, spam, csmByOrg } = await entry.pending;
+  const { joinedPosts, csmByOrg } = await entry.pending;
 
-  const targetPosts = allPosts.filter((p) => p.sent_date === targetDate);
+  let targetPosts = joinedPosts.filter((p) => p.sent_date === targetDate);
 
-  const joined = joinRows(targetPosts, metrics, unsubs, spam);
+  // Overlay live spam reports. The snapshot deliberately skips spam
+  // because the 15-day sendgrid_v1 query times out (see
+  // fetchDeliverabilityPosts comment); for the target-date subset
+  // (usually 50–200 post IDs) the same query runs in 1–3s.
+  try {
+    const spam = await fetchSpam(targetPosts.map((p) => p.post_id));
+    if (spam.length > 0) {
+      const spamById = new Map(
+        spam.map((s) => [String(s.sendable_id), Number(s.spam_reports)])
+      );
+      targetPosts = targetPosts.map((p) => {
+        const reports = spamById.get(p.post_id);
+        if (!reports) return p;
+        const denom = p.delivered > 0 ? p.delivered : 0;
+        return {
+          ...p,
+          spam_reports: reports,
+          spam_rate: denom > 0 ? reports / denom : 0,
+        };
+      });
+    }
+  } catch (e) {
+    console.error(
+      "[deliverability] live spam overlay failed (continuing without):",
+      e instanceof Error ? e.message : e
+    );
+  }
 
+  // Thresholds applied at request time (not at sync time) so
+  // /settings/general edits take effect without a resync.
   const alerts: DeliverabilityAlert[] = [];
-  for (const post of joined) {
+  for (const post of targetPosts) {
     const flags = analyzePost(post);
     if (flags.length === 0) continue;
     const ownerCsm = csmByOrg.get(post.organization_id) ?? null;
@@ -328,7 +417,7 @@ export async function runDeliverabilityCheck(
     target_date: targetDate,
     csm_name: csmName,
     total_posts_yesterday: targetPosts.length,
-    total_enterprise_posts: allPosts.length,
+    total_enterprise_posts: joinedPosts.length,
     alerts,
     generated_at: new Date().toISOString(),
   };

@@ -20,10 +20,14 @@ import path from "node:path";
 import { runSavedQuestion } from "../src/lib/metabase";
 import { encryptSnapshot } from "../src/lib/data/snapshot-crypto";
 import { writeCohortSnapshot } from "../src/lib/data/cohort-snapshots";
+import { writeDeliverabilitySnapshot } from "../src/lib/data/deliverability-snapshot";
+import { fetchDeliverabilityPosts } from "../src/lib/engines/deliverability";
 import {
   fetchLastActivity,
   fetchLastActivityByEmail,
 } from "../src/lib/integrations/hubspot";
+
+const DELIVERABILITY_LOOKBACK_DAYS = 15;
 
 const QUESTION_ID = 10600;
 const PLAINTEXT_PATH = path.join(process.cwd(), "data/snapshot.json");
@@ -218,6 +222,40 @@ async function main() {
     } catch (e) {
       console.error(
         `[sync] cohort q${cohort.id} (${cohort.label}) failed (continuing):`,
+        e instanceof Error ? e.message : e
+      );
+    }
+  }
+
+  // ─── Deliverability snapshot ──────────────────────────────────────
+  // Pre-compute the joined Q1-Q4 ClickHouse result for the last 15
+  // days so /csm?tab=deliverability reads from disk instead of waiting
+  // 30–60s on 4 separate ClickHouse queries. Thresholds are applied at
+  // request time, so /settings/general edits take effect immediately
+  // without a resync.
+  {
+    const started = Date.now();
+    try {
+      console.error(
+        `[sync] pulling deliverability (last ${DELIVERABILITY_LOOKBACK_DAYS}d, 4 ClickHouse queries)…`
+      );
+      const posts = await fetchDeliverabilityPosts(DELIVERABILITY_LOOKBACK_DAYS);
+      const written = await writeDeliverabilitySnapshot(
+        {
+          generated_at: new Date().toISOString(),
+          lookback_days: DELIVERABILITY_LOOKBACK_DAYS,
+          row_count: posts.length,
+          posts,
+        },
+        { plaintext: usePlaintext }
+      );
+      const elapsed = ((Date.now() - started) / 1000).toFixed(1);
+      console.error(
+        `[sync] wrote ${written} (${posts.length} posts, ${elapsed}s)`
+      );
+    } catch (e) {
+      console.error(
+        "[sync] deliverability snapshot failed (continuing):",
         e instanceof Error ? e.message : e
       );
     }

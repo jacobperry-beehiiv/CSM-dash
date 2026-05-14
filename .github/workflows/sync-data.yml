@@ -62,7 +62,8 @@ jobs:
           for f in \
             data/snapshot.enc.json \
             data/approaching-enterprise.enc.json \
-            data/past-due.enc.json
+            data/past-due.enc.json \
+            data/deliverability.enc.json
           do
             if [ -f "$f" ]; then
               git add "$f"

@@ -22,3 +22,5 @@ data/*.json
 # AM cohort snapshots — pre-computed q13268 + q24620 results.
 !data/approaching-enterprise.enc.json
 !data/past-due.enc.json
+# Deliverability snapshot — last 15d of joined ClickHouse post metrics.
+!data/deliverability.enc.json
