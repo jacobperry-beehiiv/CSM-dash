@@ -148,7 +148,9 @@ export function OutreachModal({ customer, onClose, initialScenario }: Props) {
       .catch(() => {});
   }, [templateUsesAdGap, adGap, customer.workspace_id]);
 
-  const ctx = { ladder, adGap };
+  // Drives the first-name resolver — "Hi Eric," when sending to one
+  // person, "Hi there," when sending to a group.
+  const ctx = { ladder, adGap, recipient_count: recipientEmails.length };
   const subject = template
     ? applyMergeTags(template.subject, customer, ctx)
     : "";

@@ -22,6 +22,10 @@ export interface MergeContext {
   /** Loaded by callers that want ad-revenue tags to resolve (single-customer
    *  flows only — bulk drafting skips this for performance). */
   adGap?: AdGapReport | null;
+  /** Number of recipients the rendered draft will be addressed to. Used by
+   *  the first-name resolver — when sending to a group there's no single
+   *  "first name" to greet, so it falls back to "there". Default 1. */
+  recipient_count?: number;
 }
 
 export interface MergeTag {
@@ -56,9 +60,37 @@ function fmtDate(s: string | null | undefined): string {
   });
 }
 
+/**
+ * Resolve `s` to a usable first name. Returns "there" when:
+ *   - the value is empty / null / whitespace
+ *   - the value looks like an email address (contains `@`). HubSpot's
+ *     `main_contact` field is often just the owner email when no real
+ *     contact has been set, and "Hi eric@plugivery.com," reads worse
+ *     than "Hi there,".
+ *
+ * Otherwise it takes the first whitespace-delimited token, which
+ * handles "First Last" and "First Middle Last" cleanly.
+ */
 function firstName(s: string | null | undefined): string {
   if (!s) return "there";
-  return s.trim().split(/\s+/)[0] || "there";
+  const trimmed = s.trim();
+  if (!trimmed) return "there";
+  if (/\S+@\S+\.\S+/.test(trimmed)) return "there";
+  return trimmed.split(/\s+/)[0] || "there";
+}
+
+/**
+ * Greeting helper for the `customer.contact_first_name` token. Falls
+ * back to "there" when the draft is being addressed to more than one
+ * recipient — a personal "Hi Eric," reads strangely when the email is
+ * going to a group.
+ */
+function firstNameForContext(
+  c: Customer,
+  ctx: MergeContext
+): string {
+  if ((ctx.recipient_count ?? 1) > 1) return "there";
+  return firstName(c.property_main_contact);
 }
 
 function pct(n: number | null | undefined): string {
@@ -122,8 +154,9 @@ export const MERGE_TAGS: MergeTag[] = [
   {
     token: "customer.contact_first_name",
     label: "Contact first name",
-    description: "First name of the main contact.",
-    resolve: (c) => firstName(c.property_main_contact),
+    description:
+      "First name of the main contact. Falls back to \"there\" when the contact is an email address or the draft is going to multiple recipients.",
+    resolve: (c, ctx) => firstNameForContext(c, ctx),
   },
   {
     token: "customer.email",
