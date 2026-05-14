@@ -7,7 +7,8 @@ import {
   type TemplateScenario,
 } from "@/lib/templates/templates";
 import { applyMergeTags } from "@/lib/templates/merge-tags";
-import type { StoredTemplate } from "@/lib/templates/store";
+import { isVisibleToCsm, type StoredTemplate } from "@/lib/templates/store";
+import { useViewerEmail } from "@/lib/auth-client";
 import { getTierLadder } from "@/lib/tiers/client";
 import type { EnterpriseTier } from "@/lib/tiers/store";
 import type { AdGapReport } from "@/lib/types";
@@ -35,6 +36,7 @@ function htmlToText(html: string): string {
 }
 
 export function OutreachModal({ customer, onClose, initialScenario }: Props) {
+  const viewerEmail = useViewerEmail();
   const [templates, setTemplates] = useState<StoredTemplate[]>([]);
   const [ladder, setLadder] = useState<EnterpriseTier[]>([]);
   const [adGap, setAdGap] = useState<AdGapReport | null>(null);
@@ -58,8 +60,9 @@ export function OutreachModal({ customer, onClose, initialScenario }: Props) {
       }),
       getTierLadder().catch(() => [] as EnterpriseTier[]),
     ])
-      .then(([list, tiers]) => {
+      .then(([allList, tiers]) => {
         if (cancelled) return;
+        const list = allList.filter((t) => isVisibleToCsm(t, viewerEmail));
         setTemplates(list);
         setLadder(tiers);
         if (!list.find((t) => t.id === chosenId) && list[0]) {

@@ -4,8 +4,9 @@ import { useState } from "react";
 import type { Customer } from "@/lib/types";
 import { composeUrlForTemplate, masqueradeUrl } from "@/lib/links";
 import { suggestTemplates } from "@/lib/templates/templates";
-import type { StoredTemplate } from "@/lib/templates/store";
+import { isVisibleToCsm, type StoredTemplate } from "@/lib/templates/store";
 import { getTierLadder } from "@/lib/tiers/client";
+import { useViewerEmail } from "@/lib/auth-client";
 
 interface Props {
   customer: Customer;
@@ -24,6 +25,7 @@ function getTemplates(): Promise<StoredTemplate[]> {
 }
 
 export function RowActions({ customer, onDraft }: Props) {
+  const viewerEmail = useViewerEmail();
   const [emailing, setEmailing] = useState(false);
   const masquerade = masqueradeUrl(customer.owner_email);
 
@@ -35,10 +37,13 @@ export function RowActions({ customer, onDraft }: Props) {
     if (!customer.owner_email) return;
     setEmailing(true);
     try {
-      const [templates, ladder] = await Promise.all([
+      const [allTemplates, ladder] = await Promise.all([
         getTemplates(),
         getTierLadder().catch(() => []),
       ]);
+      const templates = allTemplates.filter((t) =>
+        isVisibleToCsm(t, viewerEmail)
+      );
       const suggestedIds = suggestTemplates(customer);
       const tpl =
         templates.find((t) => suggestedIds.includes(t.id as never)) ??

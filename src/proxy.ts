@@ -18,6 +18,13 @@ export default auth((req) => {
   // from Google needs to complete without a session check loop.
   if (pathname.startsWith("/api/auth/")) return;
 
+  // The customer-signals route does its own auth (NextAuth session OR a
+  // SIGNAL_API_KEY bearer token), so external integrations like the
+  // CSM-dash Claude skill can POST/GET it without a logged-in session.
+  // Without this exemption the proxy would redirect bearer-auth requests
+  // to /login as HTML, breaking the JSON contract.
+  if (pathname.startsWith("/api/customer-signals")) return;
+
   if (!req.auth) {
     const url = req.nextUrl.clone();
     url.pathname = "/login";

@@ -15,13 +15,35 @@ export interface StoredTemplate {
   id: string;
   label: string;
   blurb: string;
+  /** Free-form descriptive tags (e.g. "renewal", "growth"). UI only. */
   tags: string[];
+  /**
+   * Lowercased CSM email addresses this template is scoped to. When
+   * non-empty, only the listed CSMs see the template in their bulk-draft
+   * dropdown / outreach modal. When empty/undefined the template is
+   * universal — every CSM sees it. Set via /settings/templates.
+   */
+  csm_tags?: string[];
   /** Subject line. Plain text. Supports {{merge.tags}}. */
   subject: string;
   /** Body. Rich HTML. Supports {{merge.tags}}. */
   body_html: string;
   created_at: string;
   updated_at: string;
+}
+
+/**
+ * Returns true if the template is visible to a given viewer. Used by
+ * BulkDraftsModal, OutreachModal, and RowActions to scope the template
+ * list to the CSM looking at the dashboard.
+ */
+export function isVisibleToCsm(
+  t: Pick<StoredTemplate, "csm_tags">,
+  viewerEmail: string | null | undefined
+): boolean {
+  if (!t.csm_tags || t.csm_tags.length === 0) return true; // universal
+  if (!viewerEmail) return true; // pre-session render — don't hide
+  return t.csm_tags.includes(viewerEmail.toLowerCase());
 }
 
 const KEY = "templates";
@@ -206,6 +228,8 @@ export interface UpsertInput {
   label: string;
   blurb?: string;
   tags?: string[];
+  /** Lowercased CSM emails this template is visible to. Empty = universal. */
+  csm_tags?: string[];
   subject: string;
   body_html: string;
 }
@@ -229,11 +253,16 @@ export async function upsertTemplate(
   const list = [...(await listTemplates())];
   const existing = input.id ? list.find((t) => t.id === input.id) : null;
 
+  const normalizedCsmTags = input.csm_tags
+    ? [...new Set(input.csm_tags.map((e) => e.toLowerCase().trim()).filter(Boolean))]
+    : undefined;
+
   if (existing) {
     Object.assign(existing, {
       label: input.label,
       blurb: input.blurb ?? existing.blurb,
       tags: input.tags ?? existing.tags,
+      csm_tags: normalizedCsmTags ?? existing.csm_tags ?? [],
       subject: input.subject,
       body_html: input.body_html,
       updated_at: nowIso(),
@@ -249,6 +278,7 @@ export async function upsertTemplate(
     label: input.label,
     blurb: input.blurb ?? "",
     tags: input.tags ?? [],
+    csm_tags: normalizedCsmTags ?? [],
     subject: input.subject,
     body_html: input.body_html,
     created_at: nowIso(),

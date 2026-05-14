@@ -19,7 +19,10 @@ import path from "node:path";
 
 import { runSavedQuestion } from "../src/lib/metabase";
 import { encryptSnapshot } from "../src/lib/data/snapshot-crypto";
-import { fetchLastActivity } from "../src/lib/integrations/hubspot";
+import {
+  fetchLastActivity,
+  fetchLastActivityByEmail,
+} from "../src/lib/integrations/hubspot";
 
 const QUESTION_ID = 10600;
 const PLAINTEXT_PATH = path.join(process.cwd(), "data/snapshot.json");
@@ -72,30 +75,67 @@ async function main() {
   // API errors, sync continues with the un-enriched rows.
   if (process.env.HUBSPOT_ACCESS_TOKEN) {
     const enrichStarted = Date.now();
+    const typedRows = rows as Record<string, unknown>[];
+
+    // Path A: rows already carry a HubSpot company ID — fastest.
     const idToRow = new Map<string, Record<string, unknown>>();
-    for (const r of rows as Record<string, unknown>[]) {
+    for (const r of typedRows) {
       const id = pickCompanyId(r);
       if (id) idToRow.set(id, r);
     }
-    const ids = [...idToRow.keys()];
-    console.error(`[sync] enriching ${ids.length} rows from HubSpot…`);
+    const idsAvailable = idToRow.size;
+
+    // Path B: fall back to owner_email lookup when no company IDs are
+    // present. q10600 doesn't expose hs_object_id today; this lets us
+    // ship enrichment without waiting on a Metabase question edit.
+    const emailToRow = new Map<string, Record<string, unknown>>();
+    if (idsAvailable === 0) {
+      for (const r of typedRows) {
+        const email =
+          typeof r.owner_email === "string" && r.owner_email
+            ? r.owner_email.toLowerCase()
+            : null;
+        if (email && !emailToRow.has(email)) emailToRow.set(email, r);
+      }
+    }
+
     try {
-      const activity = await fetchLastActivity(ids);
       let filled = 0;
-      for (const [id, row] of idToRow) {
-        const hit = activity.get(id);
-        // Always stash the company ID on the row even if HubSpot had no
-        // activity for it — useful for future enrichment + debugging.
-        row.hubspot_company_id = id;
-        if (hit) {
-          row.last_activity_at = hit.last_activity_at;
-          row.last_activity_source = hit.source;
-          filled++;
+      if (idsAvailable > 0) {
+        console.error(
+          `[sync] enriching ${idsAvailable} rows from HubSpot by company ID…`
+        );
+        const activity = await fetchLastActivity([...idToRow.keys()]);
+        for (const [id, row] of idToRow) {
+          row.hubspot_company_id = id;
+          const hit = activity.get(id);
+          if (hit) {
+            row.last_activity_at = hit.last_activity_at;
+            row.last_activity_source = hit.source;
+            filled++;
+          }
         }
+      } else if (emailToRow.size > 0) {
+        console.error(
+          `[sync] no company IDs in q10600 — enriching ${emailToRow.size} rows from HubSpot by owner_email…`
+        );
+        const activity = await fetchLastActivityByEmail([...emailToRow.keys()]);
+        for (const [email, row] of emailToRow) {
+          const hit = activity.get(email);
+          if (hit) {
+            row.last_activity_at = hit.last_activity_at;
+            row.last_activity_source = hit.source;
+            filled++;
+          }
+        }
+      } else {
+        console.error(
+          "[sync] no HubSpot company IDs or owner_emails found — nothing to enrich"
+        );
       }
       const enrichElapsed = ((Date.now() - enrichStarted) / 1000).toFixed(1);
       console.error(
-        `[sync] HubSpot enriched ${filled}/${ids.length} rows in ${enrichElapsed}s`
+        `[sync] HubSpot enriched ${filled} rows in ${enrichElapsed}s`
       );
     } catch (e) {
       console.error(

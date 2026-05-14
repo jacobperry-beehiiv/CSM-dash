@@ -2,7 +2,7 @@
 
 import { Fragment, useEffect, useMemo, useState } from "react";
 import type { Customer } from "@/lib/types";
-import { fmtCompactCurrency, fmtDate, daysUntil } from "./format";
+import { fmtCurrency, fmtDate, daysUntil } from "./format";
 import { OutreachModal } from "./outreach-modal";
 import { CustomerDetailPanel } from "./customer-detail-panel";
 import { RowActions } from "./row-actions";
@@ -241,7 +241,7 @@ export function RenewalPanel({ customers }: Props) {
                           </div>
                         </td>
                         <td className="px-3 py-2 text-right font-medium">
-                          {fmtCompactCurrency(c.arr)}
+                          {fmtCurrency(c.arr)}
                         </td>
                         <td className="px-3 py-2 text-muted">
                           <div>{fmtDate(date ?? null)}</div>

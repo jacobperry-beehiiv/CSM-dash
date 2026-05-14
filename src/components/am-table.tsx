@@ -2,7 +2,7 @@
 
 import { Fragment, useMemo, useState } from "react";
 import type { Customer } from "@/lib/types";
-import { fmtCompactCurrency, fmtNumber, fmtPct } from "./format";
+import { fmtCurrency, fmtNumber, fmtPct } from "./format";
 import { OutreachModal } from "./outreach-modal";
 import { CustomerDetailPanel } from "./customer-detail-panel";
 import { RowActions } from "./row-actions";
@@ -98,7 +98,7 @@ export function AmTable({ rows, csms }: Props) {
         <Card label="Approaching 100K subs" value={String(counts.ent)} accent={counts.ent > 0} />
         <Card
           label="Combined ARR"
-          value={fmtCompactCurrency(rows.reduce((s, r) => s + r.customer.arr, 0))}
+          value={fmtCurrency(rows.reduce((s, r) => s + r.customer.arr, 0))}
         />
         <Card
           label="Combined subs"
@@ -221,7 +221,7 @@ export function AmTable({ rows, csms }: Props) {
                       {fmtPct(u)}
                     </td>
                     <td className="px-3 py-2.5 text-right">
-                      {fmtCompactCurrency(c.arr)}
+                      {fmtCurrency(c.arr)}
                     </td>
                     <td className="px-3 py-2.5 text-muted hidden lg:table-cell break-words">
                       {c.customer_success_manager?.replace(/_/g, " ") ?? (

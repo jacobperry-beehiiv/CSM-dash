@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import type { ApproachingEntRow } from "@/lib/engines/am-cohorts";
-import { fmtCompactCurrency, fmtDate, fmtNumber, fmtPct } from "../format";
+import { fmtCurrency, fmtDate, fmtNumber, fmtPct } from "../format";
 import { BucketSection } from "./bucket-section";
 
 interface Props {
@@ -59,7 +59,7 @@ function priceLabel(r: ApproachingEntRow): string {
   const interval = (r.billing_interval ?? "").toLowerCase();
   const suffix =
     interval === "month" || interval === "monthly" ? "/mo" : "/yr";
-  return `${fmtCompactCurrency(r.last_payment_amount)}${suffix}`;
+  return `${fmtCurrency(r.last_payment_amount)}${suffix}`;
 }
 
 export function ApproachingEnterprisePanel({ rows }: Props) {

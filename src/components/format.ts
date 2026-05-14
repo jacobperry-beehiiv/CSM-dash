@@ -1,15 +1,13 @@
+/**
+ * Exact-dollar formatter — `$1,234,567`. Used everywhere ARR/MRR is
+ * shown so CSMs see real numbers instead of rounded "$1.2M" badges.
+ */
 export function fmtCurrency(n: number): string {
   return new Intl.NumberFormat("en-US", {
     style: "currency",
     currency: "USD",
     maximumFractionDigits: 0,
   }).format(n);
-}
-
-export function fmtCompactCurrency(n: number): string {
-  if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `$${(n / 1_000).toFixed(0)}K`;
-  return `$${n.toFixed(0)}`;
 }
 
 export function fmtNumber(n: number | null | undefined): string {

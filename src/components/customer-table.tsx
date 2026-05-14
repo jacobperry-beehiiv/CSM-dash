@@ -11,9 +11,11 @@ import { CustomerDetailPanel } from "./customer-detail-panel";
 import { RowActions } from "./row-actions";
 import { AdNetworkFilter } from "./ad-network-filter";
 import { FeatureUtilizationFilter } from "./feature-utilization-filter";
-import { fmtCompactCurrency, fmtDate, fmtNumber, daysUntil } from "./format";
+import { fmtCurrency, fmtDate, fmtNumber, daysUntil } from "./format";
 import { featureCounts } from "@/lib/features";
 import { lastContacted } from "@/lib/customer-helpers";
+import { isVisibleToCsm } from "@/lib/templates/store";
+import { useViewerEmail } from "@/lib/auth-client";
 import { composeUrlForTemplate, composeUrlWithAdGap } from "@/lib/links";
 import type { StoredTemplate } from "@/lib/templates/store";
 import type { AdGapReport } from "@/lib/types";
@@ -60,6 +62,7 @@ export function CustomerTable({
   initialCustomers: CustomerWithMetrics[];
   csms: string[];
 }) {
+  const viewerEmail = useViewerEmail();
   const [sortKey, setSortKey] = useState<SortKey>("arr");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
   const [search, setSearch] = useState("");
@@ -343,13 +346,18 @@ export function CustomerTable({
     setBulkModalOpen(true);
 
     try {
-      const [templates, ladder] = await Promise.all([
+      const [allTemplates, ladder] = await Promise.all([
         fetch("/api/templates").then(async (r) => {
           if (!r.ok) throw new Error(`HTTP ${r.status}`);
           return (await r.json()) as StoredTemplate[];
         }),
         getTierLadder().catch(() => []),
       ]);
+      // Narrow to templates this CSM is allowed to see. Universal
+      // (no csm_tags) templates remain visible to everyone.
+      const templates = allTemplates.filter((t) =>
+        isVisibleToCsm(t, viewerEmail)
+      );
       setBulkTemplates(templates);
       setBulkLadder(ladder);
       const wantedId = autoTemplateId();
@@ -431,7 +439,7 @@ export function CustomerTable({
           </div>
         );
       case "arr":
-        return fmtCompactCurrency(c.arr);
+        return fmtCurrency(c.arr);
       case "active_subs":
         return fmtNumber(c.active_subs);
       case "features_enabled": {

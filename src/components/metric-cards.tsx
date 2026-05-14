@@ -1,4 +1,4 @@
-import { fmtCompactCurrency } from "./format";
+import { fmtCurrency } from "./format";
 import type { CustomerWithMetrics } from "@/lib/types";
 
 export function MetricCards({ customers }: { customers: CustomerWithMetrics[] }) {
@@ -15,8 +15,8 @@ export function MetricCards({ customers }: { customers: CustomerWithMetrics[] })
 
   const cards = [
     { label: "Customers", value: String(customers.length) },
-    { label: "Total ARR", value: fmtCompactCurrency(totalArr) },
-    { label: "Total MRR", value: fmtCompactCurrency(totalMrr) },
+    { label: "Total ARR", value: fmtCurrency(totalArr) },
+    { label: "Total MRR", value: fmtCurrency(totalMrr) },
     { label: "Renewals (30d)", value: String(renewalsSoon) },
   ];
 

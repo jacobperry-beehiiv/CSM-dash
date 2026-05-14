@@ -1,7 +1,7 @@
 import Link from "next/link";
 import type { Customer } from "@/lib/types";
 import { lastContacted } from "@/lib/customer-helpers";
-import { fmtCompactCurrency, fmtDate, fmtNumber } from "./format";
+import { fmtCurrency, fmtDate, fmtNumber } from "./format";
 import { RiskLevelChip } from "./risk-level-chip";
 import { FeatureBreakdown } from "./feature-breakdown";
 import { FeatureUtilizationPanel } from "./feature-utilization-panel";
@@ -28,8 +28,8 @@ export function CustomerDetailPanel({
       {topSlot}
 
       <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-        <Stat label="ARR" value={fmtCompactCurrency(c.arr)} />
-        <Stat label="MRR" value={fmtCompactCurrency(c.mrr)} />
+        <Stat label="ARR" value={fmtCurrency(c.arr)} />
+        <Stat label="MRR" value={fmtCurrency(c.mrr)} />
         <Stat label="Active subs" value={fmtNumber(c.active_subs)} />
       </div>
 

@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import type { Customer } from "@/lib/types";
-import { fmtCompactCurrency, fmtNumber, fmtPct } from "../format";
+import { fmtCurrency, fmtNumber, fmtPct } from "../format";
 import { CsmSelector } from "../csm-selector";
 import { RowActions } from "../row-actions";
 import { OutreachModal } from "../outreach-modal";
@@ -57,9 +57,9 @@ function pct(c: Customer): number {
 function priceLabel(c: Customer): string {
   const interval = (c.interval ?? "").toLowerCase();
   if (interval === "month" || interval === "monthly") {
-    return `${fmtCompactCurrency(c.mrr)}/mo`;
+    return `${fmtCurrency(c.mrr)}/mo`;
   }
-  return `${fmtCompactCurrency(c.arr)}/yr`;
+  return `${fmtCurrency(c.arr)}/yr`;
 }
 
 export function EnterpriseOnlyPanel({ rows, csms }: Props) {
@@ -151,7 +151,7 @@ export function EnterpriseOnlyPanel({ rows, csms }: Props) {
                         )}
                       </td>
                       <td className="px-3 py-2 text-right">
-                        {fmtCompactCurrency(c.arr)}
+                        {fmtCurrency(c.arr)}
                       </td>
                       <td className="px-3 py-2">
                         <RowActions customer={c} onDraft={setOutreachFor} />

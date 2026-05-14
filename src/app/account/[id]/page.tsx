@@ -1,7 +1,7 @@
 import { notFound } from "next/navigation";
 import { loadCustomers } from "@/lib/data/load-customers";
 import { lastContacted } from "@/lib/customer-helpers";
-import { fmtCompactCurrency, fmtDate, fmtNumber, fmtPct } from "@/components/format";
+import { fmtCurrency, fmtDate, fmtNumber, fmtPct } from "@/components/format";
 import { RiskLevelChip } from "@/components/risk-level-chip";
 import { AccountOutreach } from "@/components/account-outreach";
 
@@ -45,8 +45,8 @@ export default async function AccountPage({
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-        <Stat label="ARR" value={fmtCompactCurrency(c.arr)} />
-        <Stat label="MRR" value={fmtCompactCurrency(c.mrr)} />
+        <Stat label="ARR" value={fmtCurrency(c.arr)} />
+        <Stat label="MRR" value={fmtCurrency(c.mrr)} />
         <Stat label="Active subs" value={fmtNumber(c.active_subs)} />
         <Stat label="Sub utilization" value={fmtPct(utilPct)} />
       </div>

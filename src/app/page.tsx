@@ -6,7 +6,7 @@ import {
   loadCustomers,
 } from "@/lib/data/load-customers";
 import { runAtRiskCheck } from "@/lib/engines/at-risk";
-import { fmtCompactCurrency } from "@/components/format";
+import { fmtCurrency } from "@/components/format";
 import type { Customer, Segment } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -112,7 +112,7 @@ export default async function MissionControl({
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
         <Stat label="Accounts" value={String(book.length)} />
-        <Stat label="Total ARR" value={fmtCompactCurrency(totalArr)} />
+        <Stat label="Total ARR" value={fmtCurrency(totalArr)} />
         <Stat label="Enterprise" value={String(entCount)} />
         <Stat label="Growth" value={String(nonEntCount)} />
       </div>

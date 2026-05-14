@@ -1,7 +1,7 @@
 "use client";
 
 import { Fragment, useEffect, useMemo, useState } from "react";
-import { fmtCompactCurrency, fmtDate, fmtNumber, fmtPct } from "./format";
+import { fmtCurrency, fmtDate, fmtNumber, fmtPct } from "./format";
 import { OutreachModal } from "./outreach-modal";
 import { CustomerDetailPanel } from "./customer-detail-panel";
 import { RowActions } from "./row-actions";
@@ -9,7 +9,8 @@ import { RiskLevelChip } from "./risk-level-chip";
 import { FlagResolutionCheckboxes } from "./flag-resolution-checkboxes";
 import { composeUrlForTemplate } from "@/lib/links";
 import { suggestTemplates } from "@/lib/templates/templates";
-import type { StoredTemplate } from "@/lib/templates/store";
+import { isVisibleToCsm, type StoredTemplate } from "@/lib/templates/store";
+import { useViewerEmail } from "@/lib/auth-client";
 import { getTierLadder } from "@/lib/tiers/client";
 import type { LastPostRow } from "@/lib/engines/last-post-batch";
 import type {
@@ -76,6 +77,7 @@ function pctVal(c: Customer): number | null {
 }
 
 export function AtRiskTable({ data }: { data: RunResult }) {
+  const viewerEmail = useViewerEmail();
   const [outreachFor, setOutreachFor] = useState<{
     customer: Customer;
     scenario: TemplateScenario;
@@ -248,7 +250,9 @@ export function AtRiskTable({ data }: { data: RunResult }) {
         }),
         getTierLadder().catch(() => []),
       ]);
-      const templates = templatesRes;
+      const templates = templatesRes.filter((t) =>
+        isVisibleToCsm(t, viewerEmail)
+      );
       let opened = 0;
       for (const a of accounts) {
         const k = a.customer.workspace_id;
@@ -531,7 +535,7 @@ export function AtRiskTable({ data }: { data: RunResult }) {
                         </div>
                       </td>
                       <td className="px-3 py-3 text-right font-medium">
-                        {fmtCompactCurrency(c.arr)}
+                        {fmtCurrency(c.arr)}
                       </td>
                       <td className={`px-3 py-3 ${lastSendCls}`}>
                         <div>{fmtDate(c.last_send)}</div>

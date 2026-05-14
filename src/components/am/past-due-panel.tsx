@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import type { PastDueRow } from "@/lib/engines/am-cohorts";
-import { fmtCompactCurrency, fmtDate } from "../format";
+import { fmtCurrency, fmtDate } from "../format";
 import type { SettingsShape } from "@/lib/data/settings-types";
 import { BucketSection } from "./bucket-section";
 
@@ -37,7 +37,7 @@ function makeBuckets(maxArr: number): BucketRange[] {
     const hi = lo + BUCKET_STEP_USD;
     const isTop = lo >= 100_000;
     ranges.push({
-      label: `${fmtCompactCurrency(lo)} – ${fmtCompactCurrency(hi)}`,
+      label: `${fmtCurrency(lo)} – ${fmtCurrency(hi)}`,
       min: lo,
       max: hi,
       toneClass: isTop
@@ -133,10 +133,10 @@ export function PastDuePanel({ rows }: Props) {
         />
         <Stat
           label="Enterprise ARR past due"
-          value={fmtCompactCurrency(enterpriseArrTotal)}
+          value={fmtCurrency(enterpriseArrTotal)}
           accent={enterpriseArrTotal > 0}
         />
-        <Stat label="Total ARR past due" value={fmtCompactCurrency(totalArr)} />
+        <Stat label="Total ARR past due" value={fmtCurrency(totalArr)} />
       </div>
 
       {droppedCount > 0 ? (
@@ -196,7 +196,7 @@ export function PastDuePanel({ rows }: Props) {
               key={bucket.label}
               label={bucket.label}
               count={list.length}
-              detail={`${fmtCompactCurrency(
+              detail={`${fmtCurrency(
                 list.reduce((s, r) => s + r.arr_dollars, 0)
               )} ARR`}
               toneClass={bucket.toneClass}
@@ -268,10 +268,10 @@ export function PastDuePanel({ rows }: Props) {
                           ) : null}
                         </td>
                         <td className="px-3 py-2 text-right">
-                          {fmtCompactCurrency(r.arr_dollars)}
+                          {fmtCurrency(r.arr_dollars)}
                         </td>
                         <td className="px-3 py-2 text-right text-red-700 font-medium">
-                          {fmtCompactCurrency(r.charge_amount_dollars)}
+                          {fmtCurrency(r.charge_amount_dollars)}
                           {r.failure_code ? (
                             <div className="text-[10px] text-muted">
                               {r.failure_code}
@@ -352,13 +352,13 @@ function renderSlackTemplate(
       const csmTag = slackId
         ? `<@${slackId}>`
         : (csmKey || "unassigned").replace(/_/g, " ");
-      return `• *${r.email ?? "—"}* — ${fmtCompactCurrency(
+      return `• *${r.email ?? "—"}* — ${fmtCurrency(
         r.charge_amount_dollars
-      )} failed charge, ${fmtCompactCurrency(r.arr_dollars)} ARR (CSM: ${csmTag})`;
+      )} failed charge, ${fmtCurrency(r.arr_dollars)} ARR (CSM: ${csmTag})`;
     })
     .join("\n");
   return template
-    .replace(/\{\{\s*total_arr\s*\}\}/g, fmtCompactCurrency(total))
+    .replace(/\{\{\s*total_arr\s*\}\}/g, fmtCurrency(total))
     .replace(/\{\{\s*count\s*\}\}/g, String(rows.length))
     .replace(/\{\{\s*count_plural\s*\}\}/g, rows.length === 1 ? "" : "s")
     .replace(/\{\{\s*account_list\s*\}\}/g, accountList);

@@ -56,6 +56,9 @@ export function TemplateEditor({
   const [label, setLabel] = useState(initial?.label ?? "");
   const [blurb, setBlurb] = useState(initial?.blurb ?? "");
   const [tagsInput, setTagsInput] = useState(initial?.tags?.join(", ") ?? "");
+  const [csmTagsInput, setCsmTagsInput] = useState(
+    initial?.csm_tags?.join(", ") ?? ""
+  );
   const [subject, setSubject] = useState(initial?.subject ?? "");
   const [bodyHtml, setBodyHtml] = useState(initial?.body_html ?? "");
   const [busy, setBusy] = useState(false);
@@ -79,6 +82,7 @@ export function TemplateEditor({
     setLabel(initial?.label ?? "");
     setBlurb(initial?.blurb ?? "");
     setTagsInput(initial?.tags?.join(", ") ?? "");
+    setCsmTagsInput(initial?.csm_tags?.join(", ") ?? "");
     setSubject(initial?.subject ?? "");
     setBodyHtml(initial?.body_html ?? "");
     setError(null);
@@ -122,6 +126,10 @@ export function TemplateEditor({
         .split(",")
         .map((s) => s.trim())
         .filter(Boolean);
+      const csm_tags = csmTagsInput
+        .split(",")
+        .map((s) => s.trim().toLowerCase())
+        .filter(Boolean);
       const res = await fetch("/api/templates", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -130,6 +138,7 @@ export function TemplateEditor({
           label,
           blurb,
           tags,
+          csm_tags,
           subject,
           body_html: bodyHtml,
         }),
@@ -198,6 +207,22 @@ export function TemplateEditor({
             placeholder="renewal, annual, escalation"
             className="w-full px-3 py-2 border border-border-strong rounded-md text-sm"
           />
+        </div>
+        <div>
+          <label className="text-xs text-muted block mb-1">
+            Visible to CSMs (comma-separated emails)
+          </label>
+          <input
+            type="text"
+            value={csmTagsInput}
+            onChange={(e) => setCsmTagsInput(e.target.value)}
+            placeholder="leave blank = visible to everyone"
+            className="w-full px-3 py-2 border border-border-strong rounded-md text-sm font-mono"
+          />
+          <p className="text-[11px] text-subtle mt-1">
+            When set, this template only appears in the bulk-draft and
+            outreach dropdowns for the listed CSMs. Empty = universal.
+          </p>
         </div>
         <div>
           <label className="text-xs text-muted block mb-1">Subject</label>
