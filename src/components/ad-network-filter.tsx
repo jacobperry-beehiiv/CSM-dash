@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import type { Customer } from "@/lib/types";
 import type { AdNetworkRollup } from "@/lib/engines/ad-network-batch";
+import { FilterPanel } from "./filters";
 
 interface Props {
   customers: Customer[];
@@ -102,114 +103,97 @@ export function AdNetworkFilter({ customers, onFilterChange }: Props) {
   ]);
 
   return (
-    <div className="rounded-md border border-border bg-surface">
-      <button
-        onClick={() => setEnabled((v) => !v)}
-        className="w-full flex items-center justify-between px-3 py-2 text-left hover:bg-canvas"
-      >
-        <span className="text-sm font-medium text-fg">
-          Ad-network filters
-        </span>
-        <span
-          className={`text-subtle transition-transform ${
-            enabled ? "rotate-90" : ""
-          }`}
-          aria-hidden
-        >
-          ▸
-        </span>
-      </button>
-
-      {enabled ? (
-        <div className="px-3 py-3 border-t border-border space-y-3">
-          {loading ? (
-            <div className="text-xs text-muted flex items-center gap-2">
-              <span className="inline-block w-3 h-3 border-2 border-border-strong border-t-gray-700 rounded-full animate-spin" />
-              Loading ad-network roll-up for {customers.length} customers…
-            </div>
-          ) : null}
-
-          {error ? (
-            <div className="text-xs text-red-700 bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/30 rounded p-2">
-              {error}
-            </div>
-          ) : null}
-
-          {!loading && !error && Object.keys(data).length > 0 ? (
-            <div className="text-xs text-muted">
-              Loaded {Object.keys(data).length} orgs from Postgres.
-            </div>
-          ) : null}
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <fieldset className="border border-border rounded-md p-2">
-              <legend className="text-xs text-muted px-1">
-                Last ad run
-              </legend>
-              <div className="flex items-center gap-2 flex-wrap">
-                <select
-                  value={lastRunMode}
-                  onChange={(e) =>
-                    setLastRunMode(
-                      e.target.value as "any" | "in_last" | "not_in_last"
-                    )
-                  }
-                  className="px-2 py-1 border border-border-strong rounded-md text-xs bg-surface"
-                >
-                  <option value="any">Any</option>
-                  <option value="in_last">Has run in last…</option>
-                  <option value="not_in_last">Has not run in last…</option>
-                </select>
-                {lastRunMode !== "any" ? (
-                  <>
-                    <input
-                      type="number"
-                      value={lastRunDays}
-                      onChange={(e) =>
-                        setLastRunDays(Math.max(1, Number(e.target.value)))
-                      }
-                      className="w-20 px-2 py-1 border border-border-strong rounded-md text-xs"
-                    />
-                    <span className="text-xs text-muted">days</span>
-                  </>
-                ) : null}
-              </div>
-            </fieldset>
-
-            <fieldset className="border border-border rounded-md p-2">
-              <legend className="text-xs text-muted px-1">
-                Ad revenue (lifetime)
-              </legend>
-              <div className="flex items-center gap-2 flex-wrap">
-                <select
-                  value={revenueMode}
-                  onChange={(e) =>
-                    setRevenueMode(e.target.value as "any" | "over" | "under")
-                  }
-                  className="px-2 py-1 border border-border-strong rounded-md text-xs bg-surface"
-                >
-                  <option value="any">Any</option>
-                  <option value="over">Earned over…</option>
-                  <option value="under">Earned under…</option>
-                </select>
-                {revenueMode !== "any" ? (
-                  <>
-                    <span className="text-xs text-muted">$</span>
-                    <input
-                      type="number"
-                      value={revenueAmount}
-                      onChange={(e) =>
-                        setRevenueAmount(Math.max(0, Number(e.target.value)))
-                      }
-                      className="w-28 px-2 py-1 border border-border-strong rounded-md text-xs"
-                    />
-                  </>
-                ) : null}
-              </div>
-            </fieldset>
+    <FilterPanel
+      title="Ad-network filters"
+      open={enabled}
+      onOpenChange={setEnabled}
+    >
+      <div className="space-y-3">
+        {loading ? (
+          <div className="text-xs text-muted flex items-center gap-2">
+            <span className="inline-block w-3 h-3 border-2 border-border-strong border-t-gray-700 rounded-full animate-spin" />
+            Loading ad-network roll-up for {customers.length} customers…
           </div>
+        ) : null}
+
+        {error ? (
+          <div className="text-xs text-red-700 bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/30 rounded p-2">
+            {error}
+          </div>
+        ) : null}
+
+        {!loading && !error && Object.keys(data).length > 0 ? (
+          <div className="text-xs text-muted">
+            Loaded {Object.keys(data).length} orgs from Postgres.
+          </div>
+        ) : null}
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <fieldset className="border border-border rounded-md p-2">
+            <legend className="text-xs text-muted px-1">Last ad run</legend>
+            <div className="flex items-center gap-2 flex-wrap">
+              <select
+                value={lastRunMode}
+                onChange={(e) =>
+                  setLastRunMode(
+                    e.target.value as "any" | "in_last" | "not_in_last"
+                  )
+                }
+                className="px-2 py-1 border border-border-strong rounded-md text-xs bg-surface"
+              >
+                <option value="any">Any</option>
+                <option value="in_last">Has run in last…</option>
+                <option value="not_in_last">Has not run in last…</option>
+              </select>
+              {lastRunMode !== "any" ? (
+                <>
+                  <input
+                    type="number"
+                    value={lastRunDays}
+                    onChange={(e) =>
+                      setLastRunDays(Math.max(1, Number(e.target.value)))
+                    }
+                    className="w-20 px-2 py-1 border border-border-strong rounded-md text-xs"
+                  />
+                  <span className="text-xs text-muted">days</span>
+                </>
+              ) : null}
+            </div>
+          </fieldset>
+
+          <fieldset className="border border-border rounded-md p-2">
+            <legend className="text-xs text-muted px-1">
+              Ad revenue (lifetime)
+            </legend>
+            <div className="flex items-center gap-2 flex-wrap">
+              <select
+                value={revenueMode}
+                onChange={(e) =>
+                  setRevenueMode(e.target.value as "any" | "over" | "under")
+                }
+                className="px-2 py-1 border border-border-strong rounded-md text-xs bg-surface"
+              >
+                <option value="any">Any</option>
+                <option value="over">Earned over…</option>
+                <option value="under">Earned under…</option>
+              </select>
+              {revenueMode !== "any" ? (
+                <>
+                  <span className="text-xs text-muted">$</span>
+                  <input
+                    type="number"
+                    value={revenueAmount}
+                    onChange={(e) =>
+                      setRevenueAmount(Math.max(0, Number(e.target.value)))
+                    }
+                    className="w-28 px-2 py-1 border border-border-strong rounded-md text-xs"
+                  />
+                </>
+              ) : null}
+            </div>
+          </fieldset>
         </div>
-      ) : null}
-    </div>
+      </div>
+    </FilterPanel>
   );
 }

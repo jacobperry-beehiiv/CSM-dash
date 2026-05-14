@@ -4,7 +4,8 @@ import { Fragment, useCallback, useMemo, useRef, useState } from "react";
 import type { Customer, CustomerWithMetrics } from "@/lib/types";
 import { StatusBadge } from "./status-badge";
 import { RiskLevelChip } from "./risk-level-chip";
-import { FilterBar } from "./filter-bar";
+import { FilterBar, SearchInput } from "./filters";
+import { CsmSelector } from "./csm-selector";
 import { MetricCards } from "./metric-cards";
 import { OutreachModal } from "./outreach-modal";
 import { CustomerDetailPanel } from "./customer-detail-panel";
@@ -545,11 +546,14 @@ export function CustomerTable({
   return (
     <>
       <MetricCards customers={filtered} />
-      <FilterBar
-        search={search}
-        onSearchChange={setSearch}
-        csms={csms}
-      />
+      <FilterBar>
+        <SearchInput
+          value={search}
+          onChange={setSearch}
+          placeholder="Search company or workspace…"
+        />
+        <CsmSelector csms={csms} />
+      </FilterBar>
 
       <div className="space-y-3 mb-4">
         <FeatureUtilizationFilter

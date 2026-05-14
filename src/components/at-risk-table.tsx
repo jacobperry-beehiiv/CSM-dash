@@ -7,6 +7,7 @@ import { CustomerDetailPanel } from "./customer-detail-panel";
 import { RowActions } from "./row-actions";
 import { RiskLevelChip } from "./risk-level-chip";
 import { FlagResolutionCheckboxes } from "./flag-resolution-checkboxes";
+import { ChipMultiSelect, SegmentToggle } from "./filters";
 import { composeUrlForTemplate } from "@/lib/links";
 import { suggestTemplates } from "@/lib/templates/templates";
 import { isVisibleToCsm, type StoredTemplate } from "@/lib/templates/types";
@@ -310,36 +311,16 @@ export function AtRiskTable({ data }: { data: RunResult }) {
         <div className="rounded-md border border-border bg-surface p-3 space-y-2">
           <div className="flex flex-wrap items-center gap-2 text-xs">
             <span className="text-muted font-medium">Filter by flag:</span>
-            <div
-              role="radiogroup"
-              aria-label="Combine mode"
-              className="inline-flex rounded-md border border-border overflow-hidden"
-            >
-              <button
-                role="radio"
-                aria-checked={combine === "any"}
-                onClick={() => setCombine("any")}
-                className={`px-2.5 py-1 ${
-                  combine === "any"
-                    ? "bg-accent text-accent-fg font-medium"
-                    : "bg-surface text-muted hover:text-fg"
-                }`}
-              >
-                any
-              </button>
-              <button
-                role="radio"
-                aria-checked={combine === "all"}
-                onClick={() => setCombine("all")}
-                className={`px-2.5 py-1 border-l border-border ${
-                  combine === "all"
-                    ? "bg-accent text-accent-fg font-medium"
-                    : "bg-surface text-muted hover:text-fg"
-                }`}
-              >
-                all
-              </button>
-            </div>
+            <SegmentToggle
+              variant="compact"
+              ariaLabel="Combine mode"
+              options={[
+                { value: "any", label: "any" },
+                { value: "all", label: "all" },
+              ]}
+              value={combine}
+              onChange={(v) => setCombine(v)}
+            />
             {filterActive ? (
               <button
                 onClick={() => setPickedFlags(new Set())}
@@ -353,44 +334,18 @@ export function AtRiskTable({ data }: { data: RunResult }) {
               </span>
             )}
           </div>
-          <div className="flex flex-wrap gap-1.5">
-            {FLAG_META.map(({ code, label, description }) => {
-              const checked = pickedFlags.has(code);
-              const count = flagCounts[code] ?? 0;
-              const dim = count === 0;
-              return (
-                <button
-                  key={code}
-                  onClick={() => toggleFlag(code)}
-                  disabled={dim}
-                  title={`${code} — ${description}`}
-                  className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-md text-xs border transition-colors ${
-                    checked
-                      ? "bg-accent-soft border-accent text-fg font-medium"
-                      : dim
-                      ? "bg-surface-2 border-border text-subtle cursor-not-allowed"
-                      : "bg-surface border-border text-muted hover:text-fg hover:border-border-strong"
-                  }`}
-                >
-                  <span
-                    className={`inline-flex items-center justify-center w-5 h-5 rounded text-[10px] font-semibold ${
-                      FLAG_COLORS[code] ?? "bg-surface-2"
-                    } ${dim ? "opacity-50" : ""}`}
-                  >
-                    {code}
-                  </span>
-                  <span>{label}</span>
-                  <span
-                    className={`tabular-nums text-[11px] ${
-                      dim ? "text-subtle" : "text-muted"
-                    }`}
-                  >
-                    {count}
-                  </span>
-                </button>
-              );
-            })}
-          </div>
+          <ChipMultiSelect
+            options={FLAG_META.map(({ code, label, description }) => ({
+              value: code,
+              label,
+              description: `${code} — ${description}`,
+              badge: code,
+              badgeClass: FLAG_COLORS[code] ?? "bg-surface-2",
+            }))}
+            selected={pickedFlags}
+            onToggle={toggleFlag}
+            countMap={flagCounts}
+          />
         </div>
       ) : null}
 

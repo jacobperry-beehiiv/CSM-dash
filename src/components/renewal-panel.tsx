@@ -6,6 +6,7 @@ import { fmtCurrency, fmtDate, daysUntil } from "./format";
 import { OutreachModal } from "./outreach-modal";
 import { CustomerDetailPanel } from "./customer-detail-panel";
 import { RowActions } from "./row-actions";
+import { FilterBar, SelectFilter } from "./filters";
 
 /**
  * Computes the customer's next renewal/charge date.
@@ -143,24 +144,20 @@ export function RenewalPanel({ customers }: Props) {
   const totalInWindow = buckets.reduce((s, x) => s + x.list.length, 0);
 
   const cadencePicker = (
-    <div className="flex items-center gap-2 mb-4">
-      <label className="text-xs text-muted">Cadence:</label>
-      <select
+    <FilterBar>
+      <SelectFilter
+        label="Cadence"
         value={intervalFilter}
-        onChange={(e) => setIntervalFilter(e.target.value)}
-        className="px-2 py-1 border border-border-strong rounded-md text-sm bg-surface"
-      >
-        <option value="">All cadences ({customers.filter((c) => c.interval).length})</option>
-        {intervals.map((i) => {
-          const count = customers.filter((c) => c.interval === i).length;
-          return (
-            <option key={i} value={i}>
-              {intervalLabel(i)} ({count})
-            </option>
-          );
-        })}
-      </select>
-    </div>
+        onChange={(v) => setIntervalFilter(v)}
+        emptyLabel="All cadences"
+        emptyCount={customers.filter((c) => c.interval).length}
+        options={intervals.map((i) => ({
+          value: i,
+          label: intervalLabel(i),
+          count: customers.filter((c) => c.interval === i).length,
+        }))}
+      />
+    </FilterBar>
   );
 
   if (totalInWindow === 0) {

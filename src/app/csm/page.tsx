@@ -16,7 +16,8 @@ import { RenewalPanel } from "@/components/renewal-panel";
 import { DeliverabilityPanel } from "@/components/deliverability-panel";
 import { DeliverabilityBanner } from "@/components/deliverability-banner";
 import { DeliverabilityLoading } from "@/components/deliverability-loading";
-import { PageCsmFilter } from "@/components/page-csm-filter";
+import { FilterBar } from "@/components/filters";
+import { CsmSelector } from "@/components/csm-selector";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -87,7 +88,7 @@ export default async function CsmPage({
     } else if (tab === "renewals") {
       body = (
         <>
-          <PageCsmFilter csms={csms} />
+          <FilterBar><span className="text-xs text-muted">CSM:</span><CsmSelector csms={csms} /></FilterBar>
           <RenewalPanel customers={book} />
         </>
       );
@@ -95,7 +96,7 @@ export default async function CsmPage({
       const result = await runAtRiskCheck({ customers: book, csmName: null });
       body = (
         <>
-          <PageCsmFilter csms={csms} />
+          <FilterBar><span className="text-xs text-muted">CSM:</span><CsmSelector csms={csms} /></FilterBar>
           <AtRiskTable data={result} />
         </>
       );
@@ -103,7 +104,7 @@ export default async function CsmPage({
       const canRunLive = source === "metabase" || source === "snapshot";
       body = canRunLive ? (
         <>
-          <PageCsmFilter csms={csms} />
+          <FilterBar><span className="text-xs text-muted">CSM:</span><CsmSelector csms={csms} /></FilterBar>
           <Suspense fallback={<DeliverabilityLoading />}>
             <DeliverabilityTab csm={csm} />
           </Suspense>

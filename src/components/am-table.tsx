@@ -7,6 +7,7 @@ import { OutreachModal } from "./outreach-modal";
 import { CustomerDetailPanel } from "./customer-detail-panel";
 import { RowActions } from "./row-actions";
 import { CsmSelector } from "./csm-selector";
+import { FilterBar, SearchInput, SegmentToggle } from "./filters";
 
 type Cohort = "approaching-cap" | "approaching-ent";
 
@@ -106,33 +107,23 @@ export function AmTable({ rows, csms }: Props) {
         />
       </div>
 
-      <div className="flex flex-wrap items-center gap-2 mb-4">
-        <input
-          type="text"
-          placeholder="Search company / contact..."
+      <FilterBar>
+        <SearchInput
           value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          className="px-3 py-2 border border-border-strong rounded-lg text-sm flex-1 min-w-[200px]"
+          onChange={setSearch}
+          placeholder="Search company / contact…"
         />
         <CsmSelector csms={csms} />
-        {(["all", "approaching-cap", "approaching-ent"] as const).map((opt) => (
-          <button
-            key={opt}
-            onClick={() => setCohortFilter(opt)}
-            className={`px-3 py-2 rounded-lg text-sm font-medium border whitespace-nowrap ${
-              cohortFilter === opt
-                ? "bg-accent text-accent-fg border-gray-900"
-                : "bg-surface text-muted border-border-strong hover:bg-canvas"
-            }`}
-          >
-            {opt === "all"
-              ? "All"
-              : opt === "approaching-cap"
-                ? `Approaching cap (${counts.cap})`
-                : `Approaching 100K subs (${counts.ent})`}
-          </button>
-        ))}
-      </div>
+        <SegmentToggle
+          options={[
+            { value: "all", label: "All" },
+            { value: "approaching-cap", label: "Approaching cap", count: counts.cap },
+            { value: "approaching-ent", label: "Approaching 100K subs", count: counts.ent },
+          ]}
+          value={cohortFilter}
+          onChange={(v) => setCohortFilter(v)}
+        />
+      </FilterBar>
 
       <div className="rounded-xl border border-border bg-surface shadow-card">
         <table className="w-full text-sm table-fixed">
