@@ -12,6 +12,10 @@ name: sync-data
 # Required repo secrets:
 #   • METABASE_API_KEY
 #   • SNAPSHOT_ENCRYPTION_KEY  (32-byte base64; same one set in Vercel env)
+#   • HUBSPOT_ACCESS_TOKEN     (Private App `pat-na1-…`. Without this the
+#                              sync soft-fails enrichment — every row's
+#                              `last_activity_at` and `hubspot_contacts`
+#                              would land empty in the committed snapshot.)
 
 on:
   workflow_dispatch:
@@ -51,6 +55,12 @@ jobs:
           METABASE_URL: https://beehiiv.metabaseapp.com
           METABASE_API_KEY: ${{ secrets.METABASE_API_KEY }}
           SNAPSHOT_ENCRYPTION_KEY: ${{ secrets.SNAPSHOT_ENCRYPTION_KEY }}
+          # HubSpot Private-App token. Drives the per-row enrichment of
+          # `last_activity_at` + `hubspot_contacts`. If this secret is
+          # missing the sync prints "HubSpot auth not configured —
+          # skipping HubSpot enrichment" and writes a snapshot without
+          # those fields, overwriting whatever the previous run produced.
+          HUBSPOT_ACCESS_TOKEN: ${{ secrets.HUBSPOT_ACCESS_TOKEN }}
 
       - name: Commit + push encrypted snapshots
         run: |
