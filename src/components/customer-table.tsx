@@ -6,6 +6,7 @@ import { StatusBadge } from "./status-badge";
 import { RiskLevelChip } from "./risk-level-chip";
 import { FilterBar, SearchInput } from "./filters";
 import { CsmSelector } from "./csm-selector";
+import { useUrlSearch } from "@/lib/hooks/use-url-search";
 import { MetricCards } from "./metric-cards";
 import { OutreachModal } from "./outreach-modal";
 import { CustomerDetailPanel } from "./customer-detail-panel";
@@ -65,7 +66,7 @@ export function CustomerTable({
   const viewerEmail = useViewerEmail();
   const [sortKey, setSortKey] = useState<SortKey>("arr");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
-  const [search, setSearch] = useState("");
+  const [search, setSearch] = useUrlSearch("q");
   const [featurePredicate, setFeaturePredicate] = useState<
     ((c: Customer) => boolean) | null
   >(null);

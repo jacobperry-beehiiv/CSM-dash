@@ -8,6 +8,7 @@ import { CustomerDetailPanel } from "./customer-detail-panel";
 import { RowActions } from "./row-actions";
 import { FilterBar, SearchInput, SelectFilter } from "./filters";
 import { CsmSelector } from "./csm-selector";
+import { useUrlSearch } from "@/lib/hooks/use-url-search";
 
 /**
  * Computes the customer's next renewal/charge date.
@@ -94,7 +95,7 @@ export function RenewalPanel({ customers, csms }: Props) {
   const [selected, setSelected] = useState<Customer | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [intervalFilter, setIntervalFilter] = useState<string>("");
-  const [search, setSearch] = useState("");
+  const [search, setSearch] = useUrlSearch("q");
 
   // Reset row-level state when the underlying customer set changes (CSM
   // filter / segment switch). Without this, "expanded" keeps stale

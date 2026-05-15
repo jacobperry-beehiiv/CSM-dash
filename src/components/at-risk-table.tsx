@@ -9,6 +9,7 @@ import { RiskLevelChip } from "./risk-level-chip";
 import { FlagResolutionCheckboxes } from "./flag-resolution-checkboxes";
 import { ChipMultiSelect, FilterBar, FilterPanel, SearchInput, SegmentToggle } from "./filters";
 import { CsmSelector } from "./csm-selector";
+import { useUrlSearch } from "@/lib/hooks/use-url-search";
 import { composeUrlForTemplate } from "@/lib/links";
 import { suggestTemplates } from "@/lib/templates/templates";
 import { isVisibleToCsm, type StoredTemplate } from "@/lib/templates/types";
@@ -94,10 +95,9 @@ export function AtRiskTable({
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
   const [bulkMessage, setBulkMessage] = useState<string | null>(null);
-  // Client-side search across the already-flagged accounts. Matches the
-  // shape of the All-assigned tab's FilterBar so the two filter strips
-  // look identical.
-  const [search, setSearch] = useState("");
+  // Client-side search across the already-flagged accounts. URL-synced
+  // (`?q=…`) so navigating away and back restores the filter.
+  const [search, setSearch] = useUrlSearch("q");
 
   // Flag filter state. Empty pickedFlags = no filter (show all accounts).
   // combine = "any" matches accounts with at least one picked flag;

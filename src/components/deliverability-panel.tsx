@@ -6,6 +6,7 @@ import { fmtDate, fmtNumber, fmtRate } from "./format";
 import { masqueradeUrl, metabasePubUrl } from "@/lib/links";
 import { FilterBar, SearchInput } from "./filters";
 import { CsmSelector } from "./csm-selector";
+import { useUrlSearch } from "@/lib/hooks/use-url-search";
 import type { Customer, DeliverabilityAlert } from "@/lib/types";
 
 interface RunResult {
@@ -64,7 +65,7 @@ export function DeliverabilityPanel({
 }) {
   const data = initial;
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  const [search, setSearch] = useState("");
+  const [search, setSearch] = useUrlSearch("q");
   const ownerEmailByWorkspace = useOwnerEmailMap(data.alerts);
 
   function toggle(k: string) {

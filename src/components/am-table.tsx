@@ -8,6 +8,7 @@ import { CustomerDetailPanel } from "./customer-detail-panel";
 import { RowActions } from "./row-actions";
 import { CsmSelector } from "./csm-selector";
 import { FilterBar, SearchInput, SegmentToggle } from "./filters";
+import { useUrlSearch } from "@/lib/hooks/use-url-search";
 
 type Cohort = "approaching-cap" | "approaching-ent";
 
@@ -46,7 +47,7 @@ function utilPct(c: Customer): number | null {
 }
 
 export function AmTable({ rows, csms }: Props) {
-  const [search, setSearch] = useState("");
+  const [search, setSearch] = useUrlSearch("q");
   const [cohortFilter, setCohortFilter] = useState<Cohort | "all">("all");
   const [outreachFor, setOutreachFor] = useState<{
     customer: Customer;
