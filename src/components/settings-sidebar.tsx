@@ -34,6 +34,12 @@ const SECTIONS: Array<{ href: string; label: string; description: string }> = [
     label: "Gmail",
     description: "Connect Gmail to create bulk drafts without opening tabs.",
   },
+  {
+    href: "/settings/api-tokens",
+    label: "API tokens",
+    description:
+      "Personal Bearer tokens for the customer-signals endpoint + future integrations.",
+  },
 ];
 
 export function SettingsSidebar() {

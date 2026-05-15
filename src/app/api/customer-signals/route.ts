@@ -10,6 +10,7 @@ import {
   type SignalKind,
 } from "@/lib/data/customer-signals";
 import { setRunState } from "@/lib/data/customer-signals-state";
+import { findTokenOwner } from "@/lib/auth/api-tokens";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 30;
@@ -40,25 +41,45 @@ const VALID_KINDS_SET = new Set<SignalKind>(VALID_SIGNAL_KINDS);
 
 async function authorize(req: Request): Promise<
   | { ok: true; mode: "session"; email: string | null }
+  | { ok: true; mode: "user_token"; email: string }
   | { ok: true; mode: "skill" }
   | { ok: false; status: number; message: string }
 > {
   const auth_header = req.headers.get("authorization");
   if (auth_header?.startsWith("Bearer ")) {
-    const expected =
+    const candidate = auth_header.slice(7).trim();
+
+    // Path A: per-user token minted at /settings/api-tokens. Preferred
+    // path going forward — every request gets attributed to the
+    // owning CSM automatically. Looked up by SHA-256 of the bearer so
+    // plaintext never lives server-side.
+    const owner = await findTokenOwner(candidate);
+    if (owner) {
+      return { ok: true, mode: "user_token", email: owner.user_email };
+    }
+
+    // Path B: legacy shared key in env. Kept so existing Vercel
+    // deployments + Claude-skill scaffolds keep working until they
+    // migrate to per-user tokens. `created_by` defaults to "skill".
+    const sharedKey =
       process.env.SIGNAL_API_KEY ?? process.env.CUSTOMER_SIGNALS_API_TOKEN;
-    if (!expected) {
+    if (sharedKey && candidate === sharedKey) {
+      return { ok: true, mode: "skill" };
+    }
+
+    // Nothing matched. If the only configured auth is per-user
+    // tokens (no shared key), say that — otherwise the generic
+    // 401 reads as "your token is wrong" even when the server
+    // simply doesn't have any way to validate anything.
+    if (!sharedKey) {
       return {
         ok: false,
-        status: 503,
+        status: 401,
         message:
-          "SIGNAL_API_KEY (or CUSTOMER_SIGNALS_API_TOKEN) env var is not configured on the server — bearer auth disabled.",
+          "Unknown Bearer token. Mint one at /settings/api-tokens or set SIGNAL_API_KEY for the legacy shared-key flow.",
       };
     }
-    if (auth_header.slice(7).trim() !== expected) {
-      return { ok: false, status: 401, message: "invalid bearer token" };
-    }
-    return { ok: true, mode: "skill" };
+    return { ok: false, status: 401, message: "invalid bearer token" };
   }
 
   const session = await auth();
@@ -67,7 +88,7 @@ async function authorize(req: Request): Promise<
       ok: false,
       status: 401,
       message:
-        "Not signed in. Sign in via /login, or pass Authorization: Bearer <SIGNAL_API_KEY>.",
+        "Not signed in. Sign in via /login, or pass Authorization: Bearer <token> (mint one at /settings/api-tokens).",
     };
   }
   return { ok: true, mode: "session", email: session.user.email };
@@ -307,10 +328,15 @@ export async function POST(req: Request) {
     );
   }
 
+  // Defaults applied when the request body doesn't supply `source` /
+  // `created_by`. Per-user tokens credit the owning email so signals
+  // posted from "Jacob's Claude skill" show up as Jacob's edits on the
+  // profile page automatically.
   const defaults = {
-    source: a.mode === "skill" ? "claude-skill" : "dashboard",
+    source:
+      a.mode === "skill" || a.mode === "user_token" ? "claude-skill" : "dashboard",
     created_by:
-      a.mode === "session" ? a.email : null /* batch caller can override */,
+      a.mode === "session" || a.mode === "user_token" ? a.email : null,
   };
 
   // Batch shape: { run_metadata, signals[] }

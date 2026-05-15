@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { getRunState } from "@/lib/data/customer-signals-state";
+import { findTokenOwner } from "@/lib/auth/api-tokens";
 
 export const dynamic = "force-dynamic";
 
@@ -19,20 +20,22 @@ async function authorize(req: Request): Promise<
 > {
   const auth_header = req.headers.get("authorization");
   if (auth_header?.startsWith("Bearer ")) {
-    const expected =
+    const candidate = auth_header.slice(7).trim();
+    // Per-user token first, then the legacy shared key.
+    const owner = await findTokenOwner(candidate);
+    if (owner) return { ok: true };
+    const sharedKey =
       process.env.SIGNAL_API_KEY ?? process.env.CUSTOMER_SIGNALS_API_TOKEN;
-    if (!expected) {
+    if (sharedKey && candidate === sharedKey) return { ok: true };
+    if (!sharedKey) {
       return {
         ok: false,
-        status: 503,
+        status: 401,
         message:
-          "SIGNAL_API_KEY (or CUSTOMER_SIGNALS_API_TOKEN) env var is not configured on the server — bearer auth disabled.",
+          "Unknown Bearer token. Mint one at /settings/api-tokens or set SIGNAL_API_KEY for the legacy shared-key flow.",
       };
     }
-    if (auth_header.slice(7).trim() !== expected) {
-      return { ok: false, status: 401, message: "invalid bearer token" };
-    }
-    return { ok: true };
+    return { ok: false, status: 401, message: "invalid bearer token" };
   }
   const session = await auth();
   if (!session?.user?.email) {
@@ -40,7 +43,7 @@ async function authorize(req: Request): Promise<
       ok: false,
       status: 401,
       message:
-        "Not signed in. Sign in via /login, or pass Authorization: Bearer <SIGNAL_API_KEY>.",
+        "Not signed in. Sign in via /login, or pass Authorization: Bearer <token> (mint one at /settings/api-tokens).",
     };
   }
   return { ok: true };
