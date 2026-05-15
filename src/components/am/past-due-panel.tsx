@@ -443,10 +443,13 @@ function renderPastDueRow(
   const values: Record<string, string> = {
     email: row.email ?? "—",
     customer_id: row.customer_id ?? "",
+    subscription_id: row.subscription_id ?? "",
     plan: row.price_name ?? "—",
     arr: fmtCurrency(row.arr_dollars),
     charge_amount: fmtCurrency(row.charge_amount_dollars),
+    charge_status: row.charge_status ?? "",
     failure_code: row.failure_code ?? "",
+    failure_message: row.failure_message ?? "",
     attempted_at: row.charge_attempted_at
       ? fmtDate(row.charge_attempted_at)
       : "",

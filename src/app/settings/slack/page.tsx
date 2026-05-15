@@ -257,14 +257,56 @@ export default function SlackSettingsPage() {
                     newlines into {"{{account_list}}"}. Per-row tokens:{" "}
                     <code className="font-mono bg-surface-2 px-1 rounded">{"{{email}}"}</code>,{" "}
                     <code className="font-mono bg-surface-2 px-1 rounded">{"{{customer_id}}"}</code>,{" "}
+                    <code className="font-mono bg-surface-2 px-1 rounded">{"{{subscription_id}}"}</code>,{" "}
                     <code className="font-mono bg-surface-2 px-1 rounded">{"{{plan}}"}</code>,{" "}
                     <code className="font-mono bg-surface-2 px-1 rounded">{"{{arr}}"}</code>,{" "}
                     <code className="font-mono bg-surface-2 px-1 rounded">{"{{charge_amount}}"}</code>,{" "}
+                    <code className="font-mono bg-surface-2 px-1 rounded">{"{{charge_status}}"}</code>,{" "}
                     <code className="font-mono bg-surface-2 px-1 rounded">{"{{failure_code}}"}</code>,{" "}
+                    <code className="font-mono bg-surface-2 px-1 rounded">{"{{failure_message}}"}</code>,{" "}
                     <code className="font-mono bg-surface-2 px-1 rounded">{"{{attempted_at}}"}</code>,{" "}
                     <code className="font-mono bg-surface-2 px-1 rounded">{"{{csm}}"}</code>
-                    {" "}(renders as a Slack @mention when the CSM has a Slack ID mapped). Leave blank to use the dashboard default.
+                    {" "}(renders as a Slack @mention when the CSM has a Slack ID mapped).
                   </p>
+                  <details className="mt-2 text-[11px] text-muted">
+                    <summary className="cursor-pointer hover:text-fg select-none">
+                      Hyperlinks in Slack messages
+                    </summary>
+                    <div className="mt-2 space-y-2 pl-2 border-l-2 border-border">
+                      <p>
+                        Slack mrkdwn renders links as{" "}
+                        <code className="font-mono bg-surface-2 px-1 rounded">
+                          {"<URL|display text>"}
+                        </code>
+                        . Merge tags interpolate into both halves, so you
+                        can build clickable rows by wrapping a token in
+                        the angle-bracket form.
+                      </p>
+                      <p className="font-medium text-fg">
+                        Link the email to the Stripe customer page:
+                      </p>
+                      <pre className="bg-surface-2 px-2 py-1.5 rounded overflow-x-auto whitespace-pre-wrap break-all">
+{`• <https://dashboard.stripe.com/customers/{{customer_id}}|{{email}}> — {{charge_amount}} failed, {{arr}} ARR (CSM: {{csm}})`}
+                      </pre>
+                      <p className="font-medium text-fg">
+                        Link the plan name to the Stripe subscription:
+                      </p>
+                      <pre className="bg-surface-2 px-2 py-1.5 rounded overflow-x-auto whitespace-pre-wrap break-all">
+{`• *{{email}}* — <https://dashboard.stripe.com/subscriptions/{{subscription_id}}|{{plan}}> · {{charge_amount}} failed ({{failure_code}})`}
+                      </pre>
+                      <p className="font-medium text-fg">Tip</p>
+                      <p>
+                        Slack doesn&apos;t auto-link bare URLs that contain
+                        merge tag content reliably — always wrap them in{" "}
+                        <code className="font-mono bg-surface-2 px-1 rounded">
+                          {"<...|...>"}
+                        </code>
+                        . If you omit the{" "}
+                        <code className="font-mono bg-surface-2 px-1 rounded">|text</code>{" "}
+                        portion the URL itself is shown.
+                      </p>
+                    </div>
+                  </details>
                 </div>
               ) : null}
             </div>
