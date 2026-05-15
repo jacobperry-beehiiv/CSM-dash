@@ -232,7 +232,9 @@ export default function SlackSettingsPage() {
                     <code className="font-mono bg-surface-2 px-1 rounded">{"{{total_arr}}"}</code>,{" "}
                     <code className="font-mono bg-surface-2 px-1 rounded">{"{{count}}"}</code>,{" "}
                     <code className="font-mono bg-surface-2 px-1 rounded">{"{{count_plural}}"}</code>,{" "}
-                    <code className="font-mono bg-surface-2 px-1 rounded">{"{{account_list}}"}</code>.
+                    <code className="font-mono bg-surface-2 px-1 rounded">{"{{account_list}}"}</code>,{" "}
+                    <code className="font-mono bg-surface-2 px-1 rounded">{"{{customer_ids}}"}</code>
+                    {" "}(comma-separated <code className="font-mono">cus_*</code> Stripe IDs from the selected rows).
                   </p>
                 ) : null}
               </div>

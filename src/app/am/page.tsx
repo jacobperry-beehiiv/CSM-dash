@@ -57,10 +57,10 @@ async function ApproachingTab() {
   }
 }
 
-async function PastDueTab() {
+async function PastDueTab({ csms }: { csms: string[] }) {
   try {
     const rows = await loadPastDue();
-    return <PastDuePanel rows={rows} />;
+    return <PastDuePanel rows={rows} csms={csms} />;
   } catch (e) {
     return (
       <div className="bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/30 rounded-lg p-4 text-sm text-red-800 dark:text-red-300">
@@ -117,7 +117,7 @@ export default async function AmPage({
             </div>
           }
         >
-          <PastDueTab />
+          <PastDueTab csms={csms} />
         </Suspense>
       );
     } else {

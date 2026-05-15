@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import type { PastDueRow } from "@/lib/engines/am-cohorts";
 import { fmtCurrency, fmtDate } from "../format";
 import {
@@ -9,10 +10,16 @@ import {
   type SettingsShape,
 } from "@/lib/data/settings-types";
 import { BucketSection } from "./bucket-section";
+import { FilterBar, SearchInput, SegmentToggle } from "../filters";
+import { CsmSelector } from "../csm-selector";
+import { useUrlSearch } from "@/lib/hooks/use-url-search";
 
 interface Props {
   rows: PastDueRow[];
+  csms: string[];
 }
+
+type PlanTier = "all" | "enterprise" | "non-enterprise";
 
 const BUCKET_STEP_USD = 50_000;
 
@@ -61,10 +68,19 @@ function isEnterprisePlan(p: PastDueRow): boolean {
   return /enterprise|custom/i.test(p.price_name ?? "");
 }
 
-export function PastDuePanel({ rows }: Props) {
+export function PastDuePanel({ rows, csms }: Props) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [settings, setSettings] = useState<SettingsShape | null>(null);
   const [composeOpen, setComposeOpen] = useState(false);
+
+  // Filter state — search and plan-tier are client-side over `rows`;
+  // CSM piggybacks on the shared `?csm=` URL param that CsmSelector
+  // already writes, so it stays consistent with the rest of the
+  // dashboard.
+  const [search, setSearch] = useUrlSearch("q");
+  const [planTier, setPlanTier] = useState<PlanTier>("all");
+  const searchParams = useSearchParams();
+  const csmFilter = searchParams.get("csm") ?? "";
 
   useEffect(() => {
     fetch("/api/settings")
@@ -73,9 +89,33 @@ export function PastDuePanel({ rows }: Props) {
       .catch(() => {});
   }, []);
 
+  // Apply filters to the raw rows BEFORE bucketing so headline counts
+  // and the rendered list always agree.
+  const filteredRows = useMemo(() => {
+    return rows.filter((r) => {
+      if (csmFilter && r.customer_success_manager !== csmFilter) return false;
+      if (planTier === "enterprise" && !isEnterprisePlan(r)) return false;
+      if (planTier === "non-enterprise" && isEnterprisePlan(r)) return false;
+      if (search) {
+        const q = search.toLowerCase();
+        const haystack = [
+          r.email,
+          r.customer_id,
+          r.price_name,
+          r.customer_success_manager,
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+        if (!haystack.includes(q)) return false;
+      }
+      return true;
+    });
+  }, [rows, csmFilter, planTier, search]);
+
   const maxArr = useMemo(
-    () => rows.reduce((m, r) => Math.max(m, r.arr_dollars), 0),
-    [rows]
+    () => filteredRows.reduce((m, r) => Math.max(m, r.arr_dollars), 0),
+    [filteredRows]
   );
   const bucketRanges = useMemo(() => makeBuckets(maxArr), [maxArr]);
 
@@ -83,12 +123,12 @@ export function PastDuePanel({ rows }: Props) {
     return bucketRanges
       .map((b) => ({
         bucket: b,
-        list: rows
+        list: filteredRows
           .filter((r) => r.arr_dollars >= b.min && r.arr_dollars < b.max)
           .sort((a, b2) => b2.arr_dollars - a.arr_dollars),
       }))
       .filter((g) => g.list.length > 0);
-  }, [rows, bucketRanges]);
+  }, [filteredRows, bucketRanges]);
 
   // Compute headline stats from the SAME rows the buckets actually render so
   // the "Past-due Enterprise" count and the visible ENT rows can never drift.
@@ -96,7 +136,9 @@ export function PastDuePanel({ rows }: Props) {
     () => grouped.flatMap((g) => g.list),
     [grouped]
   );
-  const droppedCount = rows.length - visibleRows.length;
+  // Diff is against the filtered set so the warning only fires for rows
+  // that ARE supposed to be in view but couldn't be bucketed.
+  const droppedCount = filteredRows.length - visibleRows.length;
 
   const enterpriseRows = visibleRows.filter(isEnterprisePlan);
   const enterpriseArrTotal = enterpriseRows.reduce(
@@ -126,8 +168,38 @@ export function PastDuePanel({ rows }: Props) {
     });
   }
 
+  const totalSourceRows = rows.length;
+  const filteredCount = filteredRows.length;
+  const filtersActive =
+    Boolean(search) || planTier !== "all" || Boolean(csmFilter);
+
   return (
     <>
+      <FilterBar>
+        <SearchInput
+          value={search}
+          onChange={setSearch}
+          placeholder="Search email, customer id, or plan…"
+        />
+        <CsmSelector csms={csms} />
+        <SegmentToggle<PlanTier>
+          options={[
+            { value: "all", label: "All plans" },
+            { value: "enterprise", label: "Enterprise" },
+            { value: "non-enterprise", label: "Non-enterprise" },
+          ]}
+          value={planTier}
+          onChange={setPlanTier}
+        />
+      </FilterBar>
+
+      {filtersActive ? (
+        <p className="text-xs text-muted mb-3">
+          Showing <strong className="text-fg">{filteredCount}</strong> of{" "}
+          {totalSourceRows} past-due accounts
+        </p>
+      ) : null}
+
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
         <Stat label="Past-due accounts" value={String(visibleRows.length)} />
         <Stat
@@ -158,9 +230,10 @@ export function PastDuePanel({ rows }: Props) {
         </span>
         <button
           onClick={() =>
-            setSelected(new Set(rows.map((r, i) => rowKey(r, i))))
+            setSelected(new Set(visibleRows.map((r, i) => rowKey(r, i))))
           }
           className="px-2 py-1 text-xs border border-border-strong rounded-md bg-surface hover:bg-canvas"
+          title="Select every account currently visible (after filters)"
         >
           Select all
         </button>
@@ -361,11 +434,19 @@ function renderSlackTemplate(
       )} failed charge, ${fmtCurrency(r.arr_dollars)} ARR (CSM: ${csmTag})`;
     })
     .join("\n");
+  // Comma-separated list of Stripe customer IDs from the selected rows.
+  // Filter to ids that actually start with `cus_` so junk values (null,
+  // legacy IDs) don't leak into a paste-into-Stripe workflow.
+  const customerIds = rows
+    .map((r) => r.customer_id)
+    .filter((id): id is string => !!id && id.startsWith("cus_"))
+    .join(", ");
   return template
     .replace(/\{\{\s*total_arr\s*\}\}/g, fmtCurrency(total))
     .replace(/\{\{\s*count\s*\}\}/g, String(rows.length))
     .replace(/\{\{\s*count_plural\s*\}\}/g, rows.length === 1 ? "" : "s")
-    .replace(/\{\{\s*account_list\s*\}\}/g, accountList);
+    .replace(/\{\{\s*account_list\s*\}\}/g, accountList)
+    .replace(/\{\{\s*customer_ids\s*\}\}/g, customerIds);
 }
 
 function SlackCompose({
