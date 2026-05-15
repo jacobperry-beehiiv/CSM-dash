@@ -31,8 +31,16 @@ export interface SlackChannel {
   /** Default Slack-mrkdwn message template with `{{token}}` merge tags.
    *  The available tokens depend on which alert type uses this channel
    *  — past-due supports {{total_arr}} / {{count}} / {{count_plural}} /
-   *  {{account_list}}. */
+   *  {{account_list}} / {{customer_ids}}. */
   template: string;
+  /** Optional per-row template for the `{{account_list}}` expansion. Each
+   *  selected row gets rendered with this template, then joined with
+   *  newlines. Past-due row tokens: `{{email}}`, `{{customer_id}}`,
+   *  `{{plan}}`, `{{arr}}`, `{{charge_amount}}`, `{{failure_code}}`,
+   *  `{{attempted_at}}`, `{{csm}}` (resolves to a Slack @mention when
+   *  mapped). When unset or empty, falls back to the hard-coded format
+   *  the dashboard shipped with. */
+  row_template?: string;
 }
 
 /** Stable id reserved for the past-due alert. The /am page looks this
@@ -105,6 +113,8 @@ export const DEFAULTS: SettingsShape = {
         channel_id: "",
         template:
           "*Past-Due Enterprise alert*\n\nTotal Enterprise ARR past due: *{{total_arr}}* across *{{count}}* account{{count_plural}}.\n\n{{account_list}}\n\nLet me know if any of these are already in motion 🙏",
+        row_template:
+          "• *{{email}}* — {{charge_amount}} failed charge, {{arr}} ARR (CSM: {{csm}})",
       },
     ],
     csm_user_ids: {},

@@ -416,23 +416,59 @@ function Stat({
 
 /** ----------------- Slack compose modal ----------------- */
 
+/** Default per-row format used when settings.slack.channels[past_due]
+ *  has no row_template. Kept in sync with DEFAULTS in settings-types
+ *  so freshly-seeded envs render identically to upgraded ones. */
+const DEFAULT_PAST_DUE_ROW_TEMPLATE =
+  "• *{{email}}* — {{charge_amount}} failed charge, {{arr}} ARR (CSM: {{csm}})";
+
+function csmTagFor(
+  csmKey: string | null,
+  settings: SettingsShape
+): string {
+  const key = csmKey ?? "";
+  const slackId = settings.slack.csm_user_ids[key];
+  if (slackId) return `<@${slackId}>`;
+  return (key || "unassigned").replace(/_/g, " ");
+}
+
+/** Render a single past-due row through the per-row template. Unknown
+ *  tokens render empty so a typo in settings doesn't echo `{{foo}}` out
+ *  into a Slack message. */
+function renderPastDueRow(
+  row: PastDueRow,
+  template: string,
+  settings: SettingsShape
+): string {
+  const values: Record<string, string> = {
+    email: row.email ?? "—",
+    customer_id: row.customer_id ?? "",
+    plan: row.price_name ?? "—",
+    arr: fmtCurrency(row.arr_dollars),
+    charge_amount: fmtCurrency(row.charge_amount_dollars),
+    failure_code: row.failure_code ?? "",
+    attempted_at: row.charge_attempted_at
+      ? fmtDate(row.charge_attempted_at)
+      : "",
+    csm: csmTagFor(row.customer_success_manager, settings),
+  };
+  return template.replace(/\{\{\s*(\w+)\s*\}\}/g, (_match, name: string) => {
+    return name in values ? values[name] : "";
+  });
+}
+
 function renderSlackTemplate(
   template: string,
   rows: PastDueRow[],
-  settings: SettingsShape
+  settings: SettingsShape,
+  rowTemplate?: string
 ): string {
   const total = rows.reduce((s, r) => s + r.arr_dollars, 0);
+  const effectiveRowTemplate = (rowTemplate ?? "").trim()
+    ? (rowTemplate as string)
+    : DEFAULT_PAST_DUE_ROW_TEMPLATE;
   const accountList = rows
-    .map((r) => {
-      const csmKey = r.customer_success_manager ?? "";
-      const slackId = settings.slack.csm_user_ids[csmKey];
-      const csmTag = slackId
-        ? `<@${slackId}>`
-        : (csmKey || "unassigned").replace(/_/g, " ");
-      return `• *${r.email ?? "—"}* — ${fmtCurrency(
-        r.charge_amount_dollars
-      )} failed charge, ${fmtCurrency(r.arr_dollars)} ARR (CSM: ${csmTag})`;
-    })
+    .map((r) => renderPastDueRow(r, effectiveRowTemplate, settings))
     .join("\n");
   // Comma-separated list of Stripe customer IDs from the selected rows.
   // Filter to ids that actually start with `cus_` so junk values (null,
@@ -464,7 +500,12 @@ function SlackCompose({
   const pastDueCfg = findSlackChannel(settings.slack, PAST_DUE_CHANNEL_ID);
   const [channel, setChannel] = useState(pastDueCfg?.channel_id ?? "");
   const [text, setText] = useState(() =>
-    renderSlackTemplate(pastDueCfg?.template ?? "", rows, settings)
+    renderSlackTemplate(
+      pastDueCfg?.template ?? "",
+      rows,
+      settings,
+      pastDueCfg?.row_template
+    )
   );
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<string | null>(null);

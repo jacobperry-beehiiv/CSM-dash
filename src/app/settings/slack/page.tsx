@@ -238,6 +238,35 @@ export default function SlackSettingsPage() {
                   </p>
                 ) : null}
               </div>
+              {c.id === PAST_DUE_CHANNEL_ID ? (
+                <div>
+                  <label className="text-xs text-muted block mb-1">
+                    {"{{account_list}}"} row format
+                  </label>
+                  <textarea
+                    value={c.row_template ?? ""}
+                    onChange={(e) =>
+                      patchChannel(c.id, { row_template: e.target.value })
+                    }
+                    rows={2}
+                    placeholder="• *{{email}}* — {{charge_amount}} failed charge, {{arr}} ARR (CSM: {{csm}})"
+                    className="w-full px-3 py-2 border border-border-strong rounded-md text-sm font-mono"
+                  />
+                  <p className="text-[11px] text-muted mt-1">
+                    One row per selected past-due account, joined with
+                    newlines into {"{{account_list}}"}. Per-row tokens:{" "}
+                    <code className="font-mono bg-surface-2 px-1 rounded">{"{{email}}"}</code>,{" "}
+                    <code className="font-mono bg-surface-2 px-1 rounded">{"{{customer_id}}"}</code>,{" "}
+                    <code className="font-mono bg-surface-2 px-1 rounded">{"{{plan}}"}</code>,{" "}
+                    <code className="font-mono bg-surface-2 px-1 rounded">{"{{arr}}"}</code>,{" "}
+                    <code className="font-mono bg-surface-2 px-1 rounded">{"{{charge_amount}}"}</code>,{" "}
+                    <code className="font-mono bg-surface-2 px-1 rounded">{"{{failure_code}}"}</code>,{" "}
+                    <code className="font-mono bg-surface-2 px-1 rounded">{"{{attempted_at}}"}</code>,{" "}
+                    <code className="font-mono bg-surface-2 px-1 rounded">{"{{csm}}"}</code>
+                    {" "}(renders as a Slack @mention when the CSM has a Slack ID mapped). Leave blank to use the dashboard default.
+                  </p>
+                </div>
+              ) : null}
             </div>
           ))}
         </div>
