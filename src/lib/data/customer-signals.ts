@@ -1,49 +1,109 @@
 import { kvGet, kvSet } from "../storage/kv";
 
 /**
- * Customer signals are append-only records of context a CSM (or a
- * Claude skill on their behalf) wants surfaced on the dashboard for a
- * given customer. Notes, action items, wins, risk-context, meeting
- * summaries — anything worth remembering against a workspace_id.
+ * Customer signals are append-or-upsert records of context the dashboard
+ * surfaces per workspace. Notes, action items, risk signals, touchpoints,
+ * goals, contact updates, feature requests/adoption, periodic customer
+ * snapshots — anything the Claude skill (or a CSM on their own) wants
+ * remembered against a workspace_id.
  *
  * Stored as an array per workspace at KV key `customer-signals/<id>`,
  * capped at MAX_PER_WORKSPACE most-recent records to keep payload sizes
  * sane.
+ *
+ * Idempotency contract:
+ *   • Callers may supply a deterministic `signal_id`. When present and
+ *     it matches an existing entry in the workspace's list, we upsert
+ *     (replace in place); otherwise we append.
+ *   • When `signal_id` is absent we generate a random `id` and always
+ *     append (the legacy single-signal path).
  */
 
+/**
+ * Kind taxonomy. The full set covers everything the Claude enterprise-
+ * customer-context skill produces; the first half (note / win / context /
+ * meeting) is grandfathered from the original single-signal endpoint so
+ * pre-existing callers keep working.
+ */
 export type SignalKind =
+  // Original taxonomy (kept for back-compat with the v1 skill scaffold).
   | "note"
-  | "risk_signal"
   | "win"
   | "context"
+  | "meeting"
+  // Skill v1.0 taxonomy.
+  | "touchpoint"
+  | "goal"
+  | "use_case"
+  | "feature_request"
+  | "feature_adoption"
+  | "contact_update"
   | "action_item"
-  | "meeting";
+  | "risk_signal"
+  | "customer_overview";
+
+export const VALID_SIGNAL_KINDS: SignalKind[] = [
+  "note",
+  "win",
+  "context",
+  "meeting",
+  "touchpoint",
+  "goal",
+  "use_case",
+  "feature_request",
+  "feature_adoption",
+  "contact_update",
+  "action_item",
+  "risk_signal",
+  "customer_overview",
+];
 
 export interface CustomerSignal {
-  /** Stable random id so the UI can dedupe / reference / dismiss. */
+  /**
+   * Primary key within a workspace. Set to the caller-supplied
+   * `signal_id` when present (deterministic — re-runs upsert in place),
+   * otherwise a random fallback for the legacy append-only path.
+   */
   id: string;
   workspace_id: string;
   kind: SignalKind;
   text: string;
   source?: string;
   created_by?: string;
+  /** When this record was first persisted server-side (ISO 8601). */
   created_at: string;
+  /** When the underlying event actually happened in the real world (ISO
+   *  8601). Distinct from created_at — a touchpoint posted later might
+   *  describe an email sent yesterday. Falls back to created_at when the
+   *  caller didn't supply one. */
+  event_at?: string;
   expires_at?: string;
   metadata?: Record<string, unknown>;
 }
 
 const KEY_PREFIX = "customer-signals/";
-const MAX_PER_WORKSPACE = 50;
+const MAX_PER_WORKSPACE = 500;
 
 export function keyFor(workspaceId: string): string {
   return KEY_PREFIX + workspaceId;
 }
 
 function randomId(): string {
-  return (
-    Date.now().toString(36) +
-    Math.random().toString(36).slice(2, 8)
-  );
+  return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+}
+
+/**
+ * Cap the per-workspace array. Sorted newest-first by `event_at`
+ * (falling back to `created_at`) so when we truncate we keep the most
+ * recent slice.
+ */
+function trim(list: CustomerSignal[]): CustomerSignal[] {
+  const sorted = [...list].sort((a, b) => {
+    const ad = Date.parse(a.event_at ?? a.created_at) || 0;
+    const bd = Date.parse(b.event_at ?? b.created_at) || 0;
+    return bd - ad;
+  });
+  return sorted.slice(0, MAX_PER_WORKSPACE);
 }
 
 export async function listSignals(
@@ -61,33 +121,99 @@ export async function listSignals(
 }
 
 export interface AppendInput {
+  /** Deterministic id from the caller. When present, upsert by this key. */
+  signal_id?: string;
   workspace_id: string;
   kind: SignalKind;
   text: string;
   source?: string;
   created_by?: string;
   created_at?: string;
+  event_at?: string;
   expires_at?: string;
   metadata?: Record<string, unknown>;
 }
 
+export type UpsertAction = "created" | "updated";
+
+export interface AppendResult {
+  signal: CustomerSignal;
+  action: UpsertAction;
+}
+
+/**
+ * Single-signal append/upsert. Kept as the building block for both the
+ * legacy single-signal POST and the new batch path. Pass `signal_id` to
+ * upsert; omit it for the append-with-random-id behaviour.
+ */
 export async function appendSignal(input: AppendInput): Promise<CustomerSignal> {
-  const list = (await kvGet<CustomerSignal[]>(keyFor(input.workspace_id))) ?? [];
-  const signal: CustomerSignal = {
-    id: randomId(),
+  const { signal } = await upsertSignal(input);
+  return signal;
+}
+
+export async function upsertSignal(input: AppendInput): Promise<AppendResult> {
+  const list =
+    (await kvGet<CustomerSignal[]>(keyFor(input.workspace_id))) ?? [];
+  const now = new Date().toISOString();
+  const id = input.signal_id ?? randomId();
+  const existing = input.signal_id
+    ? list.find((s) => s.id === id) ?? null
+    : null;
+  const merged: CustomerSignal = {
+    id,
     workspace_id: input.workspace_id,
     kind: input.kind,
     text: input.text,
     source: input.source,
     created_by: input.created_by,
-    created_at: input.created_at ?? new Date().toISOString(),
+    // Preserve original created_at on update; use new one on create.
+    created_at: existing?.created_at ?? input.created_at ?? now,
+    event_at: input.event_at,
     expires_at: input.expires_at,
     metadata: input.metadata,
   };
-  // Prepend so callers see newest-first; cap the list size.
-  const next = [signal, ...list].slice(0, MAX_PER_WORKSPACE);
+  const without = existing ? list.filter((s) => s.id !== id) : list;
+  const next = trim([merged, ...without]);
   await kvSet(keyFor(input.workspace_id), next);
-  return signal;
+  return { signal: merged, action: existing ? "updated" : "created" };
+}
+
+/**
+ * Apply a batch of signals to a single workspace's KV row. Cuts down on
+ * KV round-trips when a single POST carries many signals against the
+ * same customer — one read-modify-write per workspace instead of one
+ * per signal.
+ */
+export async function upsertSignalsForWorkspace(
+  workspaceId: string,
+  inputs: AppendInput[]
+): Promise<AppendResult[]> {
+  if (inputs.length === 0) return [];
+  const list = (await kvGet<CustomerSignal[]>(keyFor(workspaceId))) ?? [];
+  const byId = new Map(list.map((s) => [s.id, s]));
+  const results: AppendResult[] = [];
+  const now = new Date().toISOString();
+  for (const input of inputs) {
+    const id = input.signal_id ?? randomId();
+    const existing = input.signal_id ? byId.get(id) ?? null : null;
+    const merged: CustomerSignal = {
+      id,
+      workspace_id: workspaceId,
+      kind: input.kind,
+      text: input.text,
+      source: input.source,
+      created_by: input.created_by,
+      created_at: existing?.created_at ?? input.created_at ?? now,
+      event_at: input.event_at,
+      expires_at: input.expires_at,
+      metadata: input.metadata,
+    };
+    byId.set(id, merged);
+    results.push({ signal: merged, action: existing ? "updated" : "created" });
+  }
+  const next = trim([...byId.values()]);
+  await kvSet(keyFor(workspaceId), next);
+  return results;
 }
 
 export async function deleteSignal(

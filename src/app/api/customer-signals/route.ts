@@ -4,9 +4,12 @@ import {
   appendSignal,
   deleteSignal,
   listSignals,
-  type SignalKind,
+  upsertSignalsForWorkspace,
+  VALID_SIGNAL_KINDS,
   type AppendInput,
+  type SignalKind,
 } from "@/lib/data/customer-signals";
+import { setRunState } from "@/lib/data/customer-signals-state";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 30;
@@ -17,37 +20,39 @@ export const maxDuration = 30;
  *   • Interactive: the request carries a valid NextAuth session cookie
  *     (logged-in CSM). `created_by` defaults to their email.
  *   • Programmatic: the request carries `Authorization: Bearer <key>`
- *     matching SIGNAL_API_KEY in the env. Intended for the Claude
- *     skill (see ~/.claude/skills/csm-dash-signal/). `created_by` must
- *     be supplied by the caller in this mode.
+ *     matching SIGNAL_API_KEY (or CUSTOMER_SIGNALS_API_TOKEN) in env.
+ *     Intended for the Claude skill (see ~/.claude/skills/csm-dash-signal/).
  *
- * Both paths read/write the same KV-backed array per workspace.
+ * Two POST shapes are supported:
+ *
+ *   • Batch (preferred, skill v1.0):
+ *       { run_metadata, signals: [...] }
+ *       → 207 Multi-Status with per-signal accept/reject + the
+ *       persisted run state echoed back.
+ *
+ *   • Single signal (legacy):
+ *       { workspace_id, kind, text, ... }
+ *       → 201 with the created CustomerSignal.
+ *       Kept so the v1 skill scaffold + ad-hoc curl scripts don't break.
  */
 
-const VALID_KINDS: SignalKind[] = [
-  "note",
-  "risk_signal",
-  "win",
-  "context",
-  "action_item",
-  "meeting",
-];
+const VALID_KINDS_SET = new Set<SignalKind>(VALID_SIGNAL_KINDS);
 
 async function authorize(req: Request): Promise<
   | { ok: true; mode: "session"; email: string | null }
   | { ok: true; mode: "skill" }
   | { ok: false; status: number; message: string }
 > {
-  // Skill path: Bearer token in Authorization header
   const auth_header = req.headers.get("authorization");
   if (auth_header?.startsWith("Bearer ")) {
-    const expected = process.env.SIGNAL_API_KEY;
+    const expected =
+      process.env.SIGNAL_API_KEY ?? process.env.CUSTOMER_SIGNALS_API_TOKEN;
     if (!expected) {
       return {
         ok: false,
         status: 503,
         message:
-          "SIGNAL_API_KEY env var is not configured on the server — bearer auth disabled.",
+          "SIGNAL_API_KEY (or CUSTOMER_SIGNALS_API_TOKEN) env var is not configured on the server — bearer auth disabled.",
       };
     }
     if (auth_header.slice(7).trim() !== expected) {
@@ -56,7 +61,6 @@ async function authorize(req: Request): Promise<
     return { ok: true, mode: "skill" };
   }
 
-  // Interactive path: NextAuth session
   const session = await auth();
   if (!session?.user?.email) {
     return {
@@ -67,6 +71,203 @@ async function authorize(req: Request): Promise<
     };
   }
   return { ok: true, mode: "session", email: session.user.email };
+}
+
+interface RunMetadata {
+  run_id: string;
+  csm_email: string;
+  csm_name?: string;
+  skill_version?: string;
+  lookback_start?: string;
+  lookback_end?: string;
+  active_customers?: number;
+  total_book_size?: number;
+  started_at?: string;
+  completed_at: string;
+}
+
+interface BatchSignalInput extends Omit<AppendInput, "kind"> {
+  signal_id: string;
+  kind: string;
+}
+
+interface BatchBody {
+  run_metadata: RunMetadata;
+  signals: BatchSignalInput[];
+}
+
+interface BatchResult {
+  signal_id: string;
+  status: "accepted" | "rejected";
+  action?: "created" | "updated";
+  error?: string;
+}
+
+function isBatchShape(body: unknown): body is BatchBody {
+  return (
+    !!body &&
+    typeof body === "object" &&
+    Array.isArray((body as BatchBody).signals)
+  );
+}
+
+function validateRunMetadata(meta: unknown): RunMetadata | string {
+  if (!meta || typeof meta !== "object") return "run_metadata is required";
+  const m = meta as Partial<RunMetadata>;
+  if (typeof m.run_id !== "string" || !m.run_id) {
+    return "run_metadata.run_id is required";
+  }
+  if (typeof m.csm_email !== "string" || !m.csm_email) {
+    return "run_metadata.csm_email is required";
+  }
+  if (typeof m.completed_at !== "string" || !m.completed_at) {
+    return "run_metadata.completed_at is required";
+  }
+  return m as RunMetadata;
+}
+
+/**
+ * Per-signal sanity check. Returns null when the signal is valid, or a
+ * human-readable error otherwise. Doesn't mutate the input — the caller
+ * passes valid inputs straight into upsertSignalsForWorkspace.
+ */
+function validateSignal(s: unknown): string | null {
+  if (!s || typeof s !== "object") return "signal must be an object";
+  const sig = s as Partial<BatchSignalInput>;
+  if (typeof sig.signal_id !== "string" || !sig.signal_id) {
+    return "signal_id is required";
+  }
+  if (typeof sig.workspace_id !== "string" || !sig.workspace_id) {
+    return "workspace_id is required";
+  }
+  if (typeof sig.kind !== "string" || !VALID_KINDS_SET.has(sig.kind as SignalKind)) {
+    return `kind must be one of: ${VALID_SIGNAL_KINDS.join(", ")}`;
+  }
+  if (typeof sig.text !== "string" || !sig.text.trim()) {
+    return "text is required";
+  }
+  if (sig.text.length > 5000) return "text exceeds 5000 characters";
+  if (typeof sig.event_at !== "string" || !sig.event_at) {
+    return "event_at is required";
+  }
+  return null;
+}
+
+async function handleBatch(
+  body: BatchBody,
+  defaults: { source: string; created_by: string | null }
+) {
+  const metaCheck = validateRunMetadata(body.run_metadata);
+  if (typeof metaCheck === "string") {
+    return NextResponse.json({ error: metaCheck }, { status: 400 });
+  }
+  const meta = metaCheck;
+
+  // Validate every signal up front so the response can include reject
+  // entries even if zero signals end up persisted.
+  const results: BatchResult[] = [];
+  const valid: BatchSignalInput[] = [];
+  for (const s of body.signals) {
+    const err = validateSignal(s);
+    if (err) {
+      results.push({
+        signal_id:
+          typeof (s as { signal_id?: string }).signal_id === "string"
+            ? (s as { signal_id: string }).signal_id
+            : "<missing>",
+        status: "rejected",
+        error: err,
+      });
+      continue;
+    }
+    valid.push(s);
+  }
+
+  // Group by workspace so we do one KV read-modify-write per customer
+  // rather than one per signal. Order within a group is preserved so
+  // last-write-wins behaves intuitively for duplicate signal_ids in
+  // the same batch.
+  const byWorkspace = new Map<string, BatchSignalInput[]>();
+  for (const sig of valid) {
+    const arr = byWorkspace.get(sig.workspace_id) ?? [];
+    arr.push(sig);
+    byWorkspace.set(sig.workspace_id, arr);
+  }
+
+  for (const [workspaceId, group] of byWorkspace) {
+    const inputs: AppendInput[] = group.map((s) => ({
+      signal_id: s.signal_id,
+      workspace_id: workspaceId,
+      kind: s.kind as SignalKind,
+      text: s.text!.trim(),
+      source: s.source ?? defaults.source,
+      created_by: s.created_by ?? defaults.created_by ?? "skill",
+      created_at: s.created_at,
+      event_at: s.event_at,
+      expires_at: s.expires_at,
+      metadata: s.metadata,
+    }));
+    try {
+      const groupResults = await upsertSignalsForWorkspace(workspaceId, inputs);
+      groupResults.forEach((r, i) => {
+        results.push({
+          signal_id: group[i].signal_id,
+          status: "accepted",
+          action: r.action,
+        });
+      });
+    } catch (e) {
+      // Hard failure on a whole workspace write — mark every signal in
+      // that group as rejected. Continue with other workspaces.
+      const message = e instanceof Error ? e.message : "kv write failed";
+      for (const sig of group) {
+        results.push({
+          signal_id: sig.signal_id,
+          status: "rejected",
+          error: message,
+        });
+      }
+    }
+  }
+
+  const accepted = results.filter((r) => r.status === "accepted").length;
+  const rejected = results.length - accepted;
+
+  // Persist run state only if at least one signal landed. A 0-accepted
+  // run is treated like a no-op so the next run still picks up the
+  // original lookback start.
+  let lastSuccessfulRun: string | null = null;
+  if (accepted > 0) {
+    try {
+      await setRunState({
+        csm_email: meta.csm_email,
+        last_successful_run: meta.completed_at,
+        last_run_id: meta.run_id,
+      });
+      lastSuccessfulRun = meta.completed_at;
+    } catch (e) {
+      console.error(
+        "[customer-signals] run state persist failed:",
+        e instanceof Error ? e.message : e
+      );
+    }
+  }
+
+  return NextResponse.json(
+    {
+      run_id: meta.run_id,
+      accepted,
+      rejected,
+      results,
+      state: lastSuccessfulRun
+        ? {
+            csm_email: meta.csm_email,
+            last_successful_run: lastSuccessfulRun,
+          }
+        : null,
+    },
+    { status: 207 }
+  );
 }
 
 export async function GET(req: Request) {
@@ -96,9 +297,9 @@ export async function POST(req: Request) {
   const a = await authorize(req);
   if (!a.ok) return NextResponse.json({ error: a.message }, { status: a.status });
 
-  let body: Partial<AppendInput>;
+  let body: unknown;
   try {
-    body = (await req.json()) as Partial<AppendInput>;
+    body = await req.json();
   } catch {
     return NextResponse.json(
       { error: "Body must be valid JSON" },
@@ -106,47 +307,62 @@ export async function POST(req: Request) {
     );
   }
 
-  if (!body.workspace_id || typeof body.workspace_id !== "string") {
+  const defaults = {
+    source: a.mode === "skill" ? "claude-skill" : "dashboard",
+    created_by:
+      a.mode === "session" ? a.email : null /* batch caller can override */,
+  };
+
+  // Batch shape: { run_metadata, signals[] }
+  if (isBatchShape(body)) {
+    return handleBatch(body, defaults);
+  }
+
+  // Legacy single-signal shape — kept for the v1 skill + curl scripts.
+  // Same validation as before this rewrite.
+  const single = body as Partial<AppendInput> & { kind?: string };
+  if (!single.workspace_id || typeof single.workspace_id !== "string") {
     return NextResponse.json(
       { error: "workspace_id is required" },
       { status: 400 }
     );
   }
-  if (!body.kind || !VALID_KINDS.includes(body.kind)) {
+  if (!single.kind || !VALID_KINDS_SET.has(single.kind as SignalKind)) {
     return NextResponse.json(
-      {
-        error: `kind must be one of: ${VALID_KINDS.join(", ")}`,
-      },
+      { error: `kind must be one of: ${VALID_SIGNAL_KINDS.join(", ")}` },
       { status: 400 }
     );
   }
-  if (!body.text || typeof body.text !== "string" || body.text.trim() === "") {
+  if (
+    !single.text ||
+    typeof single.text !== "string" ||
+    single.text.trim() === ""
+  ) {
     return NextResponse.json(
       { error: "text is required and must be non-empty" },
       { status: 400 }
     );
   }
-  if (body.text.length > 5000) {
+  if (single.text.length > 5000) {
     return NextResponse.json(
       { error: "text exceeds 5000 characters" },
       { status: 400 }
     );
   }
 
-  // Stamp created_by from the session when no explicit value supplied
-  const createdBy =
-    body.created_by ?? (a.mode === "session" ? a.email : "skill");
-
   try {
     const signal = await appendSignal({
-      workspace_id: body.workspace_id,
-      kind: body.kind,
-      text: body.text.trim(),
-      source: body.source ?? (a.mode === "skill" ? "claude-skill" : "dashboard"),
-      created_by: createdBy ?? undefined,
-      created_at: body.created_at,
-      expires_at: body.expires_at,
-      metadata: body.metadata,
+      signal_id: single.signal_id,
+      workspace_id: single.workspace_id,
+      kind: single.kind as SignalKind,
+      text: single.text.trim(),
+      source: single.source ?? defaults.source,
+      created_by:
+        single.created_by ?? defaults.created_by ?? "skill",
+      created_at: single.created_at,
+      event_at: single.event_at,
+      expires_at: single.expires_at,
+      metadata: single.metadata,
     });
     return NextResponse.json(signal, { status: 201 });
   } catch (e) {
