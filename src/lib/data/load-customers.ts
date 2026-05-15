@@ -3,6 +3,7 @@ import type { Customer, DataSource, Segment } from "../types";
 import { loadCustomersFromSnapshot, snapshotMetadata } from "./snapshot-loader";
 import { metabaseRowToCustomer } from "./metabase-mapper";
 import { applyOverride, loadOverrides } from "./customer-overrides";
+import { TEST_CUSTOMER } from "./test-customer";
 
 export function getDataSource(): DataSource {
   const raw = (process.env.DATA_SOURCE ?? "").toLowerCase().trim();
@@ -47,7 +48,11 @@ async function loadRawCustomers(): Promise<Customer[]> {
 export async function loadCustomers(): Promise<Customer[]> {
   const raw = await loadRawCustomers();
   const overrides = await loadOverrides();
-  return raw.map((c) => applyOverride(c, overrides));
+  // Append the synthetic test workspace after overrides — it's not in the
+  // Metabase snapshot, so applyOverride() would no-op on it anyway, and
+  // keeping it outside the override loop guarantees its placeholder
+  // values can't be accidentally mutated.
+  return [...raw.map((c) => applyOverride(c, overrides)), TEST_CUSTOMER];
 }
 
 /** Bust the loadCustomers raw cache — only useful for snapshot rotation. */
