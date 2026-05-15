@@ -1,10 +1,12 @@
 import { notFound } from "next/navigation";
 import { loadCustomers } from "@/lib/data/load-customers";
 import { lastContacted } from "@/lib/customer-helpers";
+import { listSignals } from "@/lib/data/customer-signals";
 import { fmtCurrency, fmtDate, fmtNumber, fmtPct } from "@/components/format";
 import { RiskLevelChip } from "@/components/risk-level-chip";
 import { AccountOutreach } from "@/components/account-outreach";
 import { HubSpotContactsSection } from "@/components/hubspot-contacts-section";
+import { CustomerSignalsSection } from "@/components/customer-signals-section";
 
 export const dynamic = "force-dynamic";
 
@@ -23,6 +25,11 @@ export default async function AccountPage({
       x.workspace_name === decoded
   );
   if (!c) return notFound();
+
+  // Fetch the signals stream (notes, touchpoints, risk signals, etc.)
+  // posted via /api/customer-signals. Empty array when nothing's been
+  // posted yet — the section renders a friendly empty state.
+  const signals = c.workspace_id ? await listSignals(c.workspace_id) : [];
 
   const utilPct =
     c.percent_of_max_subs != null
@@ -127,6 +134,10 @@ export default async function AccountPage({
             value={c.completed_t4_recommendations ? "✓" : "—"}
           />
         </Section>
+      </div>
+
+      <div className="mb-6">
+        <CustomerSignalsSection signals={signals} />
       </div>
 
       <HubSpotContactsSection contacts={c.hubspot_contacts} />
