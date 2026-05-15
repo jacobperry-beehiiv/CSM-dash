@@ -57,10 +57,30 @@ async function ApproachingTab() {
   }
 }
 
-async function PastDueTab({ csms }: { csms: string[] }) {
+async function PastDueTab({
+  csms,
+  csm,
+}: {
+  csms: string[];
+  csm: string | null;
+}) {
   try {
-    const rows = await loadPastDue();
-    return <PastDuePanel rows={rows} csms={csms} />;
+    const allRows = await loadPastDue();
+    // Server-side CSM filter so a URL change (?csm=Foo) forces a single
+    // consistent re-render with the new rows prop. Doing this client-side
+    // off useSearchParams left a window where the headline count
+    // updated but the bucketed table body still rendered the previous
+    // list — visible as 1-account-but-8-rows artefacting in screenshots.
+    const rows = csm
+      ? allRows.filter((r) => r.customer_success_manager === csm)
+      : allRows;
+    return (
+      <PastDuePanel
+        rows={rows}
+        csms={csms}
+        totalSourceRows={allRows.length}
+      />
+    );
   } catch (e) {
     return (
       <div className="bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/30 rounded-lg p-4 text-sm text-red-800 dark:text-red-300">
@@ -117,7 +137,7 @@ export default async function AmPage({
             </div>
           }
         >
-          <PastDueTab csms={csms} />
+          <PastDueTab csms={csms} csm={csm} />
         </Suspense>
       );
     } else {

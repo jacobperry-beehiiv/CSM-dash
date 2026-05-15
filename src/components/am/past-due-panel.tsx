@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useSearchParams } from "next/navigation";
 import type { PastDueRow } from "@/lib/engines/am-cohorts";
 import { fmtCurrency, fmtDate } from "../format";
 import {
@@ -15,8 +14,14 @@ import { CsmSelector } from "../csm-selector";
 import { useUrlSearch } from "@/lib/hooks/use-url-search";
 
 interface Props {
+  /** Already CSM-filtered server-side (per `?csm=…`). The client still
+   *  applies search + plan-tier filters on top of this list. */
   rows: PastDueRow[];
+  /** All CSMs in the book so the dropdown can render its options. */
   csms: string[];
+  /** Total count from q24620 BEFORE the server applied the CSM filter,
+   *  used for the "Showing X of Y" diagnostic line. */
+  totalSourceRows: number;
 }
 
 type PlanTier = "all" | "enterprise" | "non-enterprise";
@@ -68,19 +73,20 @@ function isEnterprisePlan(p: PastDueRow): boolean {
   return /enterprise|custom/i.test(p.price_name ?? "");
 }
 
-export function PastDuePanel({ rows, csms }: Props) {
+export function PastDuePanel({ rows, csms, totalSourceRows }: Props) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [settings, setSettings] = useState<SettingsShape | null>(null);
   const [composeOpen, setComposeOpen] = useState(false);
 
-  // Filter state — search and plan-tier are client-side over `rows`;
-  // CSM piggybacks on the shared `?csm=` URL param that CsmSelector
-  // already writes, so it stays consistent with the rest of the
-  // dashboard.
+  // Filter state. CSM filtering is applied server-side (see /am/page.tsx
+  // PastDueTab), so `rows` arrives already narrowed when ?csm= is in
+  // the URL — that avoids a stale-render artefact where the client-side
+  // useSearchParams read raced against router.refresh() and left the
+  // bucketed table rendering pre-filter rows while the headline counts
+  // already reflected the filter. Search + plan-tier still filter
+  // client-side because they're cheap and don't require a server hop.
   const [search, setSearch] = useUrlSearch("q");
   const [planTier, setPlanTier] = useState<PlanTier>("all");
-  const searchParams = useSearchParams();
-  const csmFilter = searchParams.get("csm") ?? "";
 
   useEffect(() => {
     fetch("/api/settings")
@@ -89,11 +95,11 @@ export function PastDuePanel({ rows, csms }: Props) {
       .catch(() => {});
   }, []);
 
-  // Apply filters to the raw rows BEFORE bucketing so headline counts
-  // and the rendered list always agree.
+  // Apply client-side filters to the (already-CSM-filtered) rows
+  // BEFORE bucketing so headline counts and the rendered list always
+  // agree.
   const filteredRows = useMemo(() => {
     return rows.filter((r) => {
-      if (csmFilter && r.customer_success_manager !== csmFilter) return false;
       if (planTier === "enterprise" && !isEnterprisePlan(r)) return false;
       if (planTier === "non-enterprise" && isEnterprisePlan(r)) return false;
       if (search) {
@@ -111,7 +117,7 @@ export function PastDuePanel({ rows, csms }: Props) {
       }
       return true;
     });
-  }, [rows, csmFilter, planTier, search]);
+  }, [rows, planTier, search]);
 
   const maxArr = useMemo(
     () => filteredRows.reduce((m, r) => Math.max(m, r.arr_dollars), 0),
@@ -168,10 +174,12 @@ export function PastDuePanel({ rows, csms }: Props) {
     });
   }
 
-  const totalSourceRows = rows.length;
+  // `rows.length` here is the post-server-CSM-filter count; the prop
+  // `totalSourceRows` carries the pre-filter total so we can show
+  // "Showing 1 of 229 past-due accounts" honestly.
   const filteredCount = filteredRows.length;
   const filtersActive =
-    Boolean(search) || planTier !== "all" || Boolean(csmFilter);
+    Boolean(search) || planTier !== "all" || rows.length !== totalSourceRows;
 
   return (
     <>
