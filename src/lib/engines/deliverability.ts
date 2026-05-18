@@ -323,6 +323,81 @@ const runCache = new Map<string, CacheEntry>();
 const RUN_CACHE_TTL_MS = 10 * 60 * 1000;
 
 /**
+ * Per-target-date spam cache. Q4 against sendgrid_v1 is the slow
+ * outlier on the deliverability render path — even chunked it can
+ * take 10–60s depending on warehouse load. Without this cache every
+ * page load re-fires the query; with it, every load after the first
+ * within a 10-min window hits in memory.
+ */
+const spamCache = new Map<
+  string,
+  { expires: number; pending: Promise<Q4Row[]> }
+>();
+
+/** Hard cap on how long we'll wait for the spam overlay before
+ *  rendering the page without it. The dashboard is more useful
+ *  without spam columns than it is locked behind a stuck query. */
+const SPAM_TIMEOUT_MS = 4000;
+
+/** Promise wrapper that resolves to `fallback` if `promise` doesn't
+ *  settle within `ms`. The underlying request keeps running (no
+ *  AbortSignal plumbed through Metabase yet) — we just stop waiting
+ *  for it on the request thread. */
+function withTimeout<T>(
+  promise: Promise<T>,
+  ms: number,
+  fallback: T,
+  label: string
+): Promise<T> {
+  return new Promise<T>((resolve) => {
+    const timer = setTimeout(() => {
+      console.error(
+        `[deliverability] ${label} timed out after ${ms}ms — rendering without it`
+      );
+      resolve(fallback);
+    }, ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err) => {
+        clearTimeout(timer);
+        console.error(
+          `[deliverability] ${label} errored:`,
+          err instanceof Error ? err.message : err
+        );
+        resolve(fallback);
+      }
+    );
+  });
+}
+
+/**
+ * Fetch spam reports for one target date with caching + timeout. The
+ * first hit per (date, isolate) within the cache window fires the
+ * ClickHouse query (time-bounded); every later hit returns the same
+ * promise.
+ */
+function spamForDate(
+  postIds: string[],
+  targetDate: string
+): Promise<Q4Row[]> {
+  if (postIds.length === 0) return Promise.resolve([]);
+  const now = Date.now();
+  const cached = spamCache.get(targetDate);
+  if (cached && cached.expires > now) return cached.pending;
+  const pending = withTimeout(
+    fetchSpam(postIds),
+    SPAM_TIMEOUT_MS,
+    [],
+    `spam for ${targetDate}`
+  );
+  spamCache.set(targetDate, { expires: now + RUN_CACHE_TTL_MS, pending });
+  return pending;
+}
+
+/**
  * Get the joined post-metrics rows for the lookback window. Tries the
  * snapshot file written by sync.ts first; falls back to a live
  * ClickHouse fetch only if the file is missing (local dev before
@@ -368,29 +443,28 @@ export async function runDeliverabilityCheck(
   // Overlay live spam reports. The snapshot deliberately skips spam
   // because the 15-day sendgrid_v1 query times out (see
   // fetchDeliverabilityPosts comment); for the target-date subset
-  // (usually 50–200 post IDs) the same query runs in 1–3s.
-  try {
-    const spam = await fetchSpam(targetPosts.map((p) => p.post_id));
-    if (spam.length > 0) {
-      const spamById = new Map(
-        spam.map((s) => [String(s.sendable_id), Number(s.spam_reports)])
-      );
-      targetPosts = targetPosts.map((p) => {
-        const reports = spamById.get(p.post_id);
-        if (!reports) return p;
-        const denom = p.delivered > 0 ? p.delivered : 0;
-        return {
-          ...p,
-          spam_reports: reports,
-          spam_rate: denom > 0 ? reports / denom : 0,
-        };
-      });
-    }
-  } catch (e) {
-    console.error(
-      "[deliverability] live spam overlay failed (continuing without):",
-      e instanceof Error ? e.message : e
+  // (usually 50–200 post IDs) the same query SHOULD run in seconds,
+  // but ClickHouse warmth + index health vary — so we cap the wait
+  // at SPAM_TIMEOUT_MS and render without it on timeout. Cached
+  // per-target-date so subsequent loads within 10min don't re-fire.
+  const spam = await spamForDate(
+    targetPosts.map((p) => p.post_id),
+    targetDate
+  );
+  if (spam.length > 0) {
+    const spamById = new Map(
+      spam.map((s) => [String(s.sendable_id), Number(s.spam_reports)])
     );
+    targetPosts = targetPosts.map((p) => {
+      const reports = spamById.get(p.post_id);
+      if (!reports) return p;
+      const denom = p.delivered > 0 ? p.delivered : 0;
+      return {
+        ...p,
+        spam_reports: reports,
+        spam_rate: denom > 0 ? reports / denom : 0,
+      };
+    });
   }
 
   // Thresholds applied at request time (not at sync time) so
