@@ -159,7 +159,31 @@ async function fetchUnsubs(postIds: string[]): Promise<Q3Row[]> {
   });
 }
 
-async function fetchSpam(postIds: string[]): Promise<Q4Row[]> {
+async function fetchSpam(
+  postIds: string[],
+  publicationIds: string[]
+): Promise<Q4Row[]> {
+  // sendgrid_v1 is huge — billions of rows. Two index conditions are
+  // mandatory for the query to complete in seconds rather than
+  // minute(s):
+  //
+  //   1. `timestamp` filter → partition prune. The table is
+  //      partitioned by toYYYYMM(timestamp); without this filter
+  //      every partition gets scanned. 21 days is slightly larger
+  //      than LOOKBACK_DAYS to absorb timezone + lag without dropping
+  //      legitimate spam events.
+  //   2. `publication_id` filter → sort-key prefix seek. The sorting
+  //      key starts with (publication_id, sendable_type, message_type,
+  //      sendable_id) — filtering all four lets ClickHouse seek
+  //      directly to our rows. Without publication_id it scans every
+  //      publication's data in the (now pruned) partitions.
+  //
+  // Probed timings on a 50-id batch:
+  //   no filters:                  60s timeout
+  //   timestamp only:              156s
+  //   timestamp + publication_id:  1.2s
+  if (publicationIds.length === 0) return [];
+  const pubInClause = toInClause(publicationIds);
   return runChunked<Q4Row>(postIds, (chunk) => {
     const inClause = toInClause(chunk);
     return `
@@ -167,7 +191,9 @@ async function fetchSpam(postIds: string[]): Promise<Q4Row[]> {
         toString(sendable_id) AS sendable_id,
         countDistinct(subscriber_id) AS spam_reports
       FROM default.sendgrid_v1
-      WHERE sendable_type = 'Post'
+      WHERE timestamp >= now() - INTERVAL 21 DAY
+        AND publication_id IN (${pubInClause})
+        AND sendable_type = 'Post'
         AND message_type = 'campaign'
         AND event IN ('spamreport', 'fbl_spam', 'spam')
         AND sendable_id IN (${inClause})
@@ -243,22 +269,36 @@ async function fetchCsmOwnership(): Promise<Map<string, string>> {
 }
 
 /**
+ * Default count of most-recent dates we pre-compute spam for at sync
+ * time. The dashboard's default view is "yesterday", so a 3-day
+ * window covers Mon-after-Fri-sync edge cases without forcing the
+ * full 15-day spam scan that consistently 60s-time-out'd.
+ */
+const SPAM_PRECOMPUTE_RECENT_DAYS = 3;
+
+/**
  * Pre-compute the joined post-metrics rows for the entire lookback
  * window. Used by scripts/sync.ts to write data/deliverability.enc.json
- * — the dashboard then reads from disk and applies thresholds + filters
- * at request time, so threshold tweaks take effect without a resync.
+ * — the dashboard then reads from disk and applies thresholds +
+ * filters at request time, so threshold tweaks take effect without
+ * a resync.
  *
- * Deliberately does NOT pre-compute spam reports. The sendgrid_v1
- * table queries 60s-time-out for 15-day-wide IN clauses even when
- * chunked; the spam column is fetched at runtime for just the
- * target-date subset of post IDs (small + fast).
- *
- * No CSM filter or target-date filter is applied here; the caller
- * narrows at read time.
+ * Spam handling: a 15-day-wide Q4 against sendgrid_v1 consistently
+ * 60s-time-out'd in early experiments (the table is too large to
+ * scan without a date filter that we can't safely add without
+ * confirming the column schema). Instead we pre-compute spam **per
+ * date** for the most-recent N dates only — each per-date query is
+ * a 50–200-id IN clause that runs in seconds. The returned snapshot
+ * carries:
+ *   • `posts` with spam_reports/spam_rate baked in for those dates
+ *   • `spam_dates` listing which dates have authoritative spam data
+ * The runtime engine reads `spam_dates` and skips its overlay path
+ * entirely when the target date is covered.
  */
 export async function fetchDeliverabilityPosts(
-  lookbackDays: number = LOOKBACK_DAYS
-): Promise<PostMetricsRow[]> {
+  lookbackDays: number = LOOKBACK_DAYS,
+  spamRecentDays: number = SPAM_PRECOMPUTE_RECENT_DAYS
+): Promise<{ posts: PostMetricsRow[]; spam_dates: string[] }> {
   const posts = await fetchPosts(lookbackDays);
   const postIds = posts.map((p) => p.post_id);
 
@@ -279,10 +319,61 @@ export async function fetchDeliverabilityPosts(
     safe(fetchUnsubs(postIds), "unsubs"),
   ]);
 
-  // Skip spam at sync time — see header comment. joinRows will leave
-  // spam_reports = 0 / spam_rate = 0 on every row, and the runtime
-  // path overlays live spam data for the target-date subset.
-  return joinRows(posts, metrics, unsubs, []);
+  // Initial join leaves spam_reports = 0 everywhere; we'll patch in
+  // fresh values per-date for the recent window below.
+  const joined = joinRows(posts, metrics, unsubs, []);
+
+  // Group post IDs by date so we can fire one spam query per date.
+  // Sorted descending so the most recent date is queried first —
+  // that's the one the dashboard renders by default, and the order
+  // matters if a later date times out and we abort the rest.
+  const idsByDate = new Map<string, string[]>();
+  for (const p of joined) {
+    const arr = idsByDate.get(p.sent_date) ?? [];
+    arr.push(p.post_id);
+    idsByDate.set(p.sent_date, arr);
+  }
+  const recentDates = [...idsByDate.keys()]
+    .sort()
+    .reverse()
+    .slice(0, spamRecentDays);
+
+  const spamDates: string[] = [];
+  for (const date of recentDates) {
+    const ids = idsByDate.get(date) ?? [];
+    if (ids.length === 0) continue;
+    // Publications that sent on this date — needed for the
+    // sort-prefix seek in fetchSpam (see comment there).
+    const pubIds = [
+      ...new Set(
+        joined.filter((p) => p.sent_date === date).map((p) => p.publication_id)
+      ),
+    ];
+    try {
+      const dateSpam = await fetchSpam(ids, pubIds);
+      const byId = new Map(
+        dateSpam.map((s) => [String(s.sendable_id), Number(s.spam_reports)])
+      );
+      // Patch spam_reports/spam_rate on the joined rows for this date.
+      for (const p of joined) {
+        if (p.sent_date !== date) continue;
+        const reports = byId.get(p.post_id) ?? 0;
+        p.spam_reports = reports;
+        p.spam_rate = p.delivered > 0 ? reports / p.delivered : 0;
+      }
+      spamDates.push(date);
+    } catch (e) {
+      // Per-date isolation: a fail on date X doesn't stop us from
+      // trying date Y. The runtime overlay path covers any dates we
+      // couldn't pre-compute.
+      console.error(
+        `[deliverability] pre-compute spam for ${date} failed (runtime overlay will retry):`,
+        e instanceof Error ? e.message : e
+      );
+    }
+  }
+
+  return { posts: joined, spam_dates: spamDates };
 }
 
 export interface DeliverabilityRunOptions {
@@ -317,6 +408,10 @@ interface CacheEntry {
   pending: Promise<{
     joinedPosts: PostMetricsRow[];
     csmByOrg: Map<string, string>;
+    /** Dates whose spam_reports column is authoritative in the
+     *  snapshot. The engine uses this to decide whether to skip
+     *  the runtime overlay for a given target date. */
+    spamDates: Set<string>;
   }>;
 }
 const runCache = new Map<string, CacheEntry>();
@@ -381,6 +476,7 @@ function withTimeout<T>(
  */
 function spamForDate(
   postIds: string[],
+  publicationIds: string[],
   targetDate: string
 ): Promise<Q4Row[]> {
   if (postIds.length === 0) return Promise.resolve([]);
@@ -388,7 +484,7 @@ function spamForDate(
   const cached = spamCache.get(targetDate);
   if (cached && cached.expires > now) return cached.pending;
   const pending = withTimeout(
-    fetchSpam(postIds),
+    fetchSpam(postIds, publicationIds),
     SPAM_TIMEOUT_MS,
     [],
     `spam for ${targetDate}`
@@ -398,17 +494,29 @@ function spamForDate(
 }
 
 /**
- * Get the joined post-metrics rows for the lookback window. Tries the
- * snapshot file written by sync.ts first; falls back to a live
- * ClickHouse fetch only if the file is missing (local dev before
- * sync has been run).
+ * Get the joined post-metrics rows for the lookback window plus the
+ * set of dates for which spam was pre-computed at sync time. Tries
+ * the snapshot file written by sync.ts first; falls back to a live
+ * fetch only if the file is missing (local dev before `npm run sync`
+ * has been run).
  */
-async function getJoinedPosts(lookback: number): Promise<PostMetricsRow[]> {
+async function getJoinedPosts(
+  lookback: number
+): Promise<{ posts: PostMetricsRow[]; spamDates: Set<string> }> {
   const snap = await readDeliverabilitySnapshot();
-  if (snap && Array.isArray(snap.posts)) return snap.posts;
+  if (snap && Array.isArray(snap.posts)) {
+    return {
+      posts: snap.posts,
+      // spam_dates was added with the "pre-compute spam at sync"
+      // change. Treat missing as "no pre-computed coverage" so the
+      // runtime overlay kicks in everywhere — safe default.
+      spamDates: new Set(snap.spam_dates ?? []),
+    };
+  }
   // No snapshot — fall back to a live fetch. Slow path, but keeps
   // local dev working before `npm run sync` has been run.
-  return fetchDeliverabilityPosts(lookback);
+  const result = await fetchDeliverabilityPosts(lookback);
+  return { posts: result.posts, spamDates: new Set(result.spam_dates) };
 }
 
 export async function runDeliverabilityCheck(
@@ -426,45 +534,52 @@ export async function runDeliverabilityCheck(
     entry = {
       expires: now + RUN_CACHE_TTL_MS,
       pending: (async () => {
-        const [joinedPosts, csmByOrg] = await Promise.all([
+        const [snap, csmByOrg] = await Promise.all([
           getJoinedPosts(lookback),
           fetchCsmOwnership(),
         ]);
-        return { joinedPosts, csmByOrg };
+        return {
+          joinedPosts: snap.posts,
+          csmByOrg,
+          spamDates: snap.spamDates,
+        };
       })(),
     };
     runCache.set(cacheKey, entry);
   }
 
-  const { joinedPosts, csmByOrg } = await entry.pending;
+  const { joinedPosts, csmByOrg, spamDates } = await entry.pending;
 
   let targetPosts = joinedPosts.filter((p) => p.sent_date === targetDate);
 
-  // Overlay live spam reports. The snapshot deliberately skips spam
-  // because the 15-day sendgrid_v1 query times out (see
-  // fetchDeliverabilityPosts comment); for the target-date subset
-  // (usually 50–200 post IDs) the same query SHOULD run in seconds,
-  // but ClickHouse warmth + index health vary — so we cap the wait
-  // at SPAM_TIMEOUT_MS and render without it on timeout. Cached
-  // per-target-date so subsequent loads within 10min don't re-fire.
-  const spam = await spamForDate(
-    targetPosts.map((p) => p.post_id),
-    targetDate
-  );
-  if (spam.length > 0) {
-    const spamById = new Map(
-      spam.map((s) => [String(s.sendable_id), Number(s.spam_reports)])
+  // Spam coverage decision: if the sync already pre-computed spam for
+  // this date, the joined-rows are authoritative — skip the runtime
+  // overlay entirely (no ClickHouse on the hot path). Only fall back
+  // to the live overlay when the target date is OUTSIDE the
+  // pre-computed window — a rare edge case (user picked a date >3d
+  // back) where we'd rather pay the wait than show zero spam.
+  if (!spamDates.has(targetDate) && targetPosts.length > 0) {
+    const pubIds = [...new Set(targetPosts.map((p) => p.publication_id))];
+    const spam = await spamForDate(
+      targetPosts.map((p) => p.post_id),
+      pubIds,
+      targetDate
     );
-    targetPosts = targetPosts.map((p) => {
-      const reports = spamById.get(p.post_id);
-      if (!reports) return p;
-      const denom = p.delivered > 0 ? p.delivered : 0;
-      return {
-        ...p,
-        spam_reports: reports,
-        spam_rate: denom > 0 ? reports / denom : 0,
-      };
-    });
+    if (spam.length > 0) {
+      const spamById = new Map(
+        spam.map((s) => [String(s.sendable_id), Number(s.spam_reports)])
+      );
+      targetPosts = targetPosts.map((p) => {
+        const reports = spamById.get(p.post_id);
+        if (!reports) return p;
+        const denom = p.delivered > 0 ? p.delivered : 0;
+        return {
+          ...p,
+          spam_reports: reports,
+          spam_rate: denom > 0 ? reports / denom : 0,
+        };
+      });
+    }
   }
 
   // Thresholds applied at request time (not at sync time) so

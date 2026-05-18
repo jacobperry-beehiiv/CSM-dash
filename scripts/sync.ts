@@ -237,21 +237,26 @@ async function main() {
     const started = Date.now();
     try {
       console.error(
-        `[sync] pulling deliverability (last ${DELIVERABILITY_LOOKBACK_DAYS}d, 4 ClickHouse queries)…`
+        `[sync] pulling deliverability (last ${DELIVERABILITY_LOOKBACK_DAYS}d posts + spam for recent dates)…`
       );
-      const posts = await fetchDeliverabilityPosts(DELIVERABILITY_LOOKBACK_DAYS);
+      const { posts, spam_dates } = await fetchDeliverabilityPosts(
+        DELIVERABILITY_LOOKBACK_DAYS
+      );
       const written = await writeDeliverabilitySnapshot(
         {
           generated_at: new Date().toISOString(),
           lookback_days: DELIVERABILITY_LOOKBACK_DAYS,
           row_count: posts.length,
           posts,
+          spam_dates,
         },
         { plaintext: usePlaintext }
       );
       const elapsed = ((Date.now() - started) / 1000).toFixed(1);
       console.error(
-        `[sync] wrote ${written} (${posts.length} posts, ${elapsed}s)`
+        `[sync] wrote ${written} (${posts.length} posts, spam dates: ${
+          spam_dates.length ? spam_dates.join(", ") : "none"
+        }, ${elapsed}s)`
       );
     } catch (e) {
       console.error(

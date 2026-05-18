@@ -30,6 +30,19 @@ export interface DeliverabilitySnapshotPayload {
   lookback_days: number;
   row_count: number;
   posts: PostMetricsRow[];
+  /**
+   * Dates (YYYY-MM-DD) where the spam-reports column on each row
+   * reflects a fresh Q4 query at sync time. The engine reads this to
+   * decide whether to skip the runtime spam-overlay for a given
+   * target_date — when the date is in this list, the snapshot
+   * already has authoritative spam counts and we can render without
+   * touching ClickHouse.
+   *
+   * Older dates (or dates the sync skipped/failed) aren't here; the
+   * runtime path falls back to a live overlay for those (with a hard
+   * timeout so the page can't hang).
+   */
+  spam_dates: string[];
 }
 
 async function resolvePath(): Promise<{
