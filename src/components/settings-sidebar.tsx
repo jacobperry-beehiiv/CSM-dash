@@ -40,6 +40,12 @@ const SECTIONS: Array<{ href: string; label: string; description: string }> = [
     description:
       "Personal Bearer tokens for the customer-signals endpoint + future integrations.",
   },
+  {
+    href: "/settings/mcp",
+    label: "MCP server",
+    description:
+      "Connect Claude Code or Claude Desktop to the dashboard.",
+  },
 ];
 
 export function SettingsSidebar() {
