@@ -25,6 +25,12 @@ export default auth((req) => {
   // to /login as HTML, breaking the JSON contract.
   if (pathname.startsWith("/api/customer-signals")) return;
 
+  // The MCP route is bearer-token-only by design (per-user API tokens
+  // minted at /settings/api-tokens). Same reason as customer-signals:
+  // a JSON-RPC client expects a JSON response, not a 307 redirect to
+  // an HTML login page.
+  if (pathname.startsWith("/api/mcp")) return;
+
   if (!req.auth) {
     const url = req.nextUrl.clone();
     url.pathname = "/login";
