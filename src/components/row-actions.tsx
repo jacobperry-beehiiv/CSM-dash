@@ -1,62 +1,28 @@
 "use client";
 
-import { useState } from "react";
 import type { Customer } from "@/lib/types";
-import { composeUrlForTemplate, masqueradeUrl } from "@/lib/links";
-import { suggestTemplates } from "@/lib/templates/templates";
-import { isVisibleToCsm, type StoredTemplate } from "@/lib/templates/types";
-import { getTierLadder } from "@/lib/tiers/client";
-import { useViewerEmail } from "@/lib/auth-client";
+import { hubspotCompanyUrl, masqueradeUrl } from "@/lib/links";
 
 interface Props {
   customer: Customer;
   onDraft: (c: Customer) => void;
 }
 
-let templateCachePromise: Promise<StoredTemplate[]> | null = null;
-function getTemplates(): Promise<StoredTemplate[]> {
-  if (!templateCachePromise) {
-    templateCachePromise = fetch("/api/templates").then((r) => {
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      return r.json() as Promise<StoredTemplate[]>;
-    });
-  }
-  return templateCachePromise;
-}
-
+/**
+ * Per-row action cluster shown on every customer-table-style row.
+ * Three slots — masquerade · HubSpot · Draft. The Draft button is the
+ * full-fledged template picker (OutreachModal); HubSpot is a quick
+ * jump to the company page when we have a `hubspot_company_id` from
+ * the sync-time enrichment. The "quick email" envelope that used to
+ * sit in the middle has been retired — Draft does the same thing
+ * with template control.
+ */
 export function RowActions({ customer, onDraft }: Props) {
-  const viewerEmail = useViewerEmail();
-  const [emailing, setEmailing] = useState(false);
   const masquerade = masqueradeUrl(customer.owner_email);
+  const hubspot = hubspotCompanyUrl(customer.hubspot_company_id);
 
   function stop(e: React.MouseEvent) {
     e.stopPropagation();
-  }
-
-  async function quickEmail() {
-    if (!customer.owner_email) return;
-    setEmailing(true);
-    try {
-      const [allTemplates, ladder] = await Promise.all([
-        getTemplates(),
-        getTierLadder().catch(() => []),
-      ]);
-      const templates = allTemplates.filter((t) =>
-        isVisibleToCsm(t, viewerEmail)
-      );
-      const suggestedIds = suggestTemplates(customer);
-      const tpl =
-        templates.find((t) => suggestedIds.includes(t.id as never)) ??
-        templates.find((t) => t.id === "general-checkin") ??
-        templates[0];
-      if (!tpl) return;
-      const url = composeUrlForTemplate(tpl, customer, ladder);
-      if (url) window.open(url, "_blank", "noopener,noreferrer");
-    } catch (e) {
-      console.error("Quick email failed:", e);
-    } finally {
-      setEmailing(false);
-    }
   }
 
   return (
@@ -73,16 +39,19 @@ export function RowActions({ customer, onDraft }: Props) {
           <span aria-hidden>👤</span>
         </a>
       ) : null}
-      {customer.owner_email ? (
-        <button
-          onClick={quickEmail}
-          disabled={emailing}
-          title={`Email ${customer.owner_email}`}
-          aria-label="Quick email"
-          className="px-2 py-1 text-xs border border-border-strong rounded-md hover:bg-canvas inline-flex items-center disabled:opacity-50"
+      {hubspot ? (
+        <a
+          href={hubspot}
+          target="_blank"
+          rel="noopener noreferrer"
+          title="Open company in HubSpot"
+          aria-label="HubSpot"
+          className="px-2 py-1 text-xs border border-border-strong rounded-md hover:bg-canvas inline-flex items-center font-semibold text-[#ff7a59]"
         >
-          <span aria-hidden>{emailing ? "…" : "✉️"}</span>
-        </button>
+          {/* HubSpot wordmark uses #ff7a59. Mono "h." reads as the
+              HubSpot icon at this size without needing an SVG dep. */}
+          <span aria-hidden>h.</span>
+        </a>
       ) : null}
       <button
         onClick={() => onDraft(customer)}

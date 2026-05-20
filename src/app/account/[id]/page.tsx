@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import { loadCustomers } from "@/lib/data/load-customers";
 import { lastContacted } from "@/lib/customer-helpers";
 import { listSignals } from "@/lib/data/customer-signals";
+import { hubspotCompanyUrl } from "@/lib/links";
 import { fmtCurrency, fmtDate, fmtNumber, fmtPct } from "@/components/format";
 import { RiskLevelChip } from "@/components/risk-level-chip";
 import { AccountOutreach } from "@/components/account-outreach";
@@ -41,13 +42,8 @@ export default async function AccountPage({
         : null;
 
   // HubSpot company-page deep link — set when the row has a
-  // hubspot_company_id from the sync-time enrichment. Portal id is the
-  // beehiiv workspace's HubSpot account, observed from real
-  // company-page URLs.
-  const HUBSPOT_PORTAL_ID = "21568530";
-  const hubspotUrl = c.hubspot_company_id
-    ? `https://app.hubspot.com/contacts/${HUBSPOT_PORTAL_ID}/record/0-2/${c.hubspot_company_id}`
-    : null;
+  // hubspot_company_id from the sync-time enrichment.
+  const hubspotUrl = hubspotCompanyUrl(c.hubspot_company_id);
 
   return (
     <>

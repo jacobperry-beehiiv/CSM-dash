@@ -26,6 +26,29 @@ export function masqueradeUrl(email: string | null | undefined): string | null {
 }
 
 /**
+ * HubSpot company-page URL. Returns null when we don't have the
+ * `hubspot_company_id` (e.g. the row didn't match during sync-time
+ * enrichment). Portal id is the beehiiv workspace's HubSpot account —
+ * overridable via NEXT_PUBLIC_HUBSPOT_PORTAL_ID if we ever stand up
+ * a second portal.
+ *
+ * `0-2` in the path is HubSpot's object-type id for companies (vs
+ * 0-1 contacts, 0-3 deals).
+ */
+const DEFAULT_HUBSPOT_PORTAL_ID = "21568530";
+
+export function hubspotCompanyUrl(
+  hubspotCompanyId: string | null | undefined
+): string | null {
+  if (!hubspotCompanyId) return null;
+  const portal =
+    process.env.NEXT_PUBLIC_HUBSPOT_PORTAL_ID ?? DEFAULT_HUBSPOT_PORTAL_ID;
+  return `https://app.hubspot.com/contacts/${portal}/record/0-2/${encodeURIComponent(
+    hubspotCompanyId
+  )}`;
+}
+
+/**
  * Returns a Metabase deep link for a specific publication / workspace.
  * Configurable via NEXT_PUBLIC_METABASE_PUB_URL_TEMPLATE — substitution
  * tokens supported: {workspace_id}, {workspace_name}, {publication_id}.
