@@ -26,6 +26,13 @@ export interface MergeContext {
    *  the first-name resolver — when sending to a group there's no single
    *  "first name" to greet, so it falls back to "there". Default 1. */
   recipient_count?: number;
+  /** When exactly one recipient is selected, the bulk-drafts modal passes
+   *  the recipient's email here so the first-name resolver can match
+   *  hubspot_contacts[].email and use THAT person's name — not whichever
+   *  HubSpot contact happens to be first in the array. Set to null when
+   *  no specific recipient is in scope (e.g. single-customer OutreachModal
+   *  with multiple checkboxes ticked). */
+  recipient_email?: string | null;
 }
 
 export interface MergeTag {
@@ -117,18 +124,40 @@ function bestHubspotFirstName(c: Customer): string | null {
  * Resolution order:
  *   1. "there" — when the draft is going to more than one recipient
  *      (a personal "Hi Eric," reads strangely on a group send).
- *   2. HubSpot enrichment — `hubspot_contacts[]` from the sync-time
- *      v4 associations + contacts batch read.
- *   3. property_main_contact — the legacy Metabase q10600 column.
- *      Often an email when no real contact has been set on the
- *      HubSpot company record.
- *   4. "there" — last resort.
+ *   2. **Per-recipient lookup** — when the caller passed a specific
+ *      `recipient_email`, find THAT contact in hubspot_contacts and
+ *      use their name. If we don't know who that email is, return
+ *      "there" rather than guessing a different HubSpot contact —
+ *      that was the speedtoscale.com bug where selecting Colton
+ *      gave "Hi Cait,".
+ *   3. **Best-guess HubSpot contact** — no specific recipient in
+ *      scope (single-customer modal with default behaviour). Pick
+ *      is_primary first, then the first contact with a real name.
+ *   4. **property_main_contact** — the legacy Metabase q10600
+ *      column. Often an email which `firstName()` detects and bails
+ *      from with "there".
+ *   5. "there" — last resort.
  */
 function firstNameForContext(
   c: Customer,
   ctx: MergeContext
 ): string {
   if ((ctx.recipient_count ?? 1) > 1) return "there";
+
+  if (ctx.recipient_email) {
+    const target = ctx.recipient_email.toLowerCase();
+    const matched = c.hubspot_contacts?.find(
+      (x) => x.email && x.email.toLowerCase() === target && x.name
+    );
+    if (matched?.name) {
+      const n = firstName(matched.name);
+      if (n !== "there") return n;
+    }
+    // We know who we're addressing but don't have their name —
+    // "there" beats picking the wrong person's name.
+    return "there";
+  }
+
   const fromHubspot = bestHubspotFirstName(c);
   if (fromHubspot) return fromHubspot;
   return firstName(c.property_main_contact);

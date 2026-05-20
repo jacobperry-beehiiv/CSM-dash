@@ -9,6 +9,20 @@ export interface BulkDraftRecipient {
   default: boolean;
 }
 
+export interface RerenderContext {
+  /** The email being addressed when exactly one recipient is checked.
+   *  When 0 or >1 are checked, this is null and the renderer falls
+   *  back to either "there" (>1) or the per-customer default (0). */
+  recipient_email: string | null;
+  recipient_count: number;
+}
+
+export interface RerenderResult {
+  subject: string;
+  body_text: string;
+  body_html?: string;
+}
+
 export interface BulkDraft {
   customer_label: string;
   /** Default recipient list (the customer's owner_email when present),
@@ -27,6 +41,15 @@ export interface BulkDraft {
    *  The modal lets the user check/uncheck each before opening tabs /
    *  creating Gmail drafts. */
   recipients: BulkDraftRecipient[];
+  /** Re-render subject + bodies when the user changes the recipient
+   *  selection inside the modal. Lets merge tags that depend on the
+   *  addressee (e.g. `{{customer.contact_first_name}}`) update live
+   *  so the body always matches who's actually being emailed.
+   *
+   *  Optional — when absent the modal keeps the originally-rendered
+   *  subject/body (current behaviour for callers that haven't
+   *  migrated yet). */
+  rerender?: (ctx: RerenderContext) => RerenderResult;
 }
 
 function buildGmailComposeUrl(
@@ -166,10 +189,54 @@ export function BulkDraftsModal({
     return emails.join(", ");
   }
 
+  /** Currently-selected recipient emails for a draft, in their
+   *  declared `recipients[]` order (so the "first" selected for
+   *  single-recipient detection is deterministic). */
+  function liveRecipientEmails(d: BulkDraft): string[] {
+    const sel = recipientSelection[d.compose_url];
+    if (!sel) return d.to ? [d.to] : [];
+    return d.recipients
+      .filter((r) => sel.has(r.email.toLowerCase()))
+      .map((r) => r.email);
+  }
+
+  /**
+   * Re-render the subject + bodies for a draft against the current
+   * recipient selection. Drives `{{customer.contact_first_name}}` (and
+   * any future per-recipient tokens) so the body always agrees with
+   * who's checked — that's the speedtoscale.com fix where the body
+   * said "Hi Cait," while Colton was selected.
+   *
+   * Drafts without a `rerender` closure (back-compat for callers that
+   * haven't migrated) keep their originally-baked subject + bodies.
+   */
+  function liveContent(d: BulkDraft): {
+    subject: string;
+    body_text: string;
+    body_html?: string;
+  } {
+    if (!d.rerender) {
+      return { subject: d.subject, body_text: d.body_text, body_html: d.body_html };
+    }
+    const emails = liveRecipientEmails(d);
+    const rerendered = d.rerender({
+      // Single-recipient signal so the resolver knows which contact to
+      // address. >1 → null, the resolver returns "there".
+      recipient_email: emails.length === 1 ? emails[0] : null,
+      recipient_count: emails.length || 1,
+    });
+    return {
+      subject: rerendered.subject,
+      body_text: rerendered.body_text,
+      body_html: rerendered.body_html ?? d.body_html,
+    };
+  }
+
   function liveComposeUrl(d: BulkDraft): string {
     const to = liveTo(d);
     if (!to) return d.compose_url;
-    return buildGmailComposeUrl(to, d.subject, d.body_text);
+    const { subject, body_text } = liveContent(d);
+    return buildGmailComposeUrl(to, subject, body_text);
   }
 
   function toggleRecipient(draftKey: string, email: string) {
@@ -195,11 +262,24 @@ export function BulkDraftsModal({
 
   /** Drafts the user actually wants to act on right now — at least one
    *  selected recipient. Used by every "send to all" path so unchecking
-   *  every recipient excludes the draft entirely. */
+   *  every recipient excludes the draft entirely. Subject + body are
+   *  resolved against the LIVE recipient selection so merge tags like
+   *  `{{customer.contact_first_name}}` follow whoever's currently
+   *  checked. */
   const actionableDrafts = useMemo(
     () =>
       drafts
-        .map((d) => ({ ...d, to: liveTo(d), compose_url: liveComposeUrl(d) }))
+        .map((d) => {
+          const live = liveContent(d);
+          return {
+            ...d,
+            to: liveTo(d),
+            subject: live.subject,
+            body_text: live.body_text,
+            body_html: live.body_html,
+            compose_url: liveComposeUrl(d),
+          };
+        })
         .filter((d) => d.to.length > 0),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [drafts, recipientSelection]
@@ -405,6 +485,12 @@ export function BulkDraftsModal({
             const sel = recipientSelection[draftKey] ?? new Set();
             const liveToStr = liveTo(d);
             const liveUrl = liveComposeUrl(d);
+            // Re-resolve subject + body against the CURRENT recipient
+            // selection so the visible preview always agrees with who's
+            // checked. Without this the row shows whatever was rendered
+            // at template-pick time, even after the user swaps
+            // recipients.
+            const liveContentForRow = liveContent(d);
             const isExpanded = expandedRecipients.has(draftKey);
             const bodyOpen = expandedBodies.has(draftKey);
             const hasContactsBeyondDefault = d.recipients.some((r) => !r.default);
@@ -434,7 +520,7 @@ export function BulkDraftsModal({
                     </div>
                     <div className="text-xs text-muted mt-1 flex items-center gap-1.5 min-w-0">
                       <span className="truncate flex-1 min-w-0">
-                        {d.subject}
+                        {liveContentForRow.subject}
                       </span>
                       <button
                         type="button"
@@ -450,7 +536,14 @@ export function BulkDraftsModal({
                     <button
                       onClick={() =>
                         copy(
-                          { ...d, to: liveToStr, compose_url: liveUrl },
+                          {
+                            ...d,
+                            to: liveToStr,
+                            compose_url: liveUrl,
+                            subject: liveContentForRow.subject,
+                            body_text: liveContentForRow.body_text,
+                            body_html: liveContentForRow.body_html,
+                          },
                           draftKey
                         )
                       }
@@ -512,13 +605,17 @@ export function BulkDraftsModal({
                 ) : null}
                 {bodyOpen ? (
                   /* Rendered HTML body the modal will create as a Gmail
-                     draft (or open via the compose URL). Falls back to
-                     the plain-text version when body_html is absent
-                     (legacy callers). The block is sandboxed visually
-                     with the same card chrome as the rest of the row so
-                     it can't blow out layout. */
+                     draft (or open via the compose URL). Reads from
+                     liveContentForRow so swapping the recipient (above)
+                     updates the body live — the speedtoscale.com bug
+                     where the preview kept saying "Hi Cait," after
+                     toggling to Colton. Falls back to the plain-text
+                     version when body_html is absent (legacy callers).
+                     The block is sandboxed visually with the same card
+                     chrome as the rest of the row so it can't blow
+                     out layout. */
                   <div className="mt-2 ml-1 border border-border rounded-md bg-canvas/40 p-3">
-                    {d.body_html ? (
+                    {liveContentForRow.body_html ? (
                       <div
                         className="prose prose-sm max-w-none text-sm text-fg"
                         // Body templates are authored by trusted admins
@@ -526,11 +623,13 @@ export function BulkDraftsModal({
                         // from our own snapshot. This is the same
                         // dangerouslySetInnerHTML path the single-customer
                         // OutreachModal uses.
-                        dangerouslySetInnerHTML={{ __html: d.body_html }}
+                        dangerouslySetInnerHTML={{
+                          __html: liveContentForRow.body_html,
+                        }}
                       />
                     ) : (
                       <pre className="whitespace-pre-wrap break-words text-sm text-fg font-sans">
-                        {d.body_text}
+                        {liveContentForRow.body_text}
                       </pre>
                     )}
                   </div>

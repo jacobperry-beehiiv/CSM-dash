@@ -109,6 +109,27 @@ export function buildBulkDrafts(input: BuildBulkDraftsInput): BulkDraft[] {
       });
     }
 
+    // Closure for live re-rendering when the modal user swaps the
+    // selected recipient. Captures customer + template + ctx so the
+    // modal doesn't need to know about merge-tag plumbing.
+    const rerender = (rctx: {
+      recipient_email: string | null;
+      recipient_count: number;
+    }) => {
+      const liveCtx = {
+        ...ctx,
+        recipient_email: rctx.recipient_email,
+        recipient_count: rctx.recipient_count,
+      };
+      const liveSubject = applyMergeTags(tpl.subject, c, liveCtx);
+      const liveHtml = applyMergeTags(tpl.body_html, c, liveCtx);
+      return {
+        subject: liveSubject,
+        body_html: liveHtml,
+        body_text: htmlToText(liveHtml),
+      };
+    };
+
     drafts.push({
       customer_label: c.company_name ?? c.workspace_name ?? ownerEmail,
       to: ownerEmail,
@@ -117,6 +138,7 @@ export function buildBulkDrafts(input: BuildBulkDraftsInput): BulkDraft[] {
       body_html,
       compose_url: composeUrl,
       recipients,
+      rerender,
     });
   }
   return drafts;
