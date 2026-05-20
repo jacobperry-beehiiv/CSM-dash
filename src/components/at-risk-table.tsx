@@ -15,7 +15,6 @@ import { suggestTemplates } from "@/lib/templates/templates";
 import { isVisibleToCsm, type StoredTemplate } from "@/lib/templates/types";
 import { useViewerEmail } from "@/lib/auth-client";
 import { getTierLadder } from "@/lib/tiers/client";
-import type { LastPostRow } from "@/lib/engines/last-post-batch";
 import type {
   AtRiskAccount,
   Customer,
@@ -155,32 +154,6 @@ export function AtRiskTable({
         .filter((k): k is string => Boolean(k)),
     [accounts]
   );
-
-  // Lazy-loaded "last published web post" per workspace. ClickHouse query
-  // runs once for all visible accounts on mount, then caches in-process.
-  const [lastPosts, setLastPosts] = useState<Record<string, LastPostRow>>({});
-  useEffect(() => {
-    // Use unfiltered set so the cache is populated for any account the
-    // user might filter in/out of view later.
-    const ids = data.accounts
-      .map((a) => a.customer.workspace_id)
-      .filter((x): x is string => Boolean(x));
-    if (ids.length === 0) return;
-    let cancelled = false;
-    fetch("/api/last-post-batch", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ organization_ids: ids }),
-    })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((j) => {
-        if (!cancelled && j) setLastPosts(j);
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, [data.accounts]);
 
   // Reset selection + expansion when the underlying account set changes
   // (CSM filter, segment switch). Otherwise stale workspace IDs linger.
@@ -456,7 +429,7 @@ export function AtRiskTable({
                 <th className="px-3 py-3 font-medium text-muted">Account</th>
                 <th className="px-3 py-3 font-medium text-muted text-right">ARR</th>
                 <th className="px-3 py-3 font-medium text-muted">Last send</th>
-                <th className="px-3 py-3 font-medium text-muted">Last web post</th>
+                <th className="px-3 py-3 font-medium text-muted">Flags</th>
                 <th className="px-3 py-3 font-medium text-muted">Last login</th>
                 <th className="px-3 py-3 font-medium text-muted text-right">% subs</th>
                 <th className="px-3 py-3 font-medium text-muted">Risk</th>
@@ -542,39 +515,31 @@ export function AtRiskTable({
                           <div className="text-xs text-muted">never</div>
                         )}
                       </td>
-                      <td className="px-3 py-3 text-muted">
-                        {(() => {
-                          const lp = c.workspace_id
-                            ? lastPosts[c.workspace_id]
-                            : undefined;
-                          if (!lp) {
-                            return (
-                              <span className="text-xs text-subtle italic">
-                                loading…
+                      <td className="px-3 py-3">
+                        {/* Compact badges per flag raised on this row. Sorted
+                            by the canonical FLAG_META order (most-common
+                            codes first) so the row reads consistently. Title
+                            attribute carries the full per-flag description. */}
+                        <div className="flex flex-wrap gap-1">
+                          {FLAG_META.filter((m) => flagCodes.has(m.code)).map(
+                            (m) => (
+                              <span
+                                key={m.code}
+                                title={`${m.code} — ${m.label}: ${m.description}`}
+                                className={`inline-flex items-center justify-center px-1.5 py-0.5 rounded text-[10px] font-semibold ${
+                                  FLAG_COLORS[m.code] ?? "bg-surface-2 text-fg"
+                                }`}
+                              >
+                                {m.code}
                               </span>
-                            );
-                          }
-                          if (!lp.last_post_at) {
-                            return (
-                              <span className="text-xs text-muted italic">
-                                never
-                              </span>
-                            );
-                          }
-                          const ago = daysAgo(lp.last_post_at);
-                          return (
-                            <>
-                              <div title={lp.last_post_title ?? undefined}>
-                                {fmtDate(lp.last_post_at)}
-                              </div>
-                              {ago != null ? (
-                                <div className="text-xs text-muted">
-                                  {ago}d ago
-                                </div>
-                              ) : null}
-                            </>
-                          );
-                        })()}
+                            )
+                          )}
+                          {a.flags.length === 0 ? (
+                            <span className="text-xs text-subtle italic">
+                              —
+                            </span>
+                          ) : null}
+                        </div>
                       </td>
                       <td className={`px-3 py-3 ${lastLoginCls}`}>
                         {c.last_log_in ? (

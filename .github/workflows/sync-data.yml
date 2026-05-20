@@ -49,6 +49,30 @@ jobs:
 
       - run: npm ci
 
+      # Hard-fail the workflow if any required secret is missing. Without
+      # this guard a missing HUBSPOT_ACCESS_TOKEN silently degrades the
+      # sync to "skip enrichment" mode and overwrites the previously
+      # enriched snapshot with one missing last_activity_at +
+      # hubspot_contacts — which is exactly what happened twice before
+      # we noticed.
+      - name: Verify required secrets are set
+        env:
+          METABASE_API_KEY: ${{ secrets.METABASE_API_KEY }}
+          SNAPSHOT_ENCRYPTION_KEY: ${{ secrets.SNAPSHOT_ENCRYPTION_KEY }}
+          HUBSPOT_ACCESS_TOKEN: ${{ secrets.HUBSPOT_ACCESS_TOKEN }}
+        run: |
+          missing=()
+          for v in METABASE_API_KEY SNAPSHOT_ENCRYPTION_KEY HUBSPOT_ACCESS_TOKEN; do
+            if [ -z "${!v}" ]; then
+              missing+=("$v")
+            fi
+          done
+          if [ "${#missing[@]}" -ne 0 ]; then
+            echo "::error::Missing required repo secret(s): ${missing[*]}. Add them under Settings → Secrets and variables → Actions, then re-run."
+            exit 1
+          fi
+          echo "All required secrets present."
+
       - name: Sync + encrypt snapshot
         run: npm run sync
         env:
