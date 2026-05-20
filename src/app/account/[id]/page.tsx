@@ -40,11 +40,31 @@ export default async function AccountPage({
         ? (c.active_subs / c.max_subscriptions) * 100
         : null;
 
+  // HubSpot company-page deep link — set when the row has a
+  // hubspot_company_id from the sync-time enrichment. Portal id is the
+  // beehiiv workspace's HubSpot account, observed from real
+  // company-page URLs.
+  const HUBSPOT_PORTAL_ID = "21568530";
+  const hubspotUrl = c.hubspot_company_id
+    ? `https://app.hubspot.com/contacts/${HUBSPOT_PORTAL_ID}/record/0-2/${c.hubspot_company_id}`
+    : null;
+
   return (
     <>
       <div className="mb-6">
-        <h1 className="text-3xl font-semibold text-fg tracking-tight">
-          {c.company_name ?? c.workspace_name}
+        <h1 className="text-3xl font-semibold text-fg tracking-tight flex items-baseline gap-3 flex-wrap">
+          <span>{c.company_name ?? c.workspace_name}</span>
+          {hubspotUrl ? (
+            <a
+              href={hubspotUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-xs font-normal text-muted hover:text-fg underline decoration-dotted"
+              title="Open this company in HubSpot"
+            >
+              HubSpot ↗
+            </a>
+          ) : null}
         </h1>
         <p className="text-sm text-muted mt-1">
           {c.workspace_name} · {c.stripe_plan ?? "—"} · CSM:{" "}
