@@ -114,6 +114,21 @@ export function BulkDraftsModal({
   const [expandedRecipients, setExpandedRecipients] = useState<Set<string>>(
     new Set()
   );
+  // Which drafts have the body preview expanded. Separate from
+  // recipient expansion so the CSM can review the body without
+  // dismissing the recipient picker.
+  const [expandedBodies, setExpandedBodies] = useState<Set<string>>(
+    new Set()
+  );
+
+  function toggleBody(draftKey: string) {
+    setExpandedBodies((prev) => {
+      const next = new Set(prev);
+      if (next.has(draftKey)) next.delete(draftKey);
+      else next.add(draftKey);
+      return next;
+    });
+  }
 
   // Initialise selection from each draft's default recipients when the
   // drafts list arrives / changes. Drafts already-keyed are preserved so
@@ -391,6 +406,7 @@ export function BulkDraftsModal({
             const liveToStr = liveTo(d);
             const liveUrl = liveComposeUrl(d);
             const isExpanded = expandedRecipients.has(draftKey);
+            const bodyOpen = expandedBodies.has(draftKey);
             const hasContactsBeyondDefault = d.recipients.some((r) => !r.default);
             return (
               <div key={draftKey} className="p-3 hover:bg-canvas/60">
@@ -416,8 +432,18 @@ export function BulkDraftsModal({
                         </button>
                       ) : null}
                     </div>
-                    <div className="text-xs text-muted mt-1 truncate">
-                      {d.subject}
+                    <div className="text-xs text-muted mt-1 flex items-center gap-1.5 min-w-0">
+                      <span className="truncate flex-1 min-w-0">
+                        {d.subject}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => toggleBody(draftKey)}
+                        className="text-[10px] uppercase tracking-wide text-accent hover:underline whitespace-nowrap flex-shrink-0"
+                        title="Toggle the rendered email body preview"
+                      >
+                        {bodyOpen ? "Hide body" : "Preview body"}
+                      </button>
                     </div>
                   </div>
                   <div className="flex items-center gap-1 flex-shrink-0">
@@ -483,6 +509,31 @@ export function BulkDraftsModal({
                       );
                     })}
                   </ul>
+                ) : null}
+                {bodyOpen ? (
+                  /* Rendered HTML body the modal will create as a Gmail
+                     draft (or open via the compose URL). Falls back to
+                     the plain-text version when body_html is absent
+                     (legacy callers). The block is sandboxed visually
+                     with the same card chrome as the rest of the row so
+                     it can't blow out layout. */
+                  <div className="mt-2 ml-1 border border-border rounded-md bg-canvas/40 p-3">
+                    {d.body_html ? (
+                      <div
+                        className="prose prose-sm max-w-none text-sm text-fg"
+                        // Body templates are authored by trusted admins
+                        // in /settings/templates; merge-tag values come
+                        // from our own snapshot. This is the same
+                        // dangerouslySetInnerHTML path the single-customer
+                        // OutreachModal uses.
+                        dangerouslySetInnerHTML={{ __html: d.body_html }}
+                      />
+                    ) : (
+                      <pre className="whitespace-pre-wrap break-words text-sm text-fg font-sans">
+                        {d.body_text}
+                      </pre>
+                    )}
+                  </div>
                 ) : null}
               </div>
             );
