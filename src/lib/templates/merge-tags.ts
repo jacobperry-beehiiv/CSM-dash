@@ -80,16 +80,57 @@ function firstName(s: string | null | undefined): string {
 }
 
 /**
- * Greeting helper for the `customer.contact_first_name` token. Falls
- * back to "there" when the draft is being addressed to more than one
- * recipient — a personal "Hi Eric," reads strangely when the email is
- * going to a group.
+ * Pull a usable first name out of the sync-time HubSpot enrichment
+ * when one's available. Preferred over property_main_contact because:
+ *
+ *   • hubspot_contacts carry a structured `name` field that
+ *     property_main_contact often doesn't (HubSpot's main_contact
+ *     property on the company record is just the owner email for ~80%
+ *     of rows in beehiiv's portal).
+ *   • Enrichment covers ~75% of customers; for those, the HubSpot
+ *     name is "Eric Nolot" while property_main_contact is
+ *     "eric@plugivery.com".
+ *
+ * Pick order:
+ *   1. Contact flagged `is_primary` (HubSpot's hs_primary_contact_id
+ *      when the enrichment can resolve it).
+ *   2. First contact with a non-email, non-empty `name`.
+ *   3. null — caller falls back to property_main_contact / "there".
+ */
+function bestHubspotFirstName(c: Customer): string | null {
+  const contacts = c.hubspot_contacts;
+  if (!contacts || contacts.length === 0) return null;
+  const candidate =
+    contacts.find((x) => x.is_primary && x.name) ??
+    contacts.find(
+      (x) => x.name && x.name.trim() && !/@/.test(x.name)
+    ) ??
+    null;
+  if (!candidate?.name) return null;
+  const name = firstName(candidate.name);
+  return name === "there" ? null : name;
+}
+
+/**
+ * Greeting helper for the `customer.contact_first_name` token.
+ *
+ * Resolution order:
+ *   1. "there" — when the draft is going to more than one recipient
+ *      (a personal "Hi Eric," reads strangely on a group send).
+ *   2. HubSpot enrichment — `hubspot_contacts[]` from the sync-time
+ *      v4 associations + contacts batch read.
+ *   3. property_main_contact — the legacy Metabase q10600 column.
+ *      Often an email when no real contact has been set on the
+ *      HubSpot company record.
+ *   4. "there" — last resort.
  */
 function firstNameForContext(
   c: Customer,
   ctx: MergeContext
 ): string {
   if ((ctx.recipient_count ?? 1) > 1) return "there";
+  const fromHubspot = bestHubspotFirstName(c);
+  if (fromHubspot) return fromHubspot;
   return firstName(c.property_main_contact);
 }
 
