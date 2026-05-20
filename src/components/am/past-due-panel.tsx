@@ -12,6 +12,10 @@ import { BucketSection } from "./bucket-section";
 import { FilterBar, SearchInput, SegmentToggle } from "../filters";
 import { CsmSelector } from "../csm-selector";
 import { useUrlSearch } from "@/lib/hooks/use-url-search";
+import {
+  SlackBulkCompose,
+  type BulkSlackMessage,
+} from "./slack-bulk-compose";
 
 interface Props {
   /** Already CSM-filtered server-side (per `?csm=…`). The client still
@@ -388,13 +392,43 @@ export function PastDuePanel({ rows, csms, totalSourceRows }: Props) {
         ARR / charge amounts converted from cents.
       </p>
 
-      {composeOpen && settings ? (
-        <SlackCompose
-          rows={rows.filter((r, i) => selected.has(rowKey(r, i)))}
-          settings={settings}
-          onClose={() => setComposeOpen(false)}
-        />
-      ) : null}
+      {composeOpen && settings ? (() => {
+        // Pre-render the bulk-compose inputs from the selected rows so
+        // the shared modal stays generic. Past-due uses the past_due
+        // channel config from /settings/slack — both the combined
+        // body template and the per-row format come from there.
+        const selectedRows = rows.filter((r, i) =>
+          selected.has(rowKey(r, i))
+        );
+        const pastDueCfg = findSlackChannel(
+          settings.slack,
+          PAST_DUE_CHANNEL_ID
+        );
+        const rowTemplate = (pastDueCfg?.row_template ?? "").trim()
+          ? (pastDueCfg!.row_template as string)
+          : DEFAULT_PAST_DUE_ROW_TEMPLATE;
+        const perCompany: BulkSlackMessage[] = selectedRows.map((r, i) => ({
+          id: rowKey(r, i),
+          label: r.email ?? r.customer_id ?? `Row ${i + 1}`,
+          text: renderPastDueRow(r, rowTemplate, settings),
+        }));
+        const combined = renderSlackTemplate(
+          pastDueCfg?.template ?? "",
+          selectedRows,
+          settings,
+          pastDueCfg?.row_template
+        );
+        return (
+          <SlackBulkCompose
+            title="Slack the past-due channel"
+            initialChannel={pastDueCfg?.channel_id ?? ""}
+            initialCombinedText={combined}
+            perCompanyMessages={perCompany}
+            defaultMode="per-company"
+            onClose={() => setComposeOpen(false)}
+          />
+        );
+      })() : null}
     </>
   );
 }
@@ -496,131 +530,6 @@ function renderSlackTemplate(
     .replace(/\{\{\s*customer_ids\s*\}\}/g, customerIds);
 }
 
-function SlackCompose({
-  rows,
-  settings,
-  onClose,
-}: {
-  rows: PastDueRow[];
-  settings: SettingsShape;
-  onClose: () => void;
-}) {
-  // Resolve the past-due channel config from the channels[] list. Falls
-  // back to empty strings if /settings/slack hasn't been visited yet —
-  // the user can still type the channel id directly in the dialog.
-  const pastDueCfg = findSlackChannel(settings.slack, PAST_DUE_CHANNEL_ID);
-  const [channel, setChannel] = useState(pastDueCfg?.channel_id ?? "");
-  const [text, setText] = useState(() =>
-    renderSlackTemplate(
-      pastDueCfg?.template ?? "",
-      rows,
-      settings,
-      pastDueCfg?.row_template
-    )
-  );
-  const [busy, setBusy] = useState(false);
-  const [result, setResult] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  async function send() {
-    setBusy(true);
-    setError(null);
-    setResult(null);
-    try {
-      const r = await fetch("/api/slack-send", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ channel, text }),
-      });
-      const j = await r.json();
-      if (!r.ok) throw new Error(j.error ?? `HTTP ${r.status}`);
-      setResult("Sent to Slack ✓");
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Unknown error");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <div
-      className="fixed inset-0 bg-black/40 z-30 flex items-center justify-center p-4"
-      onClick={onClose}
-    >
-      <div
-        className="bg-surface rounded-lg w-full max-w-2xl max-h-[90vh] overflow-hidden flex flex-col"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-start justify-between p-4 border-b border-border">
-          <div>
-            <h3 className="font-semibold text-fg">
-              Slack the past-due channel
-            </h3>
-            <p className="text-xs text-muted mt-0.5">
-              {rows.length} account{rows.length === 1 ? "" : "s"} selected.
-            </p>
-          </div>
-          <button
-            onClick={onClose}
-            className="text-subtle hover:text-muted text-xl leading-none"
-            aria-label="Close"
-          >
-            ×
-          </button>
-        </div>
-
-        <div className="p-4 space-y-3 overflow-y-auto flex-1">
-          <div>
-            <label className="text-xs text-muted block mb-1">
-              Channel ID (e.g. C0AMK142WUR)
-            </label>
-            <input
-              type="text"
-              value={channel}
-              onChange={(e) => setChannel(e.target.value)}
-              placeholder="C0AMK142WUR"
-              className="w-full px-3 py-2 border border-border-strong rounded-md text-sm font-mono"
-            />
-          </div>
-
-          <div>
-            <label className="text-xs text-muted block mb-1">Message</label>
-            <textarea
-              value={text}
-              onChange={(e) => setText(e.target.value)}
-              rows={14}
-              className="w-full px-3 py-2 border border-border-strong rounded-md text-sm font-mono"
-            />
-          </div>
-
-          {error ? (
-            <div className="bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/30 rounded-md p-3 text-sm text-red-800 dark:text-red-300">
-              {error}
-            </div>
-          ) : null}
-          {result ? (
-            <div className="bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-200 dark:border-emerald-500/30 rounded-md p-3 text-sm text-emerald-800 dark:text-emerald-300">
-              {result}
-            </div>
-          ) : null}
-        </div>
-
-        <div className="p-4 border-t border-border flex items-center gap-2 justify-end">
-          <button
-            onClick={onClose}
-            className="px-3 py-1.5 border border-border-strong rounded-md text-sm hover:bg-canvas"
-          >
-            Cancel
-          </button>
-          <button
-            onClick={send}
-            disabled={busy || !channel || !text}
-            className="px-3 py-1.5 bg-accent text-accent-fg rounded-md text-sm font-medium hover:bg-accent-hover disabled:opacity-50"
-          >
-            {busy ? "Sending…" : "Send to Slack"}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
+// SlackCompose was inlined here before — replaced by the shared
+// <SlackBulkCompose> in ./slack-bulk-compose.tsx, which supports
+// per-company sends as well as the original combined-digest mode.

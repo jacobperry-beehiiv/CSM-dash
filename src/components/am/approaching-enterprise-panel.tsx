@@ -1,9 +1,50 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { ApproachingEntRow } from "@/lib/engines/am-cohorts";
 import { fmtCurrency, fmtDate, fmtNumber, fmtPct } from "../format";
 import { BucketSection } from "./bucket-section";
+import {
+  SlackBulkCompose,
+  type BulkSlackMessage,
+} from "./slack-bulk-compose";
+import type { SettingsShape } from "@/lib/data/settings-types";
+
+/**
+ * Defaults used when there's no `approaching_enterprise` channel
+ * configured at /settings/slack yet. Mirrors the past-due defaults —
+ * the user can override either template through the settings UI.
+ */
+const DEFAULT_APPROACHING_TEMPLATE =
+  "*Approaching Enterprise threshold*\n\n*{{count}}* account{{count_plural}} approaching or exceeding their plan cap:\n\n{{account_list}}\n\nHeads-up to the AM team to start the upsell conversation.";
+const DEFAULT_APPROACHING_ROW_TEMPLATE =
+  "• *{{workspace_name}}* — {{pct_cap}} of cap ({{subs}}/{{cap}} subs) on {{plan}}. Owner: {{owner_email}}";
+
+/** Render a single Approaching row through the per-row template. Unknown
+ *  tokens render empty so a typo in settings doesn't echo `{{foo}}` out
+ *  into a Slack message. */
+function renderApproachingRow(
+  row: ApproachingEntRow,
+  template: string
+): string {
+  const pct = pctNum(row);
+  const values: Record<string, string> = {
+    workspace_name: row.workspace_name ?? "—",
+    owner_email: row.owner_email ?? "",
+    owner_name: row.owner_name ?? "",
+    plan: row.plan_name ?? "—",
+    price: priceLabel(row),
+    subs: fmtNumber(row.total_subscriptions),
+    cap: fmtNumber(row.max_subscriptions),
+    pct_cap: fmtPct(pct),
+    last_send: row.last_send ? fmtDate(row.last_send) : "—",
+    last_payment: row.last_payment_at ? fmtDate(row.last_payment_at) : "—",
+    masquerade_url: row.masquerade_url ?? "",
+  };
+  return template.replace(/\{\{\s*(\w+)\s*\}\}/g, (_match, name: string) => {
+    return name in values ? values[name] : "";
+  });
+}
 
 interface Props {
   rows: ApproachingEntRow[];
@@ -64,6 +105,32 @@ function priceLabel(r: ApproachingEntRow): string {
 
 export function ApproachingEnterprisePanel({ rows }: Props) {
   const [search, setSearch] = useState("");
+  // Bulk-select state mirrors past-due-panel: row keys in a Set.
+  // Row key is organization_id with a stable fallback so rows without
+  // an id still de-dupe predictably across re-renders.
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [settings, setSettings] = useState<SettingsShape | null>(null);
+  const [composeOpen, setComposeOpen] = useState(false);
+
+  useEffect(() => {
+    fetch("/api/settings")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => setSettings(j as SettingsShape))
+      .catch(() => {});
+  }, []);
+
+  function rowKey(r: ApproachingEntRow, i: number): string {
+    return r.organization_id ?? r.workspace_name ?? `row-${i}`;
+  }
+
+  function toggleSelected(k: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(k)) next.delete(k);
+      else next.add(k);
+      return next;
+    });
+  }
 
   // Filter to ≥75% utilization, then bucket. q13268 returns customers
   // approaching the 100K Enterprise threshold — they're already a curated
@@ -97,6 +164,14 @@ export function ApproachingEnterprisePanel({ rows }: Props) {
     return p != null && p >= 75;
   }).length;
 
+  // Visible rows (after filter + sort + bucket) — used by the
+  // "Select all visible" toolbar action so we don't select rows
+  // that aren't in view.
+  const visibleRows = useMemo(
+    () => buckets.flatMap((g) => g.list),
+    [buckets]
+  );
+
   return (
     <>
       <div className="flex flex-wrap items-center gap-2 mb-4">
@@ -110,6 +185,36 @@ export function ApproachingEnterprisePanel({ rows }: Props) {
         <span className="text-xs text-muted ml-auto">
           {totalAtOrAbove75} of {rows.length} q13268 rows at ≥75% of plan limit
         </span>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2 mb-4">
+        <span className="text-xs text-muted">
+          <strong>{selected.size}</strong> selected
+        </span>
+        <button
+          onClick={() =>
+            setSelected(new Set(visibleRows.map((r, i) => rowKey(r, i))))
+          }
+          className="px-2 py-1 text-xs border border-border-strong rounded-md bg-surface hover:bg-canvas"
+          title="Select every visible row (after filters)"
+        >
+          Select all
+        </button>
+        <button
+          onClick={() => setSelected(new Set())}
+          className="px-2 py-1 text-xs border border-border-strong rounded-md bg-surface hover:bg-canvas"
+        >
+          Clear
+        </button>
+        <div className="flex-1" />
+        <button
+          onClick={() => setComposeOpen(true)}
+          disabled={!settings || selected.size === 0}
+          className="px-3 py-1.5 bg-accent text-accent-fg rounded-md text-sm font-medium hover:bg-accent-hover disabled:opacity-50"
+          title="Send a Slack message about the selected accounts"
+        >
+          📣 Slack the channel
+        </button>
       </div>
 
       {buckets.length === 0 ? (
@@ -128,10 +233,11 @@ export function ApproachingEnterprisePanel({ rows }: Props) {
             >
               <table className="w-full text-sm table-fixed">
                 <colgroup>
-                  <col className="w-[24%]" />
+                  <col className="w-8" />
+                  <col className="w-[22%]" />
                   <col className="w-[10%]" />
                   <col className="w-[10%]" />
-                  <col className="w-[14%]" />
+                  <col className="w-[12%]" />
                   <col className="w-[8%]" />
                   <col className="w-[12%]" />
                   <col className="w-[12%]" />
@@ -139,6 +245,7 @@ export function ApproachingEnterprisePanel({ rows }: Props) {
                 </colgroup>
                 <thead>
                   <tr className="text-xs text-muted border-y border-border text-left">
+                    <th className="px-3 py-2"></th>
                     <th className="px-3 py-2 font-medium">Workspace</th>
                     <th className="px-3 py-2 font-medium">Plan</th>
                     <th className="px-3 py-2 font-medium text-right">Price</th>
@@ -152,13 +259,27 @@ export function ApproachingEnterprisePanel({ rows }: Props) {
                   </tr>
                 </thead>
                 <tbody>
-                  {list.map((r) => {
+                  {list.map((r, i) => {
                     const p = pctNum(r);
+                    const k = rowKey(r, i);
+                    const isChecked = selected.has(k);
                     return (
                       <tr
-                        key={r.organization_id ?? r.workspace_name ?? Math.random()}
+                        key={k}
                         className="border-b border-border hover:bg-blue-50 dark:bg-blue-500/40 align-top"
                       >
+                        <td
+                          className="px-3 py-2"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={isChecked}
+                            onChange={() => toggleSelected(k)}
+                            className="h-4 w-4 rounded border-border-strong cursor-pointer"
+                            aria-label={`Select ${r.workspace_name ?? "row"}`}
+                          />
+                        </td>
                         <td className="px-3 py-2 break-words">
                           <div className="font-medium text-fg">
                             {r.workspace_name ?? "—"}
@@ -230,6 +351,53 @@ export function ApproachingEnterprisePanel({ rows }: Props) {
         </code>
         . Refresh the page to re-fetch (10-min in-process cache).
       </p>
+
+      {composeOpen && settings ? (() => {
+        // Pre-render combined + per-company Slack bodies from the
+        // selected rows so the shared modal stays generic. Falls back
+        // to baked-in defaults when /settings/slack hasn't been
+        // configured for the approaching channel yet.
+        const selectedRows = visibleRows.filter((r, i) =>
+          selected.has(rowKey(r, i))
+        );
+        // Approaching uses its own row template; if a channel labelled
+        // `approaching` exists in settings.slack.channels we honor its
+        // template + row_template. Otherwise we use baked-in defaults.
+        const cfg = settings.slack.channels.find(
+          (c) => c.id === "approaching_enterprise"
+        );
+        const rowTemplate = (cfg?.row_template ?? "").trim()
+          ? (cfg!.row_template as string)
+          : DEFAULT_APPROACHING_ROW_TEMPLATE;
+        const combinedTemplate = (cfg?.template ?? "").trim()
+          ? (cfg!.template as string)
+          : DEFAULT_APPROACHING_TEMPLATE;
+        const accountList = selectedRows
+          .map((r) => renderApproachingRow(r, rowTemplate))
+          .join("\n");
+        const combined = combinedTemplate
+          .replace(/\{\{\s*count\s*\}\}/g, String(selectedRows.length))
+          .replace(
+            /\{\{\s*count_plural\s*\}\}/g,
+            selectedRows.length === 1 ? "" : "s"
+          )
+          .replace(/\{\{\s*account_list\s*\}\}/g, accountList);
+        const perCompany: BulkSlackMessage[] = selectedRows.map((r, i) => ({
+          id: rowKey(r, i),
+          label: r.workspace_name ?? r.owner_email ?? `Row ${i + 1}`,
+          text: renderApproachingRow(r, rowTemplate),
+        }));
+        return (
+          <SlackBulkCompose
+            title="Slack the AM channel"
+            initialChannel={cfg?.channel_id ?? ""}
+            initialCombinedText={combined}
+            perCompanyMessages={perCompany}
+            defaultMode="per-company"
+            onClose={() => setComposeOpen(false)}
+          />
+        );
+      })() : null}
     </>
   );
 }
