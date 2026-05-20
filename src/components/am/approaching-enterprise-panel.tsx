@@ -8,7 +8,9 @@ import {
   SlackBulkCompose,
   type BulkSlackMessage,
 } from "./slack-bulk-compose";
+import { BulkEmailLauncher } from "./bulk-email-launcher";
 import type { SettingsShape } from "@/lib/data/settings-types";
+import type { Customer } from "@/lib/types";
 
 /**
  * Defaults used when there's no `approaching_enterprise` channel
@@ -119,6 +121,23 @@ export function ApproachingEnterprisePanel({ rows }: Props) {
       .catch(() => {});
   }, []);
 
+  // Customer book for the bulk-email launcher (see same pattern in
+  // past-due-panel). Approaching rows index by stripe_customer_id.
+  const [customerBook, setCustomerBook] = useState<Customer[]>([]);
+  useEffect(() => {
+    fetch("/api/customers")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((list) => setCustomerBook((list as Customer[]) ?? []))
+      .catch(() => {});
+  }, []);
+  const customerByStripeId = useMemo(() => {
+    const m = new Map<string, Customer>();
+    for (const c of customerBook) {
+      if (c.stripe_customer_id) m.set(c.stripe_customer_id, c);
+    }
+    return m;
+  }, [customerBook]);
+
   function rowKey(r: ApproachingEntRow, i: number): string {
     return r.organization_id ?? r.workspace_name ?? `row-${i}`;
   }
@@ -207,6 +226,25 @@ export function ApproachingEnterprisePanel({ rows }: Props) {
           Clear
         </button>
         <div className="flex-1" />
+        <BulkEmailLauncher
+          customers={(() => {
+            const selectedRows = visibleRows.filter((r, i) =>
+              selected.has(rowKey(r, i))
+            );
+            return selectedRows
+              .map((r) =>
+                r.stripe_customer_id
+                  ? customerByStripeId.get(r.stripe_customer_id)
+                  : null
+              )
+              .filter((c): c is Customer => Boolean(c));
+          })()}
+          // Approaching → upsell — use the dedicated template if it
+          // exists, fall back to general-checkin.
+          defaultTemplateId="approaching-ent"
+          disabled={selected.size === 0 || customerBook.length === 0}
+          label="✉️ Email selected"
+        />
         <button
           onClick={() => setComposeOpen(true)}
           disabled={!settings || selected.size === 0}

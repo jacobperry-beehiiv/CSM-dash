@@ -17,11 +17,10 @@ import { featureCounts } from "@/lib/features";
 import { lastContacted } from "@/lib/customer-helpers";
 import { isVisibleToCsm } from "@/lib/templates/types";
 import { useViewerEmail } from "@/lib/auth-client";
-import { composeUrlForTemplate, composeUrlWithAdGap } from "@/lib/links";
 import type { StoredTemplate } from "@/lib/templates/types";
 import type { AdGapReport } from "@/lib/types";
 import { getTierLadder } from "@/lib/tiers/client";
-import { applyMergeTags } from "@/lib/templates/merge-tags";
+import { buildBulkDrafts } from "@/lib/templates/bulk-drafts";
 import { BulkDraftsModal, type BulkDraft } from "./bulk-drafts-modal";
 
 type SortKey = keyof CustomerWithMetrics | "features_enabled";
@@ -150,22 +149,6 @@ export function CustomerTable({
     return "general-checkin";
   }
 
-  function htmlToText(html: string): string {
-    return html
-      .replace(/<\/(p|li|div|h[1-6])>/gi, "\n")
-      .replace(/<br\s*\/?>(?!\n)/gi, "\n")
-      .replace(/<li[^>]*>/gi, "  • ")
-      .replace(/<[^>]+>/g, "")
-      .replace(/&nbsp;/g, " ")
-      .replace(/&amp;/g, "&")
-      .replace(/&lt;/g, "<")
-      .replace(/&gt;/g, ">")
-      .replace(/&quot;/g, '"')
-      .replace(/&#39;/g, "'")
-      .replace(/\n{3,}/g, "\n\n")
-      .trim();
-  }
-
   function csvEscape(v: unknown): string {
     if (v == null) return "";
     return `"${String(v).replace(/"/g, '""')}"`;
@@ -273,50 +256,12 @@ export function CustomerTable({
       tpl.subject + tpl.body_html
     );
     const adGapByOrg = usesAdGap ? await fetchAdGapForTargets(targets) : {};
-
-    const drafts: BulkDraft[] = [];
-    for (const c of targets) {
-      if (!c.owner_email) continue;
-      const adGap = c.workspace_id ? adGapByOrg[c.workspace_id] ?? null : null;
-      const composeUrl =
-        usesAdGap && adGap
-          ? composeUrlWithAdGap(tpl, c, ladder, adGap)
-          : composeUrlForTemplate(tpl, c, ladder);
-      if (!composeUrl) continue;
-      const ctx = { ladder, adGap };
-      const subject = applyMergeTags(tpl.subject, c, ctx);
-      const body_html = applyMergeTags(tpl.body_html, c, ctx);
-      const body_text = htmlToText(body_html);
-      // Build the recipient picker: owner_email is the default-checked
-      // entry, then every HubSpot contact whose primary associated
-      // company is this customer's company. Deduped by lowercased email.
-      const ownerEmail = c.owner_email;
-      const seen = new Set<string>([ownerEmail.toLowerCase()]);
-      const recipients: BulkDraft["recipients"] = [
-        { email: ownerEmail, name: c.property_main_contact ?? null, default: true },
-      ];
-      for (const contact of c.hubspot_contacts ?? []) {
-        if (!contact.email) continue;
-        const key = contact.email.toLowerCase();
-        if (seen.has(key)) continue;
-        seen.add(key);
-        recipients.push({
-          email: contact.email,
-          name: contact.name,
-          default: false,
-        });
-      }
-      drafts.push({
-        customer_label: c.company_name ?? c.workspace_name ?? ownerEmail,
-        to: ownerEmail,
-        subject,
-        body_text,
-        body_html,
-        compose_url: composeUrl,
-        recipients,
-      });
-    }
-    return drafts;
+    return buildBulkDrafts({
+      targets,
+      template: tpl,
+      ladder,
+      adGapByOrg,
+    });
   }
 
   /**

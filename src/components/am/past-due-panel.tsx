@@ -16,6 +16,8 @@ import {
   SlackBulkCompose,
   type BulkSlackMessage,
 } from "./slack-bulk-compose";
+import { BulkEmailLauncher } from "./bulk-email-launcher";
+import type { Customer } from "@/lib/types";
 
 interface Props {
   /** Already CSM-filtered server-side (per `?csm=…`). The client still
@@ -98,6 +100,29 @@ export function PastDuePanel({ rows, csms, totalSourceRows }: Props) {
       .then((j) => setSettings(j as SettingsShape))
       .catch(() => {});
   }, []);
+
+  // Customer book — fetched once so the bulk-email launcher can hand
+  // full Customer records (with HubSpot contacts) to the BulkDraftsModal.
+  // Without this we'd only have PastDueRow data, which lacks the
+  // merge-tag fields the template renderer expects.
+  const [customerBook, setCustomerBook] = useState<Customer[]>([]);
+  useEffect(() => {
+    fetch("/api/customers")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((list) => setCustomerBook((list as Customer[]) ?? []))
+      .catch(() => {});
+  }, []);
+
+  /** Stripe-customer-id index of the book for O(1) selected-row → Customer
+   *  lookups. q24620's `customer_id` is the Stripe cus_… id; q10600
+   *  surfaces the same id as Customer.stripe_customer_id. */
+  const customerByStripeId = useMemo(() => {
+    const m = new Map<string, Customer>();
+    for (const c of customerBook) {
+      if (c.stripe_customer_id) m.set(c.stripe_customer_id, c);
+    }
+    return m;
+  }, [customerBook]);
 
   // Apply client-side filters to the (already-CSM-filtered) rows
   // BEFORE bucketing so headline counts and the rendered list always
@@ -264,6 +289,25 @@ export function PastDuePanel({ rows, csms, totalSourceRows }: Props) {
           Select Enterprise only
         </button>
         <div className="flex-1" />
+        {/* Resolve each selected past-due row to a Customer record (by
+            stripe_customer_id) so the BulkDraftsModal has the merge-tag
+            fields it expects. Rows without a matching Customer (e.g. a
+            cancelled workspace removed from the book) are dropped. */}
+        <BulkEmailLauncher
+          customers={(() => {
+            const selectedRows = rows.filter((r, i) =>
+              selected.has(rowKey(r, i))
+            );
+            return selectedRows
+              .map((r) =>
+                r.customer_id ? customerByStripeId.get(r.customer_id) : null
+              )
+              .filter((c): c is Customer => Boolean(c));
+          })()}
+          defaultTemplateId="general-checkin"
+          disabled={selected.size === 0 || customerBook.length === 0}
+          label="✉️ Email selected"
+        />
         <button
           onClick={() => setComposeOpen(true)}
           disabled={!settings || selected.size === 0}
