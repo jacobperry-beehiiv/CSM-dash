@@ -47,6 +47,12 @@ export interface SlackChannel {
  *  up explicitly to find the right channel config. */
 export const PAST_DUE_CHANNEL_ID = "past_due";
 
+/** Stable id for the global "Report an issue" button. When set, the
+ *  floating bug-report button routes user-submitted feedback there
+ *  (text + optional screenshot). When absent the API returns a
+ *  helpful 503 telling the admin to configure it at /settings/slack. */
+export const ISSUE_REPORTS_CHANNEL_ID = "issue_reports";
+
 /** Map of customer_success_manager (e.g. "Jacob_Perry") → Slack user ID
  *  (e.g. "U02ABC123") so {{customer.csm_slack}} renders an actual @mention. */
 export type CsmSlackIdMap = Record<string, string>;

@@ -7,6 +7,7 @@ import { SnapshotBanner } from "@/components/snapshot-banner";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { UserMenu } from "@/components/user-menu";
 import { BeehiivLogo } from "@/components/beehiiv-logo";
+import { ReportIssueButton } from "@/components/report-issue-button";
 
 export const metadata: Metadata = {
   title: "CSM Mission Control — beehiiv",
@@ -89,6 +90,10 @@ export default function RootLayout({
           </div>
         </header>
         <main className="max-w-[1400px] mx-auto px-6 py-10">{children}</main>
+        {/* Site-wide "Report an issue" floating button. Hides itself
+            when no viewer is signed in (handled inside the component
+            via useViewerEmail), so the login page chrome stays clean. */}
+        <ReportIssueButton />
       </body>
     </html>
   );
