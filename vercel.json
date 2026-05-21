@@ -2,12 +2,6 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": "nextjs",
   "regions": ["iad1"],
-  "crons": [
-    {
-      "path": "/api/feature-updates/sync",
-      "schedule": "*/30 * * * *"
-    }
-  ],
   "headers": [
     {
       "source": "/(.*)",
