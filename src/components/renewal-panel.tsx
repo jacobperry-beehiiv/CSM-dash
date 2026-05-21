@@ -83,12 +83,27 @@ const BUCKETS: Bucket[] = [
   },
 ];
 
-function intervalLabel(raw: string): string {
+/**
+ * Collapse the raw `interval` string to a canonical bucket so the
+ * cadence dropdown doesn't duplicate entries. Metabase emits "month"
+ * / "year" on most rows; the manual customer-override path writes
+ * "month" / "annual"; some older rows have "monthly" / "yearly".
+ * Without bucketing the dropdown ends up with two "Annual" options
+ * (one matching "year", one matching "annual") that filter to
+ * disjoint sets.
+ */
+function intervalBucket(raw: string | null | undefined): string {
+  if (!raw) return "";
   const t = raw.trim().toLowerCase();
-  if (t === "month" || t === "monthly") return "Monthly";
-  if (t === "year" || t === "annual" || t === "yearly") return "Annual";
-  // Title-case anything else ("3x a year", "quarterly", …)
-  return raw.charAt(0).toUpperCase() + raw.slice(1);
+  if (t === "month" || t === "monthly") return "monthly";
+  if (t === "year" || t === "annual" || t === "yearly") return "annual";
+  return t;
+}
+
+function bucketLabel(bucket: string): string {
+  if (bucket === "monthly") return "Monthly";
+  if (bucket === "annual") return "Annual";
+  return bucket.charAt(0).toUpperCase() + bucket.slice(1);
 }
 
 export function RenewalPanel({ customers, csms }: Props) {
@@ -120,18 +135,33 @@ export function RenewalPanel({ customers, csms }: Props) {
     });
   }
 
-  const intervals = useMemo(() => {
-    const set = new Set<string>();
+  /**
+   * Bucketed cadence options + counts. We group on the canonical
+   * bucket so "month"/"monthly" and "year"/"annual"/"yearly" each
+   * collapse into a single dropdown row. The bucket string also
+   * becomes the filter value, and the row predicate below buckets
+   * each customer's interval before comparing.
+   */
+  const intervalOptions = useMemo(() => {
+    const counts = new Map<string, number>();
     for (const c of customers) {
-      if (c.interval) set.add(c.interval);
+      const bucket = intervalBucket(c.interval);
+      if (!bucket) continue;
+      counts.set(bucket, (counts.get(bucket) ?? 0) + 1);
     }
-    return [...set].sort();
+    return [...counts.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([bucket, count]) => ({
+        value: bucket,
+        label: bucketLabel(bucket),
+        count,
+      }));
   }, [customers]);
 
   const filtered = useMemo(() => {
     let list = customers;
     if (intervalFilter) {
-      list = list.filter((c) => c.interval === intervalFilter);
+      list = list.filter((c) => intervalBucket(c.interval) === intervalFilter);
     }
     if (search) {
       const q = search.toLowerCase();
@@ -174,11 +204,7 @@ export function RenewalPanel({ customers, csms }: Props) {
         onChange={(v) => setIntervalFilter(v)}
         emptyLabel="All cadences"
         emptyCount={customers.filter((c) => c.interval).length}
-        options={intervals.map((i) => ({
-          value: i,
-          label: intervalLabel(i),
-          count: customers.filter((c) => c.interval === i).length,
-        }))}
+        options={intervalOptions}
       />
     </FilterBar>
   );
@@ -189,7 +215,7 @@ export function RenewalPanel({ customers, csms }: Props) {
         {cadencePicker}
         <div className="bg-green-50 border border-green-200 rounded-lg p-4 text-sm text-green-800">
           No renewals in the next 90 days
-          {intervalFilter ? ` for ${intervalLabel(intervalFilter)} customers` : ""}.
+          {intervalFilter ? ` for ${bucketLabel(intervalFilter)} customers` : ""}.
         </div>
       </>
     );
