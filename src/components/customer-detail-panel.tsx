@@ -8,6 +8,7 @@ import { FeatureUtilizationPanel } from "./feature-utilization-panel";
 import { AdGapSummary } from "./ad-gap-summary";
 import { CadenceToggle } from "./cadence-toggle";
 import { HubSpotContactsSection } from "./hubspot-contacts-section";
+import { CopyButton } from "./copy-button";
 
 interface Props {
   customer: Customer;
@@ -27,6 +28,23 @@ export function CustomerDetailPanel({
   return (
     <div className="space-y-3">
       {topSlot}
+
+      {c.workspace_id ? (
+        <div className="flex flex-wrap items-center gap-2 text-xs text-muted">
+          <span>Workspace ID:</span>
+          <CopyButton value={c.workspace_id} label="Copy workspace ID" />
+          {c.stripe_customer_id ? (
+            <>
+              <span className="text-subtle">·</span>
+              <span>Stripe:</span>
+              <CopyButton
+                value={c.stripe_customer_id}
+                label="Copy Stripe customer ID"
+              />
+            </>
+          ) : null}
+        </div>
+      ) : null}
 
       <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
         <Stat label="ARR" value={fmtCurrency(c.arr)} />
