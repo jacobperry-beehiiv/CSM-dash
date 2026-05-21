@@ -72,8 +72,22 @@ export function FeatureUpdatesPanel() {
     }
   }
 
-  const updates = store?.updates ?? [];
-  const visible = expanded ? updates : updates.slice(0, PAGE_SIZE);
+  // Only render posts that follow the team's "Feature name: X" Slack
+  // convention. Threads, ad-hoc messages, channel chatter, etc. get
+  // filtered out at the panel level — we keep them in the KV store in
+  // case the convention evolves, but they don't pollute the home page.
+  const allUpdates = store?.updates ?? [];
+  const parsed = allUpdates
+    .map((u) => ({ update: u, parsed: parseFeatureUpdate(u.text) }))
+    .filter(
+      (
+        x
+      ): x is {
+        update: FeatureUpdate;
+        parsed: { name: string; body: string };
+      } => x.parsed !== null
+    );
+  const visible = expanded ? parsed : parsed.slice(0, PAGE_SIZE);
 
   return (
     <section className="bg-surface rounded-xl border border-border shadow-card p-5 mt-6">
@@ -112,26 +126,28 @@ export function FeatureUpdatesPanel() {
         </div>
       ) : !store ? (
         <div className="text-sm text-muted">Loading…</div>
-      ) : updates.length === 0 ? (
+      ) : parsed.length === 0 ? (
         <div className="text-sm text-muted">
-          No feature updates pulled yet. Click <em>Sync now</em> to
-          backfill from the configured Slack channel.
+          {allUpdates.length === 0
+            ? "No feature updates pulled yet. Click "
+            : `${allUpdates.length} message${allUpdates.length === 1 ? "" : "s"} pulled from Slack, but none match the "Feature name:" format. Click `}
+          <em>Sync now</em> to pull again from the configured channel.
         </div>
       ) : (
         <>
-          <ul className="space-y-3">
-            {visible.map((u) => (
-              <UpdateRow key={u.id} update={u} />
+          <ul className="space-y-4">
+            {visible.map(({ update, parsed: p }) => (
+              <UpdateRow key={update.id} update={update} parsed={p} />
             ))}
           </ul>
-          {updates.length > PAGE_SIZE ? (
+          {parsed.length > PAGE_SIZE ? (
             <button
               onClick={() => setExpanded((e) => !e)}
               className="mt-3 text-xs text-accent hover:underline"
             >
               {expanded
                 ? "Show fewer"
-                : `Show ${updates.length - PAGE_SIZE} more`}
+                : `Show ${parsed.length - PAGE_SIZE} more`}
             </button>
           ) : null}
         </>
@@ -140,46 +156,21 @@ export function FeatureUpdatesPanel() {
   );
 }
 
-function UpdateRow({ update }: { update: FeatureUpdate }) {
-  const [open, setOpen] = useState(false);
-  // First non-empty line is treated as the feature name. Feature-update
-  // posts in Slack conventionally lead with the title on its own line,
-  // so this is a reliable summary without forcing a structured schema.
-  // Strips Slack mrkdwn emphasis markers from the headline so a leading
-  // *bold* doesn't render as raw asterisks in the collapsed view.
-  const { headline, body } = splitHeadline(update.text);
-  const hasBody = body.trim().length > 0;
+function UpdateRow({
+  update,
+  parsed,
+}: {
+  update: FeatureUpdate;
+  parsed: { name: string; body: string };
+}) {
+  const hasBody = parsed.body.trim().length > 0;
   return (
     <li className="border-l-2 border-border pl-3">
-      <button
-        type="button"
-        onClick={() => hasBody && setOpen((o) => !o)}
-        // Disable the click target entirely when there's no body so the
-        // row doesn't pretend to be expandable. Keep the same layout
-        // by rendering it as a <div>-like button — no visual disabled
-        // state, just no pointer cursor + no toggle.
-        disabled={!hasBody}
-        className={`w-full text-left ${hasBody ? "cursor-pointer" : "cursor-default"}`}
-        aria-expanded={hasBody ? open : undefined}
-      >
-        <div className="flex items-baseline gap-2">
-          {hasBody ? (
-            <span
-              aria-hidden
-              className={`text-muted text-xs transition-transform inline-block ${
-                open ? "rotate-90" : ""
-              }`}
-            >
-              ▸
-            </span>
-          ) : null}
-          <span
-            className="text-sm font-medium text-fg break-words"
-            dangerouslySetInnerHTML={{ __html: renderSlackMrkdwn(headline) }}
-          />
-        </div>
-      </button>
-      <div className="flex items-center gap-2 text-xs text-muted mt-0.5 ml-5">
+      <h3
+        className="text-sm font-semibold text-fg break-words"
+        dangerouslySetInnerHTML={{ __html: renderSlackMrkdwn(parsed.name) }}
+      />
+      <div className="flex items-center gap-2 text-xs text-muted mt-0.5">
         <span>{update.author_name}</span>
         <span>·</span>
         <span>{relativeTime(new Date(update.posted_at_ms).toISOString())}</span>
@@ -191,47 +182,79 @@ function UpdateRow({ update }: { update: FeatureUpdate }) {
               target="_blank"
               rel="noopener noreferrer"
               className="text-accent hover:underline"
-              onClick={(e) => e.stopPropagation()}
             >
               Open in Slack
             </a>
           </>
         ) : null}
       </div>
-      {open && hasBody ? (
+      {hasBody ? (
         <div
-          className="text-sm text-fg mt-2 ml-5 whitespace-pre-wrap break-words"
+          className="text-sm text-fg mt-2 whitespace-pre-wrap break-words"
           // Slack mrkdwn → HTML is small enough to inline. The renderer
           // escapes everything first, then re-introduces a fixed set of
           // safe tags (b/i/code/anchor), so untrusted Slack content can't
           // smuggle markup through.
-          dangerouslySetInnerHTML={{ __html: renderSlackMrkdwn(body) }}
+          dangerouslySetInnerHTML={{ __html: renderSlackMrkdwn(parsed.body) }}
         />
       ) : null}
     </li>
   );
 }
 
-/** Split a Slack message into "first meaningful line" + "everything
- *  after." The first non-blank line is taken as the feature name; the
- *  rest is the body (preserves blank lines so paragraph structure
- *  survives). Strips bold/italic markers from the headline so users
- *  don't see literal `*` characters when the row is collapsed. */
-function splitHeadline(text: string): { headline: string; body: string } {
+/**
+ * Parse a Slack feature-update post into a (name, body) pair.
+ *
+ * The team's convention is a leading line of the form
+ *   `*Feature name:* <the name>`
+ * (with or without the surrounding bold asterisks, and case-insensitive
+ * on the label). We pull the name out, drop that line from the body,
+ * and return the rest verbatim — every other labelled field stays in
+ * place so readers see the full context underneath the title.
+ *
+ * Returns `null` when the post doesn't match the convention so the
+ * panel can skip ad-hoc messages and thread replies that ended up in
+ * the same channel.
+ *
+ * Also supports the variant where "Feature name" is on its own line
+ * and the value is on the next non-blank line:
+ *   `*Feature name*`
+ *   `Bold Reports`
+ */
+function parseFeatureUpdate(
+  text: string
+): { name: string; body: string } | null {
   const lines = text.split("\n");
-  let headlineIdx = -1;
   for (let i = 0; i < lines.length; i++) {
-    if (lines[i].trim().length > 0) {
-      headlineIdx = i;
-      break;
+    // Strip Slack bold markers (asterisks) so the label is easy to
+    // match regardless of formatting.
+    const stripped = lines[i].replace(/\*/g, "").trim();
+    const m = /^feature\s*name\s*:?\s*(.*)$/i.exec(stripped);
+    if (!m) continue;
+
+    // Case 1: value on the same line ("Feature name: Bold Reports").
+    const inlineName = m[1].trim();
+    if (inlineName) {
+      const body = lines.filter((_, idx) => idx !== i).join("\n").trim();
+      return { name: inlineName, body };
     }
+
+    // Case 2: label-only line ("*Feature name*"), value on the next
+    // non-blank line.
+    for (let j = i + 1; j < lines.length; j++) {
+      const value = lines[j].replace(/\*/g, "").trim();
+      if (!value) continue;
+      const drop = new Set<number>([i, j]);
+      const body = lines
+        .filter((_, idx) => !drop.has(idx))
+        .join("\n")
+        .trim();
+      return { name: value, body };
+    }
+    // Label with no value following — not a valid feature post.
+    return null;
   }
-  if (headlineIdx === -1) {
-    return { headline: "(no content)", body: "" };
-  }
-  const headline = lines[headlineIdx].trim();
-  const body = lines.slice(headlineIdx + 1).join("\n").trim();
-  return { headline, body };
+  return null;
 }
 
 /**
