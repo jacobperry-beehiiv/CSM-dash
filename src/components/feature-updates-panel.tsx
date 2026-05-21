@@ -141,10 +141,46 @@ export function FeatureUpdatesPanel() {
 }
 
 function UpdateRow({ update }: { update: FeatureUpdate }) {
+  const [open, setOpen] = useState(false);
+  // First non-empty line is treated as the feature name. Feature-update
+  // posts in Slack conventionally lead with the title on its own line,
+  // so this is a reliable summary without forcing a structured schema.
+  // Strips Slack mrkdwn emphasis markers from the headline so a leading
+  // *bold* doesn't render as raw asterisks in the collapsed view.
+  const { headline, body } = splitHeadline(update.text);
+  const hasBody = body.trim().length > 0;
   return (
     <li className="border-l-2 border-border pl-3">
-      <div className="flex items-center gap-2 text-xs text-muted">
-        <span className="font-medium text-fg">{update.author_name}</span>
+      <button
+        type="button"
+        onClick={() => hasBody && setOpen((o) => !o)}
+        // Disable the click target entirely when there's no body so the
+        // row doesn't pretend to be expandable. Keep the same layout
+        // by rendering it as a <div>-like button — no visual disabled
+        // state, just no pointer cursor + no toggle.
+        disabled={!hasBody}
+        className={`w-full text-left ${hasBody ? "cursor-pointer" : "cursor-default"}`}
+        aria-expanded={hasBody ? open : undefined}
+      >
+        <div className="flex items-baseline gap-2">
+          {hasBody ? (
+            <span
+              aria-hidden
+              className={`text-muted text-xs transition-transform inline-block ${
+                open ? "rotate-90" : ""
+              }`}
+            >
+              ▸
+            </span>
+          ) : null}
+          <span
+            className="text-sm font-medium text-fg break-words"
+            dangerouslySetInnerHTML={{ __html: renderSlackMrkdwn(headline) }}
+          />
+        </div>
+      </button>
+      <div className="flex items-center gap-2 text-xs text-muted mt-0.5 ml-5">
+        <span>{update.author_name}</span>
         <span>·</span>
         <span>{relativeTime(new Date(update.posted_at_ms).toISOString())}</span>
         {update.permalink ? (
@@ -155,22 +191,47 @@ function UpdateRow({ update }: { update: FeatureUpdate }) {
               target="_blank"
               rel="noopener noreferrer"
               className="text-accent hover:underline"
+              onClick={(e) => e.stopPropagation()}
             >
               Open in Slack
             </a>
           </>
         ) : null}
       </div>
-      <div
-        className="text-sm text-fg mt-1 whitespace-pre-wrap break-words"
-        // Slack mrkdwn → HTML is small enough to inline. The renderer
-        // escapes everything first, then re-introduces a fixed set of
-        // safe tags (b/i/code/anchor), so untrusted Slack content can't
-        // smuggle markup through.
-        dangerouslySetInnerHTML={{ __html: renderSlackMrkdwn(update.text) }}
-      />
+      {open && hasBody ? (
+        <div
+          className="text-sm text-fg mt-2 ml-5 whitespace-pre-wrap break-words"
+          // Slack mrkdwn → HTML is small enough to inline. The renderer
+          // escapes everything first, then re-introduces a fixed set of
+          // safe tags (b/i/code/anchor), so untrusted Slack content can't
+          // smuggle markup through.
+          dangerouslySetInnerHTML={{ __html: renderSlackMrkdwn(body) }}
+        />
+      ) : null}
     </li>
   );
+}
+
+/** Split a Slack message into "first meaningful line" + "everything
+ *  after." The first non-blank line is taken as the feature name; the
+ *  rest is the body (preserves blank lines so paragraph structure
+ *  survives). Strips bold/italic markers from the headline so users
+ *  don't see literal `*` characters when the row is collapsed. */
+function splitHeadline(text: string): { headline: string; body: string } {
+  const lines = text.split("\n");
+  let headlineIdx = -1;
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i].trim().length > 0) {
+      headlineIdx = i;
+      break;
+    }
+  }
+  if (headlineIdx === -1) {
+    return { headline: "(no content)", body: "" };
+  }
+  const headline = lines[headlineIdx].trim();
+  const body = lines.slice(headlineIdx + 1).join("\n").trim();
+  return { headline, body };
 }
 
 /**
