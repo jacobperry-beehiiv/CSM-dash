@@ -31,6 +31,13 @@ export default auth((req) => {
   // an HTML login page.
   if (pathname.startsWith("/api/mcp")) return;
 
+  // Cron-triggered Slack sync. Accepts EITHER a signed-in session
+  // (admin clicking "Sync now") or a Bearer CRON_SECRET header
+  // (Vercel Cron). The route handler itself checks both — letting the
+  // request through here just keeps the JSON contract intact for the
+  // cron path.
+  if (pathname.startsWith("/api/feature-updates/sync")) return;
+
   if (!req.auth) {
     const url = req.nextUrl.clone();
     url.pathname = "/login";
