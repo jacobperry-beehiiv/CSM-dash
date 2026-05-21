@@ -3,8 +3,10 @@ import {
   filterCustomers,
   getDataSource,
   loadCustomers,
+  resolveCsmFilter,
   uniqueCsms,
 } from "@/lib/data/load-customers";
+import { auth } from "@/auth";
 import { runAtRiskCheck } from "@/lib/engines/at-risk";
 import { runDeliverabilityCheck } from "@/lib/engines/deliverability";
 import type { CustomerWithMetrics, Segment } from "@/lib/types";
@@ -73,17 +75,22 @@ export default async function CsmPage({
   // filters now do that drill-down inside the consolidated book view.
   const rawTab = sp.tab ?? "book";
   const tab = rawTab === "utilization" ? "book" : rawTab;
-  const csm = sp.csm ?? null;
   const segment: Segment = (sp.segment as Segment) ?? "enterprise";
   const source = getDataSource();
 
   let body;
   let error: string | null = null;
   let csms: string[] = [];
+  // Effective CSM filter: defaults to the viewer's own handle on
+  // first load (?csm= absent), null when they pick "All CSMs"
+  // (?csm=all). See lib/data/load-customers.ts → resolveCsmFilter.
+  let csm: string | null = null;
 
   try {
     const all = await loadCustomers();
     csms = uniqueCsms(all);
+    const session = await auth();
+    csm = resolveCsmFilter(sp.csm, all, session?.user?.email);
     const book = filterCustomers(all, { csm, segment });
 
     if (tab === "book") {

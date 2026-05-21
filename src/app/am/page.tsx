@@ -2,8 +2,10 @@ import { Suspense } from "react";
 import {
   isEnterprise,
   loadCustomers,
+  resolveCsmFilter,
   uniqueCsms,
 } from "@/lib/data/load-customers";
+import { auth } from "@/auth";
 import {
   loadApproachingEnterprise,
   loadPastDue,
@@ -98,14 +100,19 @@ export default async function AmPage({
 }) {
   const sp = await searchParams;
   const tab = sp.tab ?? "enterprise";
-  const csm = sp.csm ?? null;
 
   let body;
   let csms: string[] = [];
+  // Effective CSM filter — defaults to the viewer's own handle on
+  // first load; `?csm=all` is the explicit "show everyone" override.
+  // See lib/data/load-customers.ts → resolveCsmFilter.
+  let csm: string | null = null;
 
   try {
     const all = await loadCustomers();
     csms = uniqueCsms(all);
+    const session = await auth();
+    csm = resolveCsmFilter(sp.csm, all, session?.user?.email);
 
     if (tab === "enterprise") {
       const cohort = all

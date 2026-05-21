@@ -179,3 +179,58 @@ export function uniqueCsms(customers: Customer[]): string[] {
   }
   return [...set].sort();
 }
+
+/**
+ * Look up the internal CSM handle ("Jacob_Perry") owned by the
+ * sign-in email. Walks the customer book for a row where
+ * customer_success_manager_email matches; returns the
+ * customer_success_manager on that row. Returns null when the
+ * viewer isn't a CSM in the book (admin email, ex-employee, etc.).
+ *
+ * Used by the page-level CSM filter to auto-scope to the viewer's
+ * own book on first load — they can opt out with the "All CSMs"
+ * option in the dropdown (which writes ?csm=all to the URL).
+ */
+export function findCsmHandleForViewer(
+  customers: Customer[],
+  viewerEmail: string | null | undefined
+): string | null {
+  if (!viewerEmail) return null;
+  const target = viewerEmail.toLowerCase();
+  for (const c of customers) {
+    const email = c.customer_success_manager_email;
+    if (
+      email &&
+      email.toLowerCase() === target &&
+      c.customer_success_manager
+    ) {
+      return c.customer_success_manager;
+    }
+  }
+  return null;
+}
+
+/**
+ * Resolve the effective CSM filter for a page given the raw URL
+ * param + the signed-in viewer's email.
+ *
+ *   sp.csm undefined  → default to viewer's own CSM handle when
+ *                       we can match them in the book; else null
+ *                       (show everyone — better than showing nothing
+ *                       to an admin who isn't a CSM).
+ *   sp.csm === "all"  → null (explicit "show everyone" override).
+ *   sp.csm specific   → that handle as-is.
+ *
+ * Returns null when no filter should be applied.
+ */
+export function resolveCsmFilter(
+  raw: string | undefined,
+  customers: Customer[],
+  viewerEmail: string | null | undefined
+): string | null {
+  if (raw === "all") return null;
+  if (raw === undefined) {
+    return findCsmHandleForViewer(customers, viewerEmail);
+  }
+  return raw || null;
+}

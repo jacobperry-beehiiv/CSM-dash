@@ -3,7 +3,9 @@ import {
   getDataSource,
   isEnterprise,
   loadCustomers,
+  resolveCsmFilter,
 } from "@/lib/data/load-customers";
+import { auth } from "@/auth";
 import { fmtCurrency } from "@/components/format";
 import { TeamTasksPanel } from "@/components/team-tasks-panel";
 import type { Customer, Segment } from "@/lib/types";
@@ -21,7 +23,6 @@ export default async function MissionControl({
   searchParams: Promise<SP>;
 }) {
   const sp = await searchParams;
-  const csm = sp.csm ?? null;
   const segment: Segment = (sp.segment as Segment) ?? "all";
   const source = getDataSource();
 
@@ -29,9 +30,17 @@ export default async function MissionControl({
   let book: Customer[] = [];
   let entCount = 0;
   let nonEntCount = 0;
+  // Effective CSM filter resolved server-side from the URL + the
+  // viewer's email. No ?csm= param → defaults to the viewer's own
+  // CSM handle when we can match them; ?csm=all overrides to
+  // everyone. `csm` is the value we filter the book by AND what we
+  // surface in the subtitle text.
+  let csm: string | null = null;
 
   try {
     const all = await loadCustomers();
+    const session = await auth();
+    csm = resolveCsmFilter(sp.csm, all, session?.user?.email);
     book = filterCustomers(all, { csm, segment });
     entCount = book.filter(isEnterprise).length;
     nonEntCount = book.length - entCount;
