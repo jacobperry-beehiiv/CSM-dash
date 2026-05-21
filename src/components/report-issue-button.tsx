@@ -35,6 +35,12 @@ const MAX_SCREENSHOT_BYTES = 5 * 1024 * 1024; // 5 MB safety cap
 export function ReportIssueButton() {
   const viewerEmail = useViewerEmail();
   const [open, setOpen] = useState(false);
+  // "Capture mode" hides the modal chrome without losing the typed
+  // message + state, so the user can hit their OS screenshot
+  // shortcut (Cmd-Shift-4 / Win-Shift-S) against a clean page. A
+  // small floating banner stays mounted with paste-listener wiring
+  // so the screenshot snaps right back into the form.
+  const [capturing, setCapturing] = useState(false);
   const [message, setMessage] = useState("");
   const [screenshot, setScreenshot] = useState<Screenshot | null>(null);
   const [busy, setBusy] = useState(false);
@@ -53,9 +59,35 @@ export function ReportIssueButton() {
       setResult(null);
       setError(null);
       setBusy(false);
+      setCapturing(false);
     }, 200);
     return () => clearTimeout(t);
   }, [open]);
+
+  // While the modal is "hidden for capture," paste anywhere on the
+  // page snaps the screenshot back in and restores the form. We
+  // listen on document so the user doesn't have to focus any
+  // particular element — they're coming back from the OS screenshot
+  // tool, so the active element is unpredictable.
+  useEffect(() => {
+    if (!capturing) return;
+    function onPaste(e: ClipboardEvent) {
+      if (!e.clipboardData) return;
+      for (const item of e.clipboardData.items) {
+        if (item.kind === "file" && item.type.startsWith("image/")) {
+          const file = item.getAsFile();
+          if (file) {
+            e.preventDefault();
+            setCapturing(false);
+            void ingestFile(file);
+          }
+          return;
+        }
+      }
+    }
+    document.addEventListener("paste", onPaste);
+    return () => document.removeEventListener("paste", onPaste);
+  }, [capturing]);
 
   // Wire Cmd/Ctrl-V on the modal to clipboard-image intake. Listens
   // at the modal container so we don't fight the textarea's own
@@ -178,7 +210,37 @@ export function ReportIssueButton() {
         <span aria-hidden>🐛</span>
         Report an issue
       </button>
-      {open ? (
+      {open && capturing ? (
+        <div className="fixed bottom-5 right-5 z-50 bg-surface border border-border-strong rounded-lg shadow-card-lg p-4 max-w-sm">
+          <div className="flex items-start gap-3">
+            <span aria-hidden className="text-lg">📸</span>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-medium text-fg">
+                Capture the page, then paste it back here
+              </p>
+              <p className="text-xs text-muted mt-1">
+                {isMacLike()
+                  ? "Press ⌘⇧4 (region) or ⌘⇧3 (full screen) — copy to clipboard by holding Ctrl. Then press ⌘V anywhere on this tab."
+                  : "Press Win+Shift+S (Snipping Tool) or PrtScn. Then press Ctrl+V anywhere on this tab."}
+              </p>
+              <p className="text-[11px] text-subtle mt-1">
+                We&apos;re listening for the paste — the form will pop
+                back up automatically with the screenshot attached.
+              </p>
+            </div>
+          </div>
+          <div className="mt-3 flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => setCapturing(false)}
+              className="px-3 py-1.5 border border-border-strong rounded-md text-xs hover:bg-canvas"
+            >
+              Bring the form back
+            </button>
+          </div>
+        </div>
+      ) : null}
+      {open && !capturing ? (
         <div
           className="fixed inset-0 bg-black/40 z-40 flex items-center justify-center p-4"
           onClick={() => !busy && setOpen(false)}
@@ -244,20 +306,34 @@ export function ReportIssueButton() {
                     </div>
                   </div>
                 ) : (
-                  <button
-                    type="button"
-                    onClick={() => fileInputRef.current?.click()}
-                    onDragOver={(e) => e.preventDefault()}
-                    onDrop={onDrop}
-                    className="w-full border border-dashed border-border-strong rounded-md py-6 text-center text-xs text-muted hover:bg-canvas/60"
-                  >
-                    <p className="font-medium text-fg">
-                      Paste, drop, or click to add
-                    </p>
-                    <p className="mt-0.5">
-                      Cmd/Ctrl-V after a screenshot tool works too
-                    </p>
-                  </button>
+                  <div className="space-y-2">
+                    <button
+                      type="button"
+                      onClick={() => fileInputRef.current?.click()}
+                      onDragOver={(e) => e.preventDefault()}
+                      onDrop={onDrop}
+                      className="w-full border border-dashed border-border-strong rounded-md py-6 text-center text-xs text-muted hover:bg-canvas/60"
+                    >
+                      <p className="font-medium text-fg">
+                        Paste, drop, or click to add
+                      </p>
+                      <p className="mt-0.5">
+                        Cmd/Ctrl-V after a screenshot tool works too
+                      </p>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setCapturing(true)}
+                      className="w-full border border-border-strong rounded-md py-2 text-xs hover:bg-canvas/60"
+                    >
+                      <span className="font-medium text-fg">
+                        Hide this modal &amp; take a screenshot
+                      </span>
+                      <span className="ml-1 text-muted">
+                        — we&apos;ll get out of the way so you can grab the page underneath
+                      </span>
+                    </button>
+                  </div>
                 )}
                 <input
                   ref={fileInputRef}
@@ -308,6 +384,19 @@ export function ReportIssueButton() {
       ) : null}
     </>
   );
+}
+
+/** Best-effort platform detection so the capture prompt shows the
+ *  right keyboard shortcut. Falls back to "mac-like" because that's
+ *  the dominant client for the beehiiv team — wrong copy is mildly
+ *  annoying, never broken. */
+function isMacLike(): boolean {
+  if (typeof navigator === "undefined") return true;
+  const ua = navigator.userAgent || "";
+  if (/Mac|iPhone|iPad|iPod/.test(ua)) return true;
+  if (/Windows|Win32|Win64/.test(ua)) return false;
+  if (/Linux|X11/.test(ua)) return false;
+  return true;
 }
 
 /** Convert ArrayBuffer → base64 without using FileReader (which is
