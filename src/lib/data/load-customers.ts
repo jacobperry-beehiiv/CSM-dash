@@ -26,6 +26,72 @@ export function getDataSource(): DataSource {
 let rawCache: { source: DataSource; data: Customer[]; expires: number } | null = null;
 const CACHE_TTL_MS = 60_000;
 
+/**
+ * "Enrichment score" for picking the best row when q10600 emits more
+ * than one row per workspace (the join that backs q10600 multiplies
+ * for ~4 customers today). Rows with HubSpot contacts or a populated
+ * `last_activity_at` beat rows without — those fields are written by
+ * the sync-time HubSpot enrichment step against `owner_email`, and
+ * Metabase doesn't double them across the duplicated rows, so when a
+ * workspace is duplicated only one copy ends up enriched.
+ */
+function enrichmentScore(c: Customer): number {
+  let score = 0;
+  if (c.hubspot_contacts && c.hubspot_contacts.length > 0) score += 10;
+  if (c.last_activity_at) score += 4;
+  if (c.hubspot_company_id) score += 2;
+  // Tiebreakers — prefer the row with the most non-null fields, on
+  // the assumption that more populated = more reliable.
+  for (const k of Object.keys(c) as (keyof Customer)[]) {
+    if (c[k] != null) score += 0.01;
+  }
+  return score;
+}
+
+/**
+ * Collapse duplicate `workspace_id` rows down to one. Keeps the
+ * highest-enrichment-scoring copy so HubSpot contacts and activity
+ * dates survive. Rows without a workspace_id are passed through
+ * untouched — they can't dedupe.
+ *
+ * Background: q10600's underlying join multiplies for a handful of
+ * workspaces (4 as of 2026-05-21 — Togethxr, Sckale, HangarX, Civic
+ * News). Without dedupe the renewals tab shows the same customer
+ * multiple times, the customer-table search surfaces dupes, the
+ * dashboard's ARR total overcounts by tens of thousands, and the
+ * "Email selected" launcher will draft two emails to the same
+ * customer.
+ */
+function dedupeByWorkspace(rows: Customer[]): Customer[] {
+  const best = new Map<string, { row: Customer; score: number }>();
+  const out: Customer[] = [];
+  for (const c of rows) {
+    const id = c.workspace_id;
+    if (!id) {
+      out.push(c);
+      continue;
+    }
+    const score = enrichmentScore(c);
+    const existing = best.get(id);
+    if (!existing || score > existing.score) {
+      best.set(id, { row: c, score });
+    }
+  }
+  // Emit in the original q10600 order to keep downstream sort
+  // assumptions (e.g. "first match wins" in csm lookups) stable.
+  const seen = new Set<string>();
+  for (const c of rows) {
+    if (!c.workspace_id) continue;
+    if (seen.has(c.workspace_id)) continue;
+    const pick = best.get(c.workspace_id);
+    if (pick) {
+      seen.add(c.workspace_id);
+      out.push(pick.row);
+    }
+  }
+  return out;
+}
+
 async function loadRawCustomers(): Promise<Customer[]> {
   const source = getDataSource();
   const now = Date.now();
@@ -40,6 +106,7 @@ async function loadRawCustomers(): Promise<Customer[]> {
     const rows = (await runSavedQuestion(10600)) as Record<string, unknown>[];
     raw = rows.map(metabaseRowToCustomer);
   }
+  raw = dedupeByWorkspace(raw);
 
   rawCache = { source, data: raw, expires: now + CACHE_TTL_MS };
   return raw;
