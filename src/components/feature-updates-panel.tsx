@@ -163,40 +163,70 @@ function UpdateRow({
   update: FeatureUpdate;
   parsed: { name: string; body: string };
 }) {
+  const [open, setOpen] = useState(false);
   const hasBody = parsed.body.trim().length > 0;
   return (
     <li className="border-l-2 border-border pl-3">
-      <h3
-        className="text-sm font-semibold text-fg break-words"
-        dangerouslySetInnerHTML={{ __html: renderSlackMrkdwn(parsed.name) }}
-      />
-      <div className="flex items-center gap-2 text-xs text-muted mt-0.5">
-        <span>{update.author_name}</span>
-        <span>·</span>
-        <span>{relativeTime(new Date(update.posted_at_ms).toISOString())}</span>
-        {update.permalink ? (
-          <>
-            <span>·</span>
-            <a
-              href={update.permalink}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-accent hover:underline"
-            >
-              Open in Slack
-            </a>
-          </>
+      <button
+        type="button"
+        onClick={() => hasBody && setOpen((o) => !o)}
+        disabled={!hasBody}
+        className={`w-full text-left flex items-baseline gap-2 ${
+          hasBody ? "cursor-pointer" : "cursor-default"
+        }`}
+        aria-expanded={hasBody ? open : undefined}
+      >
+        {hasBody ? (
+          <span
+            aria-hidden
+            className={`text-muted text-xs transition-transform inline-block ${
+              open ? "rotate-90" : ""
+            }`}
+          >
+            ▸
+          </span>
         ) : null}
-      </div>
-      {hasBody ? (
-        <div
-          className="text-sm text-fg mt-2 whitespace-pre-wrap break-words"
-          // Slack mrkdwn → HTML is small enough to inline. The renderer
-          // escapes everything first, then re-introduces a fixed set of
-          // safe tags (b/i/code/anchor), so untrusted Slack content can't
-          // smuggle markup through.
-          dangerouslySetInnerHTML={{ __html: renderSlackMrkdwn(parsed.body) }}
+        <span
+          className="text-sm font-semibold text-fg break-words"
+          dangerouslySetInnerHTML={{ __html: renderSlackMrkdwn(parsed.name) }}
         />
+      </button>
+      {open ? (
+        <>
+          <div className="flex items-center gap-2 text-xs text-muted mt-1 ml-5">
+            <span>{update.author_name}</span>
+            <span>·</span>
+            <span>
+              {relativeTime(new Date(update.posted_at_ms).toISOString())}
+            </span>
+            {update.permalink ? (
+              <>
+                <span>·</span>
+                <a
+                  href={update.permalink}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-accent hover:underline"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  Open in Slack
+                </a>
+              </>
+            ) : null}
+          </div>
+          {hasBody ? (
+            <div
+              className="text-sm text-fg mt-2 ml-5 whitespace-pre-wrap break-words"
+              // Slack mrkdwn → HTML is small enough to inline. The
+              // renderer escapes everything first, then re-introduces
+              // a fixed set of safe tags (b/i/code/anchor), so
+              // untrusted Slack content can't smuggle markup through.
+              dangerouslySetInnerHTML={{
+                __html: renderSlackMrkdwn(parsed.body),
+              }}
+            />
+          ) : null}
+        </>
       ) : null}
     </li>
   );
