@@ -49,6 +49,23 @@ export function hubspotCompanyUrl(
 }
 
 /**
+ * Stripe Dashboard URL for a customer record. Defaults to live mode
+ * since this dashboard reads production data; set
+ * NEXT_PUBLIC_STRIPE_TEST_MODE=true to point links at the test
+ * dashboard for local sandboxing.
+ */
+export function stripeCustomerUrl(
+  stripeCustomerId: string | null | undefined
+): string | null {
+  if (!stripeCustomerId) return null;
+  const test = process.env.NEXT_PUBLIC_STRIPE_TEST_MODE === "true";
+  const segment = test ? "test/customers" : "customers";
+  return `https://dashboard.stripe.com/${segment}/${encodeURIComponent(
+    stripeCustomerId
+  )}`;
+}
+
+/**
  * Returns a Metabase deep link for a specific publication / workspace.
  * Configurable via NEXT_PUBLIC_METABASE_PUB_URL_TEMPLATE — substitution
  * tokens supported: {workspace_id}, {workspace_name}, {publication_id}.

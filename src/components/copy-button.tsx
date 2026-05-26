@@ -16,6 +16,8 @@ export function CopyButton({
   value,
   label,
   showValue = true,
+  href,
+  hrefLabel,
   className = "",
 }: {
   value: string;
@@ -24,6 +26,14 @@ export function CopyButton({
   /** When true, renders the value itself in a mono badge next to the
    *  button. Set false for sensitive values you don't want surfaced. */
   showValue?: boolean;
+  /** When set, wraps the value badge in an `<a target="_blank">` so the
+   *  ID becomes a quick-jump to the linked profile (Stripe, HubSpot,
+   *  etc.) without losing the click-to-copy affordance — those live in
+   *  the adjacent button. */
+  href?: string | null;
+  /** Optional tooltip override for the link wrapper. Defaults to
+   *  "Open in new tab". */
+  hrefLabel?: string;
   className?: string;
 }) {
   const [hit, setHit] = useState(false);
@@ -38,12 +48,28 @@ export function CopyButton({
     }
   }
 
+  const badge = (
+    <code className="font-mono text-[11px] text-subtle bg-surface-2 px-1.5 py-0.5 rounded select-all">
+      {value}
+    </code>
+  );
+
   return (
     <span className={`inline-flex items-center gap-1.5 ${className}`}>
       {showValue ? (
-        <code className="font-mono text-[11px] text-subtle bg-surface-2 px-1.5 py-0.5 rounded select-all">
-          {value}
-        </code>
+        href ? (
+          <a
+            href={href}
+            target="_blank"
+            rel="noopener noreferrer"
+            title={hrefLabel ?? "Open in new tab"}
+            className="hover:underline decoration-dotted"
+          >
+            {badge}
+          </a>
+        ) : (
+          badge
+        )
       ) : null}
       <button
         type="button"

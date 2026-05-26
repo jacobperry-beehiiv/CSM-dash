@@ -9,6 +9,7 @@ import { AdGapSummary } from "./ad-gap-summary";
 import { CadenceToggle } from "./cadence-toggle";
 import { HubSpotContactsSection } from "./hubspot-contacts-section";
 import { CopyButton } from "./copy-button";
+import { stripeCustomerUrl } from "@/lib/links";
 
 interface Props {
   customer: Customer;
@@ -40,6 +41,8 @@ export function CustomerDetailPanel({
               <CopyButton
                 value={c.stripe_customer_id}
                 label="Copy Stripe customer ID"
+                href={stripeCustomerUrl(c.stripe_customer_id)}
+                hrefLabel="Open in Stripe Dashboard"
               />
             </>
           ) : null}
