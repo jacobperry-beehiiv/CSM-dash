@@ -1,7 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { newMemberId, type TeamMember } from "@/lib/team-tasks/types";
+import type { SettingsShape } from "@/lib/data/settings";
 
 /**
  * Admin UI for the shared team roster powering the open-asks tracker
@@ -17,8 +18,35 @@ export function TeamRosterEditor({ initial }: { initial: TeamMember[] }) {
   const [saving, setSaving] = useState(false);
   const [savedAt, setSavedAt] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // CSM → Slack ID map from /settings/slack — single source of truth
+  // we link team members against. Fetched on mount so the dropdown
+  // reflects whatever IDs an admin has already configured globally.
+  const [csmSlackIds, setCsmSlackIds] = useState<Record<string, string>>({});
   const dirtyRef = useRef<TeamMember[] | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/settings")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => {
+        if (cancelled || !j) return;
+        const s = j as SettingsShape;
+        setCsmSlackIds(s.slack?.csm_user_ids ?? {});
+      })
+      .catch(() => {
+        // Failure here is non-fatal — the manual slack_user_id input
+        // still works as a fallback.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const csmHandleOptions = useMemo(
+    () => Object.keys(csmSlackIds).sort(),
+    [csmSlackIds]
+  );
 
   const save = useCallback(async (next: TeamMember[]) => {
     setSaving(true);
@@ -81,6 +109,15 @@ export function TeamRosterEditor({ initial }: { initial: TeamMember[] }) {
     );
   }
 
+  function setCsmHandle(id: string, handle: string) {
+    const next = handle.trim() || null;
+    update(
+      members.map((m) =>
+        m.id === id ? { ...m, csm_handle: next ?? undefined } : m
+      )
+    );
+  }
+
   function remove(id: string) {
     if (members.length <= 1) {
       setError("Roster must include at least one member.");
@@ -131,55 +168,98 @@ export function TeamRosterEditor({ initial }: { initial: TeamMember[] }) {
       </div>
 
       <ul className="divide-y divide-border bg-surface border border-border rounded-md">
-        {members.map((m, i) => (
-          <li
-            key={m.id}
-            className="flex items-center gap-2 px-3 py-2 hover:bg-canvas/40"
-          >
-            <div className="flex flex-col gap-0">
-              <button
-                onClick={() => move(m.id, -1)}
-                disabled={i === 0}
-                aria-label="Move up"
-                className="text-subtle hover:text-fg disabled:opacity-30 leading-none"
-              >
-                ▲
-              </button>
-              <button
-                onClick={() => move(m.id, 1)}
-                disabled={i === members.length - 1}
-                aria-label="Move down"
-                className="text-subtle hover:text-fg disabled:opacity-30 leading-none"
-              >
-                ▼
-              </button>
-            </div>
-            <input
-              type="text"
-              value={m.label}
-              onChange={(e) => rename(m.id, e.target.value)}
-              placeholder="Display name"
-              className="flex-1 px-2 py-1 bg-transparent border border-transparent hover:border-border focus:border-accent rounded text-sm focus:outline-none"
-            />
-            <input
-              type="text"
-              value={m.slack_user_id ?? ""}
-              onChange={(e) => setSlackId(m.id, e.target.value)}
-              placeholder="Slack ID (U02ABC123)"
-              title="Slack user ID for due-date reminders. Find it via the user's Slack profile → … → Copy member ID."
-              className="w-44 px-2 py-1 bg-transparent border border-transparent hover:border-border focus:border-accent rounded text-[12px] font-mono focus:outline-none"
-            />
-            <code className="text-[11px] text-subtle font-mono">{m.id}</code>
-            <button
-              onClick={() => remove(m.id)}
-              className="text-subtle hover:text-red-600 text-sm px-2"
-              title="Remove from roster"
-              aria-label={`Remove ${m.label}`}
+        {members.map((m, i) => {
+          // Effective Slack ID surfaced inline so admins can see at a
+          // glance whether reminders will reach this member. Manual
+          // override wins; otherwise we dereference csm_handle through
+          // the global Slack settings map.
+          const resolvedSlackId = m.slack_user_id
+            ? m.slack_user_id
+            : m.csm_handle
+              ? csmSlackIds[m.csm_handle]
+              : null;
+          return (
+            <li
+              key={m.id}
+              className="flex flex-wrap items-center gap-2 px-3 py-2 hover:bg-canvas/40"
             >
-              ✕
-            </button>
-          </li>
-        ))}
+              <div className="flex flex-col gap-0">
+                <button
+                  onClick={() => move(m.id, -1)}
+                  disabled={i === 0}
+                  aria-label="Move up"
+                  className="text-subtle hover:text-fg disabled:opacity-30 leading-none"
+                >
+                  ▲
+                </button>
+                <button
+                  onClick={() => move(m.id, 1)}
+                  disabled={i === members.length - 1}
+                  aria-label="Move down"
+                  className="text-subtle hover:text-fg disabled:opacity-30 leading-none"
+                >
+                  ▼
+                </button>
+              </div>
+              <input
+                type="text"
+                value={m.label}
+                onChange={(e) => rename(m.id, e.target.value)}
+                placeholder="Display name"
+                className="flex-1 min-w-[10rem] px-2 py-1 bg-transparent border border-transparent hover:border-border focus:border-accent rounded text-sm focus:outline-none"
+              />
+              <select
+                value={m.csm_handle ?? ""}
+                onChange={(e) => setCsmHandle(m.id, e.target.value)}
+                title="Link to a CSM from /settings/slack — Slack ID is sourced from there automatically."
+                className="px-2 py-1 border border-border-strong rounded-md text-xs bg-surface min-w-[10rem]"
+              >
+                <option value="">— link to CSM —</option>
+                {csmHandleOptions.map((h) => (
+                  <option key={h} value={h}>
+                    {h.replace(/_/g, " ")}
+                  </option>
+                ))}
+              </select>
+              <input
+                type="text"
+                value={m.slack_user_id ?? ""}
+                onChange={(e) => setSlackId(m.id, e.target.value)}
+                placeholder="Slack ID override"
+                title="Manual Slack user ID. Use this when the team member isn't a CSM (admin, contractor)."
+                className="w-40 px-2 py-1 bg-transparent border border-transparent hover:border-border focus:border-accent rounded text-[12px] font-mono focus:outline-none"
+              />
+              {/* Effective-ID readout. Green when reminders will reach this
+                  member; muted when there's nothing to dereference yet. */}
+              {resolvedSlackId ? (
+                <code
+                  className="text-[11px] font-mono px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300"
+                  title={`Effective Slack ID — ${
+                    m.slack_user_id ? "override" : "via " + m.csm_handle
+                  }`}
+                >
+                  → {resolvedSlackId}
+                </code>
+              ) : (
+                <span
+                  className="text-[11px] text-subtle italic"
+                  title="No Slack ID — reminders will skip this member."
+                >
+                  no Slack ID
+                </span>
+              )}
+              <code className="text-[11px] text-subtle font-mono">{m.id}</code>
+              <button
+                onClick={() => remove(m.id)}
+                className="text-subtle hover:text-red-600 text-sm px-2"
+                title="Remove from roster"
+                aria-label={`Remove ${m.label}`}
+              >
+                ✕
+              </button>
+            </li>
+          );
+        })}
       </ul>
 
       <div className="flex flex-wrap items-center gap-2">

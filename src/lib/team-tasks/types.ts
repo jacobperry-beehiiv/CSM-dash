@@ -36,10 +36,15 @@ export interface TeamMember {
   id: string;
   /** Display label shown in the column header. */
   label: string;
-  /** Slack user ID (e.g. "U02ABC123") used by the due-date reminder
-   *  sweep. When unset, the member is silently skipped — there's no
-   *  way to DM them without it. Find a teammate's ID by clicking their
-   *  Slack profile → "..." → "Copy member ID". */
+  /** Preferred linkage to the global CSM → Slack ID map maintained at
+   *  /settings/slack. Storing the handle (e.g. "Jacob_Perry") instead
+   *  of the Slack ID directly means there's a single source of truth:
+   *  edit the ID once in Slack settings and every team-task reminder
+   *  picks it up automatically. */
+  csm_handle?: string | null;
+  /** Direct Slack ID (e.g. "U02ABC123"). Used as an override when the
+   *  member isn't in the CSM map (admins, contractors). Takes priority
+   *  over `csm_handle` resolution when both are set. */
   slack_user_id?: string | null;
 }
 

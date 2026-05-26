@@ -1,4 +1,5 @@
 import { kvGet, kvSet } from "../storage/kv";
+import { loadSettings } from "../data/settings";
 import { getTeamTasks } from "./store";
 import type { TeamTask, TeamMember } from "./types";
 
@@ -99,10 +100,26 @@ interface SweepResult {
   failures: { task: string; member: string; error: string }[];
 }
 
+/** Resolve a team member to a Slack user ID, preferring the direct
+ *  override and falling back to the CSM-handle lookup in the global
+ *  Slack settings. Returns null when neither path yields an ID. */
+export function resolveMemberSlackId(
+  member: TeamMember,
+  csmUserIds: Record<string, string>
+): string | null {
+  if (member.slack_user_id) return member.slack_user_id;
+  if (member.csm_handle && csmUserIds[member.csm_handle]) {
+    return csmUserIds[member.csm_handle];
+  }
+  return null;
+}
+
 export async function runReminderSweep(
   opts: { dryRun?: boolean } = {}
 ): Promise<SweepResult> {
   const { tasks, members } = await getTeamTasks();
+  const settings = await loadSettings();
+  const csmUserIds = settings.slack.csm_user_ids;
   const state = await loadState();
   const result: SweepResult = {
     checked: 0,
@@ -133,7 +150,7 @@ export async function runReminderSweep(
       if (!member) continue; // Orphaned assignment for a removed member.
       result.checked++;
 
-      const slackId = member.slack_user_id ?? null;
+      const slackId = resolveMemberSlackId(member, csmUserIds);
       if (!slackId) {
         result.skipped_no_slack_id++;
         continue;
