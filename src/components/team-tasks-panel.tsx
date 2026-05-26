@@ -207,8 +207,21 @@ export function TeamTasksPanel() {
 
   const visibleTasks = useMemo(() => {
     if (!list) return [];
-    if (!hideCompleted) return list.tasks;
-    return list.tasks.filter((t) => !isTaskComplete(t, list.members));
+    const filtered = hideCompleted
+      ? list.tasks.filter((t) => !isTaskComplete(t, list.members))
+      : list.tasks;
+    // Earliest due-date first; tasks without a due date sink to the
+    // bottom (sorted by created_at among themselves so adding a task
+    // doesn't shuffle the existing TBD pile). Stable sort comes for
+    // free from Array#sort in modern engines.
+    return [...filtered].sort((a, b) => {
+      const aHas = Boolean(a.due_date);
+      const bHas = Boolean(b.due_date);
+      if (aHas && bHas) return a.due_date!.localeCompare(b.due_date!);
+      if (aHas) return -1;
+      if (bHas) return 1;
+      return (a.created_at ?? "").localeCompare(b.created_at ?? "");
+    });
   }, [list, hideCompleted]);
 
   const hiddenCount = list ? list.tasks.length - visibleTasks.length : 0;

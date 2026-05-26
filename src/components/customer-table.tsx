@@ -4,7 +4,7 @@ import { Fragment, useCallback, useMemo, useRef, useState } from "react";
 import type { Customer, CustomerWithMetrics } from "@/lib/types";
 import { StatusBadge } from "./status-badge";
 import { RiskLevelChip } from "./risk-level-chip";
-import { FilterBar, SearchInput } from "./filters";
+import { FilterBar, SearchInput, SelectFilter } from "./filters";
 import { CsmSelector } from "./csm-selector";
 import { useUrlSearch } from "@/lib/hooks/use-url-search";
 import { MetricCards } from "./metric-cards";
@@ -66,6 +66,11 @@ export function CustomerTable({
   const [sortKey, setSortKey] = useState<SortKey>("arr");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
   const [search, setSearch] = useUrlSearch("q");
+  // Lifecycle filter: q10600 already restricts to Live + Onboarding,
+  // so those are the only two values that show up in the book. The
+  // empty/"All" option leaves both showing. Synced to the URL so the
+  // viewer can deep-link a status-scoped view.
+  const [statusFilter, setStatusFilter] = useUrlSearch("status");
   const [featurePredicate, setFeaturePredicate] = useState<
     ((c: Customer) => boolean) | null
   >(null);
@@ -110,6 +115,12 @@ export function CustomerTable({
     if (featurePredicate) {
       list = list.filter(featurePredicate);
     }
+    if (statusFilter) {
+      const target = statusFilter.toLowerCase();
+      list = list.filter(
+        (c) => (c.property_company_status ?? "").toLowerCase() === target
+      );
+    }
 
     list = [...list].sort((a, b) => {
       const av = pickSortValue(a, sortKey);
@@ -125,7 +136,21 @@ export function CustomerTable({
       return sortDir === "asc" ? na - nb : nb - na;
     });
     return list;
-  }, [initialCustomers, search, featurePredicate, sortKey, sortDir]);
+  }, [initialCustomers, search, featurePredicate, statusFilter, sortKey, sortDir]);
+
+  // Counts shown next to each option in the lifecycle dropdown so the
+  // viewer sees how many rows each filter would yield. Derived from
+  // the full book (ignoring the active status filter), so the counts
+  // stay stable as the user toggles.
+  const statusCounts = useMemo(() => {
+    const counts: { live: number; onboarding: number } = { live: 0, onboarding: 0 };
+    for (const c of initialCustomers) {
+      const s = (c.property_company_status ?? "").toLowerCase();
+      if (s === "live") counts.live++;
+      else if (s === "onboarding") counts.onboarding++;
+    }
+    return counts;
+  }, [initialCustomers]);
 
   function toggleSort(key: SortKey) {
     if (sortKey === key) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
@@ -477,6 +502,21 @@ export function CustomerTable({
           placeholder="Search company or workspace…"
         />
         <CsmSelector csms={csms} />
+        <SelectFilter
+          label="Status"
+          value={statusFilter}
+          onChange={setStatusFilter}
+          emptyLabel="All"
+          emptyCount={statusCounts.live + statusCounts.onboarding}
+          options={[
+            { value: "Live", label: "Live", count: statusCounts.live },
+            {
+              value: "Onboarding",
+              label: "Onboarding",
+              count: statusCounts.onboarding,
+            },
+          ]}
+        />
       </FilterBar>
 
       <div className="space-y-3 mb-4">
