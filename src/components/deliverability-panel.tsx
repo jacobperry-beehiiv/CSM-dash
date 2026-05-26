@@ -63,10 +63,80 @@ export function DeliverabilityPanel({
   initial: RunResult;
   csms: string[];
 }) {
-  const data = initial;
+  // Local state mirrors the server's cleared resolutions so a Clear
+  // click feels instant. The engine seeded each alert with its
+  // cleared field on the server; we shadow that here so optimistic
+  // updates don't lose state on re-render.
+  const [data, setData] = useState<RunResult>(initial);
+  // Posts the user has pending clear/un-clear requests on — used so
+  // the button can show a brief "Clearing…" state without going
+  // through a full reload.
+  const [busyPosts, setBusyPosts] = useState<Set<string>>(new Set());
+  const [showCleared, setShowCleared] = useState(false);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [search, setSearch] = useUrlSearch("q");
   const ownerEmailByWorkspace = useOwnerEmailMap(data.alerts);
+
+  async function setClearedOptimistic(
+    postId: string,
+    cleared: boolean,
+    reason?: string
+  ) {
+    setBusyPosts((prev) => {
+      const next = new Set(prev);
+      next.add(postId);
+      return next;
+    });
+    // Optimistic patch.
+    const stamp = new Date().toISOString();
+    setData((prev) => ({
+      ...prev,
+      alerts: prev.alerts.map((a) =>
+        a.post.post_id !== postId
+          ? a
+          : {
+              ...a,
+              cleared: cleared
+                ? {
+                    cleared_at: stamp,
+                    cleared_by: null,
+                    reason: reason ?? null,
+                  }
+                : null,
+            }
+      ),
+    }));
+    try {
+      const r = await fetch("/api/deliverability/clear", {
+        method: cleared ? "POST" : "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ post_id: postId, reason }),
+      });
+      if (!r.ok) {
+        const j = (await r.json().catch(() => ({}))) as { error?: string };
+        throw new Error(j.error ?? `HTTP ${r.status}`);
+      }
+    } catch (e) {
+      // Roll back on failure.
+      setData((prev) => ({
+        ...prev,
+        alerts: prev.alerts.map((a) =>
+          a.post.post_id !== postId
+            ? a
+            : { ...a, cleared: cleared ? null : a.cleared }
+        ),
+      }));
+      window.alert(
+        `Clear failed: ${e instanceof Error ? e.message : "unknown"}`
+      );
+    } finally {
+      setBusyPosts((prev) => {
+        const next = new Set(prev);
+        next.delete(postId);
+        return next;
+      });
+    }
+  }
 
   function toggle(k: string) {
     setExpanded((prev) => {
@@ -89,6 +159,18 @@ export function DeliverabilityPanel({
     );
   }, [data.alerts, search]);
 
+  const clearedCount = useMemo(
+    () => data.alerts.filter((a) => a.cleared).length,
+    [data.alerts]
+  );
+
+  // Hide cleared sends from the default view; the toggle exposes them
+  // with the "Cleared" pill + an undo button.
+  const visibleAlerts = useMemo(
+    () => alerts.filter((a) => showCleared || !a.cleared),
+    [alerts, showCleared]
+  );
+
   return (
     <div className="space-y-4">
       <FilterBar>
@@ -98,24 +180,46 @@ export function DeliverabilityPanel({
           placeholder="Search workspace or subject…"
         />
         <CsmSelector csms={csms} />
+        {clearedCount > 0 ? (
+          <label className="inline-flex items-center gap-2 text-xs text-muted cursor-pointer">
+            <input
+              type="checkbox"
+              checked={showCleared}
+              onChange={(e) => setShowCleared(e.target.checked)}
+              className="rounded border-border-strong"
+            />
+            <span>
+              Show cleared ({clearedCount})
+            </span>
+          </label>
+        ) : null}
       </FilterBar>
       <div className="text-xs text-muted">
         {(() => {
-          const flaggedAll = data.alerts.filter((a) => a.flags.length > 0).length;
-          const flaggedFiltered = alerts.filter((a) => a.flags.length > 0).length;
+          const flaggedAll = data.alerts.filter(
+            (a) => a.flags.length > 0 && !a.cleared
+          ).length;
+          const flaggedFiltered = visibleAlerts.filter(
+            (a) => a.flags.length > 0 && !a.cleared
+          ).length;
           if (search) {
             return (
               <>
-                <strong className="text-fg">{alerts.length}</strong> of{" "}
+                <strong className="text-fg">{visibleAlerts.length}</strong> of{" "}
                 {data.alerts.length} sends match the filter (
-                {flaggedFiltered} flagged)
+                {flaggedFiltered} active alerts)
               </>
             );
           }
           return (
             <>
-              <strong className="text-fg">{data.alerts.length}</strong> sends
-              · {flaggedAll} flagged
+              <strong className="text-fg">{visibleAlerts.length}</strong>{" "}
+              {showCleared || clearedCount === 0 ? "sends" : "active sends"}
+              {" · "}
+              {flaggedAll} active alerts
+              {clearedCount > 0 && !showCleared ? (
+                <> · {clearedCount} cleared (hidden)</>
+              ) : null}
             </>
           );
         })()}
@@ -123,12 +227,17 @@ export function DeliverabilityPanel({
         {data.target_date} · generated {fmtDate(data.generated_at)}
       </div>
 
-      {alerts.length === 0 ? (
+      {visibleAlerts.length === 0 ? (
         <div className="bg-green-50 dark:bg-green-500/10 border border-green-200 dark:border-green-500/30 rounded-lg p-4 text-sm text-green-800 dark:text-green-200">
           {search ? (
             <>No sends match &ldquo;{search}&rdquo;.</>
           ) : data.total_posts_yesterday === 0 ? (
             <>No publications in this book sent on {data.target_date}.</>
+          ) : clearedCount > 0 && !showCleared ? (
+            <>
+              No active sends — all {clearedCount} of yesterday&apos;s sends
+              have been cleared.
+            </>
           ) : (
             <>
               No sends on {data.target_date} for the selected scope.
@@ -193,11 +302,14 @@ export function DeliverabilityPanel({
               </tr>
             </thead>
             <tbody>
-              {alerts.map((alert, i) => {
+              {visibleAlerts.map((alert, i) => {
                 const k = `${alert.post.post_id}-${i}`;
                 const isOpen = expanded.has(k);
                 const flagged = alert.flags.length > 0;
-                const critical = alert.flags.some((f) => f.severity === "critical");
+                const cleared = Boolean(alert.cleared);
+                const busy = busyPosts.has(alert.post.post_id);
+                const critical =
+                  !cleared && alert.flags.some((f) => f.severity === "critical");
                 const email = ownerEmailByWorkspace.get(alert.post.organization_id);
                 const masqUrl = email ? masqueradeUrl(email) : null;
                 const mbUrl = metabasePubUrl({
@@ -229,7 +341,16 @@ export function DeliverabilityPanel({
                         </span>
                       </td>
                       <td className="px-3 py-3">
-                        {flagged ? (
+                        {cleared ? (
+                          <span
+                            className="inline-flex items-center px-1.5 py-0.5 rounded-md text-[11px] font-medium bg-slate-200 text-slate-700 dark:bg-slate-500/30 dark:text-slate-200"
+                            title={`Cleared ${
+                              alert.cleared?.cleared_by ?? ""
+                            } ${alert.cleared?.cleared_at ?? ""}`.trim()}
+                          >
+                            Cleared
+                          </span>
+                        ) : flagged ? (
                           <SeverityBadge
                             severity={critical ? "critical" : "warning"}
                           />
@@ -302,6 +423,46 @@ export function DeliverabilityPanel({
                               📊
                             </a>
                           ) : null}
+                          {flagged ? (
+                            cleared ? (
+                              <button
+                                type="button"
+                                disabled={busy}
+                                onClick={() =>
+                                  void setClearedOptimistic(
+                                    alert.post.post_id,
+                                    false
+                                  )
+                                }
+                                title="Restore this send to the active alerts list."
+                                aria-label="Undo clear"
+                                className="px-2 py-1 text-xs border border-border-strong rounded-md hover:bg-canvas disabled:opacity-50"
+                              >
+                                {busy ? "…" : "Undo"}
+                              </button>
+                            ) : (
+                              <button
+                                type="button"
+                                disabled={busy}
+                                onClick={() => {
+                                  const reason =
+                                    window.prompt(
+                                      "Optional reason for clearing this send (visible to the team). Leave blank to skip."
+                                    ) ?? "";
+                                  void setClearedOptimistic(
+                                    alert.post.post_id,
+                                    true,
+                                    reason || undefined
+                                  );
+                                }}
+                                title="Acknowledge this flagged send and hide it from the active alerts list. Undo from the Show-cleared view."
+                                aria-label="Clear flagged send"
+                                className="px-2 py-1 text-xs border border-border-strong rounded-md hover:bg-canvas disabled:opacity-50"
+                              >
+                                {busy ? "…" : "Clear"}
+                              </button>
+                            )
+                          ) : null}
                         </div>
                       </td>
                     </tr>
@@ -343,6 +504,19 @@ function DeliverabilityDetail({ alert }: { alert: DeliverabilityAlert }) {
         Sent {fmtDate(alert.post.sent_date)} · {fmtNumber(alert.post.sent)}{" "}
         recipients · {alert.post.newsletter}
       </div>
+
+      {alert.cleared ? (
+        <div className="rounded-md border border-slate-300 dark:border-slate-500/30 bg-slate-100 dark:bg-slate-500/10 px-3 py-2 text-xs text-slate-700 dark:text-slate-200">
+          Cleared {fmtDate(alert.cleared.cleared_at)}
+          {alert.cleared.cleared_by ? <> by {alert.cleared.cleared_by}</> : null}
+          {alert.cleared.reason ? (
+            <>
+              {" · "}
+              <span className="italic">&ldquo;{alert.cleared.reason}&rdquo;</span>
+            </>
+          ) : null}
+        </div>
+      ) : null}
 
       <div className="grid grid-cols-2 md:grid-cols-6 gap-2 bg-surface rounded-md border border-border p-3">
         <Metric label="Delivered" value={fmtRate(alert.post.delivery_rate)} />

@@ -117,6 +117,14 @@ export interface DeliverabilityAlert {
   post: PostMetricsRow;
   flags: RedFlag[];
   csm: string | null;
+  /** Set when a CSM has explicitly "cleared" this send (acknowledged
+   *  or triaged). Hidden from the active alerts list by default; the
+   *  panel offers a "Show cleared" toggle to bring them back. */
+  cleared?: {
+    cleared_at: string;
+    cleared_by?: string | null;
+    reason?: string | null;
+  } | null;
 }
 
 // ─── At-risk ──────────────────────────────────────────────────────────

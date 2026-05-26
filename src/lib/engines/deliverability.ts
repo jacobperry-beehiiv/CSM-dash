@@ -1,6 +1,7 @@
 import { DB, runNativeQuery } from "../metabase";
 import { loadCustomers } from "../data/load-customers";
 import { readDeliverabilitySnapshot } from "../data/deliverability-snapshot";
+import { loadClearedPosts } from "../data/deliverability-clears";
 import { analyzePost } from "../thresholds";
 import type {
   DeliverabilityAlert,
@@ -589,12 +590,16 @@ export async function runDeliverabilityCheck(
   // whether it tripped a flag — readers want the full publication
   // sweep, not just the alarms. Clean posts ship through with an
   // empty `flags` array; the panel renders a "Clean" pill for them.
+  // Cleared resolutions are attached so the panel can hide acknowledged
+  // sends behind a "Show cleared" toggle.
+  const clearedByPost = await loadClearedPosts();
   const alerts: DeliverabilityAlert[] = [];
   for (const post of targetPosts) {
     const ownerCsm = csmByOrg.get(post.organization_id) ?? null;
     if (csmName && ownerCsm !== csmName) continue;
     const flags = analyzePost(post);
-    alerts.push({ post, flags, csm: ownerCsm });
+    const cleared = clearedByPost[post.post_id] ?? null;
+    alerts.push({ post, flags, csm: ownerCsm, cleared });
   }
 
   // Sort: critical count desc, then warning count desc, then sent desc
