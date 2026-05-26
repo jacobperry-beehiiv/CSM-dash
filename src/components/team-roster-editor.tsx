@@ -295,6 +295,7 @@ function ReminderSweepButtons() {
         error?: string;
         sent?: number;
         checked?: number;
+        skipped_no_due?: number;
         skipped_no_slack_id?: number;
         skipped_already_sent?: number;
         failures?: { task: string; member: string; error: string }[];
@@ -302,18 +303,47 @@ function ReminderSweepButtons() {
       if (!r.ok || !j.ok) {
         throw new Error(j.error ?? `HTTP ${r.status}`);
       }
-      const parts = [
-        `${dryRun ? "Dry run" : "Sent"}: ${j.sent ?? 0}`,
-        `checked: ${j.checked ?? 0}`,
-        j.skipped_no_slack_id
-          ? `missing slack id: ${j.skipped_no_slack_id}`
-          : null,
-        j.skipped_already_sent
-          ? `already sent: ${j.skipped_already_sent}`
-          : null,
-        j.failures?.length ? `failures: ${j.failures.length}` : null,
-      ].filter(Boolean);
-      setReport(parts.join(" · "));
+      // Build a layered report so every "why nothing happened" case is
+      // surfaced: a stage-match miss looks different from "all members
+      // are unmapped" looks different from "Slack rejected the DM."
+      const lines: string[] = [];
+      lines.push(
+        `${dryRun ? "Dry run" : "Sent"}: ${j.sent ?? 0} · checked unchecked assignments: ${j.checked ?? 0}`
+      );
+      if (j.skipped_no_due) {
+        lines.push(`Tasks skipped (no due date): ${j.skipped_no_due}`);
+      }
+      if (j.skipped_no_slack_id) {
+        lines.push(
+          `Members skipped (no Slack ID resolvable): ${j.skipped_no_slack_id}`
+        );
+      }
+      if (j.skipped_already_sent) {
+        lines.push(
+          `Already pinged this stage: ${j.skipped_already_sent}`
+        );
+      }
+      if (j.failures?.length) {
+        // Surface the actual Slack errors inline — they're usually
+        // obvious (e.g. "channel_not_found" = bad ID, "cannot_dm_bot"
+        // = pointed at the bot itself).
+        for (const f of j.failures.slice(0, 5)) {
+          lines.push(`✗ ${f.member} → ${f.task}: ${f.error}`);
+        }
+        if (j.failures.length > 5) {
+          lines.push(`…and ${j.failures.length - 5} more failures`);
+        }
+      }
+      if (
+        (j.sent ?? 0) === 0 &&
+        (j.checked ?? 0) === 0 &&
+        !j.failures?.length
+      ) {
+        lines.push(
+          "Nothing matched a reminder stage right now — try a task with a due date 3, 1, or 0 days out."
+        );
+      }
+      setReport(lines.join("\n"));
     } catch (e) {
       setReport(`Failed: ${e instanceof Error ? e.message : "unknown"}`);
     } finally {
@@ -340,7 +370,9 @@ function ReminderSweepButtons() {
         {running === "live" ? "Sending…" : "Send reminders now"}
       </button>
       {report ? (
-        <span className="text-xs text-muted">{report}</span>
+        <pre className="text-xs text-muted whitespace-pre-wrap break-words w-full mt-1 font-sans">
+          {report}
+        </pre>
       ) : null}
     </>
   );
