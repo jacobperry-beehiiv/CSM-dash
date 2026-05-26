@@ -36,6 +36,11 @@ export interface TeamMember {
   id: string;
   /** Display label shown in the column header. */
   label: string;
+  /** Slack user ID (e.g. "U02ABC123") used by the due-date reminder
+   *  sweep. When unset, the member is silently skipped — there's no
+   *  way to DM them without it. Find a teammate's ID by clicking their
+   *  Slack profile → "..." → "Copy member ID". */
+  slack_user_id?: string | null;
 }
 
 export interface TeamTaskList {

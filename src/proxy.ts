@@ -38,6 +38,11 @@ export default auth((req) => {
   // cron path.
   if (pathname.startsWith("/api/feature-updates/sync")) return;
 
+  // Same bearer/session dual-auth as above, but for the daily
+  // team-task due-date reminder sweep. Triggered by GitHub Actions
+  // cron (.github/workflows/team-task-reminders.yml).
+  if (pathname.startsWith("/api/team-tasks/reminders/sweep")) return;
+
   if (!req.auth) {
     const url = req.nextUrl.clone();
     url.pathname = "/login";

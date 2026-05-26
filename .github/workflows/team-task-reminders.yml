@@ -1,0 +1,63 @@
+name: team-task-reminders
+
+# Daily sweep: hits /api/team-tasks/reminders/sweep on the production
+# dashboard with a bearer token so the live deployment fires the
+# reminder DMs. We run this from GitHub Actions because Vercel Hobby
+# doesn't allow `crons` in vercel.json, and the existing sync workflow
+# already proves out the pattern.
+#
+# Required repo secrets:
+#   • CRON_SECRET         — same value set in Vercel project env so the
+#                            sweep route's bearer-auth path succeeds.
+#   • DASHBOARD_URL       — root URL of the deployed dashboard, e.g.
+#                            https://csm-dash.vercel.app (no trailing /).
+#
+# Trigger:
+#   • automatically once daily at 14:00 UTC (≈9am Central / 10am ET)
+#   • manually via "Run workflow" — useful after rolling out the feature
+#     to immediately catch any tasks already past a reminder threshold
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 14 * * *"
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify required secrets are set
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          DASHBOARD_URL: ${{ secrets.DASHBOARD_URL }}
+        run: |
+          missing=()
+          for v in CRON_SECRET DASHBOARD_URL; do
+            if [ -z "${!v}" ]; then
+              missing+=("$v")
+            fi
+          done
+          if [ "${#missing[@]}" -ne 0 ]; then
+            echo "::error::Missing required repo secret(s): ${missing[*]}. Add them under Settings → Secrets and variables → Actions, then re-run."
+            exit 1
+          fi
+          echo "All required secrets present."
+
+      - name: POST /api/team-tasks/reminders/sweep
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          DASHBOARD_URL: ${{ secrets.DASHBOARD_URL }}
+        run: |
+          set -e
+          response=$(curl -sS -w "\n%{http_code}" -X POST \
+            -H "Authorization: Bearer ${CRON_SECRET}" \
+            -H "Content-Type: application/json" \
+            "${DASHBOARD_URL}/api/team-tasks/reminders/sweep")
+          body=$(echo "$response" | sed '$d')
+          code=$(echo "$response" | tail -n1)
+          echo "HTTP $code"
+          echo "$body"
+          if [ "$code" != "200" ]; then
+            echo "::error::Sweep failed with HTTP $code"
+            exit 1
+          fi
