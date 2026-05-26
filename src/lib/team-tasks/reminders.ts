@@ -63,6 +63,17 @@ async function saveState(s: ReminderState): Promise<void> {
   await kvSet(STATE_KEY, s);
 }
 
+/** Wipe the dedupe state so every (task, member, stage) eligible
+ *  right now will fire on the next sweep. Used by the admin "reset"
+ *  button when test-runs left rows that need to be re-pinged for
+ *  real, or during development. */
+export async function resetReminderState(): Promise<{ cleared: number }> {
+  const current = await loadState();
+  const cleared = Object.keys(current.sent).length;
+  await saveState({ sent: {} });
+  return { cleared };
+}
+
 /** Drop ms-precision and compute UTC midnight so the day-arithmetic
  *  doesn't drift across timezones. `due_date` is stored as YYYY-MM-DD
  *  (HTML date input) — interpret as UTC. */

@@ -279,15 +279,22 @@ export function TeamRosterEditor({ initial }: { initial: TeamMember[] }) {
  *  actually sending; live run does the work. Both report counts
  *  inline so admins can verify the mapping before they cron it. */
 function ReminderSweepButtons() {
-  const [running, setRunning] = useState<"dry" | "live" | null>(null);
+  const [running, setRunning] = useState<"dry" | "live" | "reset" | null>(
+    null
+  );
   const [report, setReport] = useState<string | null>(null);
 
-  async function run(dryRun: boolean) {
-    setRunning(dryRun ? "dry" : "live");
+  async function run(opts: { dryRun?: boolean; reset?: boolean } = {}) {
+    const { dryRun = false, reset = false } = opts;
+    setRunning(reset ? "reset" : dryRun ? "dry" : "live");
     setReport(null);
     try {
+      const params = new URLSearchParams();
+      if (dryRun) params.set("dryRun", "1");
+      if (reset) params.set("reset", "1");
+      const qs = params.toString();
       const r = await fetch(
-        `/api/team-tasks/reminders/sweep${dryRun ? "?dryRun=1" : ""}`,
+        `/api/team-tasks/reminders/sweep${qs ? `?${qs}` : ""}`,
         { method: "POST" }
       );
       const j = (await r.json()) as {
@@ -298,6 +305,7 @@ function ReminderSweepButtons() {
         skipped_no_due?: number;
         skipped_no_slack_id?: number;
         skipped_already_sent?: number;
+        cleared?: number | null;
         failures?: { task: string; member: string; error: string }[];
       };
       if (!r.ok || !j.ok) {
@@ -307,6 +315,13 @@ function ReminderSweepButtons() {
       // surfaced: a stage-match miss looks different from "all members
       // are unmapped" looks different from "Slack rejected the DM."
       const lines: string[] = [];
+      if (reset && j.cleared != null) {
+        lines.push(
+          `Cleared ${j.cleared} previously-sent reminder${
+            j.cleared === 1 ? "" : "s"
+          } from dedupe state.`
+        );
+      }
       lines.push(
         `${dryRun ? "Dry run" : "Sent"}: ${j.sent ?? 0} · checked unchecked assignments: ${j.checked ?? 0}`
       );
@@ -354,7 +369,7 @@ function ReminderSweepButtons() {
   return (
     <>
       <button
-        onClick={() => run(true)}
+        onClick={() => run({ dryRun: true })}
         disabled={running !== null}
         className="px-3 py-1.5 border border-border-strong rounded-md text-sm hover:bg-canvas disabled:opacity-50"
         title="Report who WOULD be pinged without actually sending."
@@ -362,12 +377,28 @@ function ReminderSweepButtons() {
         {running === "dry" ? "Checking…" : "Reminder dry run"}
       </button>
       <button
-        onClick={() => run(false)}
+        onClick={() => run({})}
         disabled={running !== null}
         className="px-3 py-1.5 border border-border-strong rounded-md text-sm hover:bg-canvas disabled:opacity-50"
         title="Send Slack DMs for any task at a reminder stage now."
       >
         {running === "live" ? "Sending…" : "Send reminders now"}
+      </button>
+      <button
+        onClick={() => {
+          if (
+            window.confirm(
+              "Clear the reminder dedupe state and re-send to everyone eligible right now? Use this when test pings have already fired but you want them to go again."
+            )
+          ) {
+            void run({ reset: true });
+          }
+        }}
+        disabled={running !== null}
+        className="px-3 py-1.5 border border-amber-300 dark:border-amber-500/40 rounded-md text-sm text-amber-700 dark:text-amber-300 hover:bg-amber-50 dark:hover:bg-amber-500/10 disabled:opacity-50"
+        title="Wipe the dedupe state so the next sweep re-pings everyone eligible. Useful after test runs."
+      >
+        {running === "reset" ? "Resetting…" : "Reset & resend"}
       </button>
       {report ? (
         <pre className="text-xs text-muted whitespace-pre-wrap break-words w-full mt-1 font-sans">

@@ -1,6 +1,9 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
-import { runReminderSweep } from "@/lib/team-tasks/reminders";
+import {
+  runReminderSweep,
+  resetReminderState,
+} from "@/lib/team-tasks/reminders";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -31,9 +34,24 @@ export async function POST(req: Request) {
   }
   const url = new URL(req.url);
   const dryRun = url.searchParams.get("dryRun") === "1";
+  const reset = url.searchParams.get("reset") === "1";
   try {
+    // `?reset=1` clears the dedupe state before running so anyone
+    // eligible right now will be re-pinged. Useful after test runs.
+    // Default behavior is unchanged — the cron call never passes this.
+    let cleared: number | null = null;
+    if (reset) {
+      const r = await resetReminderState();
+      cleared = r.cleared;
+    }
     const result = await runReminderSweep({ dryRun });
-    return NextResponse.json({ ok: true, dryRun, ...result });
+    return NextResponse.json({
+      ok: true,
+      dryRun,
+      reset,
+      cleared,
+      ...result,
+    });
   } catch (e) {
     return NextResponse.json(
       { error: e instanceof Error ? e.message : "Unknown error" },
