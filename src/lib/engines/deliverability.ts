@@ -584,12 +584,16 @@ export async function runDeliverabilityCheck(
 
   // Thresholds applied at request time (not at sync time) so
   // /settings/general edits take effect without a resync.
+  //
+  // We surface EVERY relevant post (per CSM filter) regardless of
+  // whether it tripped a flag — readers want the full publication
+  // sweep, not just the alarms. Clean posts ship through with an
+  // empty `flags` array; the panel renders a "Clean" pill for them.
   const alerts: DeliverabilityAlert[] = [];
   for (const post of targetPosts) {
-    const flags = analyzePost(post);
-    if (flags.length === 0) continue;
     const ownerCsm = csmByOrg.get(post.organization_id) ?? null;
     if (csmName && ownerCsm !== csmName) continue;
+    const flags = analyzePost(post);
     alerts.push({ post, flags, csm: ownerCsm });
   }
 

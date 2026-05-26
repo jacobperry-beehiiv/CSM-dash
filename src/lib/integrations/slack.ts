@@ -48,7 +48,11 @@ export async function postDeliverabilityAlerts(
   result: DeliverabilityRunResult
 ): Promise<void> {
   if (!SLACK_BOT_TOKEN || !CHANNEL) return;
-  if (result.alerts.length === 0) {
+  // `result.alerts` now contains ALL posts in the CSM's book (clean +
+  // flagged) so the dashboard can render a full sweep. The Slack
+  // channel is still alarms-only, so we filter to flagged here.
+  const flagged = result.alerts.filter((a) => a.flags.length > 0);
+  if (flagged.length === 0) {
     await slackPost(
       CHANNEL,
       `:white_check_mark: Deliverability check — ${result.target_date} — no red flags for ${result.csm_name ?? "all CSMs"} (${result.total_posts_yesterday} posts analyzed).`
@@ -56,8 +60,8 @@ export async function postDeliverabilityAlerts(
     return;
   }
 
-  const header = `:rotating_light: *Deliverability alerts — ${result.target_date}* (${result.alerts.length} flagged / ${result.total_posts_yesterday} posts)`;
-  const lines = result.alerts.slice(0, 10).map((a) => {
+  const header = `:rotating_light: *Deliverability alerts — ${result.target_date}* (${flagged.length} flagged / ${result.total_posts_yesterday} posts)`;
+  const lines = flagged.slice(0, 10).map((a) => {
     const critCount = a.flags.filter((f) => f.severity === "critical").length;
     const severity = critCount > 0 ? ":red_circle:" : ":warning:";
     const topFlag = a.flags[0];

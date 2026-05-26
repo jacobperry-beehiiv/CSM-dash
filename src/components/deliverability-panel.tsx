@@ -2,7 +2,7 @@
 
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { SeverityBadge } from "./status-badge";
-import { fmtDate, fmtNumber, fmtRate } from "./format";
+import { fmtDate, fmtNumber, fmtPct, fmtRate } from "./format";
 import { masqueradeUrl, metabasePubUrl } from "@/lib/links";
 import { FilterBar, SearchInput } from "./filters";
 import { CsmSelector } from "./csm-selector";
@@ -100,52 +100,91 @@ export function DeliverabilityPanel({
         <CsmSelector csms={csms} />
       </FilterBar>
       <div className="text-xs text-muted">
-        {search ? (
-          <>
-            <strong className="text-fg">{alerts.length}</strong> of{" "}
-            {data.alerts.length} flagged match the filter
-          </>
-        ) : (
-          <>{data.alerts.length} flagged</>
-        )}
+        {(() => {
+          const flaggedAll = data.alerts.filter((a) => a.flags.length > 0).length;
+          const flaggedFiltered = alerts.filter((a) => a.flags.length > 0).length;
+          if (search) {
+            return (
+              <>
+                <strong className="text-fg">{alerts.length}</strong> of{" "}
+                {data.alerts.length} sends match the filter (
+                {flaggedFiltered} flagged)
+              </>
+            );
+          }
+          return (
+            <>
+              <strong className="text-fg">{data.alerts.length}</strong> sends
+              · {flaggedAll} flagged
+            </>
+          );
+        })()}
         {" · "}
-        {data.total_posts_yesterday} posts on {data.target_date} · generated{" "}
-        {fmtDate(data.generated_at)}
+        {data.target_date} · generated {fmtDate(data.generated_at)}
       </div>
 
       {alerts.length === 0 ? (
-        <div className="bg-green-50 border border-green-200 rounded-lg p-4 text-sm text-green-800">
+        <div className="bg-green-50 dark:bg-green-500/10 border border-green-200 dark:border-green-500/30 rounded-lg p-4 text-sm text-green-800 dark:text-green-200">
           {search ? (
-            <>No alerts match &ldquo;{search}&rdquo;.</>
+            <>No sends match &ldquo;{search}&rdquo;.</>
+          ) : data.total_posts_yesterday === 0 ? (
+            <>No publications in this book sent on {data.target_date}.</>
           ) : (
             <>
-              No red flags for {data.target_date}. Analyzed{" "}
-              {data.total_posts_yesterday} posts.
+              No sends on {data.target_date} for the selected scope.
             </>
           )}
         </div>
       ) : (
-        <div className="rounded-xl border border-border bg-surface shadow-card">
-          <table className="w-full text-sm table-fixed">
+        <div className="rounded-xl border border-border bg-surface shadow-card overflow-x-auto">
+          <table className="w-full text-sm">
             <colgroup>
               <col className="w-8" />
-              <col className="w-[9%]" />
-              <col className="w-[22%]" />
-              <col className="w-[28%] hidden md:table-cell" />
               <col className="w-[8%]" />
-              <col className="w-[12%] hidden lg:table-cell" />
-              <col className="w-[12%]" />
+              <col className="w-[18%]" />
+              <col className="w-[22%] hidden md:table-cell" />
+              <col className="w-[7%]" />
+              <col className="w-[7%]" />
+              <col className="w-[7%]" />
+              <col className="w-[7%] hidden xl:table-cell" />
+              <col className="w-[7%] hidden xl:table-cell" />
+              <col className="w-[10%] hidden lg:table-cell" />
+              <col className="w-[7%]" />
             </colgroup>
             <thead className="bg-canvas">
               <tr className="text-left border-b border-border">
                 <th className="px-3 py-3"></th>
-                <th className="px-3 py-3 font-medium text-muted">Severity</th>
+                <th className="px-3 py-3 font-medium text-muted">Status</th>
                 <th className="px-3 py-3 font-medium text-muted">Workspace</th>
                 <th className="px-3 py-3 font-medium text-muted hidden md:table-cell">
                   Subject
                 </th>
                 <th className="px-3 py-3 font-medium text-muted text-right">
                   Sent
+                </th>
+                <th
+                  className="px-3 py-3 font-medium text-muted text-right"
+                  title="Delivery rate (delivered / sent)"
+                >
+                  Deliv
+                </th>
+                <th
+                  className="px-3 py-3 font-medium text-muted text-right"
+                  title="Open rate (opens / delivered)"
+                >
+                  Open
+                </th>
+                <th
+                  className="px-3 py-3 font-medium text-muted text-right hidden xl:table-cell"
+                  title="Click-through rate (clicks / delivered)"
+                >
+                  CTR
+                </th>
+                <th
+                  className="px-3 py-3 font-medium text-muted text-right hidden xl:table-cell"
+                  title="Spam complaint rate"
+                >
+                  Spam
                 </th>
                 <th className="px-3 py-3 font-medium text-muted hidden lg:table-cell">
                   CSM
@@ -157,6 +196,7 @@ export function DeliverabilityPanel({
               {alerts.map((alert, i) => {
                 const k = `${alert.post.post_id}-${i}`;
                 const isOpen = expanded.has(k);
+                const flagged = alert.flags.length > 0;
                 const critical = alert.flags.some((f) => f.severity === "critical");
                 const email = ownerEmailByWorkspace.get(alert.post.organization_id);
                 const masqUrl = email ? masqueradeUrl(email) : null;
@@ -171,10 +211,12 @@ export function DeliverabilityPanel({
                       onClick={() => toggle(k)}
                       className={`border-b border-border align-top cursor-pointer transition-colors ${
                         isOpen
-                          ? critical
-                            ? "bg-red-50 dark:bg-red-500/60"
-                            : "bg-amber-50 dark:bg-amber-500/60"
-                          : "hover:bg-blue-50 dark:bg-blue-500/30"
+                          ? flagged
+                            ? critical
+                              ? "bg-red-50 dark:bg-red-500/60"
+                              : "bg-amber-50 dark:bg-amber-500/60"
+                            : "bg-blue-50 dark:bg-blue-500/30"
+                          : "hover:bg-blue-50 dark:hover:bg-blue-500/15"
                       }`}
                     >
                       <td className="px-3 py-3 text-subtle select-none">
@@ -187,9 +229,18 @@ export function DeliverabilityPanel({
                         </span>
                       </td>
                       <td className="px-3 py-3">
-                        <SeverityBadge
-                          severity={critical ? "critical" : "warning"}
-                        />
+                        {flagged ? (
+                          <SeverityBadge
+                            severity={critical ? "critical" : "warning"}
+                          />
+                        ) : (
+                          <span
+                            className="inline-flex items-center px-1.5 py-0.5 rounded-md text-[11px] font-medium bg-green-100 text-green-800 dark:bg-green-500/20 dark:text-green-200"
+                            title="No deliverability thresholds tripped"
+                          >
+                            Clean
+                          </span>
+                        )}
                       </td>
                       <td className="px-3 py-3 break-words">
                         <div className="font-medium text-fg">
@@ -202,8 +253,20 @@ export function DeliverabilityPanel({
                       <td className="px-3 py-3 text-muted italic break-words hidden md:table-cell">
                         &ldquo;{alert.post.subject}&rdquo;
                       </td>
-                      <td className="px-3 py-3 text-right">
+                      <td className="px-3 py-3 text-right tabular-nums">
                         {fmtNumber(alert.post.sent)}
+                      </td>
+                      <td className="px-3 py-3 text-right tabular-nums">
+                        {fmtPct(alert.post.delivery_rate * 100, 1)}
+                      </td>
+                      <td className="px-3 py-3 text-right tabular-nums">
+                        {fmtPct(alert.post.open_rate * 100, 1)}
+                      </td>
+                      <td className="px-3 py-3 text-right tabular-nums hidden xl:table-cell">
+                        {fmtPct(alert.post.ctr * 100, 1)}
+                      </td>
+                      <td className="px-3 py-3 text-right tabular-nums hidden xl:table-cell">
+                        {fmtRate(alert.post.spam_rate * 100, 3)}%
                       </td>
                       <td className="px-3 py-3 text-muted hidden lg:table-cell break-words">
                         {alert.csm?.replace(/_/g, " ") ?? (
@@ -245,10 +308,14 @@ export function DeliverabilityPanel({
                     {isOpen && (
                       <tr
                         className={`border-b border-border ${
-                          critical ? "bg-red-50 dark:bg-red-500/30" : "bg-amber-50 dark:bg-amber-500/30"
+                          flagged
+                            ? critical
+                              ? "bg-red-50 dark:bg-red-500/30"
+                              : "bg-amber-50 dark:bg-amber-500/30"
+                            : "bg-blue-50 dark:bg-blue-500/15"
                         }`}
                       >
-                        <td colSpan={7} className="px-6 py-4">
+                        <td colSpan={11} className="px-6 py-4">
                           <DeliverabilityDetail alert={alert} />
                         </td>
                       </tr>
@@ -262,7 +329,8 @@ export function DeliverabilityPanel({
       )}
 
       <p className="text-xs text-subtle">
-        Click a row to see flag details and full metric breakdown.
+        Every send in scope is listed — flagged rows are sorted to the top.
+        Click any row for a full metric breakdown and flag details.
       </p>
     </div>
   );
@@ -289,22 +357,29 @@ function DeliverabilityDetail({ alert }: { alert: DeliverabilityAlert }) {
         <h4 className="text-xs font-semibold uppercase tracking-wide text-muted mb-2">
           Flags ({alert.flags.length})
         </h4>
-        <ul className="space-y-1.5">
-          {alert.flags.map((f) => (
-            <li key={f.code} className="text-sm flex items-start gap-2">
-              <span
-                className={
-                  f.severity === "critical"
-                    ? "text-red-600 font-medium flex-shrink-0"
-                    : "text-amber-700 flex-shrink-0"
-                }
-              >
-                ▸
-              </span>
-              <span className="text-fg break-words">{f.message}</span>
-            </li>
-          ))}
-        </ul>
+        {alert.flags.length === 0 ? (
+          <p className="text-sm text-muted">
+            No thresholds tripped — every deliverability metric is in healthy
+            range.
+          </p>
+        ) : (
+          <ul className="space-y-1.5">
+            {alert.flags.map((f) => (
+              <li key={f.code} className="text-sm flex items-start gap-2">
+                <span
+                  className={
+                    f.severity === "critical"
+                      ? "text-red-600 font-medium flex-shrink-0"
+                      : "text-amber-700 flex-shrink-0"
+                  }
+                >
+                  ▸
+                </span>
+                <span className="text-fg break-words">{f.message}</span>
+              </li>
+            ))}
+          </ul>
+        )}
       </div>
     </div>
   );
