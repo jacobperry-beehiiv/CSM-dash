@@ -261,44 +261,53 @@ function UpdateRow({
 /**
  * Parse a Slack feature-update post into a (name, body) pair.
  *
- * The team's convention is a leading line of the form
- *   `*Feature name:* <the name>`
- * (with or without the surrounding bold asterisks, and case-insensitive
- * on the label). We pull the name out, drop that line from the body,
- * and return the rest verbatim — every other labelled field stays in
- * place so readers see the full context underneath the title.
+ * Fuzzy match for "feature name" anywhere on a line — case-insensitive,
+ * ignoring Slack mrkdwn emphasis markers (`*_~``), markdown header
+ * decoration (`#`), blockquote / bullet prefixes (`> -`), and leading
+ * emoji / non-word characters. So all of these find "ODA Ad Offers
+ * Capped at 7" as the name:
  *
- * Returns `null` when the post doesn't match the convention so the
- * panel can skip ad-hoc messages and thread replies that ended up in
- * the same channel.
+ *   `Feature Name`                                  → next-line value
+ *   `Feature Name: ODA Ad Offers Capped at 7`       → inline value
+ *   `*Feature Name:* ODA Ad Offers Capped at 7`     → bold + inline
+ *   `🚀 Feature Name`                              → emoji prefix
+ *   `# Feature Name`                                → header prefix
+ *   `> Feature Name`                                → blockquote
+ *   `**Feature Name**`                              → markdown bold
  *
- * Also supports the variant where "Feature name" is on its own line
- * and the value is on the next non-blank line:
- *   `*Feature name*`
- *   `Bold Reports`
+ * Returns null when the post truly doesn't mention "feature name" so
+ * threads + chatter still get filtered out of the panel.
  */
 function parseFeatureUpdate(
   text: string
 ): { name: string; body: string } | null {
   const lines = text.split("\n");
   for (let i = 0; i < lines.length; i++) {
-    // Strip Slack bold markers (asterisks) so the label is easy to
-    // match regardless of formatting.
-    const stripped = lines[i].replace(/\*/g, "").trim();
-    const m = /^feature\s*name\s*:?\s*(.*)$/i.exec(stripped);
+    // Pre-strip mrkdwn / decoration before matching so the regex
+    // doesn't need to account for every variant.
+    const stripped = lines[i]
+      .replace(/[*_~`]/g, "") // emphasis markers
+      .trim()
+      .replace(/^[#>\-•·]+\s*/, "") // header / blockquote / bullet
+      .replace(/^(:[a-z0-9_+\-]+:\s*)+/i, "") // Slack :emoji: shortcodes
+      .replace(/^[^\w]+/u, "") // leading unicode emoji / non-word
+      .trim();
+
+    // Match "feature name" optionally followed by a separator
+    // (colon / dash / period / whitespace) and the value.
+    const m = /^feature\s*name\s*[:.\-—]?\s*(.*)$/i.exec(stripped);
     if (!m) continue;
 
-    // Case 1: value on the same line ("Feature name: Bold Reports").
-    const inlineName = m[1].trim();
+    // Case 1: value on the same line ("Feature Name: ODA Ad Offers…").
+    const inlineName = cleanValue(m[1]);
     if (inlineName) {
       const body = lines.filter((_, idx) => idx !== i).join("\n").trim();
       return { name: inlineName, body };
     }
 
-    // Case 2: label-only line ("*Feature name*"), value on the next
-    // non-blank line.
+    // Case 2: label-only line, value on the next non-blank line.
     for (let j = i + 1; j < lines.length; j++) {
-      const value = lines[j].replace(/\*/g, "").trim();
+      const value = cleanValue(lines[j]);
       if (!value) continue;
       const drop = new Set<number>([i, j]);
       const body = lines
@@ -311,6 +320,15 @@ function parseFeatureUpdate(
     return null;
   }
   return null;
+}
+
+/** Strip mrkdwn emphasis + leading/trailing decoration from a name
+ *  candidate so the displayed title is clean. */
+function cleanValue(raw: string): string {
+  return raw
+    .replace(/[*_~`]/g, "")
+    .replace(/^[#>\-•·]+\s*/, "")
+    .trim();
 }
 
 /**
