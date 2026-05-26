@@ -42,6 +42,13 @@ export async function POST(req: Request) {
     );
   }
 
+  // ?backfill=1 ignores the cursor and re-pulls the most-recent 200
+  // messages — useful when a post fell into a sync gap, or after a
+  // parser tweak that should re-evaluate older history. Merge is
+  // dedupe-by-ts so existing rows are never duplicated.
+  const url = new URL(req.url);
+  const backfill = url.searchParams.get("backfill") === "1";
+
   try {
     const current = await getFeatureUpdates();
     // Slack's `oldest` is exclusive when `inclusive=false`, so passing
@@ -50,8 +57,8 @@ export async function POST(req: Request) {
     // let the pull take the most recent N messages.
     const incoming = await pullFeatureUpdates({
       channelId,
-      oldestTs: current.cursor_ts,
-      maxMessages: current.cursor_ts ? 200 : 50,
+      oldestTs: backfill ? null : current.cursor_ts,
+      maxMessages: backfill || !current.cursor_ts ? 200 : 200,
     });
     const result = await mergeFeatureUpdates({
       incoming,
@@ -61,6 +68,7 @@ export async function POST(req: Request) {
     return NextResponse.json({
       added: result.added,
       total: result.total,
+      backfill,
       last_synced_at: after.last_synced_at,
       cursor_ts: after.cursor_ts,
     });

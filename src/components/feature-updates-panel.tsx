@@ -44,11 +44,14 @@ export function FeatureUpdatesPanel() {
     void reload();
   }, [reload]);
 
-  async function syncNow() {
+  async function syncNow(opts: { backfill?: boolean } = {}) {
     setSyncing(true);
     setSyncMessage(null);
     try {
-      const r = await fetch("/api/feature-updates/sync", { method: "POST" });
+      const qs = opts.backfill ? "?backfill=1" : "";
+      const r = await fetch(`/api/feature-updates/sync${qs}`, {
+        method: "POST",
+      });
       const j = (await r.json()) as {
         added?: number;
         total?: number;
@@ -57,8 +60,12 @@ export function FeatureUpdatesPanel() {
       if (!r.ok) throw new Error(j.error ?? `HTTP ${r.status}`);
       setSyncMessage(
         j.added === 0
-          ? "No new updates."
-          : `Pulled ${j.added} new update${j.added === 1 ? "" : "s"}.`
+          ? opts.backfill
+            ? "Re-fetched recent history — nothing new added."
+            : "No new updates."
+          : `Pulled ${j.added} ${opts.backfill ? "back-filled" : "new"} update${
+              j.added === 1 ? "" : "s"
+            }.`
       );
       await reload();
     } catch (e) {
@@ -106,14 +113,24 @@ export function FeatureUpdatesPanel() {
             )}
           </p>
         </div>
-        <button
-          onClick={syncNow}
-          disabled={syncing}
-          className="px-3 py-1.5 border border-border-strong rounded-md text-xs hover:bg-canvas disabled:opacity-50"
-          title="Pull the latest messages from Slack now"
-        >
-          {syncing ? "Syncing…" : "Sync now"}
-        </button>
+        <div className="flex items-center gap-1.5">
+          <button
+            onClick={() => syncNow({ backfill: true })}
+            disabled={syncing}
+            className="px-3 py-1.5 border border-border-strong rounded-md text-xs hover:bg-canvas disabled:opacity-50"
+            title="Re-fetch the most-recent 200 messages, ignoring the incremental cursor. Useful when a post fell into a sync gap."
+          >
+            Backfill
+          </button>
+          <button
+            onClick={() => syncNow()}
+            disabled={syncing}
+            className="px-3 py-1.5 border border-border-strong rounded-md text-xs hover:bg-canvas disabled:opacity-50"
+            title="Pull the latest messages from Slack now"
+          >
+            {syncing ? "Syncing…" : "Sync now"}
+          </button>
+        </div>
       </div>
 
       {syncMessage ? (
