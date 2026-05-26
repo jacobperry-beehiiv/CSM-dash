@@ -238,25 +238,42 @@ async function uploadScreenshot(input: UploadInput): Promise<void> {
     throw new Error(`upload PUT: HTTP ${r2.status}`);
   }
 
-  // Step 3
+  // Step 3 — Slack's files.completeUploadExternal is far happier with
+  // form-encoded params than a JSON body: the `files` array must be a
+  // JSON-encoded STRING, not a real array. Sending it as a real array
+  // via Content-Type: application/json reliably trips `invalid_arguments`
+  // even though the docs imply both encodings work. The Slack Node SDK
+  // does exactly this under the hood.
   const r3 = await fetch(
     "https://slack.com/api/files.completeUploadExternal",
     {
       method: "POST",
       headers: {
         Authorization: `Bearer ${SLACK_BOT_TOKEN}`,
-        "Content-Type": "application/json; charset=utf-8",
+        "Content-Type": "application/x-www-form-urlencoded",
       },
-      body: JSON.stringify({
-        files: [{ id: j1.file_id, title: filename }],
+      body: new URLSearchParams({
+        files: JSON.stringify([{ id: j1.file_id, title: filename }]),
         channel_id: input.channelId,
         initial_comment: input.initialComment,
       }),
     }
   );
-  const j3 = (await r3.json()) as { ok: boolean; error?: string };
+  const j3 = (await r3.json()) as {
+    ok: boolean;
+    error?: string;
+    response_metadata?: { messages?: string[] };
+  };
   if (!j3.ok) {
-    throw new Error(`completeUploadExternal: ${j3.error ?? "unknown"}`);
+    // Slack returns the offending field name in response_metadata.messages
+    // for invalid_arguments responses — surface it so the next failure
+    // points straight at the bad input.
+    const detail = j3.response_metadata?.messages?.join("; ") ?? "";
+    throw new Error(
+      `completeUploadExternal: ${j3.error ?? "unknown"}${
+        detail ? ` (${detail})` : ""
+      }`
+    );
   }
 }
 
