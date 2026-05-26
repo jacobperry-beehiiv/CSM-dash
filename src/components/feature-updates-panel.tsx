@@ -204,9 +204,18 @@ function UpdateRow({
           </span>
         ) : null}
         <span
-          className="text-sm font-semibold text-fg break-words"
+          className="text-sm font-semibold text-fg break-words flex-1"
           dangerouslySetInnerHTML={{ __html: renderSlackMrkdwn(parsed.name) }}
         />
+        {/* Surface the posted date in the collapsed view so stale rows
+         *  are obvious without expanding. Title attribute carries the
+         *  exact ISO timestamp for inspection. */}
+        <span
+          className="text-[11px] text-subtle ml-2 flex-shrink-0"
+          title={new Date(update.posted_at_ms).toISOString()}
+        >
+          {relativeTime(new Date(update.posted_at_ms).toISOString())}
+        </span>
       </button>
       {open ? (
         <>
