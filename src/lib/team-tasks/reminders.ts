@@ -145,7 +145,6 @@ export async function runReminderSweep(
     skipped_no_slack_id_names: [],
     failures: [],
   };
-  const memberById = new Map(members.map((m) => [m.id, m] as const));
   const skippedNamesSeen = new Set<string>();
 
   for (const task of tasks) {
@@ -158,13 +157,16 @@ export async function runReminderSweep(
     const stage = stageFor(dDays);
     if (!stage) continue;
 
-    // Anyone whose checkbox is still "unchecked" gets the nudge.
-    // Explicit `na` and `checked` mean "I'm done thinking about this
-    // task," so they're left alone.
-    for (const [memberId, assignment] of Object.entries(task.assignments)) {
+    // Iterate the full roster rather than task.assignments — the UI
+    // renders an absent assignment as `☐ unchecked`, so the sweep has
+    // to treat it the same way. Iterating only `Object.entries(...)`
+    // would silently skip every team member who's never explicitly
+    // clicked their cell (most of them, since clicking starts at ☐
+    // and a fresh task has assignments = {}). Explicit `checked` or
+    // `na` still means "done thinking about this," so we skip those.
+    for (const member of members) {
+      const assignment = task.assignments[member.id] ?? "unchecked";
       if (assignment !== "unchecked") continue;
-      const member = memberById.get(memberId);
-      if (!member) continue; // Orphaned assignment for a removed member.
       result.checked++;
 
       const slackId = resolveMemberSlackId(member, csmUserIds);
@@ -177,7 +179,7 @@ export async function runReminderSweep(
         continue;
       }
 
-      const dedupeKey = `${task.id}:${memberId}:${stage}`;
+      const dedupeKey = `${task.id}:${member.id}:${stage}`;
       if (state.sent[dedupeKey]) {
         result.skipped_already_sent++;
         continue;
