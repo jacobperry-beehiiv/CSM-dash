@@ -12,6 +12,17 @@ import {
 } from "@/lib/team-tasks/types";
 
 /**
+ * Per-op payload shape — mirrors the discriminated union in the
+ * store's TeamTaskOp. Re-declared here so the client doesn't need to
+ * import server code.
+ */
+type TeamTaskOp =
+  | { type: "cycle"; taskId: string; memberId: string }
+  | { type: "patch"; taskId: string; patch: Partial<TeamTask> }
+  | { type: "add"; task: TeamTask }
+  | { type: "delete"; taskId: string };
+
+/**
  * Shared team task list — mirrors the spreadsheet that #csm-dream-team-v2
  * used to track cross-team asks. One row per ask, one column per CSM,
  * tri-state per-cell (☐ → ✓ → N/A → ☐).
@@ -96,9 +107,11 @@ export function TeamTasksPanel() {
   const [hideCompleted, setHideCompleted] = useState(true);
   const [detailsEditingId, setDetailsEditingId] = useState<string | null>(null);
 
-  // Track which row was edited last so the autosave debounce can fire on
-  // unmount.
-  const dirtyRef = useRef<TeamTaskList | null>(null);
+  // Pending text-patch coalescer. Multiple field edits to the same task
+  // (e.g. typing in `ask` then tabbing to `details`) get bundled into
+  // a single PATCH op when the debounce fires. Atomic ops (cycle/add/
+  // delete) bypass this and ship immediately.
+  const pendingPatchesRef = useRef<Map<string, Partial<TeamTask>>>(new Map());
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Initial load
@@ -122,87 +135,159 @@ export function TeamTasksPanel() {
     };
   }, []);
 
-  const save = useCallback(async (next: TeamTaskList) => {
+  /** Send a batch of ops to the server. Each PATCH is server-atomic
+   *  (read-modify-write inside one KV write), so concurrent edits from
+   *  different CSMs merge instead of stomping. The response carries
+   *  the merged list — we replace local state with it so the viewer
+   *  also catches up on anyone else's edits that landed in the
+   *  meantime. */
+  const sendOps = useCallback(async (ops: TeamTaskOp[]) => {
+    if (ops.length === 0) return;
     setSaving(true);
     try {
       const r = await fetch("/api/team-tasks", {
-        method: "PUT",
+        method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(next),
+        body: JSON.stringify({ ops }),
       });
       if (!r.ok) {
         const j = (await r.json().catch(() => ({}))) as { error?: string };
         throw new Error(j.error ?? `HTTP ${r.status}`);
       }
+      // Read the body so the connection closes cleanly, but DON'T
+      // replace local state with it: if a text field is mid-edit, the
+      // user's input would visibly snap back to the server value
+      // between keystrokes. The optimistic update is the source of
+      // truth client-side; cross-CSM sync happens via the periodic
+      // background poll below.
+      await r.json().catch(() => ({}));
       setSavedAt(new Date().toISOString());
     } catch (e) {
-      setLoadError(`Save failed: ${e instanceof Error ? e.message : "unknown"}`);
+      setLoadError(
+        `Save failed: ${e instanceof Error ? e.message : "unknown"}`
+      );
     } finally {
       setSaving(false);
     }
   }, []);
 
-  /** Apply an update + schedule autosave. Always pass the full new list. */
-  const update = useCallback(
-    (next: TeamTaskList) => {
-      setList(next);
-      dirtyRef.current = next;
-      if (debounceRef.current) clearTimeout(debounceRef.current);
-      debounceRef.current = setTimeout(() => {
-        if (dirtyRef.current) save(dirtyRef.current);
-      }, 800);
-    },
-    [save]
-  );
-
-  // Flush pending save on unmount so navigating away mid-keystroke
-  // doesn't drop the last edit.
+  // Background poll — pulls the latest list every 20s when the tab is
+  // visible. Skips while there are pending patches in the debounce
+  // queue (the user is actively typing) and skips while a save is
+  // in flight, so a polled refresh never clobbers an in-progress edit.
   useEffect(() => {
-    return () => {
-      if (debounceRef.current) clearTimeout(debounceRef.current);
-      if (dirtyRef.current) {
-        void fetch("/api/team-tasks", {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(dirtyRef.current),
-          keepalive: true,
+    let cancelled = false;
+    const interval = setInterval(() => {
+      if (cancelled) return;
+      if (typeof document !== "undefined" && document.hidden) return;
+      if (pendingPatchesRef.current.size > 0) return;
+      void fetch("/api/team-tasks")
+        .then((r) => (r.ok ? r.json() : null))
+        .then((data) => {
+          if (cancelled || !data) return;
+          if (pendingPatchesRef.current.size > 0) return; // user started typing between request + response
+          setList(data as TeamTaskList);
+        })
+        .catch(() => {
+          // Silent — next tick will retry.
         });
-      }
+    }, 20_000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
     };
   }, []);
 
+  /** Flush all pending text patches (keyed by task id) as a single
+   *  batched PATCH request. */
+  const flushPending = useCallback(() => {
+    const pending = pendingPatchesRef.current;
+    if (pending.size === 0) return;
+    const ops: TeamTaskOp[] = Array.from(pending.entries()).map(
+      ([taskId, patch]) => ({ type: "patch", taskId, patch })
+    );
+    pending.clear();
+    void sendOps(ops);
+  }, [sendOps]);
+
+  // Flush any debounced patches on unmount so navigating away
+  // mid-keystroke doesn't drop the last edit. Uses keepalive so the
+  // request survives the navigation.
+  useEffect(() => {
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+      const pending = pendingPatchesRef.current;
+      if (pending.size === 0) return;
+      const ops: TeamTaskOp[] = Array.from(pending.entries()).map(
+        ([taskId, patch]) => ({ type: "patch", taskId, patch })
+      );
+      pending.clear();
+      void fetch("/api/team-tasks", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ops }),
+        keepalive: true,
+      });
+    };
+  }, []);
+
+  /** Patch a single task's fields. Optimistic-apply locally, then
+   *  enqueue the patch for a 800ms-debounced PATCH so rapid typing
+   *  doesn't fire one HTTP call per keystroke. */
   function patchTask(taskId: string, patch: Partial<TeamTask>) {
     if (!list) return;
-    const next: TeamTaskList = {
+    // Optimistic local update so the input feels instant.
+    setList({
       ...list,
       tasks: list.tasks.map((t) =>
         t.id === taskId
           ? { ...t, ...patch, updated_at: new Date().toISOString() }
           : t
       ),
-    };
-    update(next);
+    });
+    // Merge into the pending bag — later edits override earlier ones
+    // for the same field, so the debounce flush sends the latest value.
+    const existing = pendingPatchesRef.current.get(taskId) ?? {};
+    pendingPatchesRef.current.set(taskId, { ...existing, ...patch });
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(flushPending, 800);
   }
 
+  /** Cycle a member's checkbox. Atomic on the server — sent
+   *  immediately so two CSMs can't stomp each other's clicks. */
   function cycleAssignment(taskId: string, memberId: string) {
     if (!list) return;
     const task = list.tasks.find((t) => t.id === taskId);
     if (!task) return;
     const current = task.assignments[memberId] ?? "unchecked";
     const nextState = nextAssignmentState(current);
-    patchTask(taskId, {
-      assignments: { ...task.assignments, [memberId]: nextState },
+    // Optimistic local update for instant feedback.
+    setList({
+      ...list,
+      tasks: list.tasks.map((t) =>
+        t.id !== taskId
+          ? t
+          : {
+              ...t,
+              assignments: { ...t.assignments, [memberId]: nextState },
+              updated_at: new Date().toISOString(),
+            }
+      ),
     });
+    void sendOps([{ type: "cycle", taskId, memberId }]);
   }
 
   function addTask() {
     if (!list) return;
-    update({ ...list, tasks: [...list.tasks, emptyTask()] });
+    const task = emptyTask();
+    setList({ ...list, tasks: [...list.tasks, task] });
+    void sendOps([{ type: "add", task }]);
   }
 
   function deleteTask(taskId: string) {
     if (!list) return;
-    update({ ...list, tasks: list.tasks.filter((t) => t.id !== taskId) });
+    setList({ ...list, tasks: list.tasks.filter((t) => t.id !== taskId) });
+    void sendOps([{ type: "delete", taskId }]);
   }
 
   const visibleTasks = useMemo(() => {

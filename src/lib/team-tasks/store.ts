@@ -1,6 +1,7 @@
 import { kvGet, kvSet } from "../storage/kv";
 import {
   DEFAULT_TEAM_MEMBERS,
+  nextAssignmentState,
   type TeamTask,
   type TeamTaskList,
   type TeamMember,
@@ -67,4 +68,72 @@ export async function saveTeamMembers(
 ): Promise<TeamTaskList> {
   const current = await getTeamTasks();
   return saveTeamTasks({ ...current, members });
+}
+
+// ─── Atomic op model ────────────────────────────────────────────────
+// Each individual mutation (checkbox cycle, text patch, add, delete)
+// hits the server as a discrete op rather than writing the whole list
+// back from a possibly-stale snapshot. The route does a fresh
+// read-modify-write per call so concurrent edits from different CSMs
+// merge instead of stomping.
+
+export type TeamTaskOp =
+  | { type: "cycle"; taskId: string; memberId: string }
+  | { type: "patch"; taskId: string; patch: Partial<TeamTask> }
+  | { type: "add"; task: TeamTask }
+  | { type: "delete"; taskId: string };
+
+/** Apply a single op to a list, returning the new list. Pure
+ *  function — the route does the I/O around it. */
+export function applyTeamTaskOp(
+  list: TeamTaskList,
+  op: TeamTaskOp
+): TeamTaskList {
+  const now = new Date().toISOString();
+  switch (op.type) {
+    case "cycle": {
+      return {
+        ...list,
+        tasks: list.tasks.map((t) =>
+          t.id !== op.taskId
+            ? t
+            : {
+                ...t,
+                assignments: {
+                  ...t.assignments,
+                  [op.memberId]: nextAssignmentState(
+                    t.assignments[op.memberId] ?? "unchecked"
+                  ),
+                },
+                updated_at: now,
+              }
+        ),
+      };
+    }
+    case "patch": {
+      return {
+        ...list,
+        tasks: list.tasks.map((t) =>
+          t.id !== op.taskId ? t : { ...t, ...op.patch, updated_at: now }
+        ),
+      };
+    }
+    case "add":
+      return { ...list, tasks: [...list.tasks, op.task] };
+    case "delete":
+      return { ...list, tasks: list.tasks.filter((t) => t.id !== op.taskId) };
+  }
+}
+
+/** Read current state, apply a batch of ops in order, persist atomically.
+ *  Single KV write per request so concurrent calls serialize at the
+ *  Postgres layer. */
+export async function applyTeamTaskOps(
+  ops: TeamTaskOp[]
+): Promise<TeamTaskList> {
+  let next = await getTeamTasks();
+  for (const op of ops) {
+    next = applyTeamTaskOp(next, op);
+  }
+  return saveTeamTasks(next);
 }
