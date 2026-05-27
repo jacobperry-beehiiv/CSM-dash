@@ -108,6 +108,10 @@ interface SweepResult {
   skipped_no_due: number;
   skipped_no_slack_id: number;
   skipped_already_sent: number;
+  /** Display labels of members the sweep saw at a stage but couldn't
+   *  DM because they have no resolvable Slack ID. Deduped + sorted —
+   *  surfaced in the admin diagnostic so the fix is obvious. */
+  skipped_no_slack_id_names: string[];
   failures: { task: string; member: string; error: string }[];
 }
 
@@ -138,9 +142,11 @@ export async function runReminderSweep(
     skipped_no_due: 0,
     skipped_no_slack_id: 0,
     skipped_already_sent: 0,
+    skipped_no_slack_id_names: [],
     failures: [],
   };
   const memberById = new Map(members.map((m) => [m.id, m] as const));
+  const skippedNamesSeen = new Set<string>();
 
   for (const task of tasks) {
     if (!task.due_date) {
@@ -164,6 +170,10 @@ export async function runReminderSweep(
       const slackId = resolveMemberSlackId(member, csmUserIds);
       if (!slackId) {
         result.skipped_no_slack_id++;
+        if (!skippedNamesSeen.has(member.id)) {
+          skippedNamesSeen.add(member.id);
+          result.skipped_no_slack_id_names.push(member.label);
+        }
         continue;
       }
 
@@ -194,6 +204,9 @@ export async function runReminderSweep(
       }
     }
   }
+
+  // Sort skipped names alphabetically for stable, readable output.
+  result.skipped_no_slack_id_names.sort();
 
   if (!opts.dryRun) {
     await saveState(state);

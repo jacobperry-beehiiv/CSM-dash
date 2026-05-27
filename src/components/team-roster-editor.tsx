@@ -304,6 +304,7 @@ function ReminderSweepButtons() {
         checked?: number;
         skipped_no_due?: number;
         skipped_no_slack_id?: number;
+        skipped_no_slack_id_names?: string[];
         skipped_already_sent?: number;
         cleared?: number | null;
         failures?: { task: string; member: string; error: string }[];
@@ -329,8 +330,11 @@ function ReminderSweepButtons() {
         lines.push(`Tasks skipped (no due date): ${j.skipped_no_due}`);
       }
       if (j.skipped_no_slack_id) {
+        const names = j.skipped_no_slack_id_names ?? [];
         lines.push(
-          `Members skipped (no Slack ID resolvable): ${j.skipped_no_slack_id}`
+          `Members skipped (no Slack ID resolvable): ${j.skipped_no_slack_id}${
+            names.length > 0 ? ` — ${names.join(", ")}` : ""
+          }`
         );
       }
       if (j.skipped_already_sent) {
