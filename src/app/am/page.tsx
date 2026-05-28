@@ -1,4 +1,5 @@
 import { Suspense } from "react";
+import { redirect } from "next/navigation";
 import {
   isEnterprise,
   loadCustomers,
@@ -9,20 +10,19 @@ import { auth } from "@/auth";
 import {
   loadApproachingEnterprise,
   loadPastDue,
+  type ApproachingEntRow,
 } from "@/lib/engines/am-cohorts";
 import type { Customer } from "@/lib/types";
 
 import { TabBar } from "@/components/tab-bar";
-import { EnterpriseOnlyPanel } from "@/components/am/enterprise-only-panel";
-import { ApproachingEnterprisePanel } from "@/components/am/approaching-enterprise-panel";
+import { ProactiveOutreachPanel } from "@/components/am/proactive-outreach-panel";
 import { PastDuePanel } from "@/components/am/past-due-panel";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 120;
 
 const TABS = [
-  { id: "enterprise", label: "Enterprise Only" },
-  { id: "approaching", label: "Approaching Enterprise" },
+  { id: "proactive", label: "Proactive Outreach" },
   { id: "past-due", label: "Past Due" },
 ];
 
@@ -45,18 +45,38 @@ function utilPct(c: Customer): number | null {
   return null;
 }
 
-async function ApproachingTab() {
+async function ProactiveOutreachTab({
+  enterpriseRows,
+  csms,
+}: {
+  enterpriseRows: Customer[];
+  csms: string[];
+}) {
+  // Approaching-Enterprise rows come from Metabase q13268 — fetched
+  // here in the server component so the panel renders against a
+  // single, consistent snapshot.
+  let approachingRows: ApproachingEntRow[] = [];
+  let approachingError: string | null = null;
   try {
-    const rows = await loadApproachingEnterprise();
-    return <ApproachingEnterprisePanel rows={rows} />;
+    approachingRows = await loadApproachingEnterprise();
   } catch (e) {
-    return (
-      <div className="bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/30 rounded-lg p-4 text-sm text-red-800 dark:text-red-300">
-        Approaching-Enterprise feed (q13268) failed:{" "}
-        {e instanceof Error ? e.message : "unknown"}
-      </div>
-    );
+    approachingError = e instanceof Error ? e.message : "unknown";
   }
+  return (
+    <>
+      {approachingError ? (
+        <div className="bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/30 rounded-lg p-4 text-sm text-red-800 dark:text-red-300 mb-4">
+          Approaching-Enterprise feed (q13268) failed: {approachingError} —
+          the &ldquo;Enterprise approaching cap&rdquo; sub-tab is unaffected.
+        </div>
+      ) : null}
+      <ProactiveOutreachPanel
+        enterpriseRows={enterpriseRows}
+        approachingRows={approachingRows}
+        csms={csms}
+      />
+    </>
+  );
 }
 
 async function PastDueTab({
@@ -99,7 +119,18 @@ export default async function AmPage({
   searchParams: Promise<SP>;
 }) {
   const sp = await searchParams;
-  const tab = sp.tab ?? "enterprise";
+  // Back-compat for the legacy ?tab=enterprise / ?tab=approaching deep
+  // links that pointed at the old separate top-level tabs. Redirect
+  // them to the consolidated "proactive" pillar with the appropriate
+  // sub-tab preselected so old bookmarks land where users expected.
+  if (sp.tab === "enterprise" || sp.tab === "approaching") {
+    const params = new URLSearchParams();
+    params.set("tab", "proactive");
+    params.set("potab", sp.tab);
+    if (sp.csm) params.set("csm", sp.csm);
+    redirect(`/am?${params.toString()}`);
+  }
+  const tab = sp.tab ?? "proactive";
 
   let body;
   let csms: string[] = [];
@@ -114,25 +145,28 @@ export default async function AmPage({
     const session = await auth();
     csm = resolveCsmFilter(sp.csm, all, session?.user?.email);
 
-    if (tab === "enterprise") {
-      const cohort = all
+    if (tab === "proactive") {
+      // Enterprise cohort: customers near or over their sub cap. CSM
+      // filter applies so a CSM-scoped view shows only their book.
+      const enterpriseCohort = all
         .filter(isEnterprise)
         .filter((c) => {
           const u = utilPct(c);
           return u != null && u >= ENT_UTIL_THRESHOLD;
         })
         .filter((c) => !csm || c.customer_success_manager === csm);
-      body = <EnterpriseOnlyPanel rows={cohort} csms={csms} />;
-    } else if (tab === "approaching") {
       body = (
         <Suspense
           fallback={
             <div className="text-sm text-muted">
-              Loading from Metabase q13268…
+              Loading proactive cohorts…
             </div>
           }
         >
-          <ApproachingTab />
+          <ProactiveOutreachTab
+            enterpriseRows={enterpriseCohort}
+            csms={csms}
+          />
         </Suspense>
       );
     } else if (tab === "past-due") {
@@ -175,7 +209,7 @@ export default async function AmPage({
         </p>
       </div>
 
-      <TabBar tabs={TABS} defaultTab="enterprise" />
+      <TabBar tabs={TABS} defaultTab="proactive" />
       {body}
     </>
   );

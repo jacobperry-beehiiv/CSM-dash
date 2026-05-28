@@ -7,6 +7,7 @@ import { CsmSelector } from "../csm-selector";
 import { RowActions } from "../row-actions";
 import { OutreachModal } from "../outreach-modal";
 import { BucketSection } from "./bucket-section";
+import { BulkEmailLauncher } from "./bulk-email-launcher";
 
 interface Props {
   rows: Customer[];
@@ -64,6 +65,9 @@ function priceLabel(c: Customer): string {
 
 export function EnterpriseOnlyPanel({ rows, csms }: Props) {
   const [outreachFor, setOutreachFor] = useState<Customer | null>(null);
+  // Bulk-select state — keyed on workspace_id (the row's stable id).
+  // Mirrors the past-due-panel pattern so all AM tabs feel the same.
+  const [selected, setSelected] = useState<Set<string>>(new Set());
 
   const buckets = useMemo(() => {
     return BUCKETS.map((b) => ({
@@ -74,6 +78,29 @@ export function EnterpriseOnlyPanel({ rows, csms }: Props) {
     })).filter((g) => g.list.length > 0);
   }, [rows]);
 
+  const visibleRows = useMemo(
+    () => buckets.flatMap((g) => g.list),
+    [buckets]
+  );
+
+  function rowKey(c: Customer): string {
+    return c.workspace_id ?? c.stripe_customer_id ?? c.workspace_name ?? "row";
+  }
+
+  function toggleSelected(k: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(k)) next.delete(k);
+      else next.add(k);
+      return next;
+    });
+  }
+
+  const selectedCustomers = useMemo(
+    () => visibleRows.filter((c) => selected.has(rowKey(c))),
+    [visibleRows, selected]
+  );
+
   return (
     <>
       <div className="flex items-center gap-3 mb-4 text-sm">
@@ -82,6 +109,38 @@ export function EnterpriseOnlyPanel({ rows, csms }: Props) {
         <span className="text-xs text-muted ml-auto">
           {rows.length} Enterprise account{rows.length === 1 ? "" : "s"} at ≥85% of cap
         </span>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2 mb-4">
+        <span className="text-xs text-muted">
+          <strong>{selected.size}</strong> selected
+        </span>
+        <button
+          onClick={() =>
+            setSelected(new Set(visibleRows.map((c) => rowKey(c))))
+          }
+          className="px-2 py-1 text-xs border border-border-strong rounded-md bg-surface hover:bg-canvas"
+          title="Select every visible row (after filters)"
+        >
+          Select all
+        </button>
+        <button
+          onClick={() => setSelected(new Set())}
+          className="px-2 py-1 text-xs border border-border-strong rounded-md bg-surface hover:bg-canvas"
+        >
+          Clear
+        </button>
+        <div className="flex-1" />
+        {/* Enterprise outreach drafts auto-CC the assigned CSM per the
+         *  brief. Same ccLookup pattern used on the Past Due Enterprise
+         *  bulk launcher. */}
+        <BulkEmailLauncher
+          customers={selectedCustomers}
+          defaultTemplateId="approaching-ent"
+          disabled={selected.size === 0}
+          label="✉️ Email selected (CCs CSM)"
+          ccLookup={(c) => c.customer_success_manager_email ?? null}
+        />
       </div>
 
       {buckets.length === 0 ? (
@@ -100,16 +159,18 @@ export function EnterpriseOnlyPanel({ rows, csms }: Props) {
             >
               <table className="w-full text-sm table-fixed">
                 <colgroup>
-                  <col className="w-[28%]" />
-                  <col className="w-[12%]" />
-                  <col className="w-[14%]" />
+                  <col className="w-8" />
+                  <col className="w-[26%]" />
                   <col className="w-[10%]" />
-                  <col className="w-[14%]" />
+                  <col className="w-[13%]" />
                   <col className="w-[10%]" />
-                  <col className="w-[12%]" />
+                  <col className="w-[13%]" />
+                  <col className="w-[10%]" />
+                  <col className="w-[10%]" />
                 </colgroup>
                 <thead>
                   <tr className="text-xs text-muted border-y border-border text-left">
+                    <th className="px-3 py-2"></th>
                     <th className="px-3 py-2 font-medium">Account</th>
                     <th className="px-3 py-2 font-medium text-right">% of cap</th>
                     <th className="px-3 py-2 font-medium text-right">Subs / cap</th>
@@ -120,11 +181,22 @@ export function EnterpriseOnlyPanel({ rows, csms }: Props) {
                   </tr>
                 </thead>
                 <tbody>
-                  {list.map((c) => (
+                  {list.map((c) => {
+                    const k = rowKey(c);
+                    return (
                     <tr
-                      key={c.workspace_id ?? c.workspace_name ?? Math.random()}
+                      key={k}
                       className="border-b border-border hover:bg-blue-50 dark:bg-blue-500/40 align-top"
                     >
+                      <td className="px-3 py-2">
+                        <input
+                          type="checkbox"
+                          checked={selected.has(k)}
+                          onChange={() => toggleSelected(k)}
+                          className="h-4 w-4 rounded border-border-strong cursor-pointer"
+                          aria-label={`Select ${c.company_name ?? c.workspace_name ?? "row"}`}
+                        />
+                      </td>
                       <td className="px-3 py-2 break-words">
                         <div className="font-medium text-fg">
                           {c.company_name ?? c.workspace_name ?? "—"}
@@ -157,7 +229,8 @@ export function EnterpriseOnlyPanel({ rows, csms }: Props) {
                         <RowActions customer={c} onDraft={setOutreachFor} />
                       </td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
             </BucketSection>
