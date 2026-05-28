@@ -24,7 +24,7 @@ export function HubSpotContactsSection({
     >
       <ul className="divide-y divide-border">
         {contacts.map((c) => (
-          <li key={c.id} className="py-1.5 flex items-start gap-2 text-sm">
+          <li key={c.id} className="py-2.5 flex items-start gap-3 text-sm">
             <div className="flex-1 min-w-0">
               <div className="flex items-baseline gap-2 flex-wrap">
                 <span className="font-medium text-fg truncate">

@@ -29,7 +29,7 @@ export function CustomerDetailPanel({
   topSlot,
 }: Props) {
   return (
-    <div className="space-y-3">
+    <div className="space-y-4">
       {topSlot}
 
       {c.workspace_id ? (
@@ -51,7 +51,7 @@ export function CustomerDetailPanel({
         </div>
       ) : null}
 
-      <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
         <Stat label="ARR" value={fmtCurrency(c.arr)} />
         <Stat label="MRR" value={fmtCurrency(c.mrr)} />
         <Stat label="Active subs" value={fmtNumber(c.active_subs)} />
@@ -59,7 +59,7 @@ export function CustomerDetailPanel({
 
       <CadenceToggle customer={c} />
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <Section title="Status">
           <Row label="Plan" value={c.stripe_plan ?? "—"} />
           <Row label="Engagement" value={c.company_engagement ?? "—"} />
@@ -137,9 +137,9 @@ export function CustomerDetailPanel({
 
 function Stat({ label, value }: { label: string; value: string }) {
   return (
-    <div className="bg-surface rounded-md border border-border p-3">
+    <div className="bg-surface rounded-md border border-border px-4 py-3">
       <p className="text-xs text-muted">{label}</p>
-      <p className="text-lg font-semibold mt-0.5">{value}</p>
+      <p className="text-lg font-semibold mt-1">{value}</p>
     </div>
   );
 }
@@ -153,7 +153,7 @@ function Section({
 }) {
   return (
     <CollapsibleSection title={title}>
-      <dl className="space-y-1">{children}</dl>
+      <dl className="space-y-2">{children}</dl>
     </CollapsibleSection>
   );
 }
@@ -166,7 +166,7 @@ function Row({
   value: React.ReactNode;
 }) {
   return (
-    <div className="flex justify-between gap-3 text-sm">
+    <div className="flex justify-between gap-4 text-sm">
       <dt className="text-muted whitespace-nowrap">{label}</dt>
       <dd className="text-fg text-right break-words min-w-0">{value}</dd>
     </div>
