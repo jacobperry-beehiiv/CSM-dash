@@ -46,6 +46,13 @@ export interface BuildBulkDraftsInput {
   /** Optional per-workspace ad-gap reports — only matters when the
    *  template's body references `customer.ad_revenue_*` tokens. */
   adGapByOrg?: Record<string, AdGapReport | null>;
+  /** Optional per-customer CC resolver. Used by the AM Past Due
+   *  Enterprise flow to CC the assigned CSM on every draft. Return
+   *  null when the customer has no CC; the returned string is a
+   *  comma-separated list (so multiple CCs per customer are fine). */
+  ccLookup?: (c: Customer) => string | null;
+  /** Optional per-customer BCC resolver. Same semantics as ccLookup. */
+  bccLookup?: (c: Customer) => string | null;
 }
 
 /**
@@ -64,7 +71,8 @@ export interface BuildBulkDraftsInput {
  * fails (e.g. missing fields the link helper needs).
  */
 export function buildBulkDrafts(input: BuildBulkDraftsInput): BulkDraft[] {
-  const { targets, template: tpl, ladder, adGapByOrg } = input;
+  const { targets, template: tpl, ladder, adGapByOrg, ccLookup, bccLookup } =
+    input;
   const usesAdGap =
     /customer\.(ad_revenue_actual|ad_revenue_potential|ad_revenue_gap|ad_zero_pubs)/.test(
       tpl.subject + tpl.body_html
@@ -75,10 +83,12 @@ export function buildBulkDrafts(input: BuildBulkDraftsInput): BulkDraft[] {
     if (!c.owner_email) continue;
     const adGap =
       usesAdGap && c.workspace_id ? adGapByOrg?.[c.workspace_id] ?? null : null;
+    const cc = ccLookup?.(c) ?? null;
+    const bcc = bccLookup?.(c) ?? null;
     const composeUrl =
       usesAdGap && adGap
-        ? composeUrlWithAdGap(tpl, c, ladder, adGap)
-        : composeUrlForTemplate(tpl, c, ladder);
+        ? composeUrlWithAdGap(tpl, c, ladder, adGap, { cc, bcc })
+        : composeUrlForTemplate(tpl, c, ladder, { cc, bcc });
     if (!composeUrl) continue;
     const ctx = { ladder, adGap };
     const subject = applyMergeTags(tpl.subject, c, ctx);
@@ -133,6 +143,8 @@ export function buildBulkDrafts(input: BuildBulkDraftsInput): BulkDraft[] {
     drafts.push({
       customer_label: c.company_name ?? c.workspace_name ?? ownerEmail,
       to: ownerEmail,
+      cc: cc ?? undefined,
+      bcc: bcc ?? undefined,
       subject,
       body_text,
       body_html,

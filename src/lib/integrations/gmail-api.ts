@@ -8,6 +8,10 @@ import { getValidAccessTokenFor } from "../data/gmail-token";
 
 export interface DraftInput {
   to: string;
+  /** Comma-separated list of CC addresses. Optional. */
+  cc?: string;
+  /** Comma-separated list of BCC addresses. Optional. */
+  bcc?: string;
   subject: string;
   body_html: string;
 }
@@ -20,17 +24,28 @@ function encodeMimeWord(s: string): string {
   return `=?UTF-8?B?${b64}?=`;
 }
 
-function buildRfc822(args: { from: string; to: string; subject: string; body_html: string }): string {
-  const lines = [
+function buildRfc822(args: {
+  from: string;
+  to: string;
+  cc?: string;
+  bcc?: string;
+  subject: string;
+  body_html: string;
+}): string {
+  const lines: string[] = [
     `From: ${args.from}`,
     `To: ${args.to}`,
+  ];
+  if (args.cc && args.cc.trim()) lines.push(`Cc: ${args.cc.trim()}`);
+  if (args.bcc && args.bcc.trim()) lines.push(`Bcc: ${args.bcc.trim()}`);
+  lines.push(
     `Subject: ${encodeMimeWord(args.subject)}`,
     "MIME-Version: 1.0",
     'Content-Type: text/html; charset="UTF-8"',
     "Content-Transfer-Encoding: 7bit",
     "",
-    args.body_html,
-  ];
+    args.body_html
+  );
   return lines.join("\r\n");
 }
 
@@ -51,6 +66,8 @@ export async function createGmailDraftFor(
     buildRfc822({
       from: fromEmail,
       to: draft.to,
+      cc: draft.cc,
+      bcc: draft.bcc,
       subject: draft.subject,
       body_html: draft.body_html,
     })

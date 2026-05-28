@@ -41,6 +41,12 @@ interface Props {
   disabled?: boolean;
   /** Label on the trigger button. Defaults to "✉️ Email selected". */
   label?: string;
+  /** Per-customer CC resolver. Used by the Past Due Enterprise tier
+   *  to CC the assigned CSM on every draft. Return null when the
+   *  customer has no CC (the draft renders without CC then). */
+  ccLookup?: (c: Customer) => string | null;
+  /** Per-customer BCC resolver. Reserved for future flows. */
+  bccLookup?: (c: Customer) => string | null;
 }
 
 export function BulkEmailLauncher({
@@ -48,6 +54,8 @@ export function BulkEmailLauncher({
   defaultTemplateId = "general-checkin",
   disabled = false,
   label = "✉️ Email selected",
+  ccLookup,
+  bccLookup,
 }: Props) {
   const viewerEmail = useViewerEmail();
   const [open, setOpen] = useState(false);
@@ -116,8 +124,10 @@ export function BulkEmailLauncher({
       // No ad-gap pre-fetch in the AM launcher (see comment at top).
       // Templates that reference ad-gap tokens render those as "—".
       adGapByOrg: {},
+      ccLookup,
+      bccLookup,
     });
-  }, [open, templateId, customers, templates, ladder]);
+  }, [open, templateId, customers, templates, ladder, ccLookup, bccLookup]);
 
   useEffect(() => {
     setDrafts(builtDrafts);

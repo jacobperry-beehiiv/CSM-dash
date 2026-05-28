@@ -29,6 +29,12 @@ export interface BulkDraft {
    *  used as the initial selection when the modal first renders.
    *  Comma-separated to match how a Gmail compose `to=` field is built. */
   to: string;
+  /** Optional CC list (comma-separated). Used by the Enterprise past-due
+   *  flow to CC the assigned CSM on every draft. Surfaced in the
+   *  per-row preview so the sender can see it before send. */
+  cc?: string;
+  /** Optional BCC list (comma-separated). Reserved for future flows. */
+  bcc?: string;
   subject: string;
   body_text: string;
   /** Rich-HTML body — Gmail API drafts use this; CSV/Open-in-Gmail fall back to body_text. */
@@ -55,9 +61,13 @@ export interface BulkDraft {
 function buildGmailComposeUrl(
   to: string,
   subject: string,
-  body: string
+  body: string,
+  cc?: string,
+  bcc?: string
 ): string {
   const params = new URLSearchParams({ view: "cm", fs: "1", to, su: subject, body });
+  if (cc && cc.trim()) params.set("cc", cc.trim());
+  if (bcc && bcc.trim()) params.set("bcc", bcc.trim());
   return `https://mail.google.com/mail/?${params.toString()}`;
 }
 
@@ -236,7 +246,7 @@ export function BulkDraftsModal({
     const to = liveTo(d);
     if (!to) return d.compose_url;
     const { subject, body_text } = liveContent(d);
-    return buildGmailComposeUrl(to, subject, body_text);
+    return buildGmailComposeUrl(to, subject, body_text, d.cc, d.bcc);
   }
 
   function toggleRecipient(draftKey: string, email: string) {
@@ -334,6 +344,11 @@ export function BulkDraftsModal({
         body: JSON.stringify({
           drafts: actionableDrafts.map((d) => ({
             to: d.to,
+            // CC/BCC ride through to Gmail API drafts too so the
+            // Enterprise-CC behavior + future BCC flows match what the
+            // compose URL preview shows.
+            cc: d.cc,
+            bcc: d.bcc,
             subject: d.subject,
             body_html: d.body_html ?? d.body_text,
           })),
@@ -531,6 +546,16 @@ export function BulkDraftsModal({
                         {bodyOpen ? "Hide body" : "Preview body"}
                       </button>
                     </div>
+                    {d.cc && d.cc.trim() ? (
+                      <div className="text-[11px] text-muted mt-0.5 truncate" title={d.cc}>
+                        CC <span className="text-fg font-mono">{d.cc}</span>
+                      </div>
+                    ) : null}
+                    {d.bcc && d.bcc.trim() ? (
+                      <div className="text-[11px] text-muted mt-0.5 truncate" title={d.bcc}>
+                        BCC <span className="text-fg font-mono">{d.bcc}</span>
+                      </div>
+                    ) : null}
                   </div>
                   <div className="flex items-center gap-1 flex-shrink-0">
                     <button

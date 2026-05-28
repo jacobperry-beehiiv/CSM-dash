@@ -112,11 +112,21 @@ export function metabasePubUrl(args: {
 
 interface ComposeArgs {
   to: string;
+  /** Comma-separated CC list. Optional. */
+  cc?: string;
+  /** Comma-separated BCC list. Optional. */
+  bcc?: string;
   subject: string;
   body: string;
 }
 
-export function gmailComposeUrl({ to, subject, body }: ComposeArgs): string {
+export function gmailComposeUrl({
+  to,
+  cc,
+  bcc,
+  subject,
+  body,
+}: ComposeArgs): string {
   const params = new URLSearchParams({
     view: "cm",
     fs: "1",
@@ -124,6 +134,8 @@ export function gmailComposeUrl({ to, subject, body }: ComposeArgs): string {
     su: subject,
     body,
   });
+  if (cc && cc.trim()) params.set("cc", cc.trim());
+  if (bcc && bcc.trim()) params.set("bcc", bcc.trim());
   return `https://mail.google.com/mail/?${params.toString()}`;
 }
 
@@ -151,14 +163,21 @@ function htmlToText(html: string): string {
 export function composeUrlForTemplate(
   template: StoredTemplate,
   customer: Customer,
-  ladder?: EnterpriseTier[]
+  ladder?: EnterpriseTier[],
+  extra?: { cc?: string | null; bcc?: string | null }
 ): string | null {
   const to = customer.owner_email ?? null;
   if (!to) return null;
   const ctx = { ladder };
   const subject = applyMergeTags(template.subject, customer, ctx);
   const body = htmlToText(applyMergeTags(template.body_html, customer, ctx));
-  return gmailComposeUrl({ to, subject, body });
+  return gmailComposeUrl({
+    to,
+    cc: extra?.cc ?? undefined,
+    bcc: extra?.bcc ?? undefined,
+    subject,
+    body,
+  });
 }
 
 /**
@@ -170,12 +189,19 @@ export function composeUrlWithAdGap(
   template: StoredTemplate,
   customer: Customer,
   ladder: EnterpriseTier[] | undefined,
-  adGap: AdGapReport | null
+  adGap: AdGapReport | null,
+  extra?: { cc?: string | null; bcc?: string | null }
 ): string | null {
   const to = customer.owner_email ?? null;
   if (!to) return null;
   const ctx = { ladder, adGap };
   const subject = applyMergeTags(template.subject, customer, ctx);
   const body = htmlToText(applyMergeTags(template.body_html, customer, ctx));
-  return gmailComposeUrl({ to, subject, body });
+  return gmailComposeUrl({
+    to,
+    cc: extra?.cc ?? undefined,
+    bcc: extra?.bcc ?? undefined,
+    subject,
+    body,
+  });
 }

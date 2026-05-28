@@ -9,7 +9,7 @@ import {
   type SettingsShape,
 } from "@/lib/data/settings-types";
 import { BucketSection } from "./bucket-section";
-import { FilterBar, SearchInput, SegmentToggle } from "../filters";
+import { FilterBar, SearchInput } from "../filters";
 import { CsmSelector } from "../csm-selector";
 import { useUrlSearch } from "@/lib/hooks/use-url-search";
 import {
@@ -17,7 +17,12 @@ import {
   type BulkSlackMessage,
 } from "./slack-bulk-compose";
 import { BulkEmailLauncher } from "./bulk-email-launcher";
+import { LowTierBulkSend } from "./low-tier-bulk-send";
 import type { Customer } from "@/lib/types";
+import type {
+  PastDueOutreachMap,
+  PastDueOutreachStatus,
+} from "@/lib/data/past-due-outreach";
 
 interface Props {
   /** Already CSM-filtered server-side (per `?csm=…`). The client still
@@ -29,8 +34,6 @@ interface Props {
    *  used for the "Showing X of Y" diagnostic line. */
   totalSourceRows: number;
 }
-
-type PlanTier = "all" | "enterprise" | "non-enterprise";
 
 const BUCKET_STEP_USD = 50_000;
 
@@ -79,26 +82,82 @@ function isEnterprisePlan(p: PastDueRow): boolean {
   return /enterprise|custom/i.test(p.price_name ?? "");
 }
 
+// ─── Phase 1 tier classification (per AM Hackathon brief) ────────────
+//
+//   Enterprise:   isEnterprisePlan(r) AND has a CSM assigned
+//   Above $3.5K:  !isEnterprisePlan(r) AND ARR >= $3,500
+//   Below $3.5K:  !isEnterprisePlan(r) AND ARR <  $3,500 AND no CSM
+//
+// "Unclassified" catches edge cases the brief doesn't enumerate
+// (Enterprise without CSM, non-Enterprise below $3.5K with a CSM, etc).
+// We still want those visible somewhere rather than silently dropped,
+// so the Follow-Up tab also lists them.
+const ABOVE_THRESHOLD_USD = 3_500;
+
+type PastDueTier =
+  | "enterprise"
+  | "above"
+  | "below"
+  | "followup"
+  | "unclassified";
+
+function classifyPastDue(r: PastDueRow): "enterprise" | "above" | "below" | "unclassified" {
+  const ent = isEnterprisePlan(r);
+  const hasCsm = Boolean(r.customer_success_manager);
+  if (ent && hasCsm) return "enterprise";
+  if (!ent && r.arr_dollars >= ABOVE_THRESHOLD_USD) return "above";
+  if (!ent && r.arr_dollars < ABOVE_THRESHOLD_USD && !hasCsm) return "below";
+  return "unclassified";
+}
+
+/** Past Due is now organized into four sub-tabs per the AM Hackathon
+ *  brief: three by tier + a Follow-Up tracker. Tab id is URL-synced
+ *  so deep-links land on the right view. */
+type PastDueSubtab = "enterprise" | "above" | "below" | "followup";
+
+const SUBTAB_LABELS: Record<PastDueSubtab, string> = {
+  enterprise: "Enterprise",
+  above: "Above $3.5K",
+  below: "Below $3.5K",
+  followup: "Follow-Up",
+};
+
 export function PastDuePanel({ rows, csms, totalSourceRows }: Props) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [settings, setSettings] = useState<SettingsShape | null>(null);
   const [composeOpen, setComposeOpen] = useState(false);
+  const [outreachMap, setOutreachMap] = useState<PastDueOutreachMap>({});
 
   // Filter state. CSM filtering is applied server-side (see /am/page.tsx
   // PastDueTab), so `rows` arrives already narrowed when ?csm= is in
-  // the URL — that avoids a stale-render artefact where the client-side
-  // useSearchParams read raced against router.refresh() and left the
-  // bucketed table rendering pre-filter rows while the headline counts
-  // already reflected the filter. Search + plan-tier still filter
-  // client-side because they're cheap and don't require a server hop.
+  // the URL. Sub-tab is URL-synced for deep-link friendliness.
   const [search, setSearch] = useUrlSearch("q");
-  const [planTier, setPlanTier] = useState<PlanTier>("all");
+  const [subtabRaw, setSubtab] = useUrlSearch("pdtab");
+  const subtab: PastDueSubtab =
+    subtabRaw === "above" ||
+    subtabRaw === "below" ||
+    subtabRaw === "followup"
+      ? subtabRaw
+      : "enterprise";
 
   useEffect(() => {
     fetch("/api/settings")
       .then((r) => (r.ok ? r.json() : null))
       .then((j) => setSettings(j as SettingsShape))
       .catch(() => {});
+  }, []);
+
+  // Outreach lifecycle map (customer_id → status). Populated by the
+  // bulk-send flows; surfaces the Follow-Up sub-tab + drives the
+  // "touched" badge on rows in other tabs.
+  const reloadOutreach = () => {
+    fetch("/api/past-due/outreach")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => setOutreachMap((j as PastDueOutreachMap) ?? {}))
+      .catch(() => {});
+  };
+  useEffect(() => {
+    reloadOutreach();
   }, []);
 
   // Customer book — fetched once so the bulk-email launcher can hand
@@ -124,29 +183,67 @@ export function PastDuePanel({ rows, csms, totalSourceRows }: Props) {
     return m;
   }, [customerBook]);
 
-  // Apply client-side filters to the (already-CSM-filtered) rows
-  // BEFORE bucketing so headline counts and the rendered list always
-  // agree.
-  const filteredRows = useMemo(() => {
+  /** Apply search to the CSM-filtered rows, then bucket by tier.
+   *  Selected sub-tab decides which tier list renders below. */
+  const searched = useMemo(() => {
+    if (!search) return rows;
+    const q = search.toLowerCase();
     return rows.filter((r) => {
-      if (planTier === "enterprise" && !isEnterprisePlan(r)) return false;
-      if (planTier === "non-enterprise" && isEnterprisePlan(r)) return false;
-      if (search) {
-        const q = search.toLowerCase();
-        const haystack = [
-          r.email,
-          r.customer_id,
-          r.price_name,
-          r.customer_success_manager,
-        ]
-          .filter(Boolean)
-          .join(" ")
-          .toLowerCase();
-        if (!haystack.includes(q)) return false;
-      }
-      return true;
+      const haystack = [
+        r.email,
+        r.customer_id,
+        r.price_name,
+        r.customer_success_manager,
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+      return haystack.includes(q);
     });
-  }, [rows, planTier, search]);
+  }, [rows, search]);
+
+  /** Map customer_id → tier classification. Computed once per searched
+   *  list so tab counts and the rendered tier match exactly. */
+  const tierByCustomerId = useMemo(() => {
+    const m = new Map<string, ReturnType<typeof classifyPastDue>>();
+    for (const r of searched) {
+      if (r.customer_id) m.set(r.customer_id, classifyPastDue(r));
+    }
+    return m;
+  }, [searched]);
+
+  const tierCounts = useMemo(() => {
+    const c = { enterprise: 0, above: 0, below: 0, unclassified: 0 };
+    for (const r of searched) {
+      c[classifyPastDue(r)]++;
+    }
+    return c;
+  }, [searched]);
+
+  // Follow-Up sub-tab: rows whose customer_id is in `outreachMap` with
+  // status "touched" (waiting for follow-up) — anywhere across all
+  // tiers. Other statuses (follow_up_sent / paid / lost) are still
+  // listed so AM has a single place to review where each account
+  // sits in the lifecycle.
+  const followUpRows = useMemo(() => {
+    return searched.filter((r) => {
+      if (!r.customer_id) return false;
+      const entry = outreachMap[r.customer_id];
+      return Boolean(entry);
+    });
+  }, [searched, outreachMap]);
+
+  /** Rows for the active sub-tab. Follow-Up uses the lifecycle map;
+   *  others use tier classification. */
+  const filteredRows = useMemo(() => {
+    if (subtab === "followup") return followUpRows;
+    return searched.filter((r) => {
+      const tier = r.customer_id
+        ? tierByCustomerId.get(r.customer_id) ?? classifyPastDue(r)
+        : classifyPastDue(r);
+      return tier === subtab;
+    });
+  }, [subtab, searched, tierByCustomerId, followUpRows]);
 
   const maxArr = useMemo(
     () => filteredRows.reduce((m, r) => Math.max(m, r.arr_dollars), 0),
@@ -208,7 +305,14 @@ export function PastDuePanel({ rows, csms, totalSourceRows }: Props) {
   // "Showing 1 of 229 past-due accounts" honestly.
   const filteredCount = filteredRows.length;
   const filtersActive =
-    Boolean(search) || planTier !== "all" || rows.length !== totalSourceRows;
+    Boolean(search) || rows.length !== totalSourceRows;
+
+  // Whenever the sub-tab changes, drop any cross-tab selections so the
+  // bulk-actions toolbar can't accidentally email accounts from a
+  // tier that's no longer visible.
+  useEffect(() => {
+    setSelected(new Set());
+  }, [subtab]);
 
   return (
     <>
@@ -219,37 +323,59 @@ export function PastDuePanel({ rows, csms, totalSourceRows }: Props) {
           placeholder="Search email, customer id, or plan…"
         />
         <CsmSelector csms={csms} />
-        <SegmentToggle<PlanTier>
-          options={[
-            { value: "all", label: "All plans" },
-            { value: "enterprise", label: "Enterprise" },
-            { value: "non-enterprise", label: "Non-enterprise" },
-          ]}
-          value={planTier}
-          onChange={setPlanTier}
-        />
       </FilterBar>
+
+      {/* Sub-tab nav — Enterprise / Above $3.5K / Below $3.5K / Follow-Up.
+       *  Counts come from the tier classifier so admins can see at a
+       *  glance where the work is concentrated. */}
+      <div className="flex flex-wrap items-center gap-1 mb-4 border-b border-border">
+        {(["enterprise", "above", "below", "followup"] as const).map((t) => {
+          const count =
+            t === "followup"
+              ? followUpRows.length
+              : t === "enterprise"
+                ? tierCounts.enterprise
+                : t === "above"
+                  ? tierCounts.above
+                  : tierCounts.below;
+          const active = subtab === t;
+          return (
+            <button
+              key={t}
+              onClick={() => setSubtab(t)}
+              className={`px-3 py-2 text-sm border-b-2 -mb-px transition-colors ${
+                active
+                  ? "border-accent text-fg font-semibold"
+                  : "border-transparent text-muted hover:text-fg"
+              }`}
+            >
+              {SUBTAB_LABELS[t]}{" "}
+              <span className="text-xs text-subtle">({count})</span>
+            </button>
+          );
+        })}
+      </div>
 
       {filtersActive ? (
         <p className="text-xs text-muted mb-3">
           Showing <strong className="text-fg">{filteredCount}</strong> of{" "}
-          {totalSourceRows} past-due accounts
+          {totalSourceRows} past-due accounts in this tier
         </p>
       ) : null}
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
-        <Stat label="Past-due accounts" value={String(visibleRows.length)} />
+        <Stat label="In this tier" value={String(visibleRows.length)} />
         <Stat
-          label="Past-due Enterprise"
+          label="Enterprise in view"
           value={String(enterpriseRows.length)}
-          accent={enterpriseRows.length > 0}
+          accent={enterpriseRows.length > 0 && subtab === "enterprise"}
         />
         <Stat
-          label="Enterprise ARR past due"
+          label="Enterprise ARR"
           value={fmtCurrency(enterpriseArrTotal)}
-          accent={enterpriseArrTotal > 0}
+          accent={enterpriseArrTotal > 0 && subtab === "enterprise"}
         />
-        <Stat label="Total ARR past due" value={fmtCurrency(totalArr)} />
+        <Stat label="Tier ARR past due" value={fmtCurrency(totalArr)} />
       </div>
 
       {droppedCount > 0 ? (
@@ -280,34 +406,94 @@ export function PastDuePanel({ rows, csms, totalSourceRows }: Props) {
         >
           Clear
         </button>
-        <button
-          onClick={() =>
-            setSelected(new Set(enterpriseRows.map((r, i) => rowKey(r, i))))
-          }
-          className="px-2 py-1 text-xs border border-border-strong rounded-md bg-surface hover:bg-canvas"
-        >
-          Select Enterprise only
-        </button>
         <div className="flex-1" />
-        {/* Resolve each selected past-due row to a Customer record (by
-            stripe_customer_id) so the BulkDraftsModal has the merge-tag
-            fields it expects. Rows without a matching Customer (e.g. a
-            cancelled workspace removed from the book) are dropped. */}
-        <BulkEmailLauncher
-          customers={(() => {
-            const selectedRows = rows.filter((r, i) =>
-              selected.has(rowKey(r, i))
+        {(() => {
+          // Resolve each selected past-due row to a Customer record (by
+          // stripe_customer_id) so the BulkDraftsModal has the merge-tag
+          // fields it expects. Rows without a matching Customer (e.g. a
+          // cancelled workspace removed from the book) are dropped.
+          const selectedRows = rows.filter((r, i) =>
+            selected.has(rowKey(r, i))
+          );
+          const selectedCustomers = selectedRows
+            .map((r) =>
+              r.customer_id ? customerByStripeId.get(r.customer_id) : null
+            )
+            .filter((c): c is Customer => Boolean(c));
+          const selectedCustomerIds = selectedCustomers
+            .map((c) => c.stripe_customer_id ?? "")
+            .filter(Boolean);
+          const markTouched = async () => {
+            if (selectedCustomerIds.length === 0) return;
+            try {
+              const r = await fetch("/api/past-due/outreach", {
+                method: "PUT",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  customer_ids: selectedCustomerIds,
+                  status:
+                    subtab === "followup" ? "follow_up_sent" : "touched",
+                }),
+              });
+              if (r.ok) reloadOutreach();
+            } catch {
+              /* non-fatal */
+            }
+          };
+          if (subtab === "below") {
+            return (
+              <LowTierBulkSend
+                customers={selectedCustomers}
+                settings={settings}
+                disabled={
+                  selected.size === 0 || customerBook.length === 0
+                }
+                onSent={() => reloadOutreach()}
+              />
             );
-            return selectedRows
-              .map((r) =>
-                r.customer_id ? customerByStripeId.get(r.customer_id) : null
-              )
-              .filter((c): c is Customer => Boolean(c));
-          })()}
-          defaultTemplateId="general-checkin"
-          disabled={selected.size === 0 || customerBook.length === 0}
-          label="✉️ Email selected"
-        />
+          }
+          // Enterprise + Above + Follow-Up all use BulkEmailLauncher.
+          // Enterprise adds CC-CSM via the ccLookup prop.
+          return (
+            <>
+              <BulkEmailLauncher
+                customers={selectedCustomers}
+                defaultTemplateId={
+                  subtab === "followup"
+                    ? "general-checkin"
+                    : "general-checkin"
+                }
+                disabled={
+                  selected.size === 0 || customerBook.length === 0
+                }
+                label={
+                  subtab === "followup"
+                    ? "↻ Follow-up email"
+                    : "✉️ Email selected"
+                }
+                ccLookup={
+                  subtab === "enterprise"
+                    ? (c) => c.customer_success_manager_email ?? null
+                    : undefined
+                }
+              />
+              <button
+                onClick={() => void markTouched()}
+                disabled={selected.size === 0}
+                className="px-3 py-1.5 border border-border-strong rounded-md text-sm hover:bg-canvas disabled:opacity-50"
+                title={
+                  subtab === "followup"
+                    ? "Mark selected as Follow-Up Sent"
+                    : "Mark selected as Touched (first outreach sent)"
+                }
+              >
+                {subtab === "followup"
+                  ? "✓ Mark follow-up sent"
+                  : "✓ Mark touched"}
+              </button>
+            </>
+          );
+        })()}
         <button
           onClick={() => setComposeOpen(true)}
           disabled={!settings || selected.size === 0}
@@ -320,7 +506,13 @@ export function PastDuePanel({ rows, csms, totalSourceRows }: Props) {
 
       {grouped.length === 0 ? (
         <div className="bg-green-50 border border-green-200 rounded-lg p-4 text-sm text-green-800">
-          No past-due accounts. Nicely done.
+          {subtab === "followup"
+            ? "Nobody's mid-outreach right now. Send a touch from another tier to start tracking."
+            : subtab === "enterprise"
+              ? "No past-due Enterprise accounts. Nicely done."
+              : subtab === "above"
+                ? "No past-due accounts above $3.5K ARR."
+                : "No past-due accounts below $3.5K ARR."}
         </div>
       ) : (
         <div className="space-y-4">
@@ -340,7 +532,7 @@ export function PastDuePanel({ rows, csms, totalSourceRows }: Props) {
                   onClick={() => selectAllIn(list)}
                   className="text-xs text-blue-600 dark:text-blue-400 hover:underline"
                 >
-                  Select all in tier
+                  Select all in bucket
                 </button>
               </div>
               <table className="w-full text-sm table-fixed">
@@ -385,8 +577,15 @@ export function PastDuePanel({ rows, csms, totalSourceRows }: Props) {
                           />
                         </td>
                         <td className="px-3 py-2 break-words">
-                          <div className="font-medium text-fg">
-                            {r.email ?? "—"}
+                          <div className="font-medium text-fg flex items-center gap-1.5">
+                            <span>{r.email ?? "—"}</span>
+                            <OutreachStatusBadge
+                              status={
+                                r.customer_id
+                                  ? outreachMap[r.customer_id]?.status
+                                  : undefined
+                              }
+                            />
                           </div>
                           <div className="text-xs text-muted truncate font-mono">
                             {r.customer_id ?? ""}
@@ -474,6 +673,44 @@ export function PastDuePanel({ rows, csms, totalSourceRows }: Props) {
         );
       })() : null}
     </>
+  );
+}
+
+/** Compact lifecycle status pill rendered inline with the customer
+ *  email cell. Invisible when there's no stored outreach status, so
+ *  untouched rows render the same as before. */
+function OutreachStatusBadge({
+  status,
+}: {
+  status?: PastDueOutreachStatus;
+}) {
+  if (!status) return null;
+  const styles: Record<PastDueOutreachStatus, { label: string; cls: string }> =
+    {
+      touched: {
+        label: "Touched",
+        cls: "bg-blue-100 text-blue-800 dark:bg-blue-500/20 dark:text-blue-200",
+      },
+      follow_up_sent: {
+        label: "Follow-up sent",
+        cls: "bg-violet-100 text-violet-800 dark:bg-violet-500/20 dark:text-violet-200",
+      },
+      paid: {
+        label: "Paid",
+        cls: "bg-emerald-100 text-emerald-800 dark:bg-emerald-500/20 dark:text-emerald-200",
+      },
+      lost: {
+        label: "Lost",
+        cls: "bg-slate-200 text-slate-800 dark:bg-slate-500/30 dark:text-slate-200",
+      },
+    };
+  const s = styles[status];
+  return (
+    <span
+      className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-medium ${s.cls}`}
+    >
+      {s.label}
+    </span>
   );
 }
 

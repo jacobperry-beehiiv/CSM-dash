@@ -8,6 +8,10 @@ export const maxDuration = 300;
 interface PostBody {
   drafts: Array<{
     to: string;
+    /** Comma-separated CC list. Optional. */
+    cc?: string;
+    /** Comma-separated BCC list. Optional. */
+    bcc?: string;
     subject: string;
     body_html: string;
   }>;
@@ -41,7 +45,13 @@ export async function POST(req: Request) {
 
     for (const d of body.drafts) {
       try {
-        const r = await createGmailDraftFor(activeEmail, d);
+        const r = await createGmailDraftFor(activeEmail, {
+          to: d.to,
+          cc: d.cc,
+          bcc: d.bcc,
+          subject: d.subject,
+          body_html: d.body_html,
+        });
         ids.push(r.id);
         created++;
       } catch (e) {

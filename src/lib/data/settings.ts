@@ -61,6 +61,7 @@ function merge(partial: Partial<SettingsShape>): SettingsShape {
       ...(partial.thresholds ?? {}),
     } as SettingsShape["thresholds"],
     slack: migrateSlack(partial.slack),
+    am: { ...DEFAULTS.am, ...(partial.am ?? {}) },
   };
 }
 

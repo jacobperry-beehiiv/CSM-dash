@@ -90,6 +90,19 @@ export interface SettingsShape {
     ad_default_rate_per_k_subs_usd: number;
   };
   slack: SlackSettings;
+  am?: AmSettings;
+}
+
+/** Account Management-specific config shared across the AM tab flows. */
+export interface AmSettings {
+  /** Designated email address used as the From for low-tier (Below $3.5K
+   *  ARR) past-due bulk outreach. Recipients land in BCC batches of 40
+   *  so an individual customer doesn't see the others. Leave blank to
+   *  fall back to the user's primary Gmail. */
+  bulk_alias_email?: string;
+  /** Cap on how many customers go into a single BCC batch. The brief
+   *  calls for 40 but admins can tune it without a code change. */
+  bulk_bcc_batch_size?: number;
 }
 
 export const DEFAULTS: SettingsShape = {
@@ -124,6 +137,10 @@ export const DEFAULTS: SettingsShape = {
       },
     ],
     csm_user_ids: {},
+  },
+  am: {
+    bulk_alias_email: "",
+    bulk_bcc_batch_size: 40,
   },
 };
 
