@@ -66,6 +66,28 @@ export function stripeCustomerUrl(
 }
 
 /**
+ * Slack deep-link for a channel ID. Returns the archives URL which
+ * works in both the web client and the native app (Slack redirects to
+ * the app via custom URL scheme when installed). Workspace subdomain
+ * defaults to "beehiiv" — override via NEXT_PUBLIC_SLACK_WORKSPACE if
+ * the project is ever pointed at a different org.
+ */
+const DEFAULT_SLACK_WORKSPACE = "beehiiv";
+
+export function slackChannelUrl(
+  channelId: string | null | undefined
+): string | null {
+  if (!channelId) return null;
+  const trimmed = channelId.trim();
+  // Sanity-check the shape — Slack IDs are uppercase alphanumerics
+  // starting with C (public channel), G (private group), or D (DM).
+  if (!/^[CGD][A-Z0-9]{6,}$/.test(trimmed)) return null;
+  const workspace =
+    process.env.NEXT_PUBLIC_SLACK_WORKSPACE ?? DEFAULT_SLACK_WORKSPACE;
+  return `https://${workspace}.slack.com/archives/${trimmed}`;
+}
+
+/**
  * Returns a Metabase deep link for a specific publication / workspace.
  * Configurable via NEXT_PUBLIC_METABASE_PUB_URL_TEMPLATE — substitution
  * tokens supported: {workspace_id}, {workspace_name}, {publication_id}.

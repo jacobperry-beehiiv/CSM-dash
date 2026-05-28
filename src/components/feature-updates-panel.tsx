@@ -5,6 +5,7 @@ import type {
   FeatureUpdate,
   FeatureUpdatesStore,
 } from "@/lib/feature-updates/types";
+import { slackChannelUrl } from "@/lib/links";
 
 /**
  * Read-only panel on the home page that shows the most recent
@@ -329,7 +330,7 @@ function ExpandedCard({
           ) : null}
           {fields.channel ? (
             <FieldRow label="Channel">
-              <span className="text-sm text-fg">{fields.channel}</span>
+              <ChannelValue raw={fields.channel} />
             </FieldRow>
           ) : null}
           {fields.other.map(({ label, value }) => (
@@ -399,6 +400,30 @@ function FieldRow({
         {children}
       </div>
     </div>
+  );
+}
+
+/** Render a Channel-field value as a Slack deep-link when we can
+ *  extract a channel ID from it; falls back to plain text otherwise.
+ *  Stops click-propagation so the row's collapse handler doesn't fire
+ *  when the user clicks the link. */
+function ChannelValue({ raw }: { raw: string }) {
+  const { id, display } = parseChannelValue(raw);
+  const href = id ? slackChannelUrl(id) : null;
+  if (!href) {
+    return <span className="text-sm text-fg">{display}</span>;
+  }
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      onClick={(e) => e.stopPropagation()}
+      className="text-sm text-accent hover:underline"
+      title={`Open ${display} in Slack`}
+    >
+      {display}
+    </a>
   );
 }
 
@@ -680,6 +705,39 @@ function splitChips(value: string): string[] {
     .split(/\s*(?:,|\/|\sand\s)\s*/i)
     .map((s) => s.trim())
     .filter(Boolean);
+}
+
+/** The Channel field in a feature-update post is a Slack channel ref.
+ *  It can land in our parser as any of these shapes:
+ *    - Plain ID: "C093C6MDS1E"
+ *    - Slack mrkdwn ref: "<#C093C6MDS1E|feature-updates>"
+ *    - Archive URL: "https://beehiiv.slack.com/archives/C093C6MDS1E"
+ *    - Plain text: "private channel" (no ID — render as-is)
+ *  We normalize to a {id?, display} pair and let the renderer decide
+ *  whether to make it a link. */
+function parseChannelValue(raw: string): { id?: string; display: string } {
+  const trimmed = raw.trim();
+
+  // Slack mrkdwn channel reference — includes the friendly name.
+  const mrkdwnRef = /^<#([CGD][A-Z0-9]{6,})\|([^>]+)>$/.exec(trimmed);
+  if (mrkdwnRef) {
+    return { id: mrkdwnRef[1], display: `#${mrkdwnRef[2]}` };
+  }
+
+  // Bare channel ID — no friendly name available.
+  if (/^[CGD][A-Z0-9]{6,}$/.test(trimmed)) {
+    return { id: trimmed, display: `#${trimmed}` };
+  }
+
+  // Slack archive URL.
+  const archiveUrl = /^https?:\/\/[^/]*\.slack\.com\/archives\/([CGD][A-Z0-9]{6,})/.exec(
+    trimmed
+  );
+  if (archiveUrl) {
+    return { id: archiveUrl[1], display: `#${archiveUrl[1]}` };
+  }
+
+  return { display: trimmed };
 }
 
 /** Friendly icon + label for a URL based on its host. Fallback is the
