@@ -18,6 +18,7 @@ import {
 } from "./slack-bulk-compose";
 import { BulkEmailLauncher } from "./bulk-email-launcher";
 import { LowTierBulkSend } from "./low-tier-bulk-send";
+import { stripeCustomerUrl } from "@/lib/links";
 import type { Customer } from "@/lib/types";
 import type {
   PastDueOutreachMap,
@@ -627,9 +628,20 @@ export function PastDuePanel({ rows, csms, totalSourceRows }: Props) {
                               }
                             />
                           </div>
-                          <div className="text-xs text-muted truncate font-mono">
-                            {r.customer_id ?? ""}
-                          </div>
+                          {r.customer_id ? (
+                            <a
+                              href={
+                                stripeCustomerUrl(r.customer_id) ?? "#"
+                              }
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              onClick={(e) => e.stopPropagation()}
+                              className="block text-xs text-muted truncate font-mono hover:text-accent hover:underline decoration-dotted"
+                              title="Open in Stripe Dashboard"
+                            >
+                              {r.customer_id}
+                            </a>
+                          ) : null}
                         </td>
                         <td className="px-3 py-2 text-muted break-words">
                           <div>{r.price_name ?? "—"}</div>
