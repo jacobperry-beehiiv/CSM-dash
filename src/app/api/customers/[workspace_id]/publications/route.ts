@@ -25,7 +25,6 @@ interface PublicationRow {
   publication_id: string;
   publication_name: string;
   subscribers: number | null;
-  is_primary: boolean;
 }
 
 export async function GET(
@@ -45,21 +44,23 @@ export async function GET(
     );
   }
 
-  // ORDER: primary first, then subscriber count desc, name as tiebreaker.
-  // Primary lives on organizations.primary_publication_id.
+  // ORDER: largest publication first (proxy for "primary"), then name
+  // as a tiebreaker. We previously tried to surface a primary flag
+  // via organizations.primary_publication_id but that column doesn't
+  // exist in this schema — drop the lookup entirely rather than guess
+  // at another column. Sub-count sort still puts the workspace's
+  // biggest pub at the top of the list, which is what readers wanted.
   const sql = `
     SELECT
       p.id::text AS publication_id,
       p.name AS publication_name,
-      coalesce(vasc.total, 0) AS subscribers,
-      (p.id = o.primary_publication_id) AS is_primary
+      coalesce(vasc.total, 0) AS subscribers
     FROM public.publications p
-    JOIN public.organizations o ON o.id = p.organization_id
     LEFT JOIN public.v_active_subscription_counts vasc
       ON vasc.publication_id = p.id
     WHERE p.organization_id = '${orgId}'
       AND p.deleted_at IS NULL
-    ORDER BY is_primary DESC, coalesce(vasc.total, 0) DESC, p.name ASC
+    ORDER BY coalesce(vasc.total, 0) DESC, p.name ASC
   `;
 
   try {
