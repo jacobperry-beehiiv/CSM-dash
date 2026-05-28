@@ -26,7 +26,10 @@ const TABS = [
   { id: "past-due", label: "Past Due" },
 ];
 
-const ENT_UTIL_THRESHOLD = 0.85;
+// Per the AM Hackathon brief follow-up: surface Enterprise accounts at
+// ≥75% of cap so AM can start the upgrade conversation earlier in the
+// curve, not just when the customer is already near hitting the limit.
+const ENT_UTIL_THRESHOLD = 0.75;
 
 interface SP {
   tab?: string;

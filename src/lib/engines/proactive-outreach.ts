@@ -21,7 +21,9 @@ import { fmtCurrency } from "../../components/format";
  * nothing because every emission is guarded by a KV dedupe key.
  */
 
-const UTIL_THRESHOLD = 0.85;
+// Matches ENT_UTIL_THRESHOLD on the AM page — Enterprise account is
+// "approaching cap" once it crosses 75% of the configured sub limit.
+const UTIL_THRESHOLD = 0.75;
 const NUDGE_AFTER_DAYS = 5;
 const NUDGE_REPEAT_DAYS = 5;
 const MS_PER_DAY = 1000 * 60 * 60 * 24;
@@ -152,7 +154,7 @@ export async function runProactiveOutreachSweep(
     );
   }
 
-  // Eligible cohort: Enterprise, ≥85% of cap, with a workspace_id to
+  // Eligible cohort: Enterprise, ≥75% of cap, with a workspace_id to
   // key dedupe state on. Falls into the same definition the panel uses.
   const eligible = customers.filter((c) => {
     if (!isEnterprise(c)) return false;

@@ -40,6 +40,16 @@ const BUCKETS: Bucket[] = [
   {
     label: "85–89%",
     test: (p) => p >= 85 && p < 90,
+    color: "bg-amber-50 dark:bg-amber-500/10 border-amber-200 dark:border-amber-500/30 text-amber-900",
+  },
+  {
+    label: "80–84%",
+    test: (p) => p >= 80 && p < 85,
+    color: "bg-yellow-50 border-yellow-200 text-yellow-900",
+  },
+  {
+    label: "75–79%",
+    test: (p) => p >= 75 && p < 80,
     color: "bg-yellow-50 border-yellow-200 text-yellow-900",
   },
 ];
@@ -124,7 +134,7 @@ export function EnterpriseOnlyPanel({ rows, csms }: Props) {
         <span className="text-xs text-muted">Filter:</span>
         <CsmSelector csms={csms} />
         <span className="text-xs text-muted ml-auto">
-          {rows.length} Enterprise account{rows.length === 1 ? "" : "s"} at ≥85% of cap
+          {rows.length} Enterprise account{rows.length === 1 ? "" : "s"} at ≥75% of cap
         </span>
       </div>
 
@@ -230,7 +240,7 @@ export function EnterpriseOnlyPanel({ rows, csms }: Props) {
 
       {buckets.length === 0 ? (
         <div className="bg-green-50 border border-green-200 rounded-lg p-4 text-sm text-green-800">
-          No Enterprise customers at or above 85% of cap. Nicely done.
+          No Enterprise customers at or above 75% of cap. Nicely done.
         </div>
       ) : (
         <div className="space-y-4">

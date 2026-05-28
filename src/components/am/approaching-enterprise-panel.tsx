@@ -58,6 +58,10 @@ interface Bucket {
   color: string;
 }
 
+// Non-Enterprise cohort uses 10% segments per the AM brief follow-up —
+// 80-89%, 90-99%, ≥100%. Above 100% is the "over the plan cap" case
+// (customer is paying the overage; conversion is urgent); 90-99% is
+// the imminent-upgrade conversation; 80-89% is the warm-pitch window.
 const BUCKETS: Bucket[] = [
   {
     label: "≥100% — over cap",
@@ -65,28 +69,13 @@ const BUCKETS: Bucket[] = [
     color: "bg-red-50 dark:bg-red-500/10 border-red-200 dark:border-red-500/30 text-red-900",
   },
   {
-    label: "95–99%",
-    test: (p) => p >= 95 && p < 100,
-    color: "bg-red-50 dark:bg-red-500/10 border-red-200 dark:border-red-500/30 text-red-900",
-  },
-  {
-    label: "90–94%",
-    test: (p) => p >= 90 && p < 95,
+    label: "90–99%",
+    test: (p) => p >= 90 && p < 100,
     color: "bg-amber-50 dark:bg-amber-500/10 border-amber-200 dark:border-amber-500/30 text-amber-900",
   },
   {
-    label: "85–89%",
-    test: (p) => p >= 85 && p < 90,
-    color: "bg-amber-50 dark:bg-amber-500/10 border-amber-200 dark:border-amber-500/30 text-amber-900",
-  },
-  {
-    label: "80–84%",
-    test: (p) => p >= 80 && p < 85,
-    color: "bg-yellow-50 border-yellow-200 text-yellow-900",
-  },
-  {
-    label: "75–79%",
-    test: (p) => p >= 75 && p < 80,
+    label: "80–89%",
+    test: (p) => p >= 80 && p < 90,
     color: "bg-yellow-50 border-yellow-200 text-yellow-900",
   },
 ];
@@ -151,16 +140,16 @@ export function ApproachingEnterprisePanel({ rows }: Props) {
     });
   }
 
-  // Filter to ≥75% utilization, then bucket. q13268 returns customers
+  // Filter to ≥80% utilization, then bucket. q13268 returns customers
   // approaching the 100K Enterprise threshold — they're already a curated
-  // pool, but the user wants the panel to focus on those actually close
-  // to/over their plan limit.
+  // pool, but per the AM brief follow-up we surface ≥80% in 10% segments
+  // (80-89, 90-99, ≥100) so the panel focuses on the actionable window.
   const buckets = useMemo(() => {
     const q = search.trim().toLowerCase();
     const filtered = rows
       .filter((r) => {
         const p = pctNum(r);
-        if (p == null || p < 75) return false;
+        if (p == null || p < 80) return false;
         if (!q) return true;
         return (
           r.workspace_name?.toLowerCase().includes(q) ||
@@ -178,9 +167,9 @@ export function ApproachingEnterprisePanel({ rows }: Props) {
     })).filter((g) => g.list.length > 0);
   }, [rows, search]);
 
-  const totalAtOrAbove75 = rows.filter((r) => {
+  const totalAtOrAboveFloor = rows.filter((r) => {
     const p = pctNum(r);
-    return p != null && p >= 75;
+    return p != null && p >= 80;
   }).length;
 
   // Visible rows (after filter + sort + bucket) — used by the
@@ -202,7 +191,7 @@ export function ApproachingEnterprisePanel({ rows }: Props) {
           className="px-3 py-2 border border-border-strong rounded-lg text-sm flex-1 min-w-[220px]"
         />
         <span className="text-xs text-muted ml-auto">
-          {totalAtOrAbove75} of {rows.length} q13268 rows at ≥75% of plan limit
+          {totalAtOrAboveFloor} of {rows.length} q13268 rows at ≥80% of plan limit
         </span>
       </div>
 
@@ -257,7 +246,7 @@ export function ApproachingEnterprisePanel({ rows }: Props) {
 
       {buckets.length === 0 ? (
         <div className="bg-green-50 border border-green-200 rounded-lg p-4 text-sm text-green-800">
-          No approaching-Enterprise accounts at ≥75% of their plan limit.
+          No approaching-Enterprise accounts at ≥80% of their plan limit.
         </div>
       ) : (
         <div className="space-y-4">
