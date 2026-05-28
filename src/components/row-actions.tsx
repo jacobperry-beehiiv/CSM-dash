@@ -33,10 +33,9 @@ export function RowActions({ customer, onDraft }: Props) {
           target="_blank"
           rel="noopener noreferrer"
           title="Masquerade into workspace"
-          aria-label="Masquerade"
           className="px-2 py-1 text-xs border border-border-strong rounded-md hover:bg-canvas inline-flex items-center"
         >
-          <span aria-hidden>👤</span>
+          Masquerade
         </a>
       ) : null}
       {hubspot ? (
