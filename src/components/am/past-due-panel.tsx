@@ -84,30 +84,33 @@ function isEnterprisePlan(p: PastDueRow): boolean {
 
 // ─── Phase 1 tier classification (per AM Hackathon brief) ────────────
 //
-//   Enterprise:   isEnterprisePlan(r) AND has a CSM assigned
-//   Above $3.5K:  !isEnterprisePlan(r) AND ARR >= $3,500
-//   Below $3.5K:  !isEnterprisePlan(r) AND ARR <  $3,500 AND no CSM
+//   Enterprise:   has a CSM assigned (canonical Enterprise signal at
+//                 beehiiv; self-serve doesn't get a CSM). Falls through
+//                 to plan-name regex when the row is unassigned but the
+//                 price_name explicitly says "enterprise" / "custom".
+//   Above $3.5K:  no CSM AND ARR >= $3,500 AND not an Ent plan.
+//   Below $3.5K:  no CSM AND ARR <  $3,500 AND not an Ent plan.
 //
-// "Unclassified" catches edge cases the brief doesn't enumerate
-// (Enterprise without CSM, non-Enterprise below $3.5K with a CSM, etc).
-// We still want those visible somewhere rather than silently dropped,
-// so the Follow-Up tab also lists them.
+// Initial implementation tied Enterprise to the plan-name regex AND
+// CSM presence — which silently misclassified rows where q24620
+// didn't surface a price_name (rows showed `Plan = —` but had a CSM
+// and high ARR). CSM presence is the stronger signal.
 const ABOVE_THRESHOLD_USD = 3_500;
 
 type PastDueTier =
   | "enterprise"
   | "above"
   | "below"
-  | "followup"
-  | "unclassified";
+  | "followup";
 
-function classifyPastDue(r: PastDueRow): "enterprise" | "above" | "below" | "unclassified" {
-  const ent = isEnterprisePlan(r);
+function classifyPastDue(r: PastDueRow): "enterprise" | "above" | "below" {
   const hasCsm = Boolean(r.customer_success_manager);
-  if (ent && hasCsm) return "enterprise";
-  if (!ent && r.arr_dollars >= ABOVE_THRESHOLD_USD) return "above";
-  if (!ent && r.arr_dollars < ABOVE_THRESHOLD_USD && !hasCsm) return "below";
-  return "unclassified";
+  if (hasCsm) return "enterprise";
+  // Edge case — Enterprise account between CSM assignments. Fall back
+  // to the plan-name regex so we still bucket them correctly.
+  if (isEnterprisePlan(r)) return "enterprise";
+  if (r.arr_dollars >= ABOVE_THRESHOLD_USD) return "above";
+  return "below";
 }
 
 /** Past Due is now organized into four sub-tabs per the AM Hackathon
@@ -241,7 +244,7 @@ export function PastDuePanel({ rows, csms, totalSourceRows }: Props) {
   }, [searched]);
 
   const tierCounts = useMemo(() => {
-    const c = { enterprise: 0, above: 0, below: 0, unclassified: 0 };
+    const c = { enterprise: 0, above: 0, below: 0 };
     for (const r of searched) {
       c[classifyPastDue(r)]++;
     }
