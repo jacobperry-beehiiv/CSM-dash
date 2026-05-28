@@ -20,7 +20,7 @@ import { useState } from "react";
 export function CollapsibleSection({
   title,
   trailing,
-  defaultOpen = true,
+  defaultOpen = false,
   children,
   className = "",
   bodyClassName = "",
@@ -31,6 +31,9 @@ export function CollapsibleSection({
    *  refresh button, etc.). Click events on this slot do NOT bubble
    *  to the toggle button. */
   trailing?: React.ReactNode;
+  /** Initial open/closed state. Defaults to closed so the expanded
+   *  customer panel reads as a clean stack of titles — click to open
+   *  whichever section you actually need. */
   defaultOpen?: boolean;
   children: React.ReactNode;
   className?: string;
