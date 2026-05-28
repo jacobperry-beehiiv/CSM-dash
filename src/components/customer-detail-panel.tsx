@@ -3,11 +3,11 @@ import type { Customer } from "@/lib/types";
 import { lastContacted } from "@/lib/customer-helpers";
 import { fmtCurrency, fmtDate, fmtNumber } from "./format";
 import { RiskLevelChip } from "./risk-level-chip";
-import { FeatureBreakdown } from "./feature-breakdown";
 import { FeatureUtilizationPanel } from "./feature-utilization-panel";
 import { AdGapSummary } from "./ad-gap-summary";
 import { CadenceToggle } from "./cadence-toggle";
 import { HubSpotContactsSection } from "./hubspot-contacts-section";
+import { CustomerPublicationsList } from "./customer-publications-list";
 import { CopyButton } from "./copy-button";
 import { stripeCustomerUrl } from "@/lib/links";
 
@@ -15,16 +15,17 @@ interface Props {
   customer: Customer;
   /** Optional extra slot above the standard sections (e.g. flag list, post metrics). */
   topSlot?: React.ReactNode;
-  /** Hide the static FeatureBreakdown grid (Monetization/Growth/Onboarding/Activity).
-   *  At-risk view sets this true since the live FeatureUtilizationPanel below
-   *  already covers the same ground with real query data. */
+  /** Reserved for future per-view chrome toggles. Previously used to
+   *  hide the static FeatureBreakdown grid; that section was replaced
+   *  with the live CustomerPublicationsList. Kept on the prop list so
+   *  existing callers (at-risk-table) keep type-checking — the value
+   *  is currently ignored. */
   hideFeatureBreakdown?: boolean;
 }
 
 export function CustomerDetailPanel({
   customer: c,
   topSlot,
-  hideFeatureBreakdown,
 }: Props) {
   return (
     <div className="space-y-3">
@@ -111,7 +112,9 @@ export function CustomerDetailPanel({
 
       <HubSpotContactsSection contacts={c.hubspot_contacts} />
 
-      {hideFeatureBreakdown ? null : <FeatureBreakdown customer={c} />}
+      {c.workspace_id ? (
+        <CustomerPublicationsList workspaceId={c.workspace_id} />
+      ) : null}
 
       <FeatureUtilizationPanel workspaceId={c.workspace_id} />
 
