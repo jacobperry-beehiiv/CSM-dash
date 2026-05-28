@@ -8,6 +8,7 @@ import { AdGapSummary } from "./ad-gap-summary";
 import { CadenceToggle } from "./cadence-toggle";
 import { HubSpotContactsSection } from "./hubspot-contacts-section";
 import { CustomerPublicationsList } from "./customer-publications-list";
+import { CollapsibleSection } from "./collapsible-section";
 import { CopyButton } from "./copy-button";
 import { stripeCustomerUrl } from "@/lib/links";
 
@@ -151,12 +152,9 @@ function Section({
   children: React.ReactNode;
 }) {
   return (
-    <div className="bg-surface rounded-md border border-border p-3">
-      <h4 className="text-xs font-semibold uppercase tracking-wide text-muted mb-2">
-        {title}
-      </h4>
+    <CollapsibleSection title={title}>
       <dl className="space-y-1">{children}</dl>
-    </div>
+    </CollapsibleSection>
   );
 }
 

@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import type { FeatureUtilization } from "@/lib/engines/feature-utilization";
 import { fmtCurrency, fmtDate, fmtNumber } from "./format";
+import { CollapsibleSection } from "./collapsible-section";
 
 interface Props {
   workspaceId: string | null | undefined;
@@ -65,16 +66,14 @@ export function FeatureUtilizationPanel({ workspaceId }: Props) {
   if (!data) return null;
 
   return (
-    <div className="bg-surface rounded-md border border-border p-3 space-y-3">
-      <div className="flex items-baseline justify-between">
-        <h4 className="text-xs font-semibold uppercase tracking-wide text-muted">
-          Enterprise feature utilization
-        </h4>
+    <CollapsibleSection
+      title="Enterprise feature utilization"
+      trailing={
         <span className="text-[10px] text-subtle">
           live · {fmtDate(data.generated_at)}
         </span>
-      </div>
-
+      }
+    >
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
         <Feature
           name="MCP"
@@ -185,7 +184,7 @@ export function FeatureUtilizationPanel({ workspaceId }: Props) {
           ]}
         />
       </div>
-    </div>
+    </CollapsibleSection>
   );
 }
 

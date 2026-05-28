@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { CopyButton } from "./copy-button";
 import { fmtNumber } from "./format";
+import { CollapsibleSection } from "./collapsible-section";
 
 /**
  * Scrollable list of every publication under a workspace. Replaces
@@ -54,19 +55,14 @@ export function CustomerPublicationsList({ workspaceId }: Props) {
     };
   }, [workspaceId]);
 
+  const titleSuffix = rows ? ` (${rows.length})` : "";
   return (
-    <section className="bg-surface rounded-md border border-border">
-      <header className="px-3 py-2 border-b border-border flex items-center justify-between gap-2">
-        <h3 className="text-sm font-semibold text-fg">
-          Publications{" "}
-          {rows ? (
-            <span className="text-xs text-muted font-normal">
-              ({rows.length})
-            </span>
-          ) : null}
-        </h3>
-      </header>
-
+    <CollapsibleSection
+      title={`Publications${titleSuffix}`}
+      // Body uses its own padding (per-state empty/loading/error/list),
+      // so opt out of the wrapper's default `p-3` to avoid double pad.
+      bodyClassName=""
+    >
       {error ? (
         <div className="p-3 text-sm text-red-700 dark:text-red-300 bg-red-50 dark:bg-red-500/10">
           Publications fetch failed: {error}
@@ -100,6 +96,6 @@ export function CustomerPublicationsList({ workspaceId }: Props) {
           ))}
         </ul>
       )}
-    </section>
+    </CollapsibleSection>
   );
 }

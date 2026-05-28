@@ -3,6 +3,7 @@
 import { useState } from "react";
 import type { AdGapReport } from "@/lib/types";
 import { fmtCurrency, fmtNumber, fmtRate } from "./format";
+import { CollapsibleSection } from "./collapsible-section";
 
 interface ApiResponse {
   matches: { id: string; name: string; owner_email: string | null }[];
@@ -54,19 +55,18 @@ export function AdGapSummary({ organizationId }: Props) {
   if (!organizationId) return null;
 
   return (
-    <div className="rounded-md border border-border bg-surface p-3 space-y-3">
-      <div className="flex items-baseline justify-between">
-        <h4 className="text-xs font-semibold uppercase tracking-wide text-muted">
-          Ad Network Gap (last 90 days)
-        </h4>
-        {data ? (
+    <CollapsibleSection
+      title="Ad Network Gap (last 90 days)"
+      trailing={
+        data ? (
           <span className="text-[10px] text-subtle">
             {data.publications.length} pubs · {fmtNumber(data.total_subscribers)}{" "}
             subs
           </span>
-        ) : null}
-      </div>
-
+        ) : null
+      }
+    >
+      <div className="space-y-3">
       {!data && !loading && !error ? (
         <button
           onClick={run}
@@ -172,7 +172,8 @@ export function AdGapSummary({ organizationId }: Props) {
           </details>
         </>
       ) : null}
-    </div>
+      </div>
+    </CollapsibleSection>
   );
 }
 

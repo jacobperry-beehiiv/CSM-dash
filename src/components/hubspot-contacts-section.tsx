@@ -1,5 +1,6 @@
 import type { HubSpotContactRef } from "@/lib/types";
 import { fmtDate } from "./format";
+import { CollapsibleSection } from "./collapsible-section";
 
 /**
  * Renders the list of contacts whose HubSpot "Contact with Primary Company"
@@ -18,10 +19,9 @@ export function HubSpotContactsSection({
   if (!contacts || contacts.length === 0) return null;
 
   return (
-    <div className="bg-surface rounded-md border border-border p-3">
-      <h4 className="text-xs font-semibold uppercase tracking-wide text-muted mb-2">
-        HubSpot contacts at this company ({contacts.length})
-      </h4>
+    <CollapsibleSection
+      title={`HubSpot contacts at this company (${contacts.length})`}
+    >
       <ul className="divide-y divide-border">
         {contacts.map((c) => (
           <li key={c.id} className="py-1.5 flex items-start gap-2 text-sm">
@@ -54,6 +54,6 @@ export function HubSpotContactsSection({
           </li>
         ))}
       </ul>
-    </div>
+    </CollapsibleSection>
   );
 }
