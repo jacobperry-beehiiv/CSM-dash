@@ -53,6 +53,13 @@ export const PAST_DUE_CHANNEL_ID = "past_due";
  *  helpful 503 telling the admin to configure it at /settings/slack. */
 export const ISSUE_REPORTS_CHANNEL_ID = "issue_reports";
 
+/** Stable id for the AM Proactive Outreach pillar's alerts channel.
+ *  Per the brief, when an Enterprise account first crosses the sub-cap
+ *  threshold a ping goes to #topic-cs-account-management with
+ *  customer + tier + bill so the CSM can context the AM before
+ *  outreach. Nudges fire here too (threaded under the original ping). */
+export const PROACTIVE_OUTREACH_CHANNEL_ID = "proactive_outreach";
+
 /** Map of customer_success_manager (e.g. "Jacob_Perry") → Slack user ID
  *  (e.g. "U02ABC123") so {{customer.csm_slack}} renders an actual @mention. */
 export type CsmSlackIdMap = Record<string, string>;
@@ -134,6 +141,16 @@ export const DEFAULTS: SettingsShape = {
           "*Past-Due Enterprise alert*\n\nTotal Enterprise ARR past due: *{{total_arr}}* across *{{count}}* account{{count_plural}}.\n\n{{account_list}}\n\nLet me know if any of these are already in motion 🙏",
         row_template:
           "• *{{email}}* — {{charge_amount}} failed charge, {{arr}} ARR (CSM: {{csm}})",
+      },
+      {
+        id: PROACTIVE_OUTREACH_CHANNEL_ID,
+        label: "Proactive outreach (Enterprise approaching cap)",
+        channel_id: "",
+        // Initial-ping template; rendered against a single customer via
+        // the proactive-outreach engine's `{{token}}` substitutions
+        // (see lib/engines/proactive-outreach.ts).
+        template:
+          ":chart_with_upwards_trend: *Enterprise account approaching cap* — {{company_name}}\n\n• Current tier: *{{tier}}*\n• Active subs: *{{active_subs}}* / {{max_subs}} (*{{util_pct}}*)\n• Current bill: *{{bill}}*\n• CSM: {{csm}}\n\nBefore AM reaches out, can you share the latest context + best contact?",
       },
     ],
     csm_user_ids: {},

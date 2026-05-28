@@ -1,13 +1,14 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { Customer } from "@/lib/types";
-import { fmtCurrency, fmtNumber, fmtPct } from "../format";
+import { fmtCurrency, fmtDate, fmtNumber, fmtPct } from "../format";
 import { CsmSelector } from "../csm-selector";
 import { RowActions } from "../row-actions";
 import { OutreachModal } from "../outreach-modal";
 import { BucketSection } from "./bucket-section";
 import { BulkEmailLauncher } from "./bulk-email-launcher";
+import type { ProactiveOutreachMap } from "@/lib/data/proactive-outreach";
 
 interface Props {
   rows: Customer[];
@@ -68,6 +69,22 @@ export function EnterpriseOnlyPanel({ rows, csms }: Props) {
   // Bulk-select state — keyed on workspace_id (the row's stable id).
   // Mirrors the past-due-panel pattern so all AM tabs feel the same.
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  // Per-workspace proactive-outreach lifecycle state (ping_sent_at,
+  // last_outreach_at, last_nudge_at). Drives the inline status badge
+  // and the "Mark outreach logged" action.
+  const [outreachMap, setOutreachMap] = useState<ProactiveOutreachMap>({});
+  const [sweepBusy, setSweepBusy] = useState(false);
+  const [sweepReport, setSweepReport] = useState<string | null>(null);
+
+  const reloadOutreach = useCallback(() => {
+    fetch("/api/proactive-outreach")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => setOutreachMap((j as ProactiveOutreachMap) ?? {}))
+      .catch(() => {});
+  }, []);
+  useEffect(() => {
+    reloadOutreach();
+  }, [reloadOutreach]);
 
   const buckets = useMemo(() => {
     return BUCKETS.map((b) => ({
@@ -130,6 +147,70 @@ export function EnterpriseOnlyPanel({ rows, csms }: Props) {
         >
           Clear
         </button>
+        <button
+          onClick={async () => {
+            const ids = selectedCustomers
+              .map((c) => c.workspace_id)
+              .filter((id): id is string => Boolean(id));
+            if (ids.length === 0) return;
+            const r = await fetch("/api/proactive-outreach", {
+              method: "PUT",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ workspace_ids: ids }),
+            });
+            if (r.ok) reloadOutreach();
+          }}
+          disabled={selected.size === 0}
+          className="px-2 py-1 text-xs border border-border-strong rounded-md bg-surface hover:bg-canvas disabled:opacity-50"
+          title="Stamp the selected rows as outreach-logged. Stops the 5-day nudge cycle for them."
+        >
+          ✓ Mark outreach logged
+        </button>
+        <button
+          onClick={async () => {
+            setSweepBusy(true);
+            setSweepReport(null);
+            try {
+              const r = await fetch("/api/proactive-outreach/sweep", {
+                method: "POST",
+              });
+              const j = (await r.json()) as {
+                ok?: boolean;
+                error?: string;
+                scanned?: number;
+                pings_sent?: number;
+                nudges_sent?: number;
+                skipped_outreach_logged?: number;
+                failures?: { workspace: string; error: string }[];
+              };
+              if (!r.ok || !j.ok) {
+                throw new Error(j.error ?? `HTTP ${r.status}`);
+              }
+              const bits: string[] = [];
+              bits.push(`Scanned ${j.scanned ?? 0}`);
+              if (j.pings_sent) bits.push(`pinged ${j.pings_sent}`);
+              if (j.nudges_sent) bits.push(`nudged ${j.nudges_sent}`);
+              if (j.skipped_outreach_logged)
+                bits.push(`${j.skipped_outreach_logged} already actioned`);
+              if (j.failures?.length)
+                bits.push(`${j.failures.length} failures`);
+              setSweepReport(bits.join(" · "));
+              reloadOutreach();
+            } catch (e) {
+              setSweepReport(
+                `Sweep failed: ${e instanceof Error ? e.message : "unknown"}`
+              );
+            } finally {
+              setSweepBusy(false);
+              setTimeout(() => setSweepReport(null), 6000);
+            }
+          }}
+          disabled={sweepBusy}
+          className="px-2 py-1 text-xs border border-border-strong rounded-md bg-surface hover:bg-canvas disabled:opacity-50"
+          title="Run the proactive-outreach sweep immediately — posts Slack pings + 5-day nudges. Same logic the daily cron uses."
+        >
+          {sweepBusy ? "Sweeping…" : "📣 Run Slack sweep"}
+        </button>
         <div className="flex-1" />
         {/* Enterprise outreach drafts auto-CC the assigned CSM per the
          *  brief. Same ccLookup pattern used on the Past Due Enterprise
@@ -142,6 +223,10 @@ export function EnterpriseOnlyPanel({ rows, csms }: Props) {
           ccLookup={(c) => c.customer_success_manager_email ?? null}
         />
       </div>
+
+      {sweepReport ? (
+        <div className="text-xs text-muted mb-3">{sweepReport}</div>
+      ) : null}
 
       {buckets.length === 0 ? (
         <div className="bg-green-50 border border-green-200 rounded-lg p-4 text-sm text-green-800">
@@ -198,8 +283,15 @@ export function EnterpriseOnlyPanel({ rows, csms }: Props) {
                         />
                       </td>
                       <td className="px-3 py-2 break-words">
-                        <div className="font-medium text-fg">
-                          {c.company_name ?? c.workspace_name ?? "—"}
+                        <div className="font-medium text-fg flex items-center gap-2 flex-wrap">
+                          <span>{c.company_name ?? c.workspace_name ?? "—"}</span>
+                          <ProactiveStatusBadge
+                            entry={
+                              c.workspace_id
+                                ? outreachMap[c.workspace_id]
+                                : undefined
+                            }
+                          />
                         </div>
                         <div className="text-xs text-muted truncate">
                           {c.property_main_contact ?? c.owner_email ?? ""}
@@ -246,4 +338,48 @@ export function EnterpriseOnlyPanel({ rows, csms }: Props) {
       ) : null}
     </>
   );
+}
+
+/** Inline chip showing where this account sits in the proactive-outreach
+ *  lifecycle: pinged in Slack, outreach logged, or nudged. Invisible
+ *  when no state exists yet (most rows on first load). */
+function ProactiveStatusBadge({
+  entry,
+}: {
+  entry?: import("@/lib/data/proactive-outreach").ProactiveOutreachEntry;
+}) {
+  if (!entry) return null;
+  if (entry.last_outreach_at) {
+    return (
+      <span
+        className="inline-block px-1.5 py-0.5 rounded text-[10px] font-medium bg-emerald-100 text-emerald-800 dark:bg-emerald-500/20 dark:text-emerald-200"
+        title={`Outreach logged ${fmtDate(entry.last_outreach_at)}${
+          entry.last_outreach_by ? ` by ${entry.last_outreach_by}` : ""
+        }`}
+      >
+        Outreach logged
+      </span>
+    );
+  }
+  if (entry.last_nudge_at) {
+    return (
+      <span
+        className="inline-block px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-100 text-amber-800 dark:bg-amber-500/20 dark:text-amber-200"
+        title={`Nudged ${fmtDate(entry.last_nudge_at)} · pinged ${fmtDate(entry.ping_sent_at)}`}
+      >
+        Nudge sent
+      </span>
+    );
+  }
+  if (entry.ping_sent_at) {
+    return (
+      <span
+        className="inline-block px-1.5 py-0.5 rounded text-[10px] font-medium bg-blue-100 text-blue-800 dark:bg-blue-500/20 dark:text-blue-200"
+        title={`Slack ping fired ${fmtDate(entry.ping_sent_at)}`}
+      >
+        Pinged
+      </span>
+    );
+  }
+  return null;
 }

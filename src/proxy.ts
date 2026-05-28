@@ -43,6 +43,11 @@ export default auth((req) => {
   // cron (.github/workflows/team-task-reminders.yml).
   if (pathname.startsWith("/api/team-tasks/reminders/sweep")) return;
 
+  // AM Proactive Outreach sweep — same dual-auth shape. Fires Slack
+  // pings for newly-cap'd Enterprise accounts + 5-day nudges. Cron
+  // workflow at .github/workflows/proactive-outreach-sweep.yml.
+  if (pathname.startsWith("/api/proactive-outreach/sweep")) return;
+
   if (!req.auth) {
     const url = req.nextUrl.clone();
     url.pathname = "/login";

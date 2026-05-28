@@ -1,0 +1,62 @@
+name: proactive-outreach-sweep
+
+# Daily sweep for the AM Proactive Outreach pillar. Hits the production
+# dashboard with a CRON_SECRET bearer so it can:
+#   • Post a Slack ping when an Enterprise account first crosses the
+#     ≥85% sub-cap threshold (per-workspace dedupe in KV).
+#   • Nudge AM in the same channel after 5 days of no logged outreach
+#     for any account that's already been pinged. Re-nudges every 5
+#     days while outreach stays unlogged.
+#
+# Required repo secrets (already set for the other crons):
+#   • CRON_SECRET    — bearer; same value as the Vercel env var
+#   • DASHBOARD_URL  — root URL, no trailing slash (e.g. https://csm-dash.vercel.app)
+#
+# Triggers:
+#   • automatically once daily at 15:00 UTC (≈10am Central / 11am ET)
+#   • manually via "Run workflow"
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 15 * * *"
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify required secrets are set
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          DASHBOARD_URL: ${{ secrets.DASHBOARD_URL }}
+        run: |
+          missing=()
+          for v in CRON_SECRET DASHBOARD_URL; do
+            if [ -z "${!v}" ]; then
+              missing+=("$v")
+            fi
+          done
+          if [ "${#missing[@]}" -ne 0 ]; then
+            echo "::error::Missing required repo secret(s): ${missing[*]}. Add them under Settings → Secrets and variables → Actions, then re-run."
+            exit 1
+          fi
+          echo "All required secrets present."
+
+      - name: POST /api/proactive-outreach/sweep
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          DASHBOARD_URL: ${{ secrets.DASHBOARD_URL }}
+        run: |
+          set -e
+          response=$(curl -sS -w "\n%{http_code}" -X POST \
+            -H "Authorization: Bearer ${CRON_SECRET}" \
+            -H "Content-Type: application/json" \
+            "${DASHBOARD_URL}/api/proactive-outreach/sweep")
+          body=$(echo "$response" | sed '$d')
+          code=$(echo "$response" | tail -n1)
+          echo "HTTP $code"
+          echo "$body"
+          if [ "$code" != "200" ]; then
+            echo "::error::Sweep failed with HTTP $code"
+            exit 1
+          fi
