@@ -255,13 +255,15 @@ export function EnterpriseOnlyPanel({ rows, csms }: Props) {
               <table className="w-full text-sm table-fixed">
                 <colgroup>
                   <col className="w-8" />
-                  <col className="w-[26%]" />
-                  <col className="w-[10%]" />
-                  <col className="w-[13%]" />
-                  <col className="w-[10%]" />
-                  <col className="w-[13%]" />
-                  <col className="w-[10%]" />
-                  <col className="w-[10%]" />
+                  <col className="w-[24%]" />
+                  <col className="w-[8%]" />
+                  <col className="w-[12%]" />
+                  <col className="w-[9%]" />
+                  <col className="w-[12%]" />
+                  <col className="w-[9%]" />
+                  {/* Actions — Masquerade + h. + Draft. Bumped from 10%
+                   *  so text "Masquerade" doesn't spill leftward. */}
+                  <col className="w-[18%]" />
                 </colgroup>
                 <thead>
                   <tr className="text-xs text-muted border-y border-border text-left">

@@ -261,14 +261,17 @@ export function ApproachingEnterprisePanel({ rows }: Props) {
               <table className="w-full text-sm table-fixed">
                 <colgroup>
                   <col className="w-8" />
-                  <col className="w-[22%]" />
-                  <col className="w-[10%]" />
-                  <col className="w-[10%]" />
-                  <col className="w-[12%]" />
-                  <col className="w-[8%]" />
-                  <col className="w-[12%]" />
-                  <col className="w-[12%]" />
-                  <col className="w-[10%]" />
+                  <col className="w-[20%]" />
+                  <col className="w-[9%]" />
+                  <col className="w-[9%]" />
+                  <col className="w-[11%]" />
+                  <col className="w-[7%]" />
+                  <col className="w-[11%]" />
+                  <col className="w-[11%]" />
+                  {/* Actions — wide enough for the Masquerade word + the
+                   *  mailto envelope. Was 10% (sized for icons) before
+                   *  the Masquerade-as-text swap. */}
+                  <col className="w-[18%]" />
                 </colgroup>
                 <thead>
                   <tr className="text-xs text-muted border-y border-border text-left">

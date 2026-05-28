@@ -37,15 +37,15 @@ interface ColumnDef {
 }
 
 const COLUMNS: ColumnDef[] = [
-  { key: "company_name", label: "Company", width: "w-[20%]", showAt: "always" },
-  { key: "arr", label: "ARR", width: "w-[8%]", align: "right", showAt: "always" },
-  { key: "active_subs", label: "Subs", width: "w-[8%]", align: "right", showAt: "md" },
-  { key: "features_enabled", label: "Features", width: "w-[8%]", align: "right", showAt: "lg" },
-  { key: "company_engagement", label: "Engagement", width: "w-[9%]", showAt: "lg" },
+  { key: "company_name", label: "Company", width: "w-[18%]", showAt: "always" },
+  { key: "arr", label: "ARR", width: "w-[7%]", align: "right", showAt: "always" },
+  { key: "active_subs", label: "Subs", width: "w-[7%]", align: "right", showAt: "md" },
+  { key: "features_enabled", label: "Features", width: "w-[7%]", align: "right", showAt: "lg" },
+  { key: "company_engagement", label: "Engagement", width: "w-[8%]", showAt: "lg" },
   { key: "property_risk_level", label: "Risk", width: "w-[8%]", showAt: "md" },
-  { key: "next_invoice", label: "Next charge", width: "w-[12%]", showAt: "md" },
-  { key: "last_send", label: "Last send", width: "w-[8%]", showAt: "lg" },
-  { key: "property_notes_last_contacted", label: "Last contacted", width: "w-[7%]", showAt: "xl" },
+  { key: "next_invoice", label: "Next charge", width: "w-[10%]", showAt: "md" },
+  { key: "last_send", label: "Last send", width: "w-[7%]", showAt: "lg" },
+  { key: "property_notes_last_contacted", label: "Last contacted", width: "w-[6%]", showAt: "xl" },
 ];
 
 const SHOW_CLASS: Record<NonNullable<ColumnDef["showAt"]>, string> = {
@@ -588,7 +588,10 @@ export function CustomerTable({
             {COLUMNS.map((c) => (
               <col key={c.key} className={`${c.width} ${SHOW_CLASS[c.showAt ?? "always"]}`} />
             ))}
-            <col className="w-[12%]" />
+            {/* Actions column. Wide enough for Masquerade + h. + Draft
+             *  text buttons; if it's too narrow the right-aligned flex
+             *  inside spills leftward into the prior column. */}
+            <col className="w-[22%]" />
           </colgroup>
           <thead>
             <tr className="bg-canvas border-b border-border">

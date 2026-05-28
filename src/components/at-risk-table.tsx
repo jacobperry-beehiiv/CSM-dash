@@ -412,15 +412,16 @@ export function AtRiskTable({
             <colgroup>
               <col className="w-8" />
               <col className="w-8" />
-              <col className="w-[18%]" />
-              <col className="w-[7%]" />
-              <col className="w-[9%]" />
-              <col className="w-[9%]" />
+              <col className="w-[16%]" />
+              <col className="w-[6%]" />
+              <col className="w-[8%]" />
+              <col className="w-[8%]" />
               <col className="w-[10%]" />
               <col className="w-[7%]" />
-              <col className="w-[8%]" />
+              <col className="w-[7%]" />
               <col className="w-[14%] hidden lg:table-cell" />
-              <col className="w-[14%]" />
+              {/* Actions — wide enough for Masquerade + h. + Draft. */}
+              <col className="w-[18%]" />
             </colgroup>
             <thead className="bg-canvas">
               <tr className="text-left border-b border-border">

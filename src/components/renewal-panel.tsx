@@ -239,12 +239,13 @@ export function RenewalPanel({ customers, csms }: Props) {
             <table className="w-full text-sm bg-surface table-fixed">
               <colgroup>
                 <col className="w-8" />
-                <col className="w-[36%]" />
-                <col className="w-[12%]" />
-                <col className="w-[14%]" />
+                <col className="w-[34%]" />
+                <col className="w-[11%]" />
+                <col className="w-[13%]" />
                 <col className="w-[8%]" />
                 <col className="w-[14%] hidden lg:table-cell" />
-                <col className="w-[16%]" />
+                {/* Actions — wide enough for Masquerade + h. + Draft. */}
+                <col className="w-[20%]" />
               </colgroup>
               <thead>
                 <tr className="text-left border-y border-border text-xs text-muted">
