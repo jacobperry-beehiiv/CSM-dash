@@ -108,4 +108,28 @@ jobs:
             exit 0
           fi
           git commit -m "chore(data): refresh encrypted snapshots ($(date -u +%FT%TZ))"
-          git push
+
+          # The sync run takes a few minutes — if a human (or another
+          # workflow) pushed to main during that window, our local main
+          # is stale and `git push` will be rejected as non-fast-forward.
+          # Retry up to N times with a rebase pulling in remote work
+          # first. Snapshots are pure-content commits and don't conflict
+          # with code changes, so the rebase should always apply cleanly.
+          push_attempt=0
+          max_attempts=5
+          until git push; do
+            push_attempt=$((push_attempt + 1))
+            if [ "$push_attempt" -ge "$max_attempts" ]; then
+              echo "::error::Push rejected after $max_attempts retries — giving up. Inspect the branch state and re-run."
+              exit 1
+            fi
+            echo "Push rejected (attempt $push_attempt/$max_attempts) — fetching + rebasing main on top of remote and retrying…"
+            # Small jitter so two concurrent workflows don't lockstep.
+            sleep $((RANDOM % 5 + 2))
+            git fetch origin main
+            # Rebase our snapshot commit on top of whatever landed
+            # remotely. -X theirs keeps remote's view of any code files
+            # that happen to overlap; snapshot files only change here so
+            # that's effectively a no-op for our use.
+            git rebase --strategy-option=theirs origin/main
+          done
