@@ -183,12 +183,18 @@ export function PastDuePanel({ rows, csms, totalSourceRows }: Props) {
     return m;
   }, [customerBook]);
 
-  /** Apply search to the CSM-filtered rows, then bucket by tier.
-   *  Selected sub-tab decides which tier list renders below. */
+  /** Apply search to the CSM-filtered rows, then dedupe per Stripe
+   *  customer_id (q24620 can return multiple rows for the same
+   *  customer — one per failed charge attempt or per past-due
+   *  subscription). Keeps the most-recent charge attempt; ties go to
+   *  the higher-ARR row.
+   *
+   *  Rows without a customer_id are kept as-is and keyed on subscription_id
+   *  so they don't collapse into each other. */
   const searched = useMemo(() => {
-    if (!search) return rows;
-    const q = search.toLowerCase();
-    return rows.filter((r) => {
+    const haystackMatch = (r: PastDueRow): boolean => {
+      if (!search) return true;
+      const q = search.toLowerCase();
       const haystack = [
         r.email,
         r.customer_id,
@@ -199,7 +205,29 @@ export function PastDuePanel({ rows, csms, totalSourceRows }: Props) {
         .join(" ")
         .toLowerCase();
       return haystack.includes(q);
-    });
+    };
+
+    const byKey = new Map<string, PastDueRow>();
+    for (const r of rows) {
+      if (!haystackMatch(r)) continue;
+      const key = r.customer_id ?? `sub:${r.subscription_id ?? ""}`;
+      if (!key) continue;
+      const existing = byKey.get(key);
+      if (!existing) {
+        byKey.set(key, r);
+        continue;
+      }
+      // Same customer — keep the row with the latest charge attempt.
+      // ISO timestamps compare lexicographically, so string > is fine.
+      const eDate = existing.charge_attempted_at ?? "";
+      const rDate = r.charge_attempted_at ?? "";
+      if (rDate > eDate) {
+        byKey.set(key, r);
+      } else if (rDate === eDate && r.arr_dollars > existing.arr_dollars) {
+        byKey.set(key, r);
+      }
+    }
+    return Array.from(byKey.values());
   }, [rows, search]);
 
   /** Map customer_id → tier classification. Computed once per searched
@@ -412,7 +440,12 @@ export function PastDuePanel({ rows, csms, totalSourceRows }: Props) {
           // stripe_customer_id) so the BulkDraftsModal has the merge-tag
           // fields it expects. Rows without a matching Customer (e.g. a
           // cancelled workspace removed from the book) are dropped.
-          const selectedRows = rows.filter((r, i) =>
+          //
+          // Iterate the DEDUPED list (`searched`) rather than the raw
+          // `rows` array — q24620 can have multiple charge-attempt rows
+          // per customer, and using the raw list here would resolve the
+          // same customer multiple times and create duplicate drafts.
+          const selectedRows = searched.filter((r, i) =>
             selected.has(rowKey(r, i))
           );
           const selectedCustomers = selectedRows
