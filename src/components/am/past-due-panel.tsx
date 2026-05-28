@@ -350,7 +350,11 @@ export function PastDuePanel({ rows, csms, totalSourceRows }: Props) {
           onChange={setSearch}
           placeholder="Search email, customer id, or plan…"
         />
-        <CsmSelector csms={csms} />
+        {/* Past Due is a team-wide triage view, so the dropdown
+         *  defaults to "All CSMs" rather than the viewer's own handle.
+         *  Matches the server-side resolution in /am/page.tsx's
+         *  PastDueTab branch. */}
+        <CsmSelector csms={csms} defaultsToAll />
       </FilterBar>
 
       {/* Sub-tab nav — Enterprise / Above $3.5K / Below $3.5K / Follow-Up.

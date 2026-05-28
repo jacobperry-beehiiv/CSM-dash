@@ -136,6 +136,12 @@ export default async function AmPage({
         </Suspense>
       );
     } else if (tab === "past-due") {
+      // Past Due is the team-wide triage view — default to ALL CSMs
+      // rather than auto-scoping to the viewer's own book. A CSM who
+      // wants to filter to their own accounts can still pick their
+      // handle from the dropdown; a deep-link with ?csm= still wins.
+      const pastDueCsm =
+        sp.csm && sp.csm !== "all" ? sp.csm : null;
       body = (
         <Suspense
           fallback={
@@ -144,7 +150,7 @@ export default async function AmPage({
             </div>
           }
         >
-          <PastDueTab csms={csms} csm={csm} />
+          <PastDueTab csms={csms} csm={pastDueCsm} />
         </Suspense>
       );
     } else {

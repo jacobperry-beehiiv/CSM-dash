@@ -6,6 +6,12 @@ import { useViewerEmail } from "@/lib/auth-client";
 
 interface Props {
   csms: string[];
+  /** When true, a bare URL (no ?csm= present) shows "All CSMs" rather
+   *  than auto-selecting the viewer's own handle. Used on team-wide
+   *  triage views (e.g. AM Past Due) where the default should be
+   *  cross-team, not per-viewer. Page-level resolution should match —
+   *  see /am/page.tsx's PastDueTab. */
+  defaultsToAll?: boolean;
 }
 
 /**
@@ -17,6 +23,7 @@ interface Props {
  *                   dropdown reflects that auto-scope by displaying
  *                   the viewer's handle as the selected option, so
  *                   what's selected always matches what's filtered.
+ *                   Override with `defaultsToAll` for team-wide views.
  *   • "all"       — explicit "show everyone". User picks this from
  *                   the dropdown; we write `?csm=all` so the page
  *                   knows to skip the auto-scope.
@@ -29,7 +36,7 @@ interface Props {
  * (admin / ex-employee), in which case the dropdown defaults to
  * "All CSMs".
  */
-export function CsmSelector({ csms }: Props) {
+export function CsmSelector({ csms, defaultsToAll = false }: Props) {
   const router = useRouter();
   const pathname = usePathname();
   const params = useSearchParams();
@@ -65,7 +72,10 @@ export function CsmSelector({ csms }: Props) {
     if (rawParam === "all") return "all";
     if (rawParam) return rawParam;
     // No param in the URL — page is server-rendering against the
-    // auto-default. Mirror that here.
+    // auto-default. Mirror that here so the dropdown agrees with
+    // what's actually being filtered. Team-wide views (`defaultsToAll`)
+    // skip the viewer-mirror so the dropdown reads "All CSMs".
+    if (defaultsToAll) return "all";
     return myCsm ?? "all";
   })();
 
