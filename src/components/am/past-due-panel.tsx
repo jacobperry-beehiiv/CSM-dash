@@ -141,6 +141,8 @@ export function PastDuePanel({ rows, csms, totalSourceRows }: Props) {
   const [historyMap, setHistoryMap] = useState<PastDueHistoryMap>({});
   // Which customer_ids currently have their history row expanded.
   const [historyOpen, setHistoryOpen] = useState<Set<string>>(new Set());
+  const [historyBusy, setHistoryBusy] = useState(false);
+  const [historyReport, setHistoryReport] = useState<string | null>(null);
 
   // Filter state. CSM filtering is applied server-side (see /am/page.tsx
   // PastDueTab), so `rows` arrives already narrowed when ?csm= is in
@@ -554,15 +556,49 @@ export function PastDuePanel({ rows, csms, totalSourceRows }: Props) {
         })()}
         <button
           onClick={async () => {
-            const r = await fetch("/api/past-due/history/sweep", {
-              method: "POST",
-            });
-            if (r.ok) reloadHistory();
+            setHistoryBusy(true);
+            setHistoryReport(null);
+            try {
+              const r = await fetch("/api/past-due/history/sweep", {
+                method: "POST",
+              });
+              const j = (await r.json()) as {
+                ok?: boolean;
+                error?: string;
+                episodes_opened?: number;
+                episodes_closed?: number;
+                episodes_updated?: number;
+                customers_tracked?: number;
+              };
+              if (!r.ok || !j.ok) {
+                throw new Error(j.error ?? `HTTP ${r.status}`);
+              }
+              const bits: string[] = [];
+              if (j.episodes_opened)
+                bits.push(`opened ${j.episodes_opened}`);
+              if (j.episodes_closed)
+                bits.push(`closed ${j.episodes_closed}`);
+              if (j.episodes_updated)
+                bits.push(`updated ${j.episodes_updated}`);
+              bits.push(`${j.customers_tracked ?? 0} customers tracked`);
+              setHistoryReport(`History reconciled — ${bits.join(" · ")}`);
+              reloadHistory();
+            } catch (e) {
+              setHistoryReport(
+                `History sweep failed: ${
+                  e instanceof Error ? e.message : "unknown"
+                }`
+              );
+            } finally {
+              setHistoryBusy(false);
+              setTimeout(() => setHistoryReport(null), 8000);
+            }
           }}
-          className="px-2 py-1 text-xs border border-border-strong rounded-md bg-surface hover:bg-canvas"
+          disabled={historyBusy}
+          className="px-2 py-1 text-xs border border-border-strong rounded-md bg-surface hover:bg-canvas disabled:opacity-50"
           title="Reconcile past-due episode history against the current q24620 snapshot. Same logic the daily cron runs."
         >
-          🕓 Refresh history
+          {historyBusy ? "Reconciling…" : "🕓 Refresh history"}
         </button>
         <button
           onClick={() => setComposeOpen(true)}
@@ -573,6 +609,10 @@ export function PastDuePanel({ rows, csms, totalSourceRows }: Props) {
           📣 Slack the past-due channel
         </button>
       </div>
+
+      {historyReport ? (
+        <div className="text-xs text-muted mb-3">{historyReport}</div>
+      ) : null}
 
       {grouped.length === 0 ? (
         <div className="bg-green-50 border border-green-200 rounded-lg p-4 text-sm text-green-800">
