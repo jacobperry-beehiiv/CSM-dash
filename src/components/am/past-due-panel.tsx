@@ -24,6 +24,8 @@ import type {
   PastDueOutreachMap,
   PastDueOutreachStatus,
 } from "@/lib/data/past-due-outreach";
+import type { PastDueHistoryMap } from "@/lib/data/past-due-history";
+import { monthsObserved } from "@/lib/data/past-due-history";
 
 interface Props {
   /** Already CSM-filtered server-side (per `?csm=…`). The client still
@@ -131,6 +133,12 @@ export function PastDuePanel({ rows, csms, totalSourceRows }: Props) {
   const [settings, setSettings] = useState<SettingsShape | null>(null);
   const [composeOpen, setComposeOpen] = useState(false);
   const [outreachMap, setOutreachMap] = useState<PastDueOutreachMap>({});
+  // Past-due episode history keyed by customer_id. Populated by the
+  // daily reconciliation cron + on-demand sweep below. Drives the
+  // "N mo past-due" badge on each row + the expandable episode log.
+  const [historyMap, setHistoryMap] = useState<PastDueHistoryMap>({});
+  // Which customer_ids currently have their history row expanded.
+  const [historyOpen, setHistoryOpen] = useState<Set<string>>(new Set());
 
   // Filter state. CSM filtering is applied server-side (see /am/page.tsx
   // PastDueTab), so `rows` arrives already narrowed when ?csm= is in
@@ -160,8 +168,15 @@ export function PastDuePanel({ rows, csms, totalSourceRows }: Props) {
       .then((j) => setOutreachMap((j as PastDueOutreachMap) ?? {}))
       .catch(() => {});
   };
+  const reloadHistory = () => {
+    fetch("/api/past-due/history")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => setHistoryMap((j as PastDueHistoryMap) ?? {}))
+      .catch(() => {});
+  };
   useEffect(() => {
     reloadOutreach();
+    reloadHistory();
   }, []);
 
   // Customer book — fetched once so the bulk-email launcher can hand
@@ -536,6 +551,18 @@ export function PastDuePanel({ rows, csms, totalSourceRows }: Props) {
           );
         })()}
         <button
+          onClick={async () => {
+            const r = await fetch("/api/past-due/history/sweep", {
+              method: "POST",
+            });
+            if (r.ok) reloadHistory();
+          }}
+          className="px-2 py-1 text-xs border border-border-strong rounded-md bg-surface hover:bg-canvas"
+          title="Reconcile past-due episode history against the current q24620 snapshot. Same logic the daily cron runs."
+        >
+          🕓 Refresh history
+        </button>
+        <button
           onClick={() => setComposeOpen(true)}
           disabled={!settings || selected.size === 0}
           className="px-3 py-1.5 bg-accent text-accent-fg rounded-md text-sm font-medium hover:bg-accent-hover disabled:opacity-50"
@@ -618,30 +645,90 @@ export function PastDuePanel({ rows, csms, totalSourceRows }: Props) {
                           />
                         </td>
                         <td className="px-3 py-2 break-words">
-                          <div className="font-medium text-fg flex items-center gap-1.5">
-                            <span>{r.email ?? "—"}</span>
-                            <OutreachStatusBadge
-                              status={
-                                r.customer_id
-                                  ? outreachMap[r.customer_id]?.status
-                                  : undefined
-                              }
-                            />
-                          </div>
-                          {r.customer_id ? (
-                            <a
-                              href={
-                                stripeCustomerUrl(r.customer_id) ?? "#"
-                              }
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              onClick={(e) => e.stopPropagation()}
-                              className="block text-xs text-muted truncate font-mono hover:text-accent hover:underline decoration-dotted"
-                              title="Open in Stripe Dashboard"
-                            >
-                              {r.customer_id}
-                            </a>
-                          ) : null}
+                          {(() => {
+                            const histEntry = r.customer_id
+                              ? historyMap[r.customer_id]
+                              : undefined;
+                            const months = histEntry
+                              ? monthsObserved(histEntry)
+                              : 0;
+                            const isHistoryOpen = r.customer_id
+                              ? historyOpen.has(r.customer_id)
+                              : false;
+                            const hasHistory =
+                              histEntry && histEntry.episodes.length > 0;
+                            const toggleHistory = (e: React.MouseEvent) => {
+                              e.stopPropagation();
+                              if (!r.customer_id || !hasHistory) return;
+                              setHistoryOpen((prev) => {
+                                const next = new Set(prev);
+                                if (next.has(r.customer_id!)) {
+                                  next.delete(r.customer_id!);
+                                } else {
+                                  next.add(r.customer_id!);
+                                }
+                                return next;
+                              });
+                            };
+                            return (
+                              <>
+                                <div className="font-medium text-fg flex items-center gap-1.5 flex-wrap">
+                                  {hasHistory ? (
+                                    <button
+                                      type="button"
+                                      onClick={toggleHistory}
+                                      className="text-left hover:underline cursor-pointer decoration-dotted"
+                                      title={`${months} month${months === 1 ? "" : "s"} past-due across ${histEntry.episodes.length} episode${histEntry.episodes.length === 1 ? "" : "s"} — click for history`}
+                                    >
+                                      {r.email ?? "—"}
+                                    </button>
+                                  ) : (
+                                    <span>{r.email ?? "—"}</span>
+                                  )}
+                                  <OutreachStatusBadge
+                                    status={
+                                      r.customer_id
+                                        ? outreachMap[r.customer_id]?.status
+                                        : undefined
+                                    }
+                                  />
+                                  {months > 0 ? (
+                                    <button
+                                      type="button"
+                                      onClick={toggleHistory}
+                                      className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-medium ${
+                                        months >= 3
+                                          ? "bg-red-100 text-red-800 dark:bg-red-500/20 dark:text-red-200"
+                                          : months >= 2
+                                            ? "bg-amber-100 text-amber-800 dark:bg-amber-500/20 dark:text-amber-200"
+                                            : "bg-slate-100 text-slate-700 dark:bg-slate-500/20 dark:text-slate-200"
+                                      }`}
+                                      title="Click for full episode history"
+                                    >
+                                      {months} mo past-due
+                                    </button>
+                                  ) : null}
+                                </div>
+                                {r.customer_id ? (
+                                  <a
+                                    href={
+                                      stripeCustomerUrl(r.customer_id) ?? "#"
+                                    }
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    onClick={(e) => e.stopPropagation()}
+                                    className="block text-xs text-muted truncate font-mono hover:text-accent hover:underline decoration-dotted"
+                                    title="Open in Stripe Dashboard"
+                                  >
+                                    {r.customer_id}
+                                  </a>
+                                ) : null}
+                                {isHistoryOpen && histEntry ? (
+                                  <EpisodeHistoryList entry={histEntry} />
+                                ) : null}
+                              </>
+                            );
+                          })()}
                         </td>
                         <td className="px-3 py-2 text-muted break-words">
                           <div>{r.price_name ?? "—"}</div>
@@ -731,6 +818,62 @@ export function PastDuePanel({ rows, csms, totalSourceRows }: Props) {
 /** Compact lifecycle status pill rendered inline with the customer
  *  email cell. Invisible when there's no stored outreach status, so
  *  untouched rows render the same as before. */
+/** Expanded episode history shown below a row when the user clicks
+ *  the email / months-past-due chip. Renders each past-due episode
+ *  with its start/end dates, failure count, and plan at the time. */
+function EpisodeHistoryList({
+  entry,
+}: {
+  entry: import("@/lib/data/past-due-history").PastDueHistoryEntry;
+}) {
+  // Most-recent episodes at the top so what just happened is at eye
+  // level. Active episodes (no end date) sort first.
+  const sorted = [...entry.episodes].sort((a, b) => {
+    if (a.episode_ended_at === null) return -1;
+    if (b.episode_ended_at === null) return 1;
+    return b.episode_started_at.localeCompare(a.episode_started_at);
+  });
+  return (
+    <div className="mt-2 mb-1 rounded-md border border-border bg-canvas/40 p-2 space-y-1.5">
+      <div className="text-[11px] font-semibold uppercase tracking-wide text-muted">
+        Past-due history ({entry.episodes.length} episode
+        {entry.episodes.length === 1 ? "" : "s"})
+      </div>
+      <ul className="space-y-1">
+        {sorted.map((ep, i) => {
+          const active = ep.episode_ended_at === null;
+          return (
+            <li
+              key={`${ep.episode_started_at}-${i}`}
+              className="text-xs flex items-baseline gap-2 flex-wrap"
+            >
+              <span
+                className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-medium ${
+                  active
+                    ? "bg-red-100 text-red-800 dark:bg-red-500/20 dark:text-red-200"
+                    : "bg-slate-100 text-slate-700 dark:bg-slate-500/20 dark:text-slate-200"
+                }`}
+              >
+                {active ? "Active" : "Resolved"}
+              </span>
+              <span className="text-fg font-medium">
+                {ep.episode_started_at}
+                {ep.episode_ended_at ? ` → ${ep.episode_ended_at}` : " → now"}
+              </span>
+              <span className="text-muted">
+                {ep.failure_count} failed charge
+                {ep.failure_count === 1 ? "" : "s"} ·{" "}
+                {fmtCurrency(ep.max_arr_dollars)} ARR
+                {ep.plan ? ` · ${ep.plan}` : ""}
+              </span>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
 function OutreachStatusBadge({
   status,
 }: {

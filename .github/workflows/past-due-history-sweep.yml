@@ -1,0 +1,59 @@
+name: past-due-history-sweep
+
+# Daily reconciliation of the past-due episode history. For every
+# customer currently in q24620, open or update an active episode.
+# Customers that have dropped out of q24620 get their open episode
+# closed. Powers the "N months past-due" badge + expandable history
+# log on the AM Past Due tab.
+#
+# Runs once daily at 16:00 UTC — after the sync workflow (08/14 UTC)
+# has refreshed q24620, so reconciliation sees the latest snapshot.
+#
+# Required repo secrets (already wired for the other crons):
+#   • CRON_SECRET
+#   • DASHBOARD_URL
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 16 * * *"
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify required secrets are set
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          DASHBOARD_URL: ${{ secrets.DASHBOARD_URL }}
+        run: |
+          missing=()
+          for v in CRON_SECRET DASHBOARD_URL; do
+            if [ -z "${!v}" ]; then
+              missing+=("$v")
+            fi
+          done
+          if [ "${#missing[@]}" -ne 0 ]; then
+            echo "::error::Missing required repo secret(s): ${missing[*]}."
+            exit 1
+          fi
+          echo "All required secrets present."
+
+      - name: POST /api/past-due/history/sweep
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          DASHBOARD_URL: ${{ secrets.DASHBOARD_URL }}
+        run: |
+          set -e
+          response=$(curl -sS -w "\n%{http_code}" -X POST \
+            -H "Authorization: Bearer ${CRON_SECRET}" \
+            -H "Content-Type: application/json" \
+            "${DASHBOARD_URL}/api/past-due/history/sweep")
+          body=$(echo "$response" | sed '$d')
+          code=$(echo "$response" | tail -n1)
+          echo "HTTP $code"
+          echo "$body"
+          if [ "$code" != "200" ]; then
+            echo "::error::Sweep failed with HTTP $code"
+            exit 1
+          fi

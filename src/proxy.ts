@@ -48,6 +48,11 @@ export default auth((req) => {
   // workflow at .github/workflows/proactive-outreach-sweep.yml.
   if (pathname.startsWith("/api/proactive-outreach/sweep")) return;
 
+  // AM Past Due history reconciliation — bumps episode counters and
+  // closes episodes that have dropped out of q24620. Daily cron at
+  // .github/workflows/past-due-history-sweep.yml.
+  if (pathname.startsWith("/api/past-due/history/sweep")) return;
+
   if (!req.auth) {
     const url = req.nextUrl.clone();
     url.pathname = "/login";
