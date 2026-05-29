@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import type { Customer } from "@/lib/types";
 import { fmtCurrency, fmtDate, fmtNumber, fmtPct } from "../format";
 import { CsmSelector } from "../csm-selector";
@@ -10,6 +10,7 @@ import { RowActions } from "../row-actions";
 import { OutreachModal } from "../outreach-modal";
 import { BucketSection } from "./bucket-section";
 import { BulkEmailLauncher } from "./bulk-email-launcher";
+import { CustomerDetailPanel } from "../customer-detail-panel";
 import type { ProactiveOutreachMap } from "@/lib/data/proactive-outreach";
 
 interface Props {
@@ -91,6 +92,18 @@ export function EnterpriseOnlyPanel({ rows, csms }: Props) {
   const [outreachFilter, setOutreachFilter] = useUrlSearch("outreach");
   const [sweepBusy, setSweepBusy] = useState(false);
   const [sweepReport, setSweepReport] = useState<string | null>(null);
+  // Per-row expand state — matches the /csm CustomerTable pattern so
+  // AM users get the same click-row-to-see-full-detail affordance the
+  // brief calls out. Keyed by rowKey() so it survives re-renders.
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  function toggleExpanded(k: string) {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(k)) next.delete(k);
+      else next.add(k);
+      return next;
+    });
+  }
 
   const reloadOutreach = useCallback(() => {
     fetch("/api/proactive-outreach")
@@ -296,7 +309,10 @@ export function EnterpriseOnlyPanel({ rows, csms }: Props) {
               <table className="w-full text-sm table-fixed">
                 <colgroup>
                   <col className="w-8" />
-                  <col className="w-[24%]" />
+                  {/* Chevron column — narrow click-target for the
+                   *  expand/collapse toggle, matches /csm pattern. */}
+                  <col className="w-6" />
+                  <col className="w-[22%]" />
                   <col className="w-[8%]" />
                   <col className="w-[12%]" />
                   <col className="w-[9%]" />
@@ -308,6 +324,7 @@ export function EnterpriseOnlyPanel({ rows, csms }: Props) {
                 </colgroup>
                 <thead>
                   <tr className="text-xs text-muted border-y border-border text-left">
+                    <th className="px-3 py-2"></th>
                     <th className="px-3 py-2"></th>
                     <th className="px-3 py-2 font-medium">Account</th>
                     <th className="px-3 py-2 font-medium text-right">% of cap</th>
@@ -321,12 +338,21 @@ export function EnterpriseOnlyPanel({ rows, csms }: Props) {
                 <tbody>
                   {list.map((c) => {
                     const k = rowKey(c);
+                    const isOpen = expanded.has(k);
                     return (
+                    <Fragment key={k}>
                     <tr
-                      key={k}
-                      className="border-b border-border hover:bg-blue-50 dark:bg-blue-500/40 align-top"
+                      onClick={() => toggleExpanded(k)}
+                      className={`border-b border-border cursor-pointer align-top ${
+                        isOpen
+                          ? "bg-blue-50 dark:bg-blue-500/40"
+                          : "hover:bg-blue-50 dark:hover:bg-blue-500/30"
+                      }`}
                     >
-                      <td className="px-3 py-2">
+                      <td
+                        className="px-3 py-2"
+                        onClick={(e) => e.stopPropagation()}
+                      >
                         <input
                           type="checkbox"
                           checked={selected.has(k)}
@@ -334,6 +360,16 @@ export function EnterpriseOnlyPanel({ rows, csms }: Props) {
                           className="h-4 w-4 rounded border-border-strong cursor-pointer"
                           aria-label={`Select ${c.company_name ?? c.workspace_name ?? "row"}`}
                         />
+                      </td>
+                      <td className="px-3 py-2 text-subtle select-none">
+                        <span
+                          aria-hidden
+                          className={`inline-block transition-transform ${
+                            isOpen ? "rotate-90" : ""
+                          }`}
+                        >
+                          ▸
+                        </span>
                       </td>
                       <td className="px-3 py-2 break-words">
                         <div className="font-medium text-fg flex items-center gap-2 flex-wrap">
@@ -370,10 +406,21 @@ export function EnterpriseOnlyPanel({ rows, csms }: Props) {
                       <td className="px-3 py-2 text-right">
                         {fmtCurrency(c.arr)}
                       </td>
-                      <td className="px-3 py-2">
+                      <td
+                        className="px-3 py-2"
+                        onClick={(e) => e.stopPropagation()}
+                      >
                         <RowActions customer={c} onDraft={setOutreachFor} />
                       </td>
                     </tr>
+                    {isOpen ? (
+                      <tr className="bg-blue-50/40 dark:bg-blue-500/10 border-b border-border">
+                        <td colSpan={9} className="px-6 py-4">
+                          <CustomerDetailPanel customer={c} />
+                        </td>
+                      </tr>
+                    ) : null}
+                    </Fragment>
                     );
                   })}
                 </tbody>

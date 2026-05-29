@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import type { ApproachingEntRow } from "@/lib/engines/am-cohorts";
 import { fmtCurrency, fmtDate, fmtNumber, fmtPct } from "../format";
 import { BucketSection } from "./bucket-section";
@@ -9,6 +9,7 @@ import {
   type BulkSlackMessage,
 } from "./slack-bulk-compose";
 import { BulkEmailLauncher } from "./bulk-email-launcher";
+import { CustomerDetailPanel } from "../customer-detail-panel";
 import type { SettingsShape } from "@/lib/data/settings-types";
 import type { Customer } from "@/lib/types";
 
@@ -102,6 +103,18 @@ export function ApproachingEnterprisePanel({ rows }: Props) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [settings, setSettings] = useState<SettingsShape | null>(null);
   const [composeOpen, setComposeOpen] = useState(false);
+  // Per-row expand state — clicking the row toggles a full
+  // CustomerDetailPanel below (notes + status + dates + …),
+  // matching /csm CustomerTable.
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  function toggleExpanded(k: string) {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(k)) next.delete(k);
+      else next.add(k);
+      return next;
+    });
+  }
 
   useEffect(() => {
     fetch("/api/settings")
@@ -274,7 +287,9 @@ export function ApproachingEnterprisePanel({ rows }: Props) {
               <table className="w-full text-sm table-fixed">
                 <colgroup>
                   <col className="w-8" />
-                  <col className="w-[20%]" />
+                  {/* Expand chevron */}
+                  <col className="w-6" />
+                  <col className="w-[18%]" />
                   <col className="w-[9%]" />
                   <col className="w-[9%]" />
                   <col className="w-[11%]" />
@@ -288,6 +303,7 @@ export function ApproachingEnterprisePanel({ rows }: Props) {
                 </colgroup>
                 <thead>
                   <tr className="text-xs text-muted border-y border-border text-left">
+                    <th className="px-3 py-2"></th>
                     <th className="px-3 py-2"></th>
                     <th className="px-3 py-2 font-medium">Workspace</th>
                     <th className="px-3 py-2 font-medium">Plan</th>
@@ -306,10 +322,23 @@ export function ApproachingEnterprisePanel({ rows }: Props) {
                     const p = pctNum(r);
                     const k = rowKey(r, i);
                     const isChecked = selected.has(k);
+                    const isOpen = expanded.has(k);
+                    // Resolve to a full Customer record for the detail
+                    // panel — q13268 only carries the public-facing
+                    // fields; merge-tag tokens + the notes section need
+                    // the canonical /api/customers row.
+                    const resolvedCustomer = r.stripe_customer_id
+                      ? customerByStripeId.get(r.stripe_customer_id) ?? null
+                      : null;
                     return (
+                      <Fragment key={k}>
                       <tr
-                        key={k}
-                        className="border-b border-border hover:bg-blue-50 dark:bg-blue-500/40 align-top"
+                        onClick={() => toggleExpanded(k)}
+                        className={`border-b border-border cursor-pointer align-top ${
+                          isOpen
+                            ? "bg-blue-50 dark:bg-blue-500/40"
+                            : "hover:bg-blue-50 dark:hover:bg-blue-500/30"
+                        }`}
                       >
                         <td
                           className="px-3 py-2"
@@ -322,6 +351,16 @@ export function ApproachingEnterprisePanel({ rows }: Props) {
                             className="h-4 w-4 rounded border-border-strong cursor-pointer"
                             aria-label={`Select ${r.workspace_name ?? "row"}`}
                           />
+                        </td>
+                        <td className="px-3 py-2 text-subtle select-none">
+                          <span
+                            aria-hidden
+                            className={`inline-block transition-transform ${
+                              isOpen ? "rotate-90" : ""
+                            }`}
+                          >
+                            ▸
+                          </span>
                         </td>
                         <td className="px-3 py-2 break-words">
                           <div className="font-medium text-fg">
@@ -352,7 +391,10 @@ export function ApproachingEnterprisePanel({ rows }: Props) {
                         <td className="px-3 py-2 text-muted text-xs">
                           {fmtDate(r.last_payment_at)}
                         </td>
-                        <td className="px-3 py-2 text-right">
+                        <td
+                          className="px-3 py-2 text-right"
+                          onClick={(e) => e.stopPropagation()}
+                        >
                           <div className="flex items-center gap-1 justify-end">
                             {r.masquerade_url ? (
                               <a
@@ -379,6 +421,25 @@ export function ApproachingEnterprisePanel({ rows }: Props) {
                           </div>
                         </td>
                       </tr>
+                      {isOpen ? (
+                        <tr className="bg-blue-50/40 dark:bg-blue-500/10 border-b border-border">
+                          <td colSpan={10} className="px-6 py-4">
+                            {resolvedCustomer ? (
+                              <CustomerDetailPanel customer={resolvedCustomer} />
+                            ) : (
+                              <p className="text-sm text-muted italic">
+                                Couldn&rsquo;t resolve this workspace to the
+                                customer book — notes &amp; the full detail
+                                panel need the canonical /api/customers row.
+                                {customerBook.length === 0
+                                  ? " (Customer book still loading.)"
+                                  : null}
+                              </p>
+                            )}
+                          </td>
+                        </tr>
+                      ) : null}
+                      </Fragment>
                     );
                   })}
                 </tbody>

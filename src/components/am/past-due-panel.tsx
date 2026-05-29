@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import type { PastDueRow } from "@/lib/engines/am-cohorts";
 import { fmtCurrency, fmtDate } from "../format";
 import {
@@ -18,6 +18,7 @@ import {
 } from "./slack-bulk-compose";
 import { BulkEmailLauncher } from "./bulk-email-launcher";
 import { LowTierBulkSend } from "./low-tier-bulk-send";
+import { CustomerDetailPanel } from "../customer-detail-panel";
 import { stripeCustomerUrl } from "@/lib/links";
 import type { Customer } from "@/lib/types";
 import type {
@@ -143,6 +144,19 @@ export function PastDuePanel({ rows, csms, totalSourceRows }: Props) {
   const [historyOpen, setHistoryOpen] = useState<Set<string>>(new Set());
   const [historyBusy, setHistoryBusy] = useState(false);
   const [historyReport, setHistoryReport] = useState<string | null>(null);
+  // Which rowKeys currently have their full CustomerDetailPanel
+  // expanded. Separate from `historyOpen` so the existing
+  // click-email-for-episode-history affordance keeps working
+  // independently of the new chevron-for-full-detail one.
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  function toggleExpanded(k: string) {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(k)) next.delete(k);
+      else next.add(k);
+      return next;
+    });
+  }
 
   // Filter state. CSM filtering is applied server-side (see /am/page.tsx
   // PastDueTab), so `rows` arrives already narrowed when ?csm= is in
@@ -704,7 +718,12 @@ export function PastDuePanel({ rows, csms, totalSourceRows }: Props) {
               <table className="w-full text-sm table-fixed">
                 <colgroup>
                   <col className="w-8" />
-                  <col className="w-[24%]" />
+                  {/* Expand chevron — toggles the full CustomerDetailPanel
+                   *  row underneath. Separate click target from the
+                   *  email-click-for-episode-history affordance, so the
+                   *  two expands can be used independently. */}
+                  <col className="w-6" />
+                  <col className="w-[22%]" />
                   <col className="w-[20%]" />
                   <col className="w-[12%]" />
                   <col className="w-[12%]" />
@@ -713,6 +732,7 @@ export function PastDuePanel({ rows, csms, totalSourceRows }: Props) {
                 </colgroup>
                 <thead>
                   <tr className="text-xs text-muted border-b border-border text-left">
+                    <th className="px-3 py-2"></th>
                     <th className="px-3 py-2"></th>
                     <th className="px-3 py-2 font-medium">Customer</th>
                     <th className="px-3 py-2 font-medium">Plan</th>
@@ -728,12 +748,29 @@ export function PastDuePanel({ rows, csms, totalSourceRows }: Props) {
                   {list.map((r, i) => {
                     const k = rowKey(r, i);
                     const isEnt = isEnterprisePlan(r);
+                    const isOpen = expanded.has(k);
+                    // Resolve to the canonical Customer record so the
+                    // detail panel + notes editor have the full set of
+                    // workspace fields. Past-due q24620 only carries
+                    // billing-side data; everything HubSpot-shaped lives
+                    // in the customer book.
+                    const resolvedCustomer = r.customer_id
+                      ? customerByStripeId.get(r.customer_id) ?? null
+                      : null;
                     return (
+                      <Fragment key={k}>
                       <tr
-                        key={k}
-                        className="border-b border-border hover:bg-blue-50 dark:bg-blue-500/40 align-top"
+                        onClick={() => toggleExpanded(k)}
+                        className={`border-b border-border cursor-pointer align-top ${
+                          isOpen
+                            ? "bg-blue-50 dark:bg-blue-500/40"
+                            : "hover:bg-blue-50 dark:hover:bg-blue-500/30"
+                        }`}
                       >
-                        <td className="px-3 py-2">
+                        <td
+                          className="px-3 py-2"
+                          onClick={(e) => e.stopPropagation()}
+                        >
                           <input
                             type="checkbox"
                             checked={selected.has(k)}
@@ -741,6 +778,16 @@ export function PastDuePanel({ rows, csms, totalSourceRows }: Props) {
                             className="h-4 w-4 rounded border-border-strong cursor-pointer"
                             aria-label={`Select ${r.email ?? "row"}`}
                           />
+                        </td>
+                        <td className="px-3 py-2 text-subtle select-none">
+                          <span
+                            aria-hidden
+                            className={`inline-block transition-transform ${
+                              isOpen ? "rotate-90" : ""
+                            }`}
+                          >
+                            ▸
+                          </span>
                         </td>
                         <td className="px-3 py-2 break-words">
                           {(() => {
@@ -858,6 +905,28 @@ export function PastDuePanel({ rows, csms, totalSourceRows }: Props) {
                           )}
                         </td>
                       </tr>
+                      {isOpen ? (
+                        <tr className="bg-blue-50/40 dark:bg-blue-500/10 border-b border-border">
+                          <td colSpan={8} className="px-6 py-4">
+                            {resolvedCustomer ? (
+                              <CustomerDetailPanel customer={resolvedCustomer} />
+                            ) : (
+                              <p className="text-sm text-muted italic">
+                                Couldn&rsquo;t resolve this past-due row to the
+                                customer book — notes &amp; the full detail
+                                panel need a matching{" "}
+                                <code className="font-mono">cus_…</code> in{" "}
+                                <code className="font-mono">/api/customers</code>
+                                .
+                                {customerBook.length === 0
+                                  ? " (Customer book still loading.)"
+                                  : null}
+                              </p>
+                            )}
+                          </td>
+                        </tr>
+                      ) : null}
+                      </Fragment>
                     );
                   })}
                 </tbody>

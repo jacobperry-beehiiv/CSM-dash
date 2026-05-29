@@ -9,6 +9,7 @@ import { CadenceToggle } from "./cadence-toggle";
 import { HubSpotContactsSection } from "./hubspot-contacts-section";
 import { CustomerPublicationsList } from "./customer-publications-list";
 import { CollapsibleSection } from "./collapsible-section";
+import { CompanyNotes } from "./am/company-notes";
 import { CopyButton } from "./copy-button";
 import { stripeCustomerUrl } from "@/lib/links";
 
@@ -112,6 +113,13 @@ export function CustomerDetailPanel({
       </div>
 
       <HubSpotContactsSection contacts={c.hubspot_contacts} />
+
+      {/* Manual notes — same KV the CSM profile-page renders from, but
+       *  scoped to kind:note so the inline editor stays a free-text
+       *  scratchpad and doesn't crowd the structured skill signals. */}
+      {c.workspace_id ? (
+        <CompanyNotes workspaceId={c.workspace_id} />
+      ) : null}
 
       {c.workspace_id ? (
         <CustomerPublicationsList workspaceId={c.workspace_id} />
