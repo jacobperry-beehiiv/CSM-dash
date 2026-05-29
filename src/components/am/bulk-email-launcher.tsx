@@ -47,6 +47,16 @@ interface Props {
   ccLookup?: (c: Customer) => string | null;
   /** Per-customer BCC resolver. Reserved for future flows. */
   bccLookup?: (c: Customer) => string | null;
+  /** Pluck a tracking id off each customer (e.g. stripe_customer_id
+   *  for past-due, workspace_id for proactive outreach). When set, the
+   *  modal forwards these ids through to `onDraftCreated` after the
+   *  user actions a batch — letting the caller stamp lifecycle state
+   *  (touched / outreach_logged) automatically. */
+  trackingIdFor?: (c: Customer) => string | null;
+  /** Fired after the user opens compose tabs OR creates Gmail-API
+   *  drafts. Receives the tracking_ids of every draft that got
+   *  handled. */
+  onDraftCreated?: (tracking_ids: string[]) => void;
 }
 
 export function BulkEmailLauncher({
@@ -56,6 +66,8 @@ export function BulkEmailLauncher({
   label = "✉️ Email selected",
   ccLookup,
   bccLookup,
+  trackingIdFor,
+  onDraftCreated,
 }: Props) {
   const viewerEmail = useViewerEmail();
   const [open, setOpen] = useState(false);
@@ -126,8 +138,9 @@ export function BulkEmailLauncher({
       adGapByOrg: {},
       ccLookup,
       bccLookup,
+      trackingIdFor,
     });
-  }, [open, templateId, customers, templates, ladder, ccLookup, bccLookup]);
+  }, [open, templateId, customers, templates, ladder, ccLookup, bccLookup, trackingIdFor]);
 
   useEffect(() => {
     setDrafts(builtDrafts);
@@ -159,6 +172,7 @@ export function BulkEmailLauncher({
           }
           error={error}
           onClose={() => setOpen(false)}
+          onDraftCreated={onDraftCreated}
         />
       ) : null}
     </>

@@ -4,6 +4,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type { Customer } from "@/lib/types";
 import { fmtCurrency, fmtDate, fmtNumber, fmtPct } from "../format";
 import { CsmSelector } from "../csm-selector";
+import { SelectFilter } from "../filters";
+import { useUrlSearch } from "@/lib/hooks/use-url-search";
 import { RowActions } from "../row-actions";
 import { OutreachModal } from "../outreach-modal";
 import { BucketSection } from "./bucket-section";
@@ -83,6 +85,10 @@ export function EnterpriseOnlyPanel({ rows, csms }: Props) {
   // last_outreach_at, last_nudge_at). Drives the inline status badge
   // and the "Mark outreach logged" action.
   const [outreachMap, setOutreachMap] = useState<ProactiveOutreachMap>({});
+  // Filter rows by whether AM has logged outreach yet — "no outreach"
+  // is the actionable bucket; "has outreach" surfaces who's already
+  // been pitched.
+  const [outreachFilter, setOutreachFilter] = useUrlSearch("outreach");
   const [sweepBusy, setSweepBusy] = useState(false);
   const [sweepReport, setSweepReport] = useState<string | null>(null);
 
@@ -97,13 +103,20 @@ export function EnterpriseOnlyPanel({ rows, csms }: Props) {
   }, [reloadOutreach]);
 
   const buckets = useMemo(() => {
+    const filteredByOutreach = rows.filter((c) => {
+      if (outreachFilter !== "has" && outreachFilter !== "none") return true;
+      const touched = Boolean(
+        c.workspace_id && outreachMap[c.workspace_id]?.last_outreach_at
+      );
+      return outreachFilter === "has" ? touched : !touched;
+    });
     return BUCKETS.map((b) => ({
       bucket: b,
-      list: rows
+      list: filteredByOutreach
         .filter((c) => b.test(pct(c)))
         .sort((a, b) => pct(b) - pct(a)),
     })).filter((g) => g.list.length > 0);
-  }, [rows]);
+  }, [rows, outreachFilter, outreachMap]);
 
   const visibleRows = useMemo(
     () => buckets.flatMap((g) => g.list),
@@ -133,6 +146,16 @@ export function EnterpriseOnlyPanel({ rows, csms }: Props) {
       <div className="flex items-center gap-3 mb-4 text-sm">
         <span className="text-xs text-muted">Filter:</span>
         <CsmSelector csms={csms} />
+        <SelectFilter
+          label="Outreach"
+          value={outreachFilter}
+          onChange={setOutreachFilter}
+          emptyLabel="Any"
+          options={[
+            { value: "none", label: "No outreach yet" },
+            { value: "has", label: "Has outreach" },
+          ]}
+        />
         <span className="text-xs text-muted ml-auto">
           {rows.length} Enterprise account{rows.length === 1 ? "" : "s"} at ≥75% of cap
         </span>
@@ -231,6 +254,24 @@ export function EnterpriseOnlyPanel({ rows, csms }: Props) {
           disabled={selected.size === 0}
           label="✉️ Email selected (CCs CSM)"
           ccLookup={(c) => c.customer_success_manager_email ?? null}
+          trackingIdFor={(c) => c.workspace_id ?? null}
+          onDraftCreated={async (ids) => {
+            // Auto-stamp `last_outreach_at` so the row picks up the
+            // green Outreach-logged badge AND the 5-day nudge cycle
+            // stops. Mirrors the existing manual "Mark outreach logged"
+            // button.
+            if (ids.length === 0) return;
+            try {
+              const r = await fetch("/api/proactive-outreach", {
+                method: "PUT",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ workspace_ids: ids }),
+              });
+              if (r.ok) reloadOutreach();
+            } catch {
+              /* non-fatal */
+            }
+          }}
         />
       </div>
 
@@ -364,11 +405,12 @@ function ProactiveStatusBadge({
   if (entry.last_outreach_at) {
     return (
       <span
-        className="inline-block px-1.5 py-0.5 rounded text-[10px] font-medium bg-emerald-100 text-emerald-800 dark:bg-emerald-500/20 dark:text-emerald-200"
+        className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-emerald-100 text-emerald-800 dark:bg-emerald-500/20 dark:text-emerald-200"
         title={`Outreach logged ${fmtDate(entry.last_outreach_at)}${
           entry.last_outreach_by ? ` by ${entry.last_outreach_by}` : ""
         }`}
       >
+        <span aria-hidden>✓</span>
         Outreach logged
       </span>
     );

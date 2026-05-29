@@ -53,6 +53,11 @@ export interface BuildBulkDraftsInput {
   ccLookup?: (c: Customer) => string | null;
   /** Optional per-customer BCC resolver. Same semantics as ccLookup. */
   bccLookup?: (c: Customer) => string | null;
+  /** Returns the opaque tracking_id used by the bulk-drafts modal's
+   *  `onDraftCreated` callback to report back which source customers
+   *  got actioned. Past Due wires to stripe_customer_id, Proactive
+   *  Outreach to workspace_id. Unset → no lifecycle tracking. */
+  trackingIdFor?: (c: Customer) => string | null;
 }
 
 /**
@@ -71,8 +76,15 @@ export interface BuildBulkDraftsInput {
  * fails (e.g. missing fields the link helper needs).
  */
 export function buildBulkDrafts(input: BuildBulkDraftsInput): BulkDraft[] {
-  const { targets, template: tpl, ladder, adGapByOrg, ccLookup, bccLookup } =
-    input;
+  const {
+    targets,
+    template: tpl,
+    ladder,
+    adGapByOrg,
+    ccLookup,
+    bccLookup,
+    trackingIdFor,
+  } = input;
   const usesAdGap =
     /customer\.(ad_revenue_actual|ad_revenue_potential|ad_revenue_gap|ad_zero_pubs)/.test(
       tpl.subject + tpl.body_html
@@ -142,6 +154,7 @@ export function buildBulkDrafts(input: BuildBulkDraftsInput): BulkDraft[] {
 
     drafts.push({
       customer_label: c.company_name ?? c.workspace_name ?? ownerEmail,
+      tracking_id: trackingIdFor?.(c) ?? undefined,
       to: ownerEmail,
       cc: cc ?? undefined,
       bcc: bcc ?? undefined,

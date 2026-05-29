@@ -25,6 +25,12 @@ export interface RerenderResult {
 
 export interface BulkDraft {
   customer_label: string;
+  /** Opaque caller-supplied id used by `onDraftCreated` to report
+   *  back which source customers actually got drafts. Past Due wires
+   *  this to stripe_customer_id; Proactive Outreach uses workspace_id.
+   *  Stays optional so callers that don't care about the lifecycle
+   *  hook keep working unchanged. */
+  tracking_id?: string;
   /** Default recipient list (the customer's owner_email when present),
    *  used as the initial selection when the modal first renders.
    *  Comma-separated to match how a Gmail compose `to=` field is built. */
@@ -108,6 +114,13 @@ interface Props {
   loadingProgress: { done: number; total: number } | null;
   error: string | null;
   onClose: () => void;
+  /** Fires AFTER the user actions a batch of drafts (opens all in
+   *  Gmail compose OR creates Gmail-API drafts). Receives the
+   *  `tracking_id` of every draft that got handled so callers can
+   *  stamp their own lifecycle state (e.g. past-due touched,
+   *  proactive outreach_logged). Drafts whose tracking_id is unset
+   *  are silently filtered out. */
+  onDraftCreated?: (tracking_ids: string[]) => void;
 }
 
 /**
@@ -131,6 +144,7 @@ export function BulkDraftsModal({
   loadingProgress,
   error,
   onClose,
+  onDraftCreated,
 }: Props) {
   const [openedCount, setOpenedCount] = useState<number | null>(null);
   const [copyHit, setCopyHit] = useState<string | null>(null);
@@ -313,11 +327,19 @@ export function BulkDraftsModal({
 
   function openAll() {
     let opened = 0;
+    const handed: string[] = [];
     for (const d of actionableDrafts) {
       const w = window.open(d.compose_url, "_blank", "noopener,noreferrer");
-      if (w) opened++;
+      if (w) {
+        opened++;
+        if (d.tracking_id) handed.push(d.tracking_id);
+      }
     }
     setOpenedCount(opened);
+    // Fire the lifecycle hook only with the tracking IDs of drafts
+    // that actually opened — popup-blocked drafts shouldn't be
+    // counted as "outreach sent" yet.
+    if (handed.length > 0 && onDraftCreated) onDraftCreated(handed);
   }
 
   function downloadCsv() {
@@ -362,6 +384,13 @@ export function BulkDraftsModal({
           j.failed > 0 ? ` (${j.failed} failed)` : ""
         }.`
       );
+      // Mark every tracked draft we attempted (Gmail's per-draft success
+      // is best-effort; failures are surfaced inline above). The
+      // touched-status flow trusts the user reviewed + sent from Gmail.
+      const handed = actionableDrafts
+        .map((d) => d.tracking_id)
+        .filter((id): id is string => Boolean(id));
+      if (handed.length > 0 && onDraftCreated) onDraftCreated(handed);
     } catch (e) {
       setGmailMessage(
         `Gmail draft creation failed: ${

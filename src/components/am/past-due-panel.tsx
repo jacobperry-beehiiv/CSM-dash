@@ -9,7 +9,7 @@ import {
   type SettingsShape,
 } from "@/lib/data/settings-types";
 import { BucketSection } from "./bucket-section";
-import { FilterBar, SearchInput } from "../filters";
+import { FilterBar, SearchInput, SelectFilter } from "../filters";
 import { CsmSelector } from "../csm-selector";
 import { useUrlSearch } from "@/lib/hooks/use-url-search";
 import {
@@ -149,6 +149,11 @@ export function PastDuePanel({ rows, csms, totalSourceRows }: Props) {
   // the URL. Sub-tab is URL-synced for deep-link friendliness.
   const [search, setSearch] = useUrlSearch("q");
   const [subtabRaw, setSubtab] = useUrlSearch("pdtab");
+  // Outreach-state filter — "has" surfaces only rows the AM has
+  // already touched, "none" surfaces only unactioned ones.
+  // URL-synced via ?outreach= so deep-links to "everyone I haven't
+  // touched yet" work as a daily-handoff link.
+  const [outreachFilter, setOutreachFilter] = useUrlSearch("outreach");
   const subtab: PastDueSubtab =
     subtabRaw === "above" ||
     subtabRaw === "below" ||
@@ -287,14 +292,30 @@ export function PastDuePanel({ rows, csms, totalSourceRows }: Props) {
   /** Rows for the active sub-tab. Follow-Up uses the lifecycle map;
    *  others use tier classification. */
   const filteredRows = useMemo(() => {
-    if (subtab === "followup") return followUpRows;
-    return searched.filter((r) => {
-      const tier = r.customer_id
-        ? tierByCustomerId.get(r.customer_id) ?? classifyPastDue(r)
-        : classifyPastDue(r);
-      return tier === subtab;
+    const base =
+      subtab === "followup"
+        ? followUpRows
+        : searched.filter((r) => {
+            const tier = r.customer_id
+              ? tierByCustomerId.get(r.customer_id) ?? classifyPastDue(r)
+              : classifyPastDue(r);
+            return tier === subtab;
+          });
+    if (outreachFilter !== "has" && outreachFilter !== "none") return base;
+    return base.filter((r) => {
+      const touched = Boolean(
+        r.customer_id ? outreachMap[r.customer_id] : null
+      );
+      return outreachFilter === "has" ? touched : !touched;
     });
-  }, [subtab, searched, tierByCustomerId, followUpRows]);
+  }, [
+    subtab,
+    searched,
+    tierByCustomerId,
+    followUpRows,
+    outreachFilter,
+    outreachMap,
+  ]);
 
   const maxArr = useMemo(
     () => filteredRows.reduce((m, r) => Math.max(m, r.arr_dollars), 0),
@@ -378,6 +399,16 @@ export function PastDuePanel({ rows, csms, totalSourceRows }: Props) {
          *  Matches the server-side resolution in /am/page.tsx's
          *  PastDueTab branch. */}
         <CsmSelector csms={csms} defaultsToAll />
+        <SelectFilter
+          label="Outreach"
+          value={outreachFilter}
+          onChange={setOutreachFilter}
+          emptyLabel="Any"
+          options={[
+            { value: "none", label: "No outreach yet" },
+            { value: "has", label: "Has outreach" },
+          ]}
+        />
       </FilterBar>
 
       {/* Sub-tab nav — Enterprise / Above $3.5K / Below $3.5K / Follow-Up.
@@ -536,6 +567,31 @@ export function PastDuePanel({ rows, csms, totalSourceRows }: Props) {
                     ? (c) => c.customer_success_manager_email ?? null
                     : undefined
                 }
+                trackingIdFor={(c) => c.stripe_customer_id ?? null}
+                onDraftCreated={async (ids) => {
+                  // Auto-stamp "touched" (or "follow_up_sent" on the
+                  // Follow-Up sub-tab) for every customer whose draft
+                  // got handed off to Gmail. Mirrors the manual "Mark
+                  // touched" button next to this, but fires on click
+                  // so the AM never has to remember the second step.
+                  if (ids.length === 0) return;
+                  try {
+                    const r = await fetch("/api/past-due/outreach", {
+                      method: "PUT",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({
+                        customer_ids: ids,
+                        status:
+                          subtab === "followup"
+                            ? "follow_up_sent"
+                            : "touched",
+                      }),
+                    });
+                    if (r.ok) reloadOutreach();
+                  } catch {
+                    /* non-fatal — manual button still works as fallback */
+                  }
+                }}
               />
               <button
                 onClick={() => void markTouched()}
@@ -922,30 +978,39 @@ function OutreachStatusBadge({
   status?: PastDueOutreachStatus;
 }) {
   if (!status) return null;
-  const styles: Record<PastDueOutreachStatus, { label: string; cls: string }> =
-    {
-      touched: {
-        label: "Touched",
-        cls: "bg-blue-100 text-blue-800 dark:bg-blue-500/20 dark:text-blue-200",
-      },
-      follow_up_sent: {
-        label: "Follow-up sent",
-        cls: "bg-violet-100 text-violet-800 dark:bg-violet-500/20 dark:text-violet-200",
-      },
-      paid: {
-        label: "Paid",
-        cls: "bg-emerald-100 text-emerald-800 dark:bg-emerald-500/20 dark:text-emerald-200",
-      },
-      lost: {
-        label: "Lost",
-        cls: "bg-slate-200 text-slate-800 dark:bg-slate-500/30 dark:text-slate-200",
-      },
-    };
+  const styles: Record<
+    PastDueOutreachStatus,
+    { label: string; cls: string; icon: string }
+  > = {
+    // First-touch / follow-up = green ✓ — surfaces as the
+    // "draft created" indicator the brief calls for.
+    touched: {
+      label: "Outreach sent",
+      cls: "bg-emerald-100 text-emerald-800 dark:bg-emerald-500/20 dark:text-emerald-200",
+      icon: "✓",
+    },
+    follow_up_sent: {
+      label: "Follow-up sent",
+      cls: "bg-emerald-100 text-emerald-800 dark:bg-emerald-500/20 dark:text-emerald-200",
+      icon: "✓",
+    },
+    paid: {
+      label: "Paid",
+      cls: "bg-slate-100 text-slate-700 dark:bg-slate-500/30 dark:text-slate-200",
+      icon: "$",
+    },
+    lost: {
+      label: "Lost",
+      cls: "bg-slate-200 text-slate-800 dark:bg-slate-500/30 dark:text-slate-200",
+      icon: "✗",
+    },
+  };
   const s = styles[status];
   return (
     <span
-      className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-medium ${s.cls}`}
+      className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium ${s.cls}`}
     >
+      <span aria-hidden>{s.icon}</span>
       {s.label}
     </span>
   );

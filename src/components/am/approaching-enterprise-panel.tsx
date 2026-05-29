@@ -233,6 +233,19 @@ export function ApproachingEnterprisePanel({ rows }: Props) {
           defaultTemplateId="approaching-ent"
           disabled={selected.size === 0 || customerBook.length === 0}
           label="✉️ Email selected"
+          trackingIdFor={(c) => c.workspace_id ?? null}
+          onDraftCreated={async (ids) => {
+            if (ids.length === 0) return;
+            try {
+              await fetch("/api/proactive-outreach", {
+                method: "PUT",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ workspace_ids: ids }),
+              });
+            } catch {
+              /* non-fatal */
+            }
+          }}
         />
         <button
           onClick={() => setComposeOpen(true)}
