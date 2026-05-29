@@ -14,7 +14,16 @@ export { DEFAULTS } from "./settings-types";
 
 const KEY = "settings";
 
-let cache: SettingsShape | null = null;
+// In-memory cache was a small speedup but turned into a footgun: when
+// the migration logic gets new fallbacks (e.g. a newly-seeded channel
+// in DEFAULTS), warm isolates that hydrated before the deploy keep
+// returning the pre-migration shape forever. Drop the cache and pay
+// the KV round-trip on every read — settings JSON is tiny and reads
+// are infrequent.
+//
+// (Earlier saves also overwrote the cache with the raw saved value
+// rather than the migration-merged shape, which compounded the
+// problem.)
 
 /**
  * Upgrade the stored slack settings into the current shape. Stored
@@ -83,17 +92,14 @@ function merge(partial: Partial<SettingsShape>): SettingsShape {
 }
 
 export async function loadSettings(): Promise<SettingsShape> {
-  if (cache) return cache;
   const stored = await kvGet<Partial<SettingsShape>>(KEY);
-  cache = stored ? merge(stored) : DEFAULTS;
-  return cache;
+  return stored ? merge(stored) : DEFAULTS;
 }
 
 export async function saveSettings(
   next: SettingsShape
 ): Promise<SettingsShape> {
   await kvSet(KEY, next);
-  cache = next;
   return next;
 }
 
