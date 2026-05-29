@@ -24,8 +24,10 @@ import type {
   PastDueOutreachMap,
   PastDueOutreachStatus,
 } from "@/lib/data/past-due-outreach";
-import type { PastDueHistoryMap } from "@/lib/data/past-due-history";
-import { monthsObserved } from "@/lib/data/past-due-history";
+// Import from the types-only file — past-due-history.ts pulls in the
+// Postgres/Metabase reconciler which can't be shipped to the browser.
+import type { PastDueHistoryMap } from "@/lib/data/past-due-history-types";
+import { monthsObserved } from "@/lib/data/past-due-history-types";
 
 interface Props {
   /** Already CSM-filtered server-side (per `?csm=…`). The client still
@@ -824,7 +826,7 @@ export function PastDuePanel({ rows, csms, totalSourceRows }: Props) {
 function EpisodeHistoryList({
   entry,
 }: {
-  entry: import("@/lib/data/past-due-history").PastDueHistoryEntry;
+  entry: import("@/lib/data/past-due-history-types").PastDueHistoryEntry;
 }) {
   // Most-recent episodes at the top so what just happened is at eye
   // level. Active episodes (no end date) sort first.

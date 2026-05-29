@@ -1,5 +1,10 @@
 import { kvGet, kvSet } from "../storage/kv";
 import { loadPastDue, type PastDueRow } from "../engines/am-cohorts";
+import type {
+  PastDueEpisode,
+  PastDueHistoryEntry,
+  PastDueHistoryMap,
+} from "./past-due-history-types";
 
 /**
  * Historical episode log for past-due customers.
@@ -7,42 +12,25 @@ import { loadPastDue, type PastDueRow } from "../engines/am-cohorts";
  * The dashboard only sees the *current* snapshot of q24620 — but
  * "this customer keeps falling into past-due" is a multi-month
  * pattern. We reconcile against q24620 once a day (or on demand)
- * and record:
+ * and record per-episode start/end + failure counters.
  *
- *   • episode_started_at  — first day we saw them in q24620 in this run
- *   • episode_ended_at    — first day they disappeared from q24620
- *                            (null while episode is active)
- *   • failure_count       — cumulative `failure_code != null` we saw
- *                            during this episode (re-attempt count)
- *   • max_arr_dollars     — highest ARR recorded during the episode
- *   • plan                — plan label at the time of last reconcile
+ * Pure types + monthsObserved() live in ./past-due-history-types.ts
+ * so client components can import them without dragging in the
+ * Postgres/Metabase deps the reconciler needs.
  *
  * Tracking is forward-only — we begin recording the day this ships.
  * Earlier history isn't captured. (Backfill from the encrypted
  * snapshot commit log is possible later; out of scope for now.)
  */
 
-export interface PastDueEpisode {
-  episode_started_at: string;
-  episode_ended_at: string | null;
-  failure_count: number;
-  max_arr_dollars: number;
-  plan: string | null;
-}
-
-export interface PastDueHistoryEntry {
-  /** Customer-id-stable shape — workspace_name / email captured for
-   *  audit even after the customer churns out of q10600. */
-  customer_id: string;
-  email: string | null;
-  workspace_name: string | null;
-  customer_success_manager: string | null;
-  episodes: PastDueEpisode[];
-  /** Last sync time we saw this customer in q24620. */
-  last_observed_at: string;
-}
-
-export type PastDueHistoryMap = Record<string, PastDueHistoryEntry>;
+// Re-export types so existing consumers that imported them from this
+// file keep working without an updated path.
+export type {
+  PastDueEpisode,
+  PastDueHistoryEntry,
+  PastDueHistoryMap,
+} from "./past-due-history-types";
+export { monthsObserved } from "./past-due-history-types";
 
 const KEY = "csm:past-due-history:v1";
 const META_KEY = "csm:past-due-history-meta:v1";
@@ -59,37 +47,6 @@ export async function loadReconcileMeta(): Promise<ReconcileMeta> {
   return (
     (await kvGet<ReconcileMeta>(META_KEY)) ?? { last_reconciled_at: null }
   );
-}
-
-/** Count distinct YYYY-MM buckets across all episode date ranges for a
- *  single customer. An episode that spans Jan-Feb 2026 counts both
- *  months. An active episode counts every month from its start through
- *  today. */
-export function monthsObserved(entry: PastDueHistoryEntry): number {
-  const seen = new Set<string>();
-  for (const ep of entry.episodes) {
-    const start = new Date(`${ep.episode_started_at}T00:00:00Z`);
-    const end = ep.episode_ended_at
-      ? new Date(`${ep.episode_ended_at}T00:00:00Z`)
-      : new Date();
-    // Walk month-by-month from start to end inclusive.
-    const cursor = new Date(
-      Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), 1)
-    );
-    const stop = new Date(
-      Date.UTC(end.getUTCFullYear(), end.getUTCMonth(), 1)
-    );
-    while (cursor.getTime() <= stop.getTime()) {
-      seen.add(
-        `${cursor.getUTCFullYear()}-${String(cursor.getUTCMonth() + 1).padStart(
-          2,
-          "0"
-        )}`
-      );
-      cursor.setUTCMonth(cursor.getUTCMonth() + 1);
-    }
-  }
-  return seen.size;
 }
 
 interface ReconcileResult {
