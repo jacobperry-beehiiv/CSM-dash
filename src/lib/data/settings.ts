@@ -3,6 +3,7 @@ import { kvGet, kvSet } from "../storage/kv";
 import {
   DEFAULTS,
   PAST_DUE_CHANNEL_ID,
+  PROACTIVE_OUTREACH_CHANNEL_ID,
   type SettingsShape,
   type SlackChannel,
   type SlackSettings,
@@ -49,6 +50,22 @@ function migrateSlack(stored: Partial<SlackSettings> | undefined): SlackSettings
         "",
     };
     merged.channels = [seed, ...merged.channels];
+  }
+  // Same backfill for proactive_outreach — added to DEFAULTS in a
+  // later commit, so KVs saved before that won't carry an entry.
+  // Without this seed, the /settings/slack page can't surface the
+  // entry to edit and admins end up creating a channel with the
+  // wrong id via the "Add channel" flow (slugified from the label).
+  const hasProactive = merged.channels.some(
+    (c) => c.id === PROACTIVE_OUTREACH_CHANNEL_ID
+  );
+  if (!hasProactive) {
+    const defaultProactive = DEFAULTS.slack.channels.find(
+      (c) => c.id === PROACTIVE_OUTREACH_CHANNEL_ID
+    );
+    if (defaultProactive) {
+      merged.channels.push({ ...defaultProactive });
+    }
   }
   return merged;
 }
