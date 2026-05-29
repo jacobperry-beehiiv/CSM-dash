@@ -148,15 +148,25 @@ export function DeliverabilityPanel({
   }
 
   /** Search filters by workspace name / subject — same shape as the
-   *  other tabs so the filter strip stays consistent. */
+   *  other tabs so the filter strip stays consistent. Also matches the
+   *  publication_id + organization_id carried on each post + the CSM
+   *  attribution, so a paste-an-ID workflow works here too. */
   const alerts = useMemo(() => {
     if (!search) return data.alerts;
     const q = search.toLowerCase();
-    return data.alerts.filter(
-      (a) =>
+    return data.alerts.filter((a) => {
+      const csmRaw = a.csm ?? null;
+      const csmHuman = csmRaw?.replace(/_/g, " ") ?? null;
+      return (
         a.post.workspace_name.toLowerCase().includes(q) ||
-        a.post.subject.toLowerCase().includes(q)
-    );
+        a.post.subject.toLowerCase().includes(q) ||
+        a.post.publication_id.toLowerCase().includes(q) ||
+        a.post.organization_id?.toLowerCase().includes(q) ||
+        a.post.newsletter?.toLowerCase().includes(q) ||
+        csmRaw?.toLowerCase().includes(q) ||
+        csmHuman?.toLowerCase().includes(q)
+      );
+    });
   }, [data.alerts, search]);
 
   const clearedCount = useMemo(
@@ -177,7 +187,7 @@ export function DeliverabilityPanel({
         <SearchInput
           value={search}
           onChange={setSearch}
-          placeholder="Search workspace or subject…"
+          placeholder="Search workspace, subject, CSM, publication ID…"
         />
         <CsmSelector csms={csms} />
         {clearedCount > 0 ? (

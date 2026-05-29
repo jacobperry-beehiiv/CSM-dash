@@ -10,6 +10,7 @@ import { FlagResolutionCheckboxes } from "./flag-resolution-checkboxes";
 import { ChipMultiSelect, FilterBar, FilterPanel, SearchInput, SegmentToggle } from "./filters";
 import { CsmSelector } from "./csm-selector";
 import { useUrlSearch } from "@/lib/hooks/use-url-search";
+import { usePublicationsIndex } from "@/lib/hooks/use-publications-index";
 import { composeUrlForTemplate } from "@/lib/links";
 import { suggestTemplates } from "@/lib/templates/templates";
 import { isVisibleToCsm, type StoredTemplate } from "@/lib/templates/types";
@@ -97,6 +98,8 @@ export function AtRiskTable({
   // Client-side search across the already-flagged accounts. URL-synced
   // (`?q=…`) so navigating away and back restores the filter.
   const [search, setSearch] = useUrlSearch("q");
+  // Publications index for the "paste a pub_… UUID" affordance.
+  const { ws2pubs } = usePublicationsIndex();
 
   // Flag filter state. Empty pickedFlags = no filter (show all accounts).
   // combine = "any" matches accounts with at least one picked flag;
@@ -129,11 +132,27 @@ export function AtRiskTable({
     let list = data.accounts;
     if (search) {
       const q = search.toLowerCase();
-      list = list.filter(({ customer: c }) =>
-        (c.company_name?.toLowerCase().includes(q) ||
+      list = list.filter(({ customer: c }) => {
+        // CSMs are stored snake_cased — humanize so "olivia chen" and
+        // "olivia_chen" both match. Same pattern used in customer-table.
+        const csmRaw = c.customer_success_manager ?? null;
+        const csmHuman = csmRaw?.replace(/_/g, " ") ?? null;
+        // Pub IDs owned by this workspace so a pasted `pub_…` UUID
+        // surfaces the parent account.
+        const pubs = c.workspace_id ? ws2pubs[c.workspace_id] ?? [] : [];
+        if (
+          c.company_name?.toLowerCase().includes(q) ||
           c.workspace_name?.toLowerCase().includes(q) ||
-          c.owner_email?.toLowerCase().includes(q)) ?? false
-      );
+          c.owner_email?.toLowerCase().includes(q) ||
+          c.workspace_id?.toLowerCase().includes(q) ||
+          c.stripe_customer_id?.toLowerCase().includes(q) ||
+          csmRaw?.toLowerCase().includes(q) ||
+          csmHuman?.toLowerCase().includes(q)
+        ) {
+          return true;
+        }
+        return pubs.some((p) => p.toLowerCase().includes(q));
+      });
     }
     if (pickedFlags.size === 0) return list;
     return list.filter((a) => {
@@ -145,7 +164,7 @@ export function AtRiskTable({
       for (const code of pickedFlags) if (!codes.has(code)) return false;
       return true;
     });
-  }, [data.accounts, pickedFlags, combine, search]);
+  }, [data.accounts, pickedFlags, combine, search, ws2pubs]);
 
   const allKeys = useMemo(
     () =>
@@ -290,7 +309,7 @@ export function AtRiskTable({
         <SearchInput
           value={search}
           onChange={setSearch}
-          placeholder="Search company or workspace…"
+          placeholder="Search name, owner, CSM, workspace / publication ID…"
         />
         <CsmSelector csms={csms} />
       </FilterBar>

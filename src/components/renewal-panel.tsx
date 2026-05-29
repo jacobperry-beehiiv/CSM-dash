@@ -9,6 +9,7 @@ import { RowActions } from "./row-actions";
 import { FilterBar, SearchInput, SelectFilter } from "./filters";
 import { CsmSelector } from "./csm-selector";
 import { useUrlSearch } from "@/lib/hooks/use-url-search";
+import { usePublicationsIndex } from "@/lib/hooks/use-publications-index";
 
 /**
  * Computes the customer's next renewal/charge date.
@@ -111,6 +112,7 @@ export function RenewalPanel({ customers, csms }: Props) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [intervalFilter, setIntervalFilter] = useState<string>("");
   const [search, setSearch] = useUrlSearch("q");
+  const { ws2pubs } = usePublicationsIndex();
 
   // Reset row-level state when the underlying customer set changes (CSM
   // filter / segment switch). Without this, "expanded" keeps stale
@@ -165,15 +167,26 @@ export function RenewalPanel({ customers, csms }: Props) {
     }
     if (search) {
       const q = search.toLowerCase();
-      list = list.filter(
-        (c) =>
+      list = list.filter((c) => {
+        const csmRaw = c.customer_success_manager ?? null;
+        const csmHuman = csmRaw?.replace(/_/g, " ") ?? null;
+        const pubs = c.workspace_id ? ws2pubs[c.workspace_id] ?? [] : [];
+        if (
           c.company_name?.toLowerCase().includes(q) ||
           c.workspace_name?.toLowerCase().includes(q) ||
-          c.owner_email?.toLowerCase().includes(q)
-      );
+          c.owner_email?.toLowerCase().includes(q) ||
+          c.workspace_id?.toLowerCase().includes(q) ||
+          c.stripe_customer_id?.toLowerCase().includes(q) ||
+          csmRaw?.toLowerCase().includes(q) ||
+          csmHuman?.toLowerCase().includes(q)
+        ) {
+          return true;
+        }
+        return pubs.some((p) => p.toLowerCase().includes(q));
+      });
     }
     return list;
-  }, [customers, intervalFilter, search]);
+  }, [customers, intervalFilter, search, ws2pubs]);
 
   const buckets = useMemo(() => {
     return BUCKETS.map((b) => {
@@ -195,7 +208,7 @@ export function RenewalPanel({ customers, csms }: Props) {
       <SearchInput
         value={search}
         onChange={setSearch}
-        placeholder="Search company or workspace…"
+        placeholder="Search name, owner, CSM, workspace / publication ID…"
       />
       <CsmSelector csms={csms} />
       <SelectFilter
