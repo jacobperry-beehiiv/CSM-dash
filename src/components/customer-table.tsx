@@ -120,13 +120,20 @@ export function CustomerTable({
         // finds the company without the user needing to know which
         // shape of ID they're holding.
         const pubs = c.workspace_id ? ws2pubs[c.workspace_id] ?? [] : [];
+        // CSM names are stored snake_cased (e.g. "olivia_chen"). Match
+        // against the underscore form AND a humanized "olivia chen"
+        // form so "Olivia" or "olivia chen" both find the row.
+        const csmRaw = c.customer_success_manager ?? null;
+        const csmHuman = csmRaw?.replace(/_/g, " ") ?? null;
         if (
           c.company_name?.toLowerCase().includes(q) ||
           c.workspace_name?.toLowerCase().includes(q) ||
           c.property_main_contact?.toLowerCase().includes(q) ||
           c.workspace_id?.toLowerCase().includes(q) ||
           c.stripe_customer_id?.toLowerCase().includes(q) ||
-          c.owner_email?.toLowerCase().includes(q)
+          c.owner_email?.toLowerCase().includes(q) ||
+          csmRaw?.toLowerCase().includes(q) ||
+          csmHuman?.toLowerCase().includes(q)
         ) {
           return true;
         }
@@ -520,7 +527,7 @@ export function CustomerTable({
         <SearchInput
           value={search}
           onChange={setSearch}
-          placeholder="Search name, owner, workspace / publication ID…"
+          placeholder="Search name, owner, CSM, workspace / publication ID…"
         />
         <CsmSelector csms={csms} />
         <SelectFilter

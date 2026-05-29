@@ -252,11 +252,17 @@ export function PastDuePanel({ rows, csms, totalSourceRows }: Props) {
         : null;
       const workspaceId = resolved?.workspace_id ?? null;
       const pubs = workspaceId ? ws2pubs[workspaceId] ?? [] : [];
+      // CSMs are stored snake_cased (e.g. "olivia_chen"). Include
+      // both the raw form and a humanized "olivia chen" so either
+      // typing pattern matches.
+      const csm = r.customer_success_manager ?? null;
+      const csmHuman = csm?.replace(/_/g, " ") ?? null;
       const haystack = [
         r.email,
         r.customer_id,
         r.price_name,
-        r.customer_success_manager,
+        csm,
+        csmHuman,
         workspaceId,
         resolved?.workspace_name,
         resolved?.company_name,
@@ -425,7 +431,7 @@ export function PastDuePanel({ rows, csms, totalSourceRows }: Props) {
         <SearchInput
           value={search}
           onChange={setSearch}
-          placeholder="Search email, customer id, plan, workspace / publication ID…"
+          placeholder="Search email, customer id, plan, CSM, workspace / publication ID…"
         />
         {/* Past Due is a team-wide triage view, so the dropdown
          *  defaults to "All CSMs" rather than the viewer's own handle.

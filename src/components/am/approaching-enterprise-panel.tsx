@@ -175,12 +175,19 @@ export function ApproachingEnterprisePanel({ rows }: Props) {
         // `pub_*` UUID surfaces its parent account.
         const orgId = r.organization_id ?? null;
         const pubs = orgId ? ws2pubs[orgId] ?? [] : [];
+        // q13268 doesn't carry the CSM — resolve through the customer
+        // book so "search by CSM" works the same as in Past Due.
+        const resolved = r.stripe_customer_id
+          ? customerByStripeId.get(r.stripe_customer_id)
+          : null;
+        const csm = resolved?.customer_success_manager?.replace(/_/g, " ");
         if (
           r.workspace_name?.toLowerCase().includes(q) ||
           r.owner_name?.toLowerCase().includes(q) ||
           r.owner_email?.toLowerCase().includes(q) ||
           orgId?.toLowerCase().includes(q) ||
-          r.stripe_customer_id?.toLowerCase().includes(q)
+          r.stripe_customer_id?.toLowerCase().includes(q) ||
+          csm?.toLowerCase().includes(q)
         ) {
           return true;
         }
@@ -194,7 +201,7 @@ export function ApproachingEnterprisePanel({ rows }: Props) {
         return p != null && b.test(p);
       }),
     })).filter((g) => g.list.length > 0);
-  }, [rows, search, ws2pubs]);
+  }, [rows, search, ws2pubs, customerByStripeId]);
 
   const totalAtOrAboveFloor = rows.filter((r) => {
     const p = pctNum(r);
@@ -214,7 +221,7 @@ export function ApproachingEnterprisePanel({ rows }: Props) {
       <div className="flex flex-wrap items-center gap-2 mb-4">
         <input
           type="text"
-          placeholder="Search workspace / owner / publication ID…"
+          placeholder="Search workspace / owner / CSM / publication ID…"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           className="px-3 py-2 border border-border-strong rounded-lg text-sm flex-1 min-w-[220px]"
