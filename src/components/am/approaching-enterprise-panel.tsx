@@ -10,6 +10,7 @@ import {
 } from "./slack-bulk-compose";
 import { BulkEmailLauncher } from "./bulk-email-launcher";
 import { CustomerDetailPanel } from "../customer-detail-panel";
+import { usePublicationsIndex } from "@/lib/hooks/use-publications-index";
 import type { SettingsShape } from "@/lib/data/settings-types";
 import type { Customer } from "@/lib/types";
 
@@ -153,6 +154,11 @@ export function ApproachingEnterprisePanel({ rows }: Props) {
     });
   }
 
+  // Publication-index — supports pasting a `pub_*` / workspace UUID
+  // into the search input and finding the matching row. Soft-fails
+  // empty if the endpoint is down.
+  const { ws2pubs } = usePublicationsIndex();
+
   // Filter to ≥80% utilization, then bucket. q13268 returns customers
   // approaching the 100K Enterprise threshold — they're already a curated
   // pool, but per the AM brief follow-up we surface ≥80% in 10% segments
@@ -164,11 +170,21 @@ export function ApproachingEnterprisePanel({ rows }: Props) {
         const p = pctNum(r);
         if (p == null || p < 80) return false;
         if (!q) return true;
-        return (
+        // organization_id IS the workspace ID in beehiiv. Lookup
+        // every publication owned by this workspace so a pasted
+        // `pub_*` UUID surfaces its parent account.
+        const orgId = r.organization_id ?? null;
+        const pubs = orgId ? ws2pubs[orgId] ?? [] : [];
+        if (
           r.workspace_name?.toLowerCase().includes(q) ||
           r.owner_name?.toLowerCase().includes(q) ||
-          r.owner_email?.toLowerCase().includes(q)
-        );
+          r.owner_email?.toLowerCase().includes(q) ||
+          orgId?.toLowerCase().includes(q) ||
+          r.stripe_customer_id?.toLowerCase().includes(q)
+        ) {
+          return true;
+        }
+        return pubs.some((p) => p.toLowerCase().includes(q));
       })
       .sort((a, b) => (pctNum(b) ?? 0) - (pctNum(a) ?? 0));
     return BUCKETS.map((b) => ({
@@ -178,7 +194,7 @@ export function ApproachingEnterprisePanel({ rows }: Props) {
         return p != null && b.test(p);
       }),
     })).filter((g) => g.list.length > 0);
-  }, [rows, search]);
+  }, [rows, search, ws2pubs]);
 
   const totalAtOrAboveFloor = rows.filter((r) => {
     const p = pctNum(r);
@@ -198,7 +214,7 @@ export function ApproachingEnterprisePanel({ rows }: Props) {
       <div className="flex flex-wrap items-center gap-2 mb-4">
         <input
           type="text"
-          placeholder="Search workspace / owner…"
+          placeholder="Search workspace / owner / publication ID…"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           className="px-3 py-2 border border-border-strong rounded-lg text-sm flex-1 min-w-[220px]"

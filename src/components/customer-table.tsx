@@ -7,6 +7,7 @@ import { RiskLevelChip } from "./risk-level-chip";
 import { FilterBar, SearchInput, SelectFilter } from "./filters";
 import { CsmSelector } from "./csm-selector";
 import { useUrlSearch } from "@/lib/hooks/use-url-search";
+import { usePublicationsIndex } from "@/lib/hooks/use-publications-index";
 import { MetricCards } from "./metric-cards";
 import { OutreachModal } from "./outreach-modal";
 import { CustomerDetailPanel } from "./customer-detail-panel";
@@ -100,17 +101,34 @@ export function CustomerTable({
     []
   );
 
+  // Publication-index for the search input. Lazy + cached so the page
+  // load isn't blocked on it — a search term entered before the fetch
+  // resolves still matches against name/workspace fields, just not
+  // against pub IDs.
+  const { ws2pubs } = usePublicationsIndex();
+
   const filtered = useMemo(() => {
     let list = initialCustomers;
 
     if (search) {
       const q = search.toLowerCase();
-      list = list.filter(
-        (c) =>
+      list = list.filter((c) => {
+        // Pub IDs owned by this workspace, so pasting a pub_… UUID
+        // finds the company without the user needing to know which
+        // shape of ID they're holding.
+        const pubs = c.workspace_id ? ws2pubs[c.workspace_id] ?? [] : [];
+        if (
           c.company_name?.toLowerCase().includes(q) ||
           c.workspace_name?.toLowerCase().includes(q) ||
-          c.property_main_contact?.toLowerCase().includes(q)
-      );
+          c.property_main_contact?.toLowerCase().includes(q) ||
+          c.workspace_id?.toLowerCase().includes(q) ||
+          c.stripe_customer_id?.toLowerCase().includes(q) ||
+          c.owner_email?.toLowerCase().includes(q)
+        ) {
+          return true;
+        }
+        return pubs.some((p) => p.toLowerCase().includes(q));
+      });
     }
     if (featurePredicate) {
       list = list.filter(featurePredicate);
@@ -136,7 +154,7 @@ export function CustomerTable({
       return sortDir === "asc" ? na - nb : nb - na;
     });
     return list;
-  }, [initialCustomers, search, featurePredicate, statusFilter, sortKey, sortDir]);
+  }, [initialCustomers, search, featurePredicate, statusFilter, sortKey, sortDir, ws2pubs]);
 
   // Counts shown next to each option in the lifecycle dropdown so the
   // viewer sees how many rows each filter would yield. Derived from
@@ -499,7 +517,7 @@ export function CustomerTable({
         <SearchInput
           value={search}
           onChange={setSearch}
-          placeholder="Search company or workspace…"
+          placeholder="Search name, owner, workspace / publication ID…"
         />
         <CsmSelector csms={csms} />
         <SelectFilter

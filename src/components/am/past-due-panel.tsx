@@ -19,6 +19,7 @@ import {
 import { BulkEmailLauncher } from "./bulk-email-launcher";
 import { LowTierBulkSend } from "./low-tier-bulk-send";
 import { CustomerDetailPanel } from "../customer-detail-panel";
+import { usePublicationsIndex } from "@/lib/hooks/use-publications-index";
 import { stripeCustomerUrl } from "@/lib/links";
 import type { Customer } from "@/lib/types";
 import type {
@@ -225,6 +226,12 @@ export function PastDuePanel({ rows, csms, totalSourceRows }: Props) {
     return m;
   }, [customerBook]);
 
+  // Publication-index drives the workspace/publication-ID search
+  // affordance. Lazily loaded once per tab session — soft-fails to
+  // empty so search keeps working if the endpoint hiccups (just
+  // without pub-ID lookup).
+  const { ws2pubs } = usePublicationsIndex();
+
   /** Apply search to the CSM-filtered rows, then dedupe per Stripe
    *  customer_id (q24620 can return multiple rows for the same
    *  customer — one per failed charge attempt or per past-due
@@ -237,11 +244,23 @@ export function PastDuePanel({ rows, csms, totalSourceRows }: Props) {
     const haystackMatch = (r: PastDueRow): boolean => {
       if (!search) return true;
       const q = search.toLowerCase();
+      // Resolve to Customer so the search can match against the
+      // workspace ID + every publication ID owned by that workspace.
+      // PastDueRow itself only carries billing-side fields.
+      const resolved = r.customer_id
+        ? customerByStripeId.get(r.customer_id)
+        : null;
+      const workspaceId = resolved?.workspace_id ?? null;
+      const pubs = workspaceId ? ws2pubs[workspaceId] ?? [] : [];
       const haystack = [
         r.email,
         r.customer_id,
         r.price_name,
         r.customer_success_manager,
+        workspaceId,
+        resolved?.workspace_name,
+        resolved?.company_name,
+        ...pubs,
       ]
         .filter(Boolean)
         .join(" ")
@@ -270,7 +289,7 @@ export function PastDuePanel({ rows, csms, totalSourceRows }: Props) {
       }
     }
     return Array.from(byKey.values());
-  }, [rows, search]);
+  }, [rows, search, customerByStripeId, ws2pubs]);
 
   /** Map customer_id → tier classification. Computed once per searched
    *  list so tab counts and the rendered tier match exactly. */
@@ -406,7 +425,7 @@ export function PastDuePanel({ rows, csms, totalSourceRows }: Props) {
         <SearchInput
           value={search}
           onChange={setSearch}
-          placeholder="Search email, customer id, or plan…"
+          placeholder="Search email, customer id, plan, workspace / publication ID…"
         />
         {/* Past Due is a team-wide triage view, so the dropdown
          *  defaults to "All CSMs" rather than the viewer's own handle.
