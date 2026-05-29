@@ -60,7 +60,12 @@ export function CustomerDetailPanel({
 
       <CadenceToggle customer={c} />
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      {/* Three sections side-by-side on md+ so Contact doesn't orphan
+       *  onto a second row at half-width. Stacks single-column on
+       *  narrow viewports (mobile, narrow popovers). All three are
+       *  collapsed by default — the row reads as a clean trio of
+       *  title-bars until you open one. */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <Section title="Status">
           <Row label="Plan" value={c.stripe_plan ?? "—"} />
           <Row label="Engagement" value={c.company_engagement ?? "—"} />

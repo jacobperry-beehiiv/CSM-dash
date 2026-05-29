@@ -46,7 +46,10 @@ const COLUMNS: ColumnDef[] = [
   { key: "property_risk_level", label: "Risk", width: "w-[8%]", showAt: "md" },
   { key: "next_invoice", label: "Next charge", width: "w-[10%]", showAt: "md" },
   { key: "last_send", label: "Last send", width: "w-[7%]", showAt: "lg" },
-  { key: "property_notes_last_contacted", label: "Last contacted", width: "w-[6%]", showAt: "xl" },
+  // Bumped from 6% so "Jan 27, 2026" stays on one line — at 6% the
+  // date wrapped to two rows on 1440-class displays and the
+  // Masquerade button in the next cell visually crowded into it.
+  { key: "property_notes_last_contacted", label: "Last contacted", width: "w-[8%]", showAt: "xl" },
 ];
 
 const SHOW_CLASS: Record<NonNullable<ColumnDef["showAt"]>, string> = {
@@ -608,8 +611,10 @@ export function CustomerTable({
             ))}
             {/* Actions column. Wide enough for Masquerade + h. + Draft
              *  text buttons; if it's too narrow the right-aligned flex
-             *  inside spills leftward into the prior column. */}
-            <col className="w-[22%]" />
+             *  inside spills leftward into the prior column. Trimmed
+             *  from 22% so the extra 2% can give "Last contacted"
+             *  enough room for "Jan 27, 2026" on a single line. */}
+            <col className="w-[20%]" />
           </colgroup>
           <thead>
             <tr className="bg-canvas border-b border-border">
