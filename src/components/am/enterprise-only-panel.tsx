@@ -111,6 +111,36 @@ export function EnterpriseOnlyPanel({ rows, csms }: Props) {
       .then((j) => setOutreachMap((j as ProactiveOutreachMap) ?? {}))
       .catch(() => {});
   }, []);
+
+  // Wipe the proactive-outreach entry for a workspace so the 5-day
+  // dedupe no longer applies — next sweep / manual ping fires fresh.
+  // Used by the inline "× clear" chip next to a row's badge and the
+  // bulk "Clear ping status" toolbar button.
+  const clearProactive = useCallback(
+    async (workspaceIds: string[]) => {
+      const ids = workspaceIds.filter(Boolean);
+      if (ids.length === 0) return;
+      // The DELETE endpoint takes one workspace_id per call. Loop in
+      // sequence so a single 5xx doesn't fail the whole batch — each
+      // delete is idempotent server-side.
+      let cleared = 0;
+      for (const id of ids) {
+        try {
+          const r = await fetch("/api/proactive-outreach", {
+            method: "DELETE",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ workspace_id: id }),
+          });
+          if (r.ok) cleared++;
+        } catch {
+          /* non-fatal — continue with the next id */
+        }
+      }
+      reloadOutreach();
+      return cleared;
+    },
+    [reloadOutreach]
+  );
   useEffect(() => {
     reloadOutreach();
   }, [reloadOutreach]);
@@ -211,6 +241,29 @@ export function EnterpriseOnlyPanel({ rows, csms }: Props) {
           title="Stamp the selected rows as outreach-logged. Stops the 5-day nudge cycle for them."
         >
           ✓ Mark outreach logged
+        </button>
+        <button
+          onClick={async () => {
+            const ids = selectedCustomers
+              .map((c) => c.workspace_id)
+              .filter((id): id is string => Boolean(id));
+            if (ids.length === 0) return;
+            if (
+              !confirm(
+                `Clear the proactive-outreach state (pinged / nudged / outreach-logged) for ${ids.length} account${
+                  ids.length === 1 ? "" : "s"
+                }? This re-enables ping eligibility immediately, ignoring the 5-day dedupe.`
+              )
+            ) {
+              return;
+            }
+            await clearProactive(ids);
+          }}
+          disabled={selected.size === 0}
+          className="px-2 py-1 text-xs border border-border-strong rounded-md bg-surface hover:bg-canvas disabled:opacity-50"
+          title="Wipe the ping / nudge / outreach-logged state for the selected rows so a fresh ping can fire before the 5-day dedupe expires. Useful when an account needs a re-ping after a no-response window."
+        >
+          ↻ Clear ping status
         </button>
         <button
           onClick={async () => {
@@ -397,6 +450,13 @@ export function EnterpriseOnlyPanel({ rows, csms }: Props) {
                                 ? outreachMap[c.workspace_id]
                                 : undefined
                             }
+                            onClear={
+                              c.workspace_id
+                                ? () => {
+                                    void clearProactive([c.workspace_id!]);
+                                  }
+                                : undefined
+                            }
                           />
                         </div>
                         <div className="text-xs text-muted truncate">
@@ -459,43 +519,84 @@ export function EnterpriseOnlyPanel({ rows, csms }: Props) {
 
 /** Inline chip showing where this account sits in the proactive-outreach
  *  lifecycle: pinged in Slack, outreach logged, or nudged. Invisible
- *  when no state exists yet (most rows on first load). */
+ *  when no state exists yet (most rows on first load).
+ *
+ *  When `onClear` is provided AND a status is visible, a small "×"
+ *  affordance follows the chip — click to wipe the proactive entry
+ *  so the workspace becomes ping-eligible again (bypasses the
+ *  5-day dedupe). */
 function ProactiveStatusBadge({
   entry,
+  onClear,
 }: {
   entry?: import("@/lib/data/proactive-outreach").ProactiveOutreachEntry;
+  onClear?: () => void;
 }) {
   if (!entry) return null;
+
+  const clearChip = onClear ? (
+    <button
+      type="button"
+      onClick={(e) => {
+        // The row is wrapped in a click-to-expand handler; without
+        // stopPropagation a clear-click would also toggle the
+        // detail panel.
+        e.stopPropagation();
+        if (
+          confirm(
+            "Clear the proactive-outreach state for this account? This re-enables a fresh ping immediately, ignoring the 5-day dedupe."
+          )
+        ) {
+          onClear();
+        }
+      }}
+      title="Clear pinged / nudged / outreach-logged status so a fresh ping can fire."
+      className="ml-1 text-[10px] text-muted hover:text-red-600 hover:underline cursor-pointer"
+      aria-label="Clear proactive outreach status"
+    >
+      × clear
+    </button>
+  ) : null;
+
   if (entry.last_outreach_at) {
     return (
-      <span
-        className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-emerald-100 text-emerald-800 dark:bg-emerald-500/20 dark:text-emerald-200"
-        title={`Outreach logged ${fmtDate(entry.last_outreach_at)}${
-          entry.last_outreach_by ? ` by ${entry.last_outreach_by}` : ""
-        }`}
-      >
-        <span aria-hidden>✓</span>
-        Outreach logged
+      <span className="inline-flex items-baseline gap-1">
+        <span
+          className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-emerald-100 text-emerald-800 dark:bg-emerald-500/20 dark:text-emerald-200"
+          title={`Outreach logged ${fmtDate(entry.last_outreach_at)}${
+            entry.last_outreach_by ? ` by ${entry.last_outreach_by}` : ""
+          }`}
+        >
+          <span aria-hidden>✓</span>
+          Outreach logged
+        </span>
+        {clearChip}
       </span>
     );
   }
   if (entry.last_nudge_at) {
     return (
-      <span
-        className="inline-block px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-100 text-amber-800 dark:bg-amber-500/20 dark:text-amber-200"
-        title={`Nudged ${fmtDate(entry.last_nudge_at)} · pinged ${fmtDate(entry.ping_sent_at)}`}
-      >
-        Nudge sent
+      <span className="inline-flex items-baseline gap-1">
+        <span
+          className="inline-block px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-100 text-amber-800 dark:bg-amber-500/20 dark:text-amber-200"
+          title={`Nudged ${fmtDate(entry.last_nudge_at)} · pinged ${fmtDate(entry.ping_sent_at)}`}
+        >
+          Nudge sent
+        </span>
+        {clearChip}
       </span>
     );
   }
   if (entry.ping_sent_at) {
     return (
-      <span
-        className="inline-block px-1.5 py-0.5 rounded text-[10px] font-medium bg-blue-100 text-blue-800 dark:bg-blue-500/20 dark:text-blue-200"
-        title={`Slack ping fired ${fmtDate(entry.ping_sent_at)}`}
-      >
-        Pinged
+      <span className="inline-flex items-baseline gap-1">
+        <span
+          className="inline-block px-1.5 py-0.5 rounded text-[10px] font-medium bg-blue-100 text-blue-800 dark:bg-blue-500/20 dark:text-blue-200"
+          title={`Slack ping fired ${fmtDate(entry.ping_sent_at)}`}
+        >
+          Pinged
+        </span>
+        {clearChip}
       </span>
     );
   }
