@@ -5,6 +5,7 @@ import {
   loadOverrides,
   setOverride,
   getOverride,
+  ownerEmailToCsmId,
 } from "@/lib/data/customer-overrides";
 import { fetchHubspotCompanyOwner } from "@/lib/integrations/hubspot";
 
@@ -42,15 +43,6 @@ interface PostBody {
 interface RefreshSnapshot {
   customer_success_manager: string | null;
   customer_success_manager_email: string | null;
-}
-
-/** Convert a HubSpot owner email into the snake-cased CSM identifier
- *  the dashboard already uses (q10600's `customer_success_manager`
- *  column). `olivia.chen@beehiiv.com` → `olivia_chen`. Falls back to
- *  the local-part as-is when the email has no dots. */
-function ownerEmailToCsmId(email: string): string {
-  const localPart = email.split("@", 1)[0] ?? email;
-  return localPart.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
 }
 
 export async function POST(req: Request) {

@@ -80,7 +80,11 @@ export function CustomerDetailPanel({
             }
           />
           {c.property_risk_level_detail ? (
-            <Row label="Risk detail" value={c.property_risk_level_detail} />
+            <Row
+              label="Risk detail"
+              value={c.property_risk_level_detail}
+              block
+            />
           ) : null}
           {c.property_customer_goals ? (
             <Row label="Goal" value={c.property_customer_goals} />
@@ -88,11 +92,8 @@ export function CustomerDetailPanel({
           {c.property_customer_goals_detail ? (
             <Row
               label="Goal detail"
-              value={
-                <span className="whitespace-pre-wrap text-sm">
-                  {c.property_customer_goals_detail}
-                </span>
-              }
+              value={c.property_customer_goals_detail}
+              block
             />
           ) : null}
         </Section>
@@ -173,7 +174,10 @@ function Section({
 }) {
   return (
     <CollapsibleSection title={title} defaultOpen={defaultOpen}>
-      <dl className="space-y-2">{children}</dl>
+      {/* Bumped from space-y-2 → space-y-3 so dense fact rows breathe
+       *  a bit; the section header is already padded, the body just
+       *  needed inter-row air. */}
+      <dl className="space-y-3">{children}</dl>
     </CollapsibleSection>
   );
 }
@@ -181,12 +185,28 @@ function Section({
 function Row({
   label,
   value,
+  /** When true, the value renders on its own line under the label
+   *  instead of inline-right. Use for long-form prose (risk_detail,
+   *  goal_detail, etc.) where right-aligning a two-line description
+   *  reads awkwardly — eye starts on the right and runs back left. */
+  block = false,
 }: {
   label: string;
   value: React.ReactNode;
+  block?: boolean;
 }) {
+  if (block) {
+    return (
+      <div className="text-sm space-y-1">
+        <dt className="text-muted">{label}</dt>
+        <dd className="text-fg break-words whitespace-pre-wrap leading-relaxed">
+          {value}
+        </dd>
+      </div>
+    );
+  }
   return (
-    <div className="flex justify-between gap-4 text-sm">
+    <div className="flex justify-between items-baseline gap-4 text-sm">
       <dt className="text-muted whitespace-nowrap">{label}</dt>
       <dd className="text-fg text-right break-words min-w-0">{value}</dd>
     </div>

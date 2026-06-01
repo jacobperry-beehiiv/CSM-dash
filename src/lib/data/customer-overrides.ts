@@ -114,3 +114,29 @@ export function getOverride(
   if (!workspaceId) return null;
   return overrides[workspaceId] ?? null;
 }
+
+/**
+ * Convert a HubSpot owner email into the internal CSM identifier
+ * shape Metabase q10600 uses (TitleCase + underscores):
+ *
+ *   olivia.chen@beehiiv.com           → Olivia_Chen
+ *   haas.cavazos@beehiiv.com          → Haas_Cavazos
+ *   jacob+test.perry@beehiiv.com      → Jacob_Test_Perry
+ *
+ * Matching q10600's convention matters because the CSM filter
+ * dropdown is built from a Set of distinct identifiers; an override
+ * value like "haas_cavazos" (all-lowercase) would otherwise sit
+ * alongside snapshot values like "Olivia_Carney" instead of
+ * collapsing into the same entry as future Metabase rows.
+ */
+export function ownerEmailToCsmId(email: string): string {
+  const localPart = email.split("@", 1)[0] ?? email;
+  return localPart
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_|_$/g, "")
+    .split("_")
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join("_");
+}

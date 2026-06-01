@@ -7,6 +7,7 @@ import {
 import {
   loadOverrides,
   setOverride,
+  ownerEmailToCsmId,
 } from "@/lib/data/customer-overrides";
 import { fetchHubspotCompanyOwners } from "@/lib/integrations/hubspot";
 
@@ -61,17 +62,6 @@ interface ChangeRow {
   company_name: string | null;
   before: { csm: string | null; email: string | null };
   after: { csm: string | null; email: string | null; owner_name: string | null };
-}
-
-/** Mirror the snake_case convention from the per-row refresh endpoint
- *  so a bulk sweep produces the same identifier shape (e.g.
- *  `olivia.chen@beehiiv.com` → `olivia_chen`). */
-function ownerEmailToCsmId(email: string): string {
-  const localPart = email.split("@", 1)[0] ?? email;
-  return localPart
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "_")
-    .replace(/^_|_$/g, "");
 }
 
 export async function POST(req: Request) {
