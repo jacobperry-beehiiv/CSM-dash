@@ -130,8 +130,18 @@ export async function runProactiveOutreachSweep(
      * eligible Enterprise ≥cap cohort as before.
      */
     workspaceIds?: string[];
+    /**
+     * Where this sweep was triggered from. "cron" is the daily GitHub
+     * Actions schedule; "manual" is an admin clicking the panel
+     * button. The `am.proactive_outreach_sweep_enabled` toggle in
+     * /settings/slack gates "cron" only — manual sweeps always run
+     * so admins can ping on-demand even when the schedule is paused.
+     * Defaults to "cron" to keep the safer-by-default behavior for
+     * callers that haven't been updated yet.
+     */
+    triggeredBy?: "cron" | "manual";
   } = {}
-): Promise<SweepResult> {
+): Promise<SweepResult & { disabled?: boolean; reason?: string }> {
   const result: SweepResult = {
     scanned: 0,
     pings_sent: 0,
@@ -148,6 +158,23 @@ export async function runProactiveOutreachSweep(
     loadProactiveOutreach(),
     loadSettings(),
   ]);
+
+  // Schedule gate — only applies to cron-triggered runs. Manual sweeps
+  // ignore the toggle so an admin can ping on-demand even while the
+  // schedule is paused (the original intent of the toggle is "stop
+  // the daily auto-pings without nuking the engine entirely").
+  const triggeredBy = opts.triggeredBy ?? "cron";
+  if (
+    triggeredBy === "cron" &&
+    settings.am?.proactive_outreach_sweep_enabled === false
+  ) {
+    return {
+      ...result,
+      disabled: true,
+      reason:
+        "Scheduled sweep is disabled in settings (am.proactive_outreach_sweep_enabled = false). Flip the toggle on /settings/slack to resume.",
+    };
+  }
 
   const channelCfg = findSlackChannel(
     settings.slack,

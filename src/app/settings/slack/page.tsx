@@ -341,6 +341,52 @@ export default function SlackSettingsPage() {
       </section>
 
       <section className="bg-surface rounded-xl border border-border shadow-card p-4 space-y-3">
+        <h2 className="text-sm font-semibold text-fg">
+          Proactive outreach schedule
+        </h2>
+        <p className="text-xs text-muted">
+          The daily GitHub Actions cron sweeps the Enterprise cohort
+          at <code className="font-mono bg-surface-2 px-1 rounded">≥75%</code>
+          {" "}of cap, posts a Slack ping for newly-crossing accounts,
+          and nudges AM after 5 days of no logged outreach. Pause the
+          schedule here when you want to mute auto-pings without
+          disabling the engine — the manual{" "}
+          <em>📣 Ping N selected on Slack</em> button on the AM
+          Proactive Outreach tab still works either way.
+        </p>
+        <label className="flex items-start gap-3 text-sm cursor-pointer">
+          <input
+            type="checkbox"
+            checked={settings.am?.proactive_outreach_sweep_enabled !== false}
+            onChange={(e) =>
+              setSettings((prev) => ({
+                ...prev,
+                am: {
+                  ...(prev.am ?? {}),
+                  proactive_outreach_sweep_enabled: e.target.checked,
+                },
+              }))
+            }
+            className="mt-0.5 h-4 w-4 rounded border-border-strong cursor-pointer"
+          />
+          <span>
+            <span className="font-medium text-fg">
+              Scheduled sweep enabled
+            </span>
+            <span className="block text-xs text-muted">
+              When off, the daily cron call to{" "}
+              <code className="font-mono bg-surface-2 px-1 rounded">
+                /api/proactive-outreach/sweep
+              </code>{" "}
+              short-circuits with{" "}
+              <code className="font-mono">{"{ disabled: true }"}</code>{" "}
+              — no Slack messages fire, no nudges go out. Default: on.
+            </span>
+          </span>
+        </label>
+      </section>
+
+      <section className="bg-surface rounded-xl border border-border shadow-card p-4 space-y-3">
         <h2 className="text-sm font-semibold text-fg">CSM Slack IDs</h2>
         <p className="text-xs text-muted">
           Map each CSM&rsquo;s internal handle (the Metabase{" "}

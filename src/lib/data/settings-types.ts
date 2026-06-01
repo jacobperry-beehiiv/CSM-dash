@@ -110,6 +110,20 @@ export interface AmSettings {
   /** Cap on how many customers go into a single BCC batch. The brief
    *  calls for 40 but admins can tune it without a code change. */
   bulk_bcc_batch_size?: number;
+  /**
+   * Master switch for the scheduled (cron) proactive-outreach sweep.
+   * When false, the daily GitHub Actions cron POST short-circuits
+   * with a "disabled" status — no Slack pings fire, no nudges go
+   * out. The manual UI sweep (📣 Ping N selected on Slack) is NOT
+   * affected; admins can still trigger pings on demand even with
+   * the schedule paused.
+   *
+   * Defaults to true so existing installs keep their current
+   * behavior on rollout. Flip to false from /settings/slack when
+   * you want to mute the channel temporarily (team OOO, channel
+   * migration, etc.).
+   */
+  proactive_outreach_sweep_enabled?: boolean;
 }
 
 export const DEFAULTS: SettingsShape = {
@@ -158,6 +172,7 @@ export const DEFAULTS: SettingsShape = {
   am: {
     bulk_alias_email: "",
     bulk_bcc_batch_size: 40,
+    proactive_outreach_sweep_enabled: true,
   },
 };
 

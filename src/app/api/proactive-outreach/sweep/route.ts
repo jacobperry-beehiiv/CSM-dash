@@ -26,7 +26,8 @@ interface PostBody {
 }
 
 export async function POST(req: Request) {
-  if (!(await authorize(req))) {
+  const auth_result = await authorize(req);
+  if (!auth_result) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
   const url = new URL(req.url);
@@ -50,10 +51,26 @@ export async function POST(req: Request) {
     const result = await runProactiveOutreachSweep({
       dryRun,
       workspaceIds,
+      // Auth path drives the gate: Bearer-secret = cron, session =
+      // manual. The settings toggle only mutes cron runs so an admin
+      // can still ping on-demand from the panel button.
+      triggeredBy: auth_result === "cron" ? "cron" : "manual",
     });
+    // Disabled-by-settings is a non-error 200 — the cron should see
+    // this as a deliberate skip, not a failure. ok stays true.
+    if (result.disabled) {
+      return NextResponse.json({
+        ok: true,
+        disabled: true,
+        reason: result.reason,
+        triggered_by: auth_result,
+        ...result,
+      });
+    }
     return NextResponse.json({
       ok: true,
       dryRun,
+      triggered_by: auth_result,
       scope: workspaceIds ? { count: workspaceIds.length } : null,
       ...result,
     });
@@ -65,12 +82,15 @@ export async function POST(req: Request) {
   }
 }
 
-async function authorize(req: Request): Promise<boolean> {
+/** Returns the auth path that succeeded, or false on rejection. We
+ *  branch on the result downstream so the schedule-disabled toggle
+ *  can apply to cron runs only. */
+async function authorize(req: Request): Promise<"cron" | "manual" | false> {
   const cronSecret = process.env.CRON_SECRET;
   if (cronSecret) {
     const header = req.headers.get("authorization") ?? "";
-    if (header === `Bearer ${cronSecret}`) return true;
+    if (header === `Bearer ${cronSecret}`) return "cron";
   }
   const session = await auth();
-  return Boolean(session?.user?.email);
+  return session?.user?.email ? "manual" : false;
 }
