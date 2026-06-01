@@ -38,18 +38,37 @@ interface ColumnDef {
 }
 
 const COLUMNS: ColumnDef[] = [
-  { key: "company_name", label: "Company", width: "w-[18%]", showAt: "always" },
+  // Company shaved from 18 → 15 so the new CSM column fits without
+  // crushing the Actions cell. Most names still fit at 15%; the
+  // workspace_name sub-line takes the visual hit when truncation
+  // kicks in.
+  { key: "company_name", label: "Company", width: "w-[15%]", showAt: "always" },
   { key: "arr", label: "ARR", width: "w-[7%]", align: "right", showAt: "always" },
   { key: "active_subs", label: "Subs", width: "w-[7%]", align: "right", showAt: "md" },
   { key: "features_enabled", label: "Features", width: "w-[7%]", align: "right", showAt: "lg" },
   { key: "company_engagement", label: "Engagement", width: "w-[8%]", showAt: "lg" },
+  // New CSM column. Lives next to Engagement because both answer
+  // "who/what owns this account?". Hidden below lg — at md the row
+  // is already busy with billing/risk/charge data. Stays in sync with
+  // the customer-overrides KV (via load-customers' applyOverride), so
+  // a "🔄 HubSpot" refresh on the detail panel flows through here on
+  // the next router.refresh() tick.
+  {
+    key: "customer_success_manager",
+    label: "CSM",
+    width: "w-[8%]",
+    showAt: "lg",
+  },
   { key: "property_risk_level", label: "Risk", width: "w-[8%]", showAt: "md" },
-  { key: "next_invoice", label: "Next charge", width: "w-[10%]", showAt: "md" },
+  // Next charge trimmed from 10 → 8 — "Jan 27, 2026" + the monthly /
+  // annual cadence chip both fit at 8% with the chip wrapping under
+  // the date on narrower screens.
+  { key: "next_invoice", label: "Next charge", width: "w-[8%]", showAt: "md" },
   { key: "last_send", label: "Last send", width: "w-[7%]", showAt: "lg" },
   // Bumped from 6% so "Jan 27, 2026" stays on one line — at 6% the
   // date wrapped to two rows on 1440-class displays and the
   // Masquerade button in the next cell visually crowded into it.
-  { key: "property_notes_last_contacted", label: "Last contacted", width: "w-[8%]", showAt: "xl" },
+  { key: "property_notes_last_contacted", label: "Last contacted", width: "w-[7%]", showAt: "xl" },
 ];
 
 const SHOW_CLASS: Record<NonNullable<ColumnDef["showAt"]>, string> = {
@@ -457,6 +476,17 @@ export function CustomerTable({
       }
       case "company_engagement":
         return <StatusBadge value={c.company_engagement} />;
+      case "customer_success_manager":
+        // Snake-cased identifier → "Jacob Perry" reads cleaner inline.
+        // Empty cell when unassigned so the column doesn't shout "-"
+        // on every self-serve row in the book.
+        return c.customer_success_manager ? (
+          <span className="text-muted text-xs">
+            {c.customer_success_manager.replace(/_/g, " ")}
+          </span>
+        ) : (
+          <span className="text-subtle text-xs italic">unassigned</span>
+        );
       case "property_risk_level":
         return (
           <RiskLevelChip

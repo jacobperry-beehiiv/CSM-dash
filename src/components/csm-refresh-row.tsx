@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import type { Customer } from "@/lib/types";
 
 /**
@@ -37,10 +38,13 @@ interface Props {
 }
 
 export function CsmRefreshRow({ customer }: Props) {
+  const router = useRouter();
   // The initial display reflects whatever loadCustomers() handed us
   // (snapshot value, possibly already-overridden). On refresh we
-  // overlay the live HubSpot value so the cell updates without a
-  // full page reload.
+  // overlay the live HubSpot value so the cell updates immediately,
+  // and we also call router.refresh() so the parent server
+  // components (CSM filter dropdown, customer-table CSM column,
+  // search haystack) re-render against the new override.
   const [displayName, setDisplayName] = useState<string | null>(
     customer.customer_success_manager ?? null
   );
@@ -85,6 +89,16 @@ export function CsmRefreshRow({ customer }: Props) {
       setRefreshedAt(j.csm_refreshed_at ?? null);
       if (beforeLabel !== afterLabel) {
         setDiff({ from: beforeLabel, to: afterLabel });
+      }
+      // Re-run the page's server components so the override propagates
+      // beyond this cell. The CSM filter dropdown (built from the
+      // customer book), the search haystack on every panel, the new
+      // CSM column on /csm, and any other place that reads
+      // customer.customer_success_manager all pick up the new value
+      // without needing a manual refresh. router.refresh() preserves
+      // local state — the diff + live pill we just set stay visible.
+      if (beforeLabel !== afterLabel) {
+        router.refresh();
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Unknown error");
