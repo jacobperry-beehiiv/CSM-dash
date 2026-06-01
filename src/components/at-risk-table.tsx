@@ -5,6 +5,7 @@ import { fmtCurrency, fmtDate, fmtNumber, fmtPct } from "./format";
 import { OutreachModal } from "./outreach-modal";
 import { CustomerDetailPanel } from "./customer-detail-panel";
 import { RowActions } from "./row-actions";
+import { BulkEmailLauncher } from "./am/bulk-email-launcher";
 import { RiskLevelChip } from "./risk-level-chip";
 import { FlagResolutionCheckboxes } from "./flag-resolution-checkboxes";
 import { ChipMultiSelect, FilterBar, FilterPanel, SearchInput, SegmentToggle } from "./filters";
@@ -393,10 +394,33 @@ export function AtRiskTable({
             {selected.size === allKeys.length ? "Deselect all" : "Select all"}
           </button>
           <div className="flex-1" />
+          {/* Resolve the selected at-risk accounts to Customer[] for
+           *  the BulkEmailLauncher. Same Customer object the table
+           *  rows already hold — no extra fetch needed. Filter on
+           *  workspace_id because that's the selection key. */}
+          {(() => {
+            const selectedCustomers = accounts
+              .filter((a) =>
+                a.customer.workspace_id
+                  ? selected.has(a.customer.workspace_id)
+                  : false
+              )
+              .map((a) => a.customer);
+            return (
+              <BulkEmailLauncher
+                customers={selectedCustomers}
+                defaultTemplateId="general-checkin"
+                disabled={selected.size === 0}
+                label={`📥 Draft for ${selected.size}`}
+                trackingIdFor={(c) => c.workspace_id ?? null}
+              />
+            );
+          })()}
           <button
             onClick={bulkCompose}
             disabled={bulkBusy || selected.size === 0}
-            className="px-3 py-1 text-xs bg-accent text-accent-fg rounded-md hover:bg-accent-hover disabled:opacity-50"
+            className="px-3 py-1 text-xs border border-border-strong rounded-md bg-surface hover:bg-canvas disabled:opacity-50"
+            title="Open one Gmail compose tab per selected account using the per-flag suggested template. Faster than the modal when you just want to fan out browser tabs."
           >
             ✉️ Open Gmail for {selected.size}
           </button>
