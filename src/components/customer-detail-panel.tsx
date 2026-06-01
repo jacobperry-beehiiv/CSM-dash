@@ -61,13 +61,13 @@ export function CustomerDetailPanel({
 
       <CadenceToggle customer={c} />
 
-      {/* Three sections side-by-side on md+ so Contact doesn't orphan
-       *  onto a second row at half-width. Stacks single-column on
-       *  narrow viewports (mobile, narrow popovers). All three are
-       *  collapsed by default — the row reads as a clean trio of
-       *  title-bars until you open one. */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <Section title="Status">
+      {/* Status / Dates / Contact each render as full-width
+       *  CollapsibleSection blocks matching the rest of the panel
+       *  (HubSpot Contacts, Notes, Publications, …). Status defaults
+       *  open because it carries the at-a-glance plan / risk /
+       *  engagement signal; the others stay collapsed until needed. */}
+      <div className="space-y-4">
+        <Section title="Status" defaultOpen>
           <Row label="Plan" value={c.stripe_plan ?? "—"} />
           <Row label="Engagement" value={c.company_engagement ?? "—"} />
           <Row
@@ -165,12 +165,14 @@ function Stat({ label, value }: { label: string; value: string }) {
 function Section({
   title,
   children,
+  defaultOpen = false,
 }: {
   title: string;
   children: React.ReactNode;
+  defaultOpen?: boolean;
 }) {
   return (
-    <CollapsibleSection title={title}>
+    <CollapsibleSection title={title} defaultOpen={defaultOpen}>
       <dl className="space-y-2">{children}</dl>
     </CollapsibleSection>
   );

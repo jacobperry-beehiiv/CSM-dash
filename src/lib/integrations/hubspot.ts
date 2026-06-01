@@ -618,3 +618,159 @@ export async function fetchHubspotCompanyOwner(
   });
   return data;
 }
+
+/**
+ * Batch counterpart to fetchHubspotCompanyOwner. Reads
+ * `hubspot_owner_id` for every company in `companyIds` via the v3
+ * batch endpoint, dedupes the owner IDs that come back, and resolves
+ * each owner_id → email via single-owner lookups (HubSpot doesn't
+ * expose a batch owners endpoint). Results are merged into one
+ * `Map<companyId, HubspotOwner | null>` so the caller can compare
+ * each row's HubSpot owner to its current dashboard CSM in one pass.
+ *
+ * Used by `/api/customer-overrides/refresh-all-csms` to sweep the
+ * entire customer book without changing the nightly Metabase
+ * snapshot pipeline. Cache reuse with fetchHubspotCompanyOwner: any
+ * owner_id already in the per-owner cache is served from there.
+ *
+ * Skipped: companies HubSpot 404s on, companies with no
+ * hubspot_owner_id set, and owners whose lookup fails individually —
+ * each lands as `null` in the result map (or absent), letting the
+ * caller distinguish "no change" from "no HubSpot data".
+ */
+export async function fetchHubspotCompanyOwners(
+  companyIds: string[]
+): Promise<Map<string, HubspotOwner | null>> {
+  const result = new Map<string, HubspotOwner | null>();
+  const unique = [...new Set(companyIds.filter(Boolean))];
+  if (unique.length === 0) return result;
+  const token = await getAccessToken();
+
+  // Pass 1: batch-read hubspot_owner_id for every company.
+  const companyToOwnerId = new Map<string, string>();
+  for (let i = 0; i < unique.length; i += BATCH_SIZE) {
+    const slice = unique.slice(i, i + BATCH_SIZE);
+    if (i > 0) await sleep(INTER_BATCH_DELAY_MS);
+
+    let res: Response;
+    try {
+      res = await fetch(COMPANY_BATCH_ENDPOINT, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          properties: ["hubspot_owner_id"],
+          inputs: slice.map((id) => ({ id })),
+        }),
+      });
+    } catch (e) {
+      console.error(
+        `[hubspot] owner batch ${i / BATCH_SIZE} network error:`,
+        e instanceof Error ? e.message : e
+      );
+      continue;
+    }
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      console.error(
+        `[hubspot] owner batch ${i / BATCH_SIZE} HTTP ${res.status}: ${body.slice(0, 200)}`
+      );
+      continue;
+    }
+    const json = (await res.json()) as {
+      results?: Array<{
+        id: string;
+        properties?: { hubspot_owner_id?: string | null };
+      }>;
+    };
+    for (const company of json.results ?? []) {
+      const ownerId = company.properties?.hubspot_owner_id?.trim() || null;
+      if (ownerId) {
+        companyToOwnerId.set(company.id, ownerId);
+      } else {
+        // Explicit null in the result — distinguishes "unassigned" from
+        // "wasn't queried". Callers can leave the dashboard's snapshot
+        // value alone in this case.
+        result.set(company.id, null);
+      }
+    }
+  }
+
+  // Pass 2: resolve each unique owner_id → email + name. Pure
+  // sequential calls because HubSpot has no batch owners read; the
+  // per-owner cache hides repeat reads when many companies share the
+  // same owner (which is exactly the beehiiv CSM rollup shape).
+  const uniqueOwnerIds = [...new Set(companyToOwnerId.values())];
+  const ownerById = new Map<string, HubspotOwner | null>();
+  for (const ownerId of uniqueOwnerIds) {
+    const cached = ownerCache.get(ownerId);
+    if (cached && cached.expires > Date.now()) {
+      ownerById.set(ownerId, cached.data);
+      continue;
+    }
+    try {
+      const ownerRes = await fetch(
+        `https://api.hubapi.com/crm/v3/owners/${encodeURIComponent(ownerId)}`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      if (ownerRes.status === 404) {
+        ownerById.set(ownerId, null);
+        ownerCache.set(ownerId, {
+          expires: Date.now() + OWNER_CACHE_TTL_MS,
+          data: null,
+        });
+        continue;
+      }
+      if (!ownerRes.ok) {
+        // Treat as transient — don't poison the cache so the next
+        // sweep can retry.
+        ownerById.set(ownerId, null);
+        continue;
+      }
+      const o = (await ownerRes.json()) as {
+        email?: string | null;
+        firstName?: string | null;
+        lastName?: string | null;
+      };
+      if (!o.email) {
+        ownerById.set(ownerId, null);
+        ownerCache.set(ownerId, {
+          expires: Date.now() + OWNER_CACHE_TTL_MS,
+          data: null,
+        });
+        continue;
+      }
+      const name = [o.firstName, o.lastName].filter(Boolean).join(" ").trim();
+      const data: HubspotOwner = {
+        owner_id: ownerId,
+        owner_email: o.email.toLowerCase(),
+        owner_name: name || null,
+      };
+      ownerById.set(ownerId, data);
+      ownerCache.set(ownerId, {
+        expires: Date.now() + OWNER_CACHE_TTL_MS,
+        data,
+      });
+    } catch (e) {
+      console.error(
+        `[hubspot] owner ${ownerId} fetch error:`,
+        e instanceof Error ? e.message : e
+      );
+      ownerById.set(ownerId, null);
+    }
+    // Light pacing — owners are typically <50 records, so we don't
+    // need the full BATCH_SIZE machinery, but a brief breather keeps
+    // us well under HubSpot's 100-req-per-10s quota when run alongside
+    // other integrations on the same portal.
+    await sleep(20);
+  }
+
+  // Stitch: for every company that had an owner_id, fold the resolved
+  // owner object back into the result map by companyId.
+  for (const [companyId, ownerId] of companyToOwnerId) {
+    result.set(companyId, ownerById.get(ownerId) ?? null);
+  }
+  return result;
+}

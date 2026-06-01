@@ -1,6 +1,7 @@
 "use client";
 
 import { Fragment, useCallback, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import type { Customer, CustomerWithMetrics } from "@/lib/types";
 import { StatusBadge } from "./status-badge";
 import { RiskLevelChip } from "./risk-level-chip";
@@ -86,6 +87,12 @@ export function CustomerTable({
   csms: string[];
 }) {
   const viewerEmail = useViewerEmail();
+  const router = useRouter();
+  // CSM sweep state. The sweep batches HubSpot owner lookups across
+  // the entire book and writes customer-overrides for any reassigned
+  // rows — see /api/customer-overrides/refresh-all-csms.
+  const [csmSweepBusy, setCsmSweepBusy] = useState(false);
+  const [csmSweepMessage, setCsmSweepMessage] = useState<string | null>(null);
   const [sortKey, setSortKey] = useState<SortKey>("arr");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
   const [search, setSearch] = useUrlSearch("q");
@@ -616,6 +623,59 @@ export function CustomerTable({
         </span>
         <div className="flex-1" />
         <button
+          onClick={async () => {
+            setCsmSweepBusy(true);
+            setCsmSweepMessage(null);
+            try {
+              const r = await fetch(
+                "/api/customer-overrides/refresh-all-csms",
+                { method: "POST" }
+              );
+              const j = (await r.json()) as {
+                scanned?: number;
+                changed?: number;
+                unchanged?: number;
+                no_hubspot_company_id?: number;
+                no_owner_in_hubspot?: number;
+                truncated?: boolean;
+                error?: string;
+              };
+              if (!r.ok) throw new Error(j.error ?? `HTTP ${r.status}`);
+              const parts: string[] = [];
+              parts.push(`${j.changed ?? 0} reassigned`);
+              parts.push(`${j.unchanged ?? 0} unchanged`);
+              if (j.no_owner_in_hubspot)
+                parts.push(`${j.no_owner_in_hubspot} unassigned in HubSpot`);
+              if (j.no_hubspot_company_id)
+                parts.push(`${j.no_hubspot_company_id} unmatched`);
+              setCsmSweepMessage(
+                `HubSpot CSM sweep — scanned ${j.scanned ?? 0}: ${parts.join(", ")}.`
+              );
+              if ((j.changed ?? 0) > 0) {
+                // Re-run server components so the new overrides land
+                // in the CSM column, the filter dropdown, the search
+                // haystack, and every other CSM-aware surface.
+                router.refresh();
+              }
+            } catch (e) {
+              setCsmSweepMessage(
+                `Sweep failed: ${e instanceof Error ? e.message : "unknown"}`
+              );
+            } finally {
+              setCsmSweepBusy(false);
+              // Clear the message after a beat — long enough to read
+              // the counts but not so long it stays around between
+              // unrelated workflows.
+              setTimeout(() => setCsmSweepMessage(null), 12_000);
+            }
+          }}
+          disabled={csmSweepBusy}
+          className="px-3 py-1 text-xs border border-border-strong rounded-md bg-surface hover:bg-surface-2 disabled:opacity-50"
+          title="Pull every customer's current HubSpot owner and write overrides for any reassignments — closes the gap between a HubSpot edit and the dashboard reflecting it, without waiting for the nightly Metabase sync."
+        >
+          {csmSweepBusy ? "Refreshing CSMs…" : "🔄 Refresh CSMs from HubSpot"}
+        </button>
+        <button
           onClick={exportFilteredCsv}
           disabled={filtered.length === 0}
           className="px-3 py-1 text-xs border border-border-strong rounded-md bg-surface hover:bg-surface-2 disabled:opacity-50"
@@ -636,6 +696,11 @@ export function CustomerTable({
       {bulkMessage ? (
         <div className="text-xs text-muted bg-blue-50 dark:bg-blue-500/10 border border-blue-200 dark:border-accent/30 rounded-md px-3 py-2 mb-3">
           {bulkMessage}
+        </div>
+      ) : null}
+      {csmSweepMessage ? (
+        <div className="text-xs text-muted bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-200 dark:border-emerald-500/30 rounded-md px-3 py-2 mb-3">
+          {csmSweepMessage}
         </div>
       ) : null}
       <div className="rounded-xl border border-border bg-surface shadow-card">
