@@ -75,10 +75,38 @@ export async function fetchAliasesFor(
     return result;
   }
 
-  const res = await fetch(
-    "https://gmail.googleapis.com/gmail/v1/users/me/settings/sendAs",
-    { headers: { Authorization: `Bearer ${token}` } }
-  );
+  // Wrap the Gmail call in try/catch + a 10s abort timeout. A hung or
+  // throwing fetch here previously bubbled all the way to the
+  // /aliases-all endpoint, which had no per-account safety net — one
+  // bad connection would 500 the whole sweep and the settings page
+  // stayed on "Looking up…" forever.
+  let res: Response;
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10_000);
+    try {
+      res = await fetch(
+        "https://gmail.googleapis.com/gmail/v1/users/me/settings/sendAs",
+        {
+          headers: { Authorization: `Bearer ${token}` },
+          signal: controller.signal,
+        }
+      );
+    } finally {
+      clearTimeout(timeout);
+    }
+  } catch (e) {
+    const message =
+      e instanceof Error
+        ? e.name === "AbortError"
+          ? "Gmail API timed out after 10s"
+          : e.message
+        : "Network error reaching Gmail";
+    console.error(`[gmail-aliases] fetch failed for ${email}: ${message}`);
+    const result: AliasFetchResult = { kind: "error", message };
+    cache.set(email, { expires: Date.now() + 30_000, result });
+    return result;
+  }
 
   if (!res.ok) {
     const body = await res.text().catch(() => "");
@@ -96,11 +124,24 @@ export async function fetchAliasesFor(
       kind: "error",
       message: `Gmail API ${res.status}: ${body.slice(0, 300)}`,
     };
+    console.error(`[gmail-aliases] non-OK for ${email}: ${result.message}`);
     cache.set(email, { expires: Date.now() + 30_000, result });
     return result;
   }
 
-  const raw = (await res.json()) as SendAsResponse;
+  let raw: SendAsResponse;
+  try {
+    raw = (await res.json()) as SendAsResponse;
+  } catch (e) {
+    const result: AliasFetchResult = {
+      kind: "error",
+      message: `Gmail API returned non-JSON: ${e instanceof Error ? e.message : "parse error"}`,
+    };
+    console.error(`[gmail-aliases] parse error for ${email}: ${result.message}`);
+    cache.set(email, { expires: Date.now() + 30_000, result });
+    return result;
+  }
+
   const aliases: AliasRow[] = (raw.sendAs ?? [])
     .filter(
       (a) =>
@@ -122,4 +163,16 @@ export async function fetchAliasesFor(
   const result: AliasFetchResult = { kind: "ok", aliases };
   cache.set(email, { expires: Date.now() + CACHE_TTL_MS, result });
   return result;
+}
+
+/** Drop any cached alias result (success OR error) for the given email.
+ *  Useful when we know the underlying state changed and shouldn't
+ *  wait for the natural TTL — e.g. after a reauth that grants new
+ *  scopes, or when an admin wants to force-refresh a single account. */
+export function invalidateAliasCache(email?: string): void {
+  if (email) {
+    cache.delete(email);
+  } else {
+    cache.clear();
+  }
 }

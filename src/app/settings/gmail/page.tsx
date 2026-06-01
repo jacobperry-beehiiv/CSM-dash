@@ -36,6 +36,11 @@ function GmailSettingsInner() {
   // connection, (b) his connection needs reconsent for the new
   // scope, or (c) Gmail just doesn't know about it.
   const [aliases, setAliases] = useState<AccountAliasRow[] | null>(null);
+  // Captures a 5xx / network failure on /api/auth/google/aliases-all
+  // so the UI never gets stuck on "Looking up…" indefinitely. Each
+  // connected account row will fall back to a generic error display
+  // when this is set.
+  const [aliasesError, setAliasesError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const justConnected = params.get("gmail_connected") === "1";
@@ -46,10 +51,29 @@ function GmailSettingsInner() {
     if (r.ok) setStatus(await r.json());
     // Aliases are independent of status — fire alongside so the
     // section below populates without a second user action.
-    const a = await fetch("/api/auth/google/aliases-all");
-    if (a.ok) {
-      const j = (await a.json()) as AllAliasesResponse;
-      setAliases(j.accounts ?? []);
+    try {
+      const a = await fetch("/api/auth/google/aliases-all");
+      if (a.ok) {
+        const j = (await a.json()) as AllAliasesResponse;
+        setAliases(j.accounts ?? []);
+        setAliasesError(null);
+      } else {
+        // Non-2xx: set aliases to [] so AliasList drops out of its
+        // "Looking up…" branch, and stash the error message for
+        // display under each row.
+        const body = (await a.json().catch(() => ({}))) as {
+          error?: string;
+        };
+        setAliases([]);
+        setAliasesError(
+          body.error ?? `Alias lookup failed (HTTP ${a.status})`
+        );
+      }
+    } catch (e) {
+      setAliases([]);
+      setAliasesError(
+        e instanceof Error ? e.message : "Alias lookup network error"
+      );
     }
   }
 
@@ -186,9 +210,22 @@ function GmailSettingsInner() {
 
       {status && status.connected_emails.length > 0 ? (
         <section className="bg-surface rounded-xl border border-border shadow-card p-4 space-y-2">
-          <h2 className="text-sm font-semibold text-fg">
-            Connected accounts &amp; their send-as aliases
-          </h2>
+          <div className="flex items-start justify-between gap-2">
+            <h2 className="text-sm font-semibold text-fg">
+              Connected accounts &amp; their send-as aliases
+            </h2>
+            <button
+              type="button"
+              onClick={() => {
+                setAliases(null);
+                setAliasesError(null);
+                void refresh();
+              }}
+              className="text-xs text-blue-600 dark:text-blue-400 hover:underline"
+            >
+              ↻ Refresh
+            </button>
+          </div>
           <p className="text-xs text-muted">
             Tokens for these accounts are saved on disk. Switching takes
             effect for this browser only — drafts will be created in
@@ -196,6 +233,14 @@ function GmailSettingsInner() {
             what shows up in the template editor&rsquo;s &ldquo;Send
             as&rdquo; dropdown when that account is active.
           </p>
+          {aliasesError ? (
+            <div className="bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/30 rounded-md p-2 text-[11px] text-red-800 dark:text-red-300">
+              Alias lookup failed: {aliasesError}. Click ↻ Refresh above
+              to retry. If this keeps happening, check the server logs
+              for <code className="font-mono">[gmail-aliases]</code>
+              entries.
+            </div>
+          ) : null}
           <ul className="divide-y divide-border">
             {status.connected_emails.map((email) => {
               const active = email === status.email;

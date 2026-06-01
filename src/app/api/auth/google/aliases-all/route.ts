@@ -53,12 +53,30 @@ export async function GET() {
   // is cached, so on warm caches this is effectively free. On a cold
   // load we make N concurrent Gmail API calls; with ~30 connected
   // CSMs and a 100-req-per-100s Gmail quota, comfortably under cap.
+  //
+  // Per-account try/catch: even though fetchAliasesFor returns errors
+  // as values rather than throwing, an unexpected throw (e.g. an
+  // uncaught network failure deep in fetch) MUST NOT take down the
+  // whole sweep. Promise.all rejects on any rejection — a single bad
+  // connection would 500 the response, leaving the settings page
+  // stuck on "Looking up…". So we catch at the per-row boundary and
+  // translate to an error row instead.
   const results = await Promise.all(
     connected.map(
-      async (email): Promise<{ email: string; result: AliasFetchResult }> => ({
-        email,
-        result: await fetchAliasesFor(email),
-      })
+      async (email): Promise<{ email: string; result: AliasFetchResult }> => {
+        try {
+          return { email, result: await fetchAliasesFor(email) };
+        } catch (e) {
+          const message = e instanceof Error ? e.message : "Unknown error";
+          console.error(
+            `[aliases-all] fetchAliasesFor threw for ${email}: ${message}`
+          );
+          return {
+            email,
+            result: { kind: "error", message },
+          };
+        }
+      }
     )
   );
 

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { saveToken } from "@/lib/data/gmail-token";
 import { setActiveEmail } from "@/lib/data/active-user";
+import { invalidateAliasCache } from "@/lib/integrations/gmail-aliases";
 
 export const dynamic = "force-dynamic";
 
@@ -105,6 +106,13 @@ export async function GET(req: Request) {
   // Tag this browser as the user we just authed — drives downstream
   // /api/drafts/bulk-create and /api/auth/google/status calls.
   await setActiveEmail(email);
+
+  // Drop any cached alias result for this account — the cache might
+  // be holding a stale "needs_reconsent" error from before the user
+  // granted the new scope. Without this, the settings page would
+  // keep showing the reconnect prompt (or a stuck error) until the
+  // 5-min TTL expired.
+  invalidateAliasCache(email);
 
   return NextResponse.redirect(`${url.origin}${next}?gmail_connected=1`);
 }
