@@ -145,6 +145,12 @@ export function PastDuePanel({ rows, csms, totalSourceRows }: Props) {
   const [historyOpen, setHistoryOpen] = useState<Set<string>>(new Set());
   const [historyBusy, setHistoryBusy] = useState(false);
   const [historyReport, setHistoryReport] = useState<string | null>(null);
+  // Surfaces success / failure of the manual "Mark touched" + "Mark
+  // follow-up sent" buttons. Without this the button silently no-ops
+  // when the fetch fails — the user sees no feedback and assumes the
+  // button is broken.
+  const [touchReport, setTouchReport] = useState<string | null>(null);
+  const [touchBusy, setTouchBusy] = useState(false);
   // Which rowKeys currently have their full CustomerDetailPanel
   // expanded. Separate from `historyOpen` so the existing
   // click-email-for-episode-history affordance keeps working
@@ -553,21 +559,68 @@ export function PastDuePanel({ rows, csms, totalSourceRows }: Props) {
           const selectedCustomerIds = selectedCustomers
             .map((c) => c.stripe_customer_id ?? "")
             .filter(Boolean);
+          // For "Mark touched" we pull customer_ids straight from the
+          // PastDueRow — q24620's `customer_id` IS the Stripe ID, so
+          // there's no need to round-trip through the customer book.
+          // This previously caused a silent no-op when:
+          //   • the customer book hadn't loaded yet (cold tab open)
+          //   • a past-due row referenced a customer that wasn't in
+          //     the current q10600 (cancelled workspace, etc.)
+          // Either path made the button look broken even when the API
+          // was perfectly happy to write the override.
+          const markTouchCustomerIds = selectedRows
+            .map((r) => r.customer_id ?? "")
+            .filter(Boolean);
+          const targetStatus =
+            subtab === "followup" ? "follow_up_sent" : "touched";
           const markTouched = async () => {
-            if (selectedCustomerIds.length === 0) return;
+            if (markTouchCustomerIds.length === 0) {
+              setTouchReport(
+                "No selectable past-due rows in your selection (rows need a Stripe customer_id to be markable)."
+              );
+              return;
+            }
+            setTouchBusy(true);
+            setTouchReport(null);
             try {
               const r = await fetch("/api/past-due/outreach", {
                 method: "PUT",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
-                  customer_ids: selectedCustomerIds,
-                  status:
-                    subtab === "followup" ? "follow_up_sent" : "touched",
+                  customer_ids: markTouchCustomerIds,
+                  status: targetStatus,
                 }),
               });
-              if (r.ok) reloadOutreach();
-            } catch {
-              /* non-fatal */
+              if (!r.ok) {
+                const body = (await r
+                  .json()
+                  .catch(() => ({}))) as { error?: string };
+                throw new Error(body.error ?? `HTTP ${r.status}`);
+              }
+              reloadOutreach();
+              setTouchReport(
+                `Marked ${markTouchCustomerIds.length} account${
+                  markTouchCustomerIds.length === 1 ? "" : "s"
+                } as ${
+                  targetStatus === "follow_up_sent"
+                    ? "follow-up sent"
+                    : "touched"
+                }.`
+              );
+              // Clear the selection so the user has a clean slate
+              // for the next batch.
+              setSelected(new Set());
+            } catch (e) {
+              setTouchReport(
+                `Mark touched failed: ${
+                  e instanceof Error ? e.message : "unknown error"
+                }`
+              );
+            } finally {
+              setTouchBusy(false);
+              // Toast lingers long enough to read but doesn't persist
+              // across unrelated workflows.
+              setTimeout(() => setTouchReport(null), 6_000);
             }
           };
           if (subtab === "below") {
@@ -634,7 +687,7 @@ export function PastDuePanel({ rows, csms, totalSourceRows }: Props) {
               />
               <button
                 onClick={() => void markTouched()}
-                disabled={selected.size === 0}
+                disabled={selected.size === 0 || touchBusy}
                 className="px-3 py-1.5 border border-border-strong rounded-md text-sm hover:bg-canvas disabled:opacity-50"
                 title={
                   subtab === "followup"
@@ -642,9 +695,19 @@ export function PastDuePanel({ rows, csms, totalSourceRows }: Props) {
                     : "Mark selected as Touched (first outreach sent)"
                 }
               >
-                {subtab === "followup"
-                  ? "✓ Mark follow-up sent"
-                  : "✓ Mark touched"}
+                {touchBusy
+                  ? "Marking…"
+                  : subtab === "followup"
+                    ? `✓ Mark follow-up sent${
+                        markTouchCustomerIds.length > 0
+                          ? ` (${markTouchCustomerIds.length})`
+                          : ""
+                      }`
+                    : `✓ Mark touched${
+                        markTouchCustomerIds.length > 0
+                          ? ` (${markTouchCustomerIds.length})`
+                          : ""
+                      }`}
               </button>
             </>
           );
@@ -707,6 +770,17 @@ export function PastDuePanel({ rows, csms, totalSourceRows }: Props) {
 
       {historyReport ? (
         <div className="text-xs text-muted mb-3">{historyReport}</div>
+      ) : null}
+      {touchReport ? (
+        <div
+          className={`text-xs px-3 py-2 mb-3 rounded-md border ${
+            touchReport.startsWith("Marked")
+              ? "bg-emerald-50 dark:bg-emerald-500/10 border-emerald-200 dark:border-emerald-500/30 text-emerald-800 dark:text-emerald-200"
+              : "bg-red-50 dark:bg-red-500/10 border-red-200 dark:border-red-500/30 text-red-800 dark:text-red-300"
+          }`}
+        >
+          {touchReport}
+        </div>
       ) : null}
 
       {grouped.length === 0 ? (
