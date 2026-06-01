@@ -10,9 +10,32 @@ interface Status {
   connected_emails: string[];
 }
 
+interface AccountAliasRow {
+  email: string;
+  aliases?: Array<{
+    email: string;
+    name: string | null;
+    is_default: boolean;
+    is_primary: boolean;
+  }>;
+  error?: string;
+  needs_reconsent?: boolean;
+}
+
+interface AllAliasesResponse {
+  accounts: AccountAliasRow[];
+}
+
 function GmailSettingsInner() {
   const params = useSearchParams();
   const [status, setStatus] = useState<Status | null>(null);
+  // Per-connection alias list. Lets a CSM (or admin debugging
+  // someone else's connection) see which Gmail account holds which
+  // alias. When Richard's alias isn't showing up in the template
+  // editor, he can spot here whether (a) it's on a different
+  // connection, (b) his connection needs reconsent for the new
+  // scope, or (c) Gmail just doesn't know about it.
+  const [aliases, setAliases] = useState<AccountAliasRow[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const justConnected = params.get("gmail_connected") === "1";
@@ -21,6 +44,13 @@ function GmailSettingsInner() {
   async function refresh() {
     const r = await fetch("/api/auth/google/status");
     if (r.ok) setStatus(await r.json());
+    // Aliases are independent of status — fire alongside so the
+    // section below populates without a second user action.
+    const a = await fetch("/api/auth/google/aliases-all");
+    if (a.ok) {
+      const j = (await a.json()) as AllAliasesResponse;
+      setAliases(j.accounts ?? []);
+    }
   }
 
   useEffect(() => {
@@ -157,33 +187,36 @@ function GmailSettingsInner() {
       {status && status.connected_emails.length > 0 ? (
         <section className="bg-surface rounded-xl border border-border shadow-card p-4 space-y-2">
           <h2 className="text-sm font-semibold text-fg">
-            Other connected accounts on this server
+            Connected accounts &amp; their send-as aliases
           </h2>
           <p className="text-xs text-muted">
             Tokens for these accounts are saved on disk. Switching takes
-            effect for this browser only — drafts will be created in the
-            chosen mailbox.
+            effect for this browser only — drafts will be created in
+            the chosen mailbox. The alias list under each account is
+            what shows up in the template editor&rsquo;s &ldquo;Send
+            as&rdquo; dropdown when that account is active.
           </p>
           <ul className="divide-y divide-border">
             {status.connected_emails.map((email) => {
               const active = email === status.email;
+              const aliasRow = aliases?.find((a) => a.email === email);
               return (
-                <li
-                  key={email}
-                  className="flex items-center justify-between py-2 text-sm"
-                >
-                  <span className="font-mono text-fg">{email}</span>
-                  <button
-                    onClick={() => (active ? null : switchTo(email))}
-                    disabled={busy || active}
-                    className={`px-2 py-1 text-xs rounded-md border ${
-                      active
-                        ? "bg-emerald-50 dark:bg-emerald-500/10 border-emerald-200 dark:border-emerald-500/30 text-emerald-700 dark:text-emerald-300"
-                        : "border-border-strong hover:bg-canvas"
-                    }`}
-                  >
-                    {active ? "Active" : "Switch"}
-                  </button>
+                <li key={email} className="py-3 space-y-2">
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="font-mono text-fg">{email}</span>
+                    <button
+                      onClick={() => (active ? null : switchTo(email))}
+                      disabled={busy || active}
+                      className={`px-2 py-1 text-xs rounded-md border ${
+                        active
+                          ? "bg-emerald-50 dark:bg-emerald-500/10 border-emerald-200 dark:border-emerald-500/30 text-emerald-700 dark:text-emerald-300"
+                          : "border-border-strong hover:bg-canvas"
+                      }`}
+                    >
+                      {active ? "Active" : "Switch"}
+                    </button>
+                  </div>
+                  <AliasList row={aliasRow} loading={aliases === null} />
                 </li>
               );
             })}
@@ -243,6 +276,87 @@ function GmailSettingsInner() {
           <li>Each CSM clicks Connect Gmail above to grant their own consent.</li>
         </ol>
       </section>
+    </div>
+  );
+}
+
+/** Per-account alias display used inside the connections list. Renders
+ *  one of four states: still loading, reconsent needed, generic error,
+ *  or the actual chip list. */
+function AliasList({
+  row,
+  loading,
+}: {
+  row: AccountAliasRow | undefined;
+  loading: boolean;
+}) {
+  if (loading || !row) {
+    return (
+      <p className="text-[11px] text-muted pl-2 border-l-2 border-border">
+        Looking up send-as aliases…
+      </p>
+    );
+  }
+  if (row.needs_reconsent) {
+    return (
+      <div className="pl-2 border-l-2 border-amber-300 text-[11px] text-amber-900 dark:text-amber-200 bg-amber-50 dark:bg-amber-500/10 rounded-r-md p-2">
+        Gmail didn&rsquo;t grant the{" "}
+        <code className="font-mono">gmail.settings.readonly</code> scope
+        for this account — its aliases can&rsquo;t be auto-discovered.{" "}
+        <a
+          href="/api/auth/google/start"
+          className="underline font-medium"
+        >
+          Reconnect this account
+        </a>{" "}
+        to enable the picker.
+      </div>
+    );
+  }
+  if (row.error) {
+    return (
+      <p className="text-[11px] text-red-700 dark:text-red-300 pl-2 border-l-2 border-red-300">
+        Couldn&rsquo;t fetch aliases: {row.error}
+      </p>
+    );
+  }
+  const aliases = row.aliases ?? [];
+  // The user's own primary address always appears in the sendAs list —
+  // filter it out for display so the chip row reads as "extra senders
+  // available", not "you can send as yourself".
+  const extra = aliases.filter((a) => !a.is_primary);
+  if (extra.length === 0) {
+    return (
+      <p className="text-[11px] text-muted pl-2 border-l-2 border-border italic">
+        No send-as aliases configured beyond the primary address. Add
+        one via Gmail → Settings → Accounts and Import → Send mail as.
+      </p>
+    );
+  }
+  return (
+    <div className="pl-2 border-l-2 border-emerald-300">
+      <p className="text-[11px] text-muted mb-1">
+        {extra.length} alias{extra.length === 1 ? "" : "es"}:
+      </p>
+      <ul className="flex flex-wrap gap-1.5">
+        {extra.map((a) => (
+          <li
+            key={a.email}
+            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full border border-emerald-300 bg-emerald-50 dark:bg-emerald-500/10 text-[11px] font-mono text-emerald-900 dark:text-emerald-200"
+            title={a.name ?? undefined}
+          >
+            {a.email}
+            {a.is_default ? (
+              <span
+                className="text-[9px] uppercase tracking-wide font-semibold opacity-70"
+                title="Gmail's default From address for this account"
+              >
+                default
+              </span>
+            ) : null}
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }
