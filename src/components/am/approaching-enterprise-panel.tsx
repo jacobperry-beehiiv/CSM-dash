@@ -484,9 +484,28 @@ export function ApproachingEnterprisePanel({ rows }: Props) {
         // selected rows so the shared modal stays generic. Falls back
         // to baked-in defaults when /settings/slack hasn't been
         // configured for the approaching channel yet.
-        const selectedRows = visibleRows.filter((r, i) =>
-          selected.has(rowKey(r, i))
-        );
+        // Sort by CSM before rendering so the Slack channel reads as
+        // contiguous per-owner blocks. q13268 doesn't carry the CSM
+        // directly — resolve through customerByStripeId (same path the
+        // search haystack uses). Within a CSM, sort by utilization
+        // descending so the most-urgent leads. Unassigned rows go last.
+        const selectedRows = visibleRows
+          .filter((r, i) => selected.has(rowKey(r, i)))
+          .slice()
+          .sort((a, b) => {
+            const aCsm = a.stripe_customer_id
+              ? customerByStripeId.get(a.stripe_customer_id)
+                  ?.customer_success_manager ?? null
+              : null;
+            const bCsm = b.stripe_customer_id
+              ? customerByStripeId.get(b.stripe_customer_id)
+                  ?.customer_success_manager ?? null
+              : null;
+            const aKey = aCsm ?? "￿";
+            const bKey = bCsm ?? "￿";
+            if (aKey !== bKey) return aKey.localeCompare(bKey);
+            return (pctNum(b) ?? 0) - (pctNum(a) ?? 0);
+          });
         // Approaching uses its own row template; if a channel labelled
         // `approaching` exists in settings.slack.channels we honor its
         // template + row_template. Otherwise we use baked-in defaults.

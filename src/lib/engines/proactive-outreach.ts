@@ -210,6 +210,23 @@ export async function runProactiveOutreachSweep(
     return u != null && u >= UTIL_THRESHOLD;
   });
 
+  // Group by CSM before iterating so the Slack channel reads as
+  // contiguous blocks per owner (Olivia's accounts in a row, then
+  // Jacob's, …) rather than interleaved. Easier to triage in Slack
+  // — a CSM scanning the channel sees their accounts together.
+  //
+  // Tie-breakers within a CSM: highest utilization first so the
+  // most-urgent account in each block leads. Unassigned rows sort
+  // to the end so they don't pollute the named-CSM blocks.
+  eligible.sort((a, b) => {
+    const aCsm = a.customer_success_manager ?? "￿"; // unassigned to end
+    const bCsm = b.customer_success_manager ?? "￿";
+    if (aCsm !== bCsm) return aCsm.localeCompare(bCsm);
+    const au = utilPct(a) ?? 0;
+    const bu = utilPct(b) ?? 0;
+    return bu - au;
+  });
+
   const now = Date.now();
 
   for (const c of eligible) {

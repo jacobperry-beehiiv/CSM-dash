@@ -1045,9 +1045,19 @@ export function PastDuePanel({ rows, csms, totalSourceRows }: Props) {
         // the shared modal stays generic. Past-due uses the past_due
         // channel config from /settings/slack — both the combined
         // body template and the per-row format come from there.
-        const selectedRows = rows.filter((r, i) =>
-          selected.has(rowKey(r, i))
-        );
+        // Sort by CSM before rendering so the Slack channel gets
+        // contiguous per-owner blocks instead of mixed messages.
+        // Within a CSM, sort by ARR descending so the biggest accounts
+        // lead. Unassigned rows go to the end.
+        const selectedRows = rows
+          .filter((r, i) => selected.has(rowKey(r, i)))
+          .slice()
+          .sort((a, b) => {
+            const aCsm = a.customer_success_manager ?? "￿";
+            const bCsm = b.customer_success_manager ?? "￿";
+            if (aCsm !== bCsm) return aCsm.localeCompare(bCsm);
+            return b.arr_dollars - a.arr_dollars;
+          });
         const pastDueCfg = findSlackChannel(
           settings.slack,
           PAST_DUE_CHANNEL_ID
