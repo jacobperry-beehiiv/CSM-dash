@@ -214,11 +214,20 @@ export function EnterpriseOnlyPanel({ rows, csms }: Props) {
         </button>
         <button
           onClick={async () => {
+            // Pull workspace_ids straight off the selected customers
+            // — this is the same path that "Mark outreach logged"
+            // above uses, so the behavior stays consistent.
+            const ids = selectedCustomers
+              .map((c) => c.workspace_id)
+              .filter((id): id is string => Boolean(id));
+            if (ids.length === 0) return;
             setSweepBusy(true);
             setSweepReport(null);
             try {
               const r = await fetch("/api/proactive-outreach/sweep", {
                 method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ workspace_ids: ids }),
               });
               const j = (await r.json()) as {
                 ok?: boolean;
@@ -227,17 +236,23 @@ export function EnterpriseOnlyPanel({ rows, csms }: Props) {
                 pings_sent?: number;
                 nudges_sent?: number;
                 skipped_outreach_logged?: number;
+                skipped_already_pinged?: number;
+                skipped_recent_nudge?: number;
                 failures?: { workspace: string; error: string }[];
               };
               if (!r.ok || !j.ok) {
                 throw new Error(j.error ?? `HTTP ${r.status}`);
               }
               const bits: string[] = [];
-              bits.push(`Scanned ${j.scanned ?? 0}`);
+              bits.push(`Scanned ${j.scanned ?? 0} selected`);
               if (j.pings_sent) bits.push(`pinged ${j.pings_sent}`);
               if (j.nudges_sent) bits.push(`nudged ${j.nudges_sent}`);
               if (j.skipped_outreach_logged)
                 bits.push(`${j.skipped_outreach_logged} already actioned`);
+              if (j.skipped_already_pinged)
+                bits.push(`${j.skipped_already_pinged} already pinged`);
+              if (j.skipped_recent_nudge)
+                bits.push(`${j.skipped_recent_nudge} recently nudged`);
               if (j.failures?.length)
                 bits.push(`${j.failures.length} failures`);
               setSweepReport(bits.join(" · "));
@@ -248,14 +263,16 @@ export function EnterpriseOnlyPanel({ rows, csms }: Props) {
               );
             } finally {
               setSweepBusy(false);
-              setTimeout(() => setSweepReport(null), 6000);
+              setTimeout(() => setSweepReport(null), 8000);
             }
           }}
-          disabled={sweepBusy}
+          disabled={sweepBusy || selected.size === 0}
           className="px-2 py-1 text-xs border border-border-strong rounded-md bg-surface hover:bg-canvas disabled:opacity-50"
-          title="Run the proactive-outreach sweep immediately — posts Slack pings + 5-day nudges. Same logic the daily cron uses."
+          title="Post a Slack ping in the proactive-outreach channel for every CHECKED row that hasn't already been pinged or actioned. The daily cron handles the full eligible cohort automatically."
         >
-          {sweepBusy ? "Sweeping…" : "📣 Run Slack sweep"}
+          {sweepBusy
+            ? "Pinging…"
+            : `📣 Ping ${selected.size > 0 ? `${selected.size} ` : ""}selected on Slack`}
         </button>
         <div className="flex-1" />
         {/* Enterprise outreach drafts auto-CC the assigned CSM per the

@@ -120,7 +120,17 @@ async function postToSlack(args: {
 }
 
 export async function runProactiveOutreachSweep(
-  opts: { dryRun?: boolean } = {}
+  opts: {
+    dryRun?: boolean;
+    /**
+     * Optional whitelist of workspace_ids to scope the sweep to. When
+     * set, only customers in this list are evaluated — useful for the
+     * manual UI trigger where the AM has hand-picked which accounts to
+     * ping. When unset (the cron path), the engine scans the full
+     * eligible Enterprise ≥cap cohort as before.
+     */
+    workspaceIds?: string[];
+  } = {}
 ): Promise<SweepResult> {
   const result: SweepResult = {
     scanned: 0,
@@ -156,7 +166,18 @@ export async function runProactiveOutreachSweep(
 
   // Eligible cohort: Enterprise, ≥75% of cap, with a workspace_id to
   // key dedupe state on. Falls into the same definition the panel uses.
+  //
+  // When the caller passed a workspaceIds whitelist, narrow to that
+  // set BEFORE applying the threshold check — gives the AM control
+  // even if a row's percentage flickers around the cap on a given
+  // q10600 snapshot, while still skipping rows that are clearly far
+  // below the threshold (defensive: a typo'd workspace_id from the
+  // UI shouldn't ping a random low-util customer).
+  const scope = opts.workspaceIds
+    ? new Set(opts.workspaceIds.filter(Boolean))
+    : null;
   const eligible = customers.filter((c) => {
+    if (scope && (!c.workspace_id || !scope.has(c.workspace_id))) return false;
     if (!isEnterprise(c)) return false;
     const u = utilPct(c);
     return u != null && u >= UTIL_THRESHOLD;
