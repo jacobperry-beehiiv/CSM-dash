@@ -7,9 +7,12 @@ import { getValidAccessTokenFor } from "../data/gmail-token";
  * share both the parsing logic and the in-process cache.
  *
  * Backed by Gmail's `users.settings.sendAs.list` endpoint. Requires
- * the `gmail.settings.readonly` scope on the auth token; CSMs whose
- * connection predates that scope return a `needs_reconsent` error so
- * the UI can prompt them to reconnect.
+ * the `gmail.settings.basic` scope on the auth token (per the Gmail
+ * API docs — the seemingly-natural `gmail.settings.readonly` does
+ * not exist as a real scope; basic is the minimum-privilege option
+ * for reading sendAs settings). CSMs whose connection predates the
+ * scope return a `needs_reconsent` error so the UI can prompt them
+ * to reconnect.
  */
 
 export interface AliasRow {
@@ -83,7 +86,7 @@ export async function fetchAliasesFor(
       const result: AliasFetchResult = {
         kind: "error",
         message:
-          "Gmail did not grant the gmail.settings.readonly scope. Reconnect Gmail to enable alias auto-discovery.",
+          "Gmail did not grant the gmail.settings.basic scope. Reconnect Gmail to enable alias auto-discovery.",
         needs_reconsent: true,
       };
       cache.set(email, { expires: Date.now() + CACHE_TTL_MS, result });

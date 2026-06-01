@@ -18,7 +18,7 @@ export const maxDuration = 30;
  * a CSM whose alias isn't showing up in the template editor needs
  * to know whether (a) the alias lives on a different connection
  * than the one they're actively signed in as, (b) their connection
- * predates the gmail.settings.readonly scope, or (c) Gmail simply
+ * predates the gmail.settings.basic scope, or (c) Gmail simply
  * has no verified alias on the account.
  *
  * Per-account fetches share the in-process cache used by the

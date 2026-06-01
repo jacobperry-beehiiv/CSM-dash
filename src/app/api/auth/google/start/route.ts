@@ -19,12 +19,18 @@ const CORE_SCOPES = [
  *  before users can grant it; otherwise Google returns
  *  `Error 400: invalid_scope` and the whole reconnect fails.
  *
+ *  This is `gmail.settings.basic` — the minimum scope that grants
+ *  read access to `users.settings.sendAs.list` per the Gmail API
+ *  docs. (There is no `gmail.settings.readonly` despite the naming
+ *  suggesting one; the valid alternatives — gmail.readonly,
+ *  gmail.modify, mail.google.com — all grant far more access.)
+ *
  *  When `?minimal=1` is on the start URL we omit this so a CSM can
  *  reconnect via the core scopes even before the consent screen
  *  catches up. They'll just see "needs reconsent" hints on
  *  /settings/gmail until a full reconnect succeeds. */
 const ALIAS_DISCOVERY_SCOPE =
-  "https://www.googleapis.com/auth/gmail.settings.readonly";
+  "https://www.googleapis.com/auth/gmail.settings.basic";
 
 export async function GET(req: Request) {
   const clientId = process.env.GOOGLE_CLIENT_ID;
@@ -42,7 +48,7 @@ export async function GET(req: Request) {
     process.env.GOOGLE_OAUTH_REDIRECT_URI ??
     `${url.origin}/api/auth/google/callback`;
   const next = url.searchParams.get("next") ?? "/settings/gmail";
-  // `?minimal=1` drops the optional gmail.settings.readonly scope.
+  // `?minimal=1` drops the optional gmail.settings.basic scope.
   // Used as a fallback when the Google Cloud project's OAuth consent
   // screen doesn't yet list that scope — Google would otherwise
   // reject the whole flow with Error 400: invalid_scope.

@@ -283,14 +283,20 @@ function GmailSettingsInner() {
         </h2>
         <p className="text-sm text-muted">
           The template editor&rsquo;s &ldquo;Send as&rdquo; dropdown
-          pulls from each CSM&rsquo;s verified Gmail aliases. That
-          requires the{" "}
+          pulls from each CSM&rsquo;s verified Gmail aliases via{" "}
           <code className="font-mono px-1 bg-surface-2 rounded">
-            gmail.settings.readonly
+            users.settings.sendAs.list
+          </code>
+          . That requires the{" "}
+          <code className="font-mono px-1 bg-surface-2 rounded">
+            gmail.settings.basic
           </code>{" "}
-          scope, which Google rejects with{" "}
+          scope (the minimum-privilege scope the Gmail API exposes for
+          reading sendAs settings — there is no{" "}
+          <code className="font-mono">gmail.settings.readonly</code>
+          ). Google rejects the OAuth flow with{" "}
           <em>Error 400: invalid_scope</em> until the project&rsquo;s
-          OAuth consent screen lists it. One-time setup:
+          consent screen lists it. One-time setup:
         </p>
         <ol className="list-decimal list-inside text-sm text-muted space-y-1">
           <li>
@@ -306,21 +312,24 @@ function GmailSettingsInner() {
             for this project.
           </li>
           <li>
-            Edit the app &rarr; <strong>Scopes</strong> step &rarr; click{" "}
-            <strong>Add or Remove Scopes</strong>.
+            Edit the app &rarr; <strong>Data Access</strong> step &rarr;
+            click <strong>Add or Remove Scopes</strong>.
           </li>
           <li>
             Search for{" "}
             <code className="font-mono px-1 bg-surface-2 rounded">
-              gmail.settings.readonly
+              gmail.settings.basic
             </code>{" "}
             (full URI:{" "}
             <code className="font-mono px-1 bg-surface-2 rounded">
-              https://www.googleapis.com/auth/gmail.settings.readonly
+              https://www.googleapis.com/auth/gmail.settings.basic
             </code>
             ), check the box, click <strong>Update</strong>, then{" "}
             <strong>Save and Continue</strong> through the rest of the
-            wizard.
+            wizard. Despite the name, Google&rsquo;s scope picker
+            doesn&rsquo;t carry a separate &ldquo;readonly&rdquo;
+            variant — <code className="font-mono">basic</code> is the
+            right pick.
           </li>
           <li>
             Existing connections need to reconnect once via{" "}
@@ -366,7 +375,7 @@ function AliasList({
       <div className="pl-2 border-l-2 border-amber-300 text-[11px] text-amber-900 dark:text-amber-200 bg-amber-50 dark:bg-amber-500/10 rounded-r-md p-2 space-y-1.5">
         <div>
           Gmail didn&rsquo;t grant the{" "}
-          <code className="font-mono">gmail.settings.readonly</code> scope
+          <code className="font-mono">gmail.settings.basic</code> scope
           for this account — its aliases can&rsquo;t be auto-discovered.{" "}
           <a href="/api/auth/google/start" className="underline font-medium">
             Reconnect this account
@@ -376,7 +385,7 @@ function AliasList({
         <div className="text-[10px] opacity-80">
           If reconnect fails with <em>Error 400: invalid_scope</em>, the
           Google Cloud OAuth consent screen for this project doesn&rsquo;t
-          yet list <code className="font-mono">gmail.settings.readonly</code>.
+          yet list <code className="font-mono">gmail.settings.basic</code>.
           A project admin needs to add it (see &ldquo;Enable alias
           auto-discovery&rdquo; below). As a workaround you can{" "}
           <a
