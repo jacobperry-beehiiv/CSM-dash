@@ -276,6 +276,70 @@ function GmailSettingsInner() {
           <li>Each CSM clicks Connect Gmail above to grant their own consent.</li>
         </ol>
       </section>
+
+      <section className="bg-surface rounded-xl border border-border shadow-card p-4 space-y-2">
+        <h2 className="text-sm font-semibold text-fg">
+          Enable alias auto-discovery (admin only)
+        </h2>
+        <p className="text-sm text-muted">
+          The template editor&rsquo;s &ldquo;Send as&rdquo; dropdown
+          pulls from each CSM&rsquo;s verified Gmail aliases. That
+          requires the{" "}
+          <code className="font-mono px-1 bg-surface-2 rounded">
+            gmail.settings.readonly
+          </code>{" "}
+          scope, which Google rejects with{" "}
+          <em>Error 400: invalid_scope</em> until the project&rsquo;s
+          OAuth consent screen lists it. One-time setup:
+        </p>
+        <ol className="list-decimal list-inside text-sm text-muted space-y-1">
+          <li>
+            Open{" "}
+            <a
+              href="https://console.cloud.google.com/apis/credentials/consent"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-blue-600 dark:text-blue-400 hover:underline"
+            >
+              Google Cloud Console &rarr; OAuth consent screen
+            </a>{" "}
+            for this project.
+          </li>
+          <li>
+            Edit the app &rarr; <strong>Scopes</strong> step &rarr; click{" "}
+            <strong>Add or Remove Scopes</strong>.
+          </li>
+          <li>
+            Search for{" "}
+            <code className="font-mono px-1 bg-surface-2 rounded">
+              gmail.settings.readonly
+            </code>{" "}
+            (full URI:{" "}
+            <code className="font-mono px-1 bg-surface-2 rounded">
+              https://www.googleapis.com/auth/gmail.settings.readonly
+            </code>
+            ), check the box, click <strong>Update</strong>, then{" "}
+            <strong>Save and Continue</strong> through the rest of the
+            wizard.
+          </li>
+          <li>
+            Existing connections need to reconnect once via{" "}
+            <code className="font-mono px-1 bg-surface-2 rounded">
+              /api/auth/google/start
+            </code>{" "}
+            to grant the new scope. Users blocked by the consent screen
+            change can use the{" "}
+            <a
+              href="/api/auth/google/start?minimal=1"
+              className="text-blue-600 dark:text-blue-400 hover:underline"
+            >
+              minimal reconnect
+            </a>{" "}
+            in the meantime — drafts work, alias picker stays empty
+            until they reconnect with the full scope set.
+          </li>
+        </ol>
+      </section>
     </div>
   );
 }
@@ -299,17 +363,30 @@ function AliasList({
   }
   if (row.needs_reconsent) {
     return (
-      <div className="pl-2 border-l-2 border-amber-300 text-[11px] text-amber-900 dark:text-amber-200 bg-amber-50 dark:bg-amber-500/10 rounded-r-md p-2">
-        Gmail didn&rsquo;t grant the{" "}
-        <code className="font-mono">gmail.settings.readonly</code> scope
-        for this account — its aliases can&rsquo;t be auto-discovered.{" "}
-        <a
-          href="/api/auth/google/start"
-          className="underline font-medium"
-        >
-          Reconnect this account
-        </a>{" "}
-        to enable the picker.
+      <div className="pl-2 border-l-2 border-amber-300 text-[11px] text-amber-900 dark:text-amber-200 bg-amber-50 dark:bg-amber-500/10 rounded-r-md p-2 space-y-1.5">
+        <div>
+          Gmail didn&rsquo;t grant the{" "}
+          <code className="font-mono">gmail.settings.readonly</code> scope
+          for this account — its aliases can&rsquo;t be auto-discovered.{" "}
+          <a href="/api/auth/google/start" className="underline font-medium">
+            Reconnect this account
+          </a>{" "}
+          to enable the picker.
+        </div>
+        <div className="text-[10px] opacity-80">
+          If reconnect fails with <em>Error 400: invalid_scope</em>, the
+          Google Cloud OAuth consent screen for this project doesn&rsquo;t
+          yet list <code className="font-mono">gmail.settings.readonly</code>.
+          A project admin needs to add it (see &ldquo;Enable alias
+          auto-discovery&rdquo; below). As a workaround you can{" "}
+          <a
+            href="/api/auth/google/start?minimal=1"
+            className="underline font-medium"
+          >
+            reconnect with the core scopes only
+          </a>{" "}
+          — drafts will work but the alias picker stays empty.
+        </div>
       </div>
     );
   }
