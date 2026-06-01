@@ -37,38 +37,38 @@ interface ColumnDef {
   showAt?: "always" | "md" | "lg" | "xl";
 }
 
+// Column widths sized so the data columns + the (now stacked) Actions
+// cluster sum to ~100%. Stacking the action buttons vertically dropped
+// the actions column from 20% → 11%, freeing room to give the
+// Engagement chip + CSM name + Last-contacted date proper breathing
+// room. Headers (e.g. "Engagement") use whitespace-nowrap below to
+// avoid wrapping; cells get overflow-hidden so any over-long content
+// gets clipped instead of bleeding into the next column.
 const COLUMNS: ColumnDef[] = [
-  // Company shaved from 18 → 15 so the new CSM column fits without
-  // crushing the Actions cell. Most names still fit at 15%; the
-  // workspace_name sub-line takes the visual hit when truncation
-  // kicks in.
-  { key: "company_name", label: "Company", width: "w-[15%]", showAt: "always" },
+  { key: "company_name", label: "Company", width: "w-[17%]", showAt: "always" },
   { key: "arr", label: "ARR", width: "w-[7%]", align: "right", showAt: "always" },
   { key: "active_subs", label: "Subs", width: "w-[7%]", align: "right", showAt: "md" },
   { key: "features_enabled", label: "Features", width: "w-[7%]", align: "right", showAt: "lg" },
-  { key: "company_engagement", label: "Engagement", width: "w-[8%]", showAt: "lg" },
-  // New CSM column. Lives next to Engagement because both answer
-  // "who/what owns this account?". Hidden below lg — at md the row
-  // is already busy with billing/risk/charge data. Stays in sync with
-  // the customer-overrides KV (via load-customers' applyOverride), so
-  // a "🔄 HubSpot" refresh on the detail panel flows through here on
-  // the next router.refresh() tick.
+  // Engagement bumped 8 → 10 so "Medium Touch" no longer bleeds the
+  // header / pill into the CSM cell.
+  { key: "company_engagement", label: "Engagement", width: "w-[10%]", showAt: "lg" },
+  // CSM bumped 8 → 10 so "Jacob Perry" (and similar) stays on one
+  // line. Lives next to Engagement because both answer "who/what
+  // owns this account?". Stays in sync with the customer-overrides
+  // KV — a "🔄 HubSpot" refresh on the detail panel propagates
+  // through here on the next router.refresh() tick.
   {
     key: "customer_success_manager",
     label: "CSM",
-    width: "w-[8%]",
+    width: "w-[10%]",
     showAt: "lg",
   },
   { key: "property_risk_level", label: "Risk", width: "w-[8%]", showAt: "md" },
-  // Next charge trimmed from 10 → 8 — "Jan 27, 2026" + the monthly /
-  // annual cadence chip both fit at 8% with the chip wrapping under
-  // the date on narrower screens.
   { key: "next_invoice", label: "Next charge", width: "w-[8%]", showAt: "md" },
   { key: "last_send", label: "Last send", width: "w-[7%]", showAt: "lg" },
-  // Bumped from 6% so "Jan 27, 2026" stays on one line — at 6% the
-  // date wrapped to two rows on 1440-class displays and the
-  // Masquerade button in the next cell visually crowded into it.
-  { key: "property_notes_last_contacted", label: "Last contacted", width: "w-[7%]", showAt: "xl" },
+  // 8% comfortably fits "Jan 27, 2026" on one line at every viewport
+  // we render at.
+  { key: "property_notes_last_contacted", label: "Last contacted", width: "w-[8%]", showAt: "xl" },
 ];
 
 const SHOW_CLASS: Record<NonNullable<ColumnDef["showAt"]>, string> = {
@@ -646,12 +646,13 @@ export function CustomerTable({
             {COLUMNS.map((c) => (
               <col key={c.key} className={`${c.width} ${SHOW_CLASS[c.showAt ?? "always"]}`} />
             ))}
-            {/* Actions column. Wide enough for Masquerade + h. + Draft
-             *  text buttons; if it's too narrow the right-aligned flex
-             *  inside spills leftward into the prior column. Trimmed
-             *  from 22% so the extra 2% can give "Last contacted"
-             *  enough room for "Jan 27, 2026" on a single line. */}
-            <col className="w-[20%]" />
+            {/* Actions column. RowActions now stacks Masquerade /
+             *  HubSpot / Draft vertically, so the column only has to
+             *  fit the widest button (~110px). 11% covers that
+             *  comfortably at every breakpoint we render at, and the
+             *  freed real estate went back into Engagement / CSM /
+             *  Last contacted above. */}
+            <col className="w-[11%]" />
           </colgroup>
           <thead>
             <tr className="bg-canvas border-b border-border">
@@ -661,9 +662,14 @@ export function CustomerTable({
                 <th
                   key={col.key}
                   onClick={() => toggleSort(col.key)}
-                  className={`px-3 py-3 font-medium text-muted cursor-pointer hover:bg-surface-2 select-none ${
+                  // overflow-hidden + whitespace-nowrap: with
+                  // table-fixed, a too-long header would otherwise
+                  // bleed into the next cell (e.g. "EngagementCSM"
+                  // smashed together). Clip instead.
+                  className={`px-3 py-3 font-medium text-muted cursor-pointer hover:bg-surface-2 select-none overflow-hidden whitespace-nowrap text-ellipsis ${
                     col.align === "right" ? "text-right" : "text-left"
                   } ${SHOW_CLASS[col.showAt ?? "always"]}`}
+                  title={col.label}
                 >
                   {col.label}
                   {sortKey === col.key && (
@@ -719,7 +725,13 @@ export function CustomerTable({
                     {COLUMNS.map((col) => (
                       <td
                         key={col.key}
-                        className={`px-3 py-2.5 ${
+                        // overflow-hidden so a too-wide chip (e.g.
+                        // "Medium Touch") doesn't bleed into the
+                        // adjacent column visually. Individual cell
+                        // renderers can still opt-in to multi-line
+                        // layouts (Company, Next charge) — their
+                        // outer wrappers govern wrapping.
+                        className={`px-3 py-2.5 overflow-hidden ${
                           col.align === "right" ? "text-right" : ""
                         } ${SHOW_CLASS[col.showAt ?? "always"]}`}
                       >
