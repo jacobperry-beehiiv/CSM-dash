@@ -14,6 +14,12 @@ export interface DraftInput {
   bcc?: string;
   subject: string;
   body_html: string;
+  /** Override the From: header with a verified send-as alias on the
+   *  authenticated account. When unset the draft uses the auth user's
+   *  primary address. Gmail rejects with HTTP 400 if `from_email`
+   *  isn't a registered alias — `createGmailDraftFor` surfaces that
+   *  via its returned error. */
+  from_email?: string;
 }
 
 function encodeMimeWord(s: string): string {
@@ -62,9 +68,14 @@ export async function createGmailDraftFor(
   draft: DraftInput
 ): Promise<{ id: string }> {
   const token = await getValidAccessTokenFor(fromEmail);
+  // `From:` is `from_email` (a verified send-as alias) when set, else
+  // the authenticated account. Auth still flows through the
+  // authenticated user's token — Gmail enforces that the From address
+  // is one of the user's verified aliases at draft-creation time.
+  const fromHeader = draft.from_email?.trim() || fromEmail;
   const raw = base64UrlEncode(
     buildRfc822({
-      from: fromEmail,
+      from: fromHeader,
       to: draft.to,
       cc: draft.cc,
       bcc: draft.bcc,

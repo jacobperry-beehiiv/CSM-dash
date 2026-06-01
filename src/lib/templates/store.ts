@@ -203,6 +203,9 @@ export interface UpsertInput {
   csm_tags?: string[];
   subject: string;
   body_html: string;
+  /** Optional default Gmail send-as alias. Empty string clears it
+   *  (revert to "use the CSM's primary"). undefined means "no change". */
+  send_as_email?: string;
 }
 
 function genId(label: string, existing: Set<string>): string {
@@ -228,6 +231,15 @@ export async function upsertTemplate(
     ? [...new Set(input.csm_tags.map((e) => e.toLowerCase().trim()).filter(Boolean))]
     : undefined;
 
+  // send_as_email: undefined means "no change"; empty string clears
+  // it (template falls back to the CSM's primary). Normalize to
+  // lowercase + trim so the alias lookup at draft time matches the
+  // gmail.users.settings.sendAs.list output cleanly.
+  const normalizedSendAs =
+    input.send_as_email === undefined
+      ? undefined
+      : input.send_as_email.trim().toLowerCase();
+
   if (existing) {
     Object.assign(existing, {
       label: input.label,
@@ -236,6 +248,10 @@ export async function upsertTemplate(
       csm_tags: normalizedCsmTags ?? existing.csm_tags ?? [],
       subject: input.subject,
       body_html: input.body_html,
+      send_as_email:
+        normalizedSendAs === undefined
+          ? existing.send_as_email
+          : normalizedSendAs || undefined,
       updated_at: nowIso(),
     });
     await persist(list);
@@ -252,6 +268,7 @@ export async function upsertTemplate(
     csm_tags: normalizedCsmTags ?? [],
     subject: input.subject,
     body_html: input.body_html,
+    send_as_email: normalizedSendAs || undefined,
     created_at: nowIso(),
     updated_at: nowIso(),
   };

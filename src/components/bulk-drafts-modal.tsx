@@ -53,6 +53,13 @@ export interface BulkDraft {
    *  The modal lets the user check/uncheck each before opening tabs /
    *  creating Gmail drafts. */
   recipients: BulkDraftRecipient[];
+  /** Optional Gmail send-as alias to use as From for this draft.
+   *  Populated from the chosen template's `send_as_email` field.
+   *  Gmail-API drafts honor this in the RFC822 From header; the
+   *  compose-tab flow opens the right Google account via the URL's
+   *  /mail/u/<from>/ prefix (the user still flips the From dropdown
+   *  inside the compose tab). Unset → drafts use the CSM's primary. */
+  from?: string;
   /** Re-render subject + bodies when the user changes the recipient
    *  selection inside the modal. Lets merge tags that depend on the
    *  addressee (e.g. `{{customer.contact_first_name}}`) update live
@@ -373,17 +380,30 @@ export function BulkDraftsModal({
             bcc: d.bcc,
             subject: d.subject,
             body_html: d.body_html ?? d.body_text,
+            // Template-level send-as alias. Server validates against
+            // the user's verified aliases and falls back to the
+            // primary on mismatch so the draft still lands.
+            from: d.from,
           })),
         }),
       });
       const j = await r.json();
       if (!r.ok) throw new Error(j.error ?? `HTTP ${r.status}`);
       const where = j.created_in ?? gmail?.email ?? "your Gmail";
-      setGmailMessage(
-        `Created ${j.created} draft${j.created === 1 ? "" : "s"} in ${where}'s Drafts folder${
-          j.failed > 0 ? ` (${j.failed} failed)` : ""
-        }.`
-      );
+      const fallbacks = (j.alias_fallbacks as number | undefined) ?? 0;
+      const parts = [
+        `Created ${j.created} draft${j.created === 1 ? "" : "s"} in ${where}'s Drafts folder`,
+      ];
+      if (j.failed > 0) parts.push(`${j.failed} failed`);
+      if (fallbacks > 0) {
+        // Drafts landed, but Gmail rejected the alias and we fell back
+        // to the auth account. Tell the user so they can either flip
+        // the From dropdown in Gmail or get the alias verified.
+        parts.push(
+          `${fallbacks} fell back to your primary — the template's alias isn't verified on this Gmail account`
+        );
+      }
+      setGmailMessage(`${parts.join(" · ")}.`);
       // Mark every tracked draft we attempted (Gmail's per-draft success
       // is best-effort; failures are surfaced inline above). The
       // touched-status flow trusts the user reviewed + sent from Gmail.
@@ -428,6 +448,22 @@ export function BulkDraftsModal({
             <h3 className="font-semibold text-fg">
               Bulk drafts ({drafts.length})
             </h3>
+            {/* All drafts share the template, so the From alias is
+             *  the same across the batch. Surface it so the CSM
+             *  knows what to expect before hitting "Create drafts". */}
+            {drafts[0]?.from ? (
+              <div className="text-[11px] text-muted mt-0.5">
+                Sending as{" "}
+                <span className="font-mono text-fg">{drafts[0].from}</span>
+                {gmail?.email && gmail.email !== drafts[0].from ? (
+                  <>
+                    {" "}
+                    on behalf of{" "}
+                    <span className="font-mono">{gmail.email}</span>
+                  </>
+                ) : null}
+              </div>
+            ) : null}
             <div className="flex items-center gap-2 mt-1.5">
               <label
                 htmlFor="bulk-template-select"

@@ -158,6 +158,10 @@ export function buildBulkDrafts(input: BuildBulkDraftsInput): BulkDraft[] {
       to: ownerEmail,
       cc: cc ?? undefined,
       bcc: bcc ?? undefined,
+      // Template-level default sender. When set, the Gmail API draft
+      // path uses it as the From header; the compose-URL path embeds
+      // it as authuser so the right Google account opens.
+      from: tpl.send_as_email || undefined,
       subject,
       body_text,
       body_html,

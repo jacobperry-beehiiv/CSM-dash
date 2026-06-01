@@ -24,8 +24,14 @@ interface UpsertBody {
   label: string;
   blurb?: string;
   tags?: string[];
+  /** Lowercased CSM emails the template should be visible to.
+   *  Universal when empty / undefined. */
+  csm_tags?: string[];
   subject: string;
   body_html: string;
+  /** Optional default Gmail send-as alias for drafts built from this
+   *  template. Empty string clears any existing value. */
+  send_as_email?: string;
 }
 
 export async function POST(req: Request) {

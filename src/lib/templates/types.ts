@@ -25,6 +25,19 @@ export interface StoredTemplate {
   subject: string;
   /** Body. Rich HTML. Supports {{merge.tags}}. */
   body_html: string;
+  /**
+   * Optional default sender for drafts built from this template. Must
+   * be a verified send-as alias on the drafting CSM's Gmail account
+   * (auto-discovered via /api/auth/google/aliases). Unset / empty
+   * means "use the CSM's primary Gmail address" — same behavior as
+   * before this field existed.
+   *
+   * Stored as a lowercased email. Renders identically across all
+   * draft paths: Gmail-API draft creation honors it via the From
+   * header; the compose-URL flow opens the correct Google account so
+   * the user can flip the From dropdown manually.
+   */
+  send_as_email?: string;
   created_at: string;
   updated_at: string;
 }

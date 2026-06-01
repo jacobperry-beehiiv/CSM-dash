@@ -61,10 +61,20 @@ export function TemplateEditor({
   );
   const [subject, setSubject] = useState(initial?.subject ?? "");
   const [bodyHtml, setBodyHtml] = useState(initial?.body_html ?? "");
+  const [sendAsEmail, setSendAsEmail] = useState(initial?.send_as_email ?? "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showMergeMenu, setShowMergeMenu] = useState(false);
   const [ladder, setLadder] = useState<EnterpriseTier[]>([]);
+  // Send-as aliases discovered on the connected Gmail account. Loaded
+  // lazily on mount; soft-fails to [] so the editor still works
+  // without the alias dropdown when /api/auth/google/aliases is down
+  // or the new scope hasn't been re-consented yet.
+  const [aliases, setAliases] = useState<
+    Array<{ email: string; name: string | null; is_primary: boolean }>
+  >([]);
+  const [aliasError, setAliasError] = useState<string | null>(null);
+  const [aliasesNeedReconsent, setAliasesNeedReconsent] = useState(false);
   const subjectRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -72,6 +82,42 @@ export function TemplateEditor({
     getTierLadder()
       .then((list) => !cancelled && setLadder(list))
       .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Load alias list once per editor open. Surfacing the reconsent
+  // banner here rather than swallowing the 403 means a CSM gets a
+  // clear path to fix it instead of a silently-empty dropdown.
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/auth/google/aliases")
+      .then(async (r) => {
+        const j = (await r.json()) as {
+          aliases?: Array<{
+            email: string;
+            name: string | null;
+            is_primary: boolean;
+          }>;
+          error?: string;
+          needs_reconsent?: boolean;
+        };
+        if (cancelled) return;
+        if (!r.ok) {
+          setAliasError(j.error ?? `HTTP ${r.status}`);
+          setAliasesNeedReconsent(Boolean(j.needs_reconsent));
+          setAliases([]);
+          return;
+        }
+        setAliases(j.aliases ?? []);
+        setAliasError(null);
+      })
+      .catch((e) => {
+        if (!cancelled) {
+          setAliasError(e instanceof Error ? e.message : "Failed to load aliases");
+        }
+      });
     return () => {
       cancelled = true;
     };
@@ -85,6 +131,7 @@ export function TemplateEditor({
     setCsmTagsInput(initial?.csm_tags?.join(", ") ?? "");
     setSubject(initial?.subject ?? "");
     setBodyHtml(initial?.body_html ?? "");
+    setSendAsEmail(initial?.send_as_email ?? "");
     setError(null);
   }, [initial?.id]);
 
@@ -141,6 +188,10 @@ export function TemplateEditor({
           csm_tags,
           subject,
           body_html: bodyHtml,
+          // Empty string clears the alias on the server; undefined would
+          // leave it unchanged. We always send an explicit value so
+          // toggling "use my primary" sticks.
+          send_as_email: sendAsEmail.trim().toLowerCase(),
         }),
       });
       const json = await res.json();
@@ -223,6 +274,59 @@ export function TemplateEditor({
             When set, this template only appears in the bulk-draft and
             outreach dropdowns for the listed CSMs. Empty = universal.
           </p>
+        </div>
+        <div>
+          <label className="text-xs text-muted block mb-1">
+            Send as (Gmail alias)
+          </label>
+          {aliasesNeedReconsent ? (
+            <div className="text-xs bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/30 rounded-md p-2 text-amber-900 dark:text-amber-200">
+              Your Gmail connection predates alias auto-discovery. Visit{" "}
+              <a
+                href="/api/auth/google/start"
+                className="underline font-medium"
+              >
+                /settings/gmail
+              </a>{" "}
+              and re-connect to enable the picker.
+            </div>
+          ) : (
+            <>
+              <select
+                value={sendAsEmail}
+                onChange={(e) => setSendAsEmail(e.target.value)}
+                className="w-full px-3 py-2 border border-border-strong rounded-md text-sm bg-surface"
+              >
+                <option value="">
+                  Default — the drafting CSM&rsquo;s primary Gmail
+                </option>
+                {aliases.map((a) => (
+                  <option key={a.email} value={a.email}>
+                    {a.name ? `${a.name} <${a.email}>` : a.email}
+                    {a.is_primary ? " (primary)" : ""}
+                  </option>
+                ))}
+                {/* If a previously-saved alias isn't in the live list
+                 *  (e.g. the active connection differs from the CSM
+                 *  who set it), still show it so the value sticks. */}
+                {sendAsEmail &&
+                !aliases.some((a) => a.email === sendAsEmail) ? (
+                  <option value={sendAsEmail}>
+                    {sendAsEmail} (saved · not in current account)
+                  </option>
+                ) : null}
+              </select>
+              <p className="text-[11px] text-subtle mt-1">
+                Drafts built from this template will use this alias as
+                their From address. Each CSM must have the alias
+                verified on their own Gmail; unverified senders fall
+                back to the primary.
+              </p>
+              {aliasError && !aliasesNeedReconsent ? (
+                <p className="text-[11px] text-red-700 mt-1">{aliasError}</p>
+              ) : null}
+            </>
+          )}
         </div>
         <div>
           <label className="text-xs text-muted block mb-1">Subject</label>

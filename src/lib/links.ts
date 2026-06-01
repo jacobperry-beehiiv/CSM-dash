@@ -118,6 +118,15 @@ interface ComposeArgs {
   bcc?: string;
   subject: string;
   body: string;
+  /**
+   * Email of the Google account (or alias's owner account) the
+   * compose tab should open under. Switches the URL prefix to
+   * `mail/u/<authuser>/` so users on multi-account sessions land in
+   * the right inbox. Gmail's web compose URL has no documented
+   * `from=` param — the user still picks the alias from the From
+   * dropdown inside the compose tab. Unset → primary account.
+   */
+  authuser?: string;
 }
 
 export function gmailComposeUrl({
@@ -126,6 +135,7 @@ export function gmailComposeUrl({
   bcc,
   subject,
   body,
+  authuser,
 }: ComposeArgs): string {
   const params = new URLSearchParams({
     view: "cm",
@@ -136,7 +146,11 @@ export function gmailComposeUrl({
   });
   if (cc && cc.trim()) params.set("cc", cc.trim());
   if (bcc && bcc.trim()) params.set("bcc", bcc.trim());
-  return `https://mail.google.com/mail/?${params.toString()}`;
+  const trimmedAuth = authuser?.trim();
+  const prefix = trimmedAuth
+    ? `https://mail.google.com/mail/u/${encodeURIComponent(trimmedAuth)}/`
+    : "https://mail.google.com/mail/";
+  return `${prefix}?${params.toString()}`;
 }
 
 function htmlToText(html: string): string {
@@ -177,6 +191,7 @@ export function composeUrlForTemplate(
     bcc: extra?.bcc ?? undefined,
     subject,
     body,
+    authuser: template.send_as_email || undefined,
   });
 }
 
@@ -203,5 +218,6 @@ export function composeUrlWithAdGap(
     bcc: extra?.bcc ?? undefined,
     subject,
     body,
+    authuser: template.send_as_email || undefined,
   });
 }

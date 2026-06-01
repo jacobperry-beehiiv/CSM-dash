@@ -3,15 +3,29 @@ import { kvGet, kvSet } from "../storage/kv";
 
 /**
  * CSM-set per-customer overrides that don't round-trip through HubSpot/
- * Stripe but should still affect the dashboard view. Currently used to
- * toggle billing cadence (monthly ↔ annual) so a CSM can preview tier
- * pricing in the other cadence without waiting on Finance to switch the
- * Stripe subscription.
+ * Stripe but should still affect the dashboard view. Currently used to:
+ *
+ *  - toggle billing cadence (monthly ↔ annual) so a CSM can preview
+ *    tier pricing in the other cadence without waiting on Finance to
+ *    switch the Stripe subscription
+ *  - patch in a freshly-pulled CSM assignment from HubSpot when the
+ *    Metabase snapshot is stale (see `refresh-csm` API route)
  */
 
 export interface CustomerOverride {
   /** Override the customer's `interval` (e.g. "annual" or "month"). */
   interval?: "annual" | "month";
+  /** Override the snake-cased CSM identifier (e.g. "olivia_chen"). When
+   *  set, this trumps the value from Metabase q10600. */
+  customer_success_manager?: string;
+  /** Override the CSM's email — kept in lockstep with
+   *  customer_success_manager so the cc-CSM flow stays consistent. */
+  customer_success_manager_email?: string;
+  /** ISO timestamp of the most-recent HubSpot pull. Renders as a tooltip
+   *  on the "live" pill the detail panel surfaces next to the CSM. */
+  csm_refreshed_at?: string;
+  /** Viewer email that triggered the refresh — audit trail. */
+  csm_refreshed_by?: string;
 }
 
 export type OverrideMap = Record<string, CustomerOverride>;
@@ -30,18 +44,38 @@ export async function loadOverrides(): Promise<OverrideMap> {
   return (await kvGet<OverrideMap>(KEY)) ?? {};
 }
 
+/** Sentinel keys exposed for callers that want to surface ONLY a
+ *  CSM-related patch without disturbing the interval override (or vice
+ *  versa). */
+type FieldKey = keyof CustomerOverride;
+
 export async function setOverride(
   workspaceId: string,
   patch: CustomerOverride
 ): Promise<OverrideMap> {
   const map = { ...(await loadOverrides()) };
-  const current = { ...(map[workspaceId] ?? {}) };
-  // Empty patch (or `interval` set to undefined) clears the field.
-  if (patch.interval === undefined) {
-    delete current.interval;
-  } else {
-    current.interval = patch.interval;
-  }
+  const current: CustomerOverride = { ...(map[workspaceId] ?? {}) };
+
+  // Per-field semantics: an explicit `undefined` clears the field; an
+  // omitted key leaves it untouched. The PUT path on the API routes
+  // passes only the fields the caller wants to update, so omission is
+  // the common case here.
+  const applyField = <K extends FieldKey>(key: K) => {
+    if (key in patch) {
+      const value = patch[key];
+      if (value === undefined || value === "") {
+        delete current[key];
+      } else {
+        current[key] = value as CustomerOverride[K];
+      }
+    }
+  };
+  applyField("interval");
+  applyField("customer_success_manager");
+  applyField("customer_success_manager_email");
+  applyField("csm_refreshed_at");
+  applyField("csm_refreshed_by");
+
   if (Object.keys(current).length === 0) {
     delete map[workspaceId];
   } else {
@@ -62,5 +96,21 @@ export function applyOverride(
   return {
     ...customer,
     interval: ov.interval ?? customer.interval,
+    customer_success_manager:
+      ov.customer_success_manager ?? customer.customer_success_manager,
+    customer_success_manager_email:
+      ov.customer_success_manager_email ??
+      customer.customer_success_manager_email,
   };
+}
+
+/** Returns the raw override entry for a workspace, if any. Lets the
+ *  detail panel render the "live" pill + timestamp without re-doing
+ *  the override lookup itself. */
+export function getOverride(
+  workspaceId: string | null | undefined,
+  overrides: OverrideMap
+): CustomerOverride | null {
+  if (!workspaceId) return null;
+  return overrides[workspaceId] ?? null;
 }

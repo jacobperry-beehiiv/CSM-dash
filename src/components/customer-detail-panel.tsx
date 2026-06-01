@@ -11,6 +11,7 @@ import { CustomerPublicationsList } from "./customer-publications-list";
 import { CollapsibleSection } from "./collapsible-section";
 import { CompanyNotes } from "./am/company-notes";
 import { CopyButton } from "./copy-button";
+import { CsmRefreshRow } from "./csm-refresh-row";
 import { stripeCustomerUrl } from "@/lib/links";
 
 interface Props {
@@ -113,7 +114,11 @@ export function CustomerDetailPanel({
           <Row label="Main contact" value={c.property_main_contact ?? "—"} />
           <Row label="Owner email" value={c.owner_email ?? "—"} />
           <Row label="Timezone" value={c.property_timezone ?? "—"} />
-          <Row label="CSM" value={c.customer_success_manager?.replace(/_/g, " ") ?? "—"} />
+          {/* CSM gets its own row with a "🔄 HubSpot" refresh chip so a
+           *  reassignment can land before the next nightly Metabase
+           *  snapshot. The component is a "use client" island; the
+           *  rest of the panel can stay server-rendered. */}
+          <Row label="CSM" value={<CsmRefreshRow customer={c} />} />
         </Section>
       </div>
 

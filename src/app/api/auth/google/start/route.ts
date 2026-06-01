@@ -9,6 +9,11 @@ const SCOPES = [
   // Compose lets us create drafts. We deliberately do NOT request
   // gmail.send — this app drafts only; the CSM still hits send manually.
   "https://www.googleapis.com/auth/gmail.compose",
+  // Read-only Gmail settings — only used to enumerate the user's
+  // verified send-as aliases at /api/auth/google/aliases so templates
+  // can pick one as their default sender. Does not grant message
+  // read / send / mutate beyond gmail.compose.
+  "https://www.googleapis.com/auth/gmail.settings.readonly",
 ].join(" ");
 
 export async function GET(req: Request) {

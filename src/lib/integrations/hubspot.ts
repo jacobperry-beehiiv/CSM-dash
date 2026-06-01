@@ -514,3 +514,107 @@ function pickLatest(
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
+
+// ─── Company owner lookup (manual CSM-refresh path) ─────────────────────
+//
+// The dashboard's `customer_success_manager` field lives in Metabase
+// q10600 and is therefore stale for 24-48h after a HubSpot reassignment.
+// To shortcut that, `/api/customer-overrides/refresh-csm` calls
+// fetchHubspotCompanyOwner() for a single company on demand and writes
+// the override into KV. See:
+//   - src/lib/data/customer-overrides.ts (override shape)
+//   - src/app/api/customer-overrides/refresh-csm/route.ts (caller)
+
+/**
+ * HubSpot owner record. Returned by /crm/v3/owners/{id}. We surface only
+ * the fields the override needs — the dashboard's CSM identifier is the
+ * email's local-part (snake-cased) and the email itself is shown
+ * inline.
+ */
+export interface HubspotOwner {
+  owner_id: string;
+  owner_email: string;
+  owner_name: string | null;
+}
+
+const OWNER_CACHE_TTL_MS = 10 * 60 * 1000;
+const ownerCache = new Map<string, { expires: number; data: HubspotOwner | null }>();
+
+/** Fetch the HubSpot company's `hubspot_owner_id` property, then
+ *  resolve that owner via /crm/v3/owners/{id}. Owner objects rarely
+ *  change so we cache results for 10 minutes; the override write path
+ *  is human-driven (button click) so cache freshness isn't critical.
+ *
+ *  Returns null when the company has no owner assigned in HubSpot or
+ *  the owner can't be resolved. Throws on auth / 5xx errors so the
+ *  endpoint caller can surface "HubSpot fetch failed: …" instead of
+ *  silently writing a no-op override. */
+export async function fetchHubspotCompanyOwner(
+  companyId: string
+): Promise<HubspotOwner | null> {
+  const token = await getAccessToken();
+
+  // Step 1 — read hubspot_owner_id off the company.
+  const cmpRes = await fetch(
+    `https://api.hubapi.com/crm/v3/objects/companies/${encodeURIComponent(companyId)}?properties=hubspot_owner_id`,
+    { headers: { Authorization: `Bearer ${token}` } }
+  );
+  if (cmpRes.status === 404) return null;
+  if (!cmpRes.ok) {
+    const body = await cmpRes.text().catch(() => "");
+    throw new Error(
+      `HubSpot company ${companyId} fetch failed (${cmpRes.status}): ${body.slice(0, 200)}`
+    );
+  }
+  const cmp = (await cmpRes.json()) as {
+    properties?: { hubspot_owner_id?: string | null };
+  };
+  const ownerId = cmp.properties?.hubspot_owner_id?.trim() || null;
+  if (!ownerId) return null;
+
+  // Step 2 — resolve owner_id → email + name (cache-hit-friendly).
+  const cached = ownerCache.get(ownerId);
+  if (cached && cached.expires > Date.now()) return cached.data;
+
+  const ownerRes = await fetch(
+    `https://api.hubapi.com/crm/v3/owners/${encodeURIComponent(ownerId)}`,
+    { headers: { Authorization: `Bearer ${token}` } }
+  );
+  if (ownerRes.status === 404) {
+    ownerCache.set(ownerId, {
+      expires: Date.now() + OWNER_CACHE_TTL_MS,
+      data: null,
+    });
+    return null;
+  }
+  if (!ownerRes.ok) {
+    const body = await ownerRes.text().catch(() => "");
+    throw new Error(
+      `HubSpot owner ${ownerId} fetch failed (${ownerRes.status}): ${body.slice(0, 200)}`
+    );
+  }
+  const o = (await ownerRes.json()) as {
+    id?: string;
+    email?: string | null;
+    firstName?: string | null;
+    lastName?: string | null;
+  };
+  if (!o.email) {
+    ownerCache.set(ownerId, {
+      expires: Date.now() + OWNER_CACHE_TTL_MS,
+      data: null,
+    });
+    return null;
+  }
+  const name = [o.firstName, o.lastName].filter(Boolean).join(" ").trim();
+  const data: HubspotOwner = {
+    owner_id: ownerId,
+    owner_email: o.email.toLowerCase(),
+    owner_name: name || null,
+  };
+  ownerCache.set(ownerId, {
+    expires: Date.now() + OWNER_CACHE_TTL_MS,
+    data,
+  });
+  return data;
+}
