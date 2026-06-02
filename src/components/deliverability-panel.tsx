@@ -154,13 +154,20 @@ export function DeliverabilityPanel({
   const alerts = useMemo(() => {
     if (!search) return data.alerts;
     const q = search.toLowerCase();
+    // Beehiiv's customer-facing publication IDs carry a `pub_` prefix
+    // (admin URLs, public API) but PostMetricsRow.publication_id is
+    // the raw UUID. Strip the prefix off the query so either form
+    // matches without the user needing to know which one we store.
+    const qNoPubPrefix = q.startsWith("pub_") ? q.slice(4) : q;
     return data.alerts.filter((a) => {
       const csmRaw = a.csm ?? null;
       const csmHuman = csmRaw?.replace(/_/g, " ") ?? null;
+      const pubId = a.post.publication_id.toLowerCase();
       return (
         a.post.workspace_name.toLowerCase().includes(q) ||
         a.post.subject.toLowerCase().includes(q) ||
-        a.post.publication_id.toLowerCase().includes(q) ||
+        pubId.includes(q) ||
+        pubId.includes(qNoPubPrefix) ||
         a.post.organization_id?.toLowerCase().includes(q) ||
         a.post.newsletter?.toLowerCase().includes(q) ||
         csmRaw?.toLowerCase().includes(q) ||

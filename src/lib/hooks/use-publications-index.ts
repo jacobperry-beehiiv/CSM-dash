@@ -89,7 +89,27 @@ export function usePublicationsIndex(): PublicationsIndex {
     if (!data) return EMPTY;
     const ws2pubs: Record<string, string[]> = {};
     for (const [pub, ws] of Object.entries(data.pub2ws)) {
-      (ws2pubs[ws] ??= []).push(pub);
+      const arr = (ws2pubs[ws] ??= []);
+      // Store BOTH the raw UUID we get from publications.id AND the
+      // customer-facing `pub_<uuid>` form. Beehiiv's admin UI and
+      // public API surface the prefixed form, so that's almost always
+      // what a CSM pastes into search. Doubling the array is cheap
+      // (~10K total entries at scale) and means substring matching
+      // works either way without each panel having to normalize.
+      arr.push(pub);
+      if (!pub.startsWith("pub_")) {
+        arr.push(`pub_${pub}`);
+      }
+    }
+    // Diagnostic: surface the empty-index case to DevTools so the
+    // next time someone reports "publication search isn't working"
+    // we can tell at a glance whether the endpoint loaded data at
+    // all. Doesn't affect any user-visible behavior.
+    const entryCount = Object.keys(data.pub2ws).length;
+    if (entryCount === 0) {
+      console.warn(
+        "[publications-index] Loaded empty map. Search-by-publication-ID won't match anything. Hit /api/customers/publications-index manually to diagnose."
+      );
     }
     return {
       pub2ws: data.pub2ws,
