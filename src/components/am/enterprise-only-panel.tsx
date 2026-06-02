@@ -11,11 +11,17 @@ import { OutreachModal } from "../outreach-modal";
 import { BucketSection } from "./bucket-section";
 import { BulkEmailLauncher } from "./bulk-email-launcher";
 import { CustomerDetailPanel } from "../customer-detail-panel";
+import { ReviewStateCell } from "./review-state-cell";
 import type { ProactiveOutreachMap } from "@/lib/data/proactive-outreach";
 import {
   DEFAULT_PROACTIVE_OUTREACH_STATUSES,
   type SettingsShape,
 } from "@/lib/data/settings-types";
+import {
+  needsReview,
+  type ReviewState,
+  type ReviewStatesMap,
+} from "@/lib/data/review-states-types";
 
 interface Props {
   rows: Customer[];
@@ -94,6 +100,40 @@ export function EnterpriseOnlyPanel({ rows, csms }: Props) {
   // is the actionable bucket; "has outreach" surfaces who's already
   // been pitched.
   const [outreachFilter, setOutreachFilter] = useUrlSearch("outreach");
+  const [needsReviewFilter, setNeedsReviewFilter] = useUrlSearch(
+    "needs_review"
+  );
+  const [reviewStates, setReviewStates] = useState<ReviewStatesMap>({});
+  useEffect(() => {
+    fetch("/api/review-states")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => j && setReviewStates(j as ReviewStatesMap))
+      .catch(() => {});
+  }, []);
+  const onReviewChange = (
+    workspaceId: string,
+    next: ReviewState | null
+  ) => {
+    setReviewStates((prev) => {
+      const map = { ...prev };
+      const current = { ...(map[workspaceId] ?? {}) };
+      if (next === null) {
+        delete current.proactive;
+      } else {
+        current.proactive = {
+          state: next,
+          set_at: new Date().toISOString(),
+          set_by: null,
+        };
+      }
+      if (Object.keys(current).length === 0) {
+        delete map[workspaceId];
+      } else {
+        map[workspaceId] = current;
+      }
+      return map;
+    });
+  };
   const [sweepBusy, setSweepBusy] = useState(false);
   const [sweepReport, setSweepReport] = useState<string | null>(null);
   // Statuses available in the Status column dropdown — sourced from
@@ -198,13 +238,19 @@ export function EnterpriseOnlyPanel({ rows, csms }: Props) {
       );
       return outreachFilter === "has" ? touched : !touched;
     });
+    const filteredByReview = filteredByOutreach.filter((c) => {
+      if (needsReviewFilter !== "1") return true;
+      return c.workspace_id
+        ? needsReview(reviewStates[c.workspace_id], "proactive")
+        : true;
+    });
     return BUCKETS.map((b) => ({
       bucket: b,
-      list: filteredByOutreach
+      list: filteredByReview
         .filter((c) => b.test(pct(c)))
         .sort((a, b) => pct(b) - pct(a)),
     })).filter((g) => g.list.length > 0);
-  }, [rows, outreachFilter, outreachMap]);
+  }, [rows, outreachFilter, outreachMap, needsReviewFilter, reviewStates]);
 
   const visibleRows = useMemo(
     () => buckets.flatMap((g) => g.list),
@@ -424,23 +470,17 @@ export function EnterpriseOnlyPanel({ rows, csms }: Props) {
               <table className="w-full text-sm table-fixed">
                 <colgroup>
                   <col className="w-8" />
-                  {/* Chevron column — narrow click-target for the
-                   *  expand/collapse toggle, matches /csm pattern. */}
                   <col className="w-6" />
-                  <col className="w-[20%]" />
+                  <col className="w-[18%]" />
                   <col className="w-[7%]" />
-                  <col className="w-[10%]" />
+                  <col className="w-[9%]" />
                   <col className="w-[8%]" />
-                  <col className="w-[10%]" />
-                  <col className="w-[8%]" />
-                  {/* Status column — dropdown driven by the configurable
-                   *  statuses list in /settings/slack. Pinged / Outreach
-                   *  made auto-fill from the engine; everything else is
-                   *  manual.*/}
-                  <col className="w-[12%]" />
-                  {/* Actions column. Stacks Masquerade / HubSpot / Draft
-                   *  vertically so 15% is plenty. */}
-                  <col className="w-[15%]" />
+                  <col className="w-[9%]" />
+                  <col className="w-[7%]" />
+                  <col className="w-[11%]" />
+                  {/* Review dropdown — drives the digest workflow. */}
+                  <col className="w-[11%]" />
+                  <col className="w-[13%]" />
                 </colgroup>
                 <thead>
                   <tr className="text-xs text-muted border-y border-border text-left">
@@ -453,6 +493,7 @@ export function EnterpriseOnlyPanel({ rows, csms }: Props) {
                     <th className="px-3 py-2 font-medium">CSM</th>
                     <th className="px-3 py-2 font-medium text-right">ARR</th>
                     <th className="px-3 py-2 font-medium">Status</th>
+                    <th className="px-3 py-2 font-medium">Review</th>
                     <th className="px-3 py-2"></th>
                   </tr>
                 </thead>
@@ -600,12 +641,31 @@ export function EnterpriseOnlyPanel({ rows, csms }: Props) {
                         className="px-3 py-2"
                         onClick={(e) => e.stopPropagation()}
                       >
+                        <ReviewStateCell
+                          workspaceId={c.workspace_id}
+                          workflow="proactive"
+                          current={
+                            c.workspace_id
+                              ? reviewStates[c.workspace_id]
+                              : undefined
+                          }
+                          onChange={(next) => {
+                            if (c.workspace_id) {
+                              onReviewChange(c.workspace_id, next);
+                            }
+                          }}
+                        />
+                      </td>
+                      <td
+                        className="px-3 py-2"
+                        onClick={(e) => e.stopPropagation()}
+                      >
                         <RowActions customer={c} onDraft={setOutreachFor} />
                       </td>
                     </tr>
                     {isOpen ? (
                       <tr className="bg-blue-50/40 dark:bg-blue-500/10 border-b border-border">
-                        <td colSpan={10} className="px-6 py-4">
+                        <td colSpan={11} className="px-6 py-4">
                           <CustomerDetailPanel customer={c} />
                         </td>
                       </tr>

@@ -16,6 +16,12 @@ import {
   type SettingsShape,
 } from "@/lib/data/settings-types";
 import type { OverrideMap } from "@/lib/data/customer-overrides";
+import type {
+  ReviewState,
+  ReviewStatesMap,
+} from "@/lib/data/review-states-types";
+import { needsReview } from "@/lib/data/review-states-types";
+import { ReviewStateCell } from "./am/review-state-cell";
 
 /**
  * Computes the customer's next renewal/charge date.
@@ -129,6 +135,11 @@ export function RenewalPanel({ customers, csms }: Props) {
   const [lifecycleOptions, setLifecycleOptions] = useState<string[]>(
     DEFAULT_LIFECYCLE_STAGES
   );
+  // Per-workflow review-state map. Drives the Review dropdown +
+  // the ?needs_review filter that scopes the panel to rows still
+  // pending action (reach_out / no decision).
+  const [reviewStates, setReviewStates] = useState<ReviewStatesMap>({});
+  const [needsReviewFilter, setNeedsReviewFilter] = useUrlSearch("needs_review");
   useEffect(() => {
     fetch("/api/customer-overrides")
       .then((r) => (r.ok ? r.json() : null))
@@ -141,7 +152,38 @@ export function RenewalPanel({ customers, csms }: Props) {
         if (Array.isArray(s) && s.length > 0) setLifecycleOptions(s);
       })
       .catch(() => {});
+    fetch("/api/review-states")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => j && setReviewStates(j as ReviewStatesMap))
+      .catch(() => {});
   }, []);
+
+  /** Apply the dropdown's new state to the local map so the next
+   *  render reflects the change without waiting for a refetch. */
+  const onReviewChange = useCallback(
+    (workspaceId: string, next: ReviewState | null) => {
+      setReviewStates((prev) => {
+        const map = { ...prev };
+        const current = { ...(map[workspaceId] ?? {}) };
+        if (next === null) {
+          delete current.renewals;
+        } else {
+          current.renewals = {
+            state: next,
+            set_at: new Date().toISOString(),
+            set_by: null,
+          };
+        }
+        if (Object.keys(current).length === 0) {
+          delete map[workspaceId];
+        } else {
+          map[workspaceId] = current;
+        }
+        return map;
+      });
+    },
+    []
+  );
 
   const setLifecycle = useCallback(
     async (workspaceId: string, stage: string) => {
@@ -255,8 +297,19 @@ export function RenewalPanel({ customers, csms }: Props) {
         return pubs.some((p) => p.toLowerCase().includes(q));
       });
     }
+    // ?needs_review=1 scopes to rows still pending action (no
+    // decision or explicitly "reach_out"). Drops "skip" + "done"
+    // so a CSM clicking the digest link sees only what's left
+    // to triage.
+    if (needsReviewFilter === "1") {
+      list = list.filter((c) =>
+        c.workspace_id
+          ? needsReview(reviewStates[c.workspace_id], "renewals")
+          : true
+      );
+    }
     return list;
-  }, [customers, intervalFilter, search, ws2pubs]);
+  }, [customers, intervalFilter, search, ws2pubs, needsReviewFilter, reviewStates]);
 
   const buckets = useMemo(() => {
     return BUCKETS.map((b) => {
@@ -322,15 +375,16 @@ export function RenewalPanel({ customers, csms }: Props) {
             <table className="w-full text-sm bg-surface table-fixed">
               <colgroup>
                 <col className="w-8" />
-                <col className="w-[22%]" />
-                <col className="w-[10%]" />
+                <col className="w-[20%]" />
                 <col className="w-[9%]" />
+                <col className="w-[8%]" />
+                <col className="w-[10%]" />
+                <col className="w-[6%]" />
                 <col className="w-[11%]" />
-                <col className="w-[7%]" />
-                <col className="w-[13%]" />
-                <col className="w-[10%] hidden lg:table-cell" />
+                <col className="w-[11%]" />
+                <col className="w-[9%] hidden lg:table-cell" />
                 {/* Actions — stacked Masquerade / HubSpot / Draft. */}
-                <col className="w-[15%]" />
+                <col className="w-[13%]" />
               </colgroup>
               <thead>
                 <tr className="text-left border-y border-border text-xs text-muted">
@@ -343,6 +397,7 @@ export function RenewalPanel({ customers, csms }: Props) {
                   <th className="px-3 py-2 font-medium">Renewal</th>
                   <th className="px-3 py-2 font-medium">Days</th>
                   <th className="px-3 py-2 font-medium">Lifecycle</th>
+                  <th className="px-3 py-2 font-medium">Review</th>
                   <th className="px-3 py-2 font-medium hidden lg:table-cell">CSM</th>
                   <th className="px-3 py-2 font-medium"></th>
                 </tr>
@@ -430,6 +485,22 @@ export function RenewalPanel({ customers, csms }: Props) {
                             </span>
                           )}
                         </td>
+                        <td className="px-3 py-2">
+                          <ReviewStateCell
+                            workspaceId={c.workspace_id}
+                            workflow="renewals"
+                            current={
+                              c.workspace_id
+                                ? reviewStates[c.workspace_id]
+                                : undefined
+                            }
+                            onChange={(next) => {
+                              if (c.workspace_id) {
+                                onReviewChange(c.workspace_id, next);
+                              }
+                            }}
+                          />
+                        </td>
                         <td className="px-3 py-2 text-muted hidden lg:table-cell break-words">
                           {c.customer_success_manager?.replace(/_/g, " ") ?? "—"}
                         </td>
@@ -439,7 +510,7 @@ export function RenewalPanel({ customers, csms }: Props) {
                       </tr>
                       {isOpen && (
                         <tr className="bg-blue-50 dark:bg-blue-500/20 border-b border-border">
-                          <td colSpan={9} className="px-6 py-4">
+                          <td colSpan={10} className="px-6 py-4">
                             <CustomerDetailPanel customer={c} />
                           </td>
                         </tr>

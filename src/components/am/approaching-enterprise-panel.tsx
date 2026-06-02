@@ -10,9 +10,16 @@ import {
 } from "./slack-bulk-compose";
 import { BulkEmailLauncher } from "./bulk-email-launcher";
 import { NotesChip } from "./notes-chip";
+import { ReviewStateCell } from "./review-state-cell";
 import { CustomerDetailPanel } from "../customer-detail-panel";
+import {
+  needsReview,
+  type ReviewState,
+  type ReviewStatesMap,
+} from "@/lib/data/review-states-types";
 import { SearchInput } from "../filters";
 import { usePublicationsIndex } from "@/lib/hooks/use-publications-index";
+import { useUrlSearch } from "@/lib/hooks/use-url-search";
 import type { SettingsShape } from "@/lib/data/settings-types";
 import type { Customer } from "@/lib/types";
 
@@ -110,6 +117,40 @@ export function ApproachingEnterprisePanel({ rows }: Props) {
   // CustomerDetailPanel below (notes + status + dates + …),
   // matching /csm CustomerTable.
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  // Per-workflow review state map for the digest workflow. Cell
+  // changes update locally so the dropdown reflects immediately.
+  const [reviewStates, setReviewStates] = useState<ReviewStatesMap>({});
+  const [needsReviewFilter] = useUrlSearch("needs_review");
+  useEffect(() => {
+    fetch("/api/review-states")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => j && setReviewStates(j as ReviewStatesMap))
+      .catch(() => {});
+  }, []);
+  const onReviewChange = (
+    workspaceId: string,
+    next: ReviewState | null
+  ) => {
+    setReviewStates((prev) => {
+      const map = { ...prev };
+      const current = { ...(map[workspaceId] ?? {}) };
+      if (next === null) {
+        delete current.proactive;
+      } else {
+        current.proactive = {
+          state: next,
+          set_at: new Date().toISOString(),
+          set_by: null,
+        };
+      }
+      if (Object.keys(current).length === 0) {
+        delete map[workspaceId];
+      } else {
+        map[workspaceId] = current;
+      }
+      return map;
+    });
+  };
   function toggleExpanded(k: string) {
     setExpanded((prev) => {
       const next = new Set(prev);
@@ -171,6 +212,11 @@ export function ApproachingEnterprisePanel({ rows }: Props) {
       .filter((r) => {
         const p = pctNum(r);
         if (p == null || p < 80) return false;
+        // ?needs_review=1 → only rows still pending action.
+        if (needsReviewFilter === "1") {
+          const ws = r.organization_id ?? null;
+          if (ws && !needsReview(reviewStates[ws], "proactive")) return false;
+        }
         if (!q) return true;
         // organization_id IS the workspace ID in beehiiv. Lookup
         // every publication owned by this workspace so a pasted
@@ -203,7 +249,7 @@ export function ApproachingEnterprisePanel({ rows }: Props) {
         return p != null && b.test(p);
       }),
     })).filter((g) => g.list.length > 0);
-  }, [rows, search, ws2pubs, customerByStripeId]);
+  }, [rows, search, ws2pubs, customerByStripeId, needsReviewFilter, reviewStates]);
 
   const totalAtOrAboveFloor = rows.filter((r) => {
     const p = pctNum(r);
@@ -312,17 +358,17 @@ export function ApproachingEnterprisePanel({ rows }: Props) {
                   <col className="w-8" />
                   {/* Expand chevron */}
                   <col className="w-6" />
-                  <col className="w-[18%]" />
-                  <col className="w-[9%]" />
-                  <col className="w-[9%]" />
+                  <col className="w-[16%]" />
+                  <col className="w-[8%]" />
+                  <col className="w-[8%]" />
+                  <col className="w-[10%]" />
+                  <col className="w-[6%]" />
+                  <col className="w-[10%]" />
+                  <col className="w-[10%]" />
+                  {/* Review dropdown — drives the digest workflow. */}
                   <col className="w-[11%]" />
-                  <col className="w-[7%]" />
-                  <col className="w-[11%]" />
-                  <col className="w-[11%]" />
-                  {/* Actions — wide enough for the Masquerade word + the
-                   *  mailto envelope. Was 10% (sized for icons) before
-                   *  the Masquerade-as-text swap. */}
-                  <col className="w-[18%]" />
+                  {/* Actions — Masquerade + envelope. */}
+                  <col className="w-[15%]" />
                 </colgroup>
                 <thead>
                   <tr className="text-xs text-muted border-y border-border text-left">
@@ -337,6 +383,7 @@ export function ApproachingEnterprisePanel({ rows }: Props) {
                     <th className="px-3 py-2 font-medium text-right">% cap</th>
                     <th className="px-3 py-2 font-medium">Last send</th>
                     <th className="px-3 py-2 font-medium">Last payment</th>
+                    <th className="px-3 py-2 font-medium">Review</th>
                     <th className="px-3 py-2"></th>
                   </tr>
                 </thead>
@@ -424,6 +471,25 @@ export function ApproachingEnterprisePanel({ rows }: Props) {
                           {fmtDate(r.last_payment_at)}
                         </td>
                         <td
+                          className="px-3 py-2"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <ReviewStateCell
+                            workspaceId={r.organization_id ?? null}
+                            workflow="proactive"
+                            current={
+                              r.organization_id
+                                ? reviewStates[r.organization_id]
+                                : undefined
+                            }
+                            onChange={(next) => {
+                              if (r.organization_id) {
+                                onReviewChange(r.organization_id, next);
+                              }
+                            }}
+                          />
+                        </td>
+                        <td
                           className="px-3 py-2 text-right"
                           onClick={(e) => e.stopPropagation()}
                         >
@@ -455,7 +521,7 @@ export function ApproachingEnterprisePanel({ rows }: Props) {
                       </tr>
                       {isOpen ? (
                         <tr className="bg-blue-50/40 dark:bg-blue-500/10 border-b border-border">
-                          <td colSpan={10} className="px-6 py-4">
+                          <td colSpan={11} className="px-6 py-4">
                             {resolvedCustomer ? (
                               <CustomerDetailPanel customer={resolvedCustomer} />
                             ) : (

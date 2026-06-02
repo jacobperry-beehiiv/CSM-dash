@@ -19,7 +19,13 @@ import {
 import { BulkEmailLauncher } from "./bulk-email-launcher";
 import { LowTierBulkSend } from "./low-tier-bulk-send";
 import { NotesChip } from "./notes-chip";
+import { ReviewStateCell } from "./review-state-cell";
 import { CustomerDetailPanel } from "../customer-detail-panel";
+import {
+  needsReview,
+  type ReviewState,
+  type ReviewStatesMap,
+} from "@/lib/data/review-states-types";
 import { usePublicationsIndex } from "@/lib/hooks/use-publications-index";
 import { stripeCustomerUrl } from "@/lib/links";
 import type { Customer } from "@/lib/types";
@@ -157,6 +163,44 @@ export function PastDuePanel({ rows, csms, totalSourceRows }: Props) {
   // click-email-for-episode-history affordance keeps working
   // independently of the new chevron-for-full-detail one.
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  // Per-workflow review map (Phase A of the digest workflow). The
+  // panel uses this to render the Review dropdown per row + scope
+  // the visible rows when ?needs_review=1 is in the URL (the
+  // digest-link target).
+  const [reviewStates, setReviewStates] = useState<ReviewStatesMap>({});
+  const [needsReviewFilter, setNeedsReviewFilter] = useUrlSearch(
+    "needs_review"
+  );
+  useEffect(() => {
+    fetch("/api/review-states")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => j && setReviewStates(j as ReviewStatesMap))
+      .catch(() => {});
+  }, []);
+  const onReviewChange = (
+    workspaceId: string,
+    next: ReviewState | null
+  ) => {
+    setReviewStates((prev) => {
+      const map = { ...prev };
+      const current = { ...(map[workspaceId] ?? {}) };
+      if (next === null) {
+        delete current.past_due;
+      } else {
+        current.past_due = {
+          state: next,
+          set_at: new Date().toISOString(),
+          set_by: null,
+        };
+      }
+      if (Object.keys(current).length === 0) {
+        delete map[workspaceId];
+      } else {
+        map[workspaceId] = current;
+      }
+      return map;
+    });
+  };
   function toggleExpanded(k: string) {
     setExpanded((prev) => {
       const next = new Set(prev);
@@ -347,13 +391,27 @@ export function PastDuePanel({ rows, csms, totalSourceRows }: Props) {
               : classifyPastDue(r);
             return tier === subtab;
           });
-    if (outreachFilter !== "has" && outreachFilter !== "none") return base;
-    return base.filter((r) => {
-      const touched = Boolean(
-        r.customer_id ? outreachMap[r.customer_id] : null
-      );
-      return outreachFilter === "has" ? touched : !touched;
-    });
+    let next = base;
+    if (outreachFilter === "has" || outreachFilter === "none") {
+      next = next.filter((r) => {
+        const touched = Boolean(
+          r.customer_id ? outreachMap[r.customer_id] : null
+        );
+        return outreachFilter === "has" ? touched : !touched;
+      });
+    }
+    // ?needs_review=1 → only rows where past-due review-state is
+    // reach_out or unset. Used by the digest deep-link so a CSM
+    // lands on exactly what's left to triage for this workflow.
+    if (needsReviewFilter === "1") {
+      next = next.filter((r) => {
+        const ws = r.customer_id
+          ? customerByStripeId.get(r.customer_id)?.workspace_id ?? null
+          : null;
+        return ws ? needsReview(reviewStates[ws], "past_due") : true;
+      });
+    }
+    return next;
   }, [
     subtab,
     searched,
@@ -361,6 +419,9 @@ export function PastDuePanel({ rows, csms, totalSourceRows }: Props) {
     followUpRows,
     outreachFilter,
     outreachMap,
+    needsReviewFilter,
+    reviewStates,
+    customerByStripeId,
   ]);
 
   const maxArr = useMemo(
@@ -818,17 +879,16 @@ export function PastDuePanel({ rows, csms, totalSourceRows }: Props) {
               <table className="w-full text-sm table-fixed">
                 <colgroup>
                   <col className="w-8" />
-                  {/* Expand chevron — toggles the full CustomerDetailPanel
-                   *  row underneath. Separate click target from the
-                   *  email-click-for-episode-history affordance, so the
-                   *  two expands can be used independently. */}
+                  {/* Expand chevron */}
                   <col className="w-6" />
-                  <col className="w-[22%]" />
                   <col className="w-[20%]" />
+                  <col className="w-[16%]" />
+                  <col className="w-[10%]" />
+                  <col className="w-[11%]" />
                   <col className="w-[12%]" />
-                  <col className="w-[12%]" />
-                  <col className="w-[14%]" />
-                  <col className="w-[12%]" />
+                  <col className="w-[10%]" />
+                  {/* Review dropdown — drives the digest workflow. */}
+                  <col className="w-[11%]" />
                 </colgroup>
                 <thead>
                   <tr className="text-xs text-muted border-b border-border text-left">
@@ -842,6 +902,7 @@ export function PastDuePanel({ rows, csms, totalSourceRows }: Props) {
                     </th>
                     <th className="px-3 py-2 font-medium">Attempted</th>
                     <th className="px-3 py-2 font-medium">CSM</th>
+                    <th className="px-3 py-2 font-medium">Review</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1016,10 +1077,31 @@ export function PastDuePanel({ rows, csms, totalSourceRows }: Props) {
                             </span>
                           )}
                         </td>
+                        <td className="px-3 py-2">
+                          <ReviewStateCell
+                            workspaceId={
+                              resolvedCustomer?.workspace_id ?? null
+                            }
+                            workflow="past_due"
+                            current={
+                              resolvedCustomer?.workspace_id
+                                ? reviewStates[resolvedCustomer.workspace_id]
+                                : undefined
+                            }
+                            onChange={(next) => {
+                              if (resolvedCustomer?.workspace_id) {
+                                onReviewChange(
+                                  resolvedCustomer.workspace_id,
+                                  next
+                                );
+                              }
+                            }}
+                          />
+                        </td>
                       </tr>
                       {isOpen ? (
                         <tr className="bg-blue-50/40 dark:bg-blue-500/10 border-b border-border">
-                          <td colSpan={8} className="px-6 py-4">
+                          <td colSpan={9} className="px-6 py-4">
                             {resolvedCustomer ? (
                               <CustomerDetailPanel customer={resolvedCustomer} />
                             ) : (
