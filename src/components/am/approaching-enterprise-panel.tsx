@@ -9,6 +9,7 @@ import {
   type BulkSlackMessage,
 } from "./slack-bulk-compose";
 import { BulkEmailLauncher } from "./bulk-email-launcher";
+import { NotesChip } from "./notes-chip";
 import { CustomerDetailPanel } from "../customer-detail-panel";
 import { SearchInput } from "../filters";
 import { usePublicationsIndex } from "@/lib/hooks/use-publications-index";
@@ -385,8 +386,17 @@ export function ApproachingEnterprisePanel({ rows }: Props) {
                           </span>
                         </td>
                         <td className="px-3 py-2 break-words">
-                          <div className="font-medium text-fg">
-                            {r.workspace_name ?? "—"}
+                          <div className="font-medium text-fg flex items-center gap-2 flex-wrap">
+                            <span>{r.workspace_name ?? "—"}</span>
+                            {/* Notes affordance — same pattern as Past
+                             *  Due. Clicking expands the row to surface
+                             *  the embedded CompanyNotes editor. */}
+                            <NotesChip
+                              workspaceId={
+                                resolvedCustomer?.workspace_id ?? null
+                              }
+                              onClick={() => toggleExpanded(k)}
+                            />
                           </div>
                           <div className="text-xs text-muted truncate">
                             {r.owner_name ?? r.owner_email ?? ""}

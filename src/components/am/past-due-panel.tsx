@@ -18,6 +18,7 @@ import {
 } from "./slack-bulk-compose";
 import { BulkEmailLauncher } from "./bulk-email-launcher";
 import { LowTierBulkSend } from "./low-tier-bulk-send";
+import { NotesChip } from "./notes-chip";
 import { CustomerDetailPanel } from "../customer-detail-panel";
 import { usePublicationsIndex } from "@/lib/hooks/use-publications-index";
 import { stripeCustomerUrl } from "@/lib/links";
@@ -935,6 +936,18 @@ export function PastDuePanel({ rows, csms, totalSourceRows }: Props) {
                                         ? outreachMap[r.customer_id]?.status
                                         : undefined
                                     }
+                                  />
+                                  {/* Notes affordance: shows N notes
+                                   *  (or "+ note" when empty) and routes
+                                   *  the click into the same row-expand
+                                   *  toggle the chevron uses, so the
+                                   *  CompanyNotes editor in the detail
+                                   *  panel becomes visible immediately. */}
+                                  <NotesChip
+                                    workspaceId={
+                                      resolvedCustomer?.workspace_id ?? null
+                                    }
+                                    onClick={() => toggleExpanded(k)}
                                   />
                                   {months > 0 ? (
                                     <button

@@ -1,4 +1,5 @@
 import { Suspense } from "react";
+import { redirect } from "next/navigation";
 import {
   filterCustomers,
   getDataSource,
@@ -14,7 +15,6 @@ import type { CustomerWithMetrics, Segment } from "@/lib/types";
 import { TabBar } from "@/components/tab-bar";
 import { CustomerTable } from "@/components/customer-table";
 import { AtRiskTable } from "@/components/at-risk-table";
-import { RenewalPanel } from "@/components/renewal-panel";
 import { DeliverabilityPanel } from "@/components/deliverability-panel";
 import { DeliverabilityBanner } from "@/components/deliverability-banner";
 import { DeliverabilityLoading } from "@/components/deliverability-loading";
@@ -26,7 +26,6 @@ const TABS = [
   { id: "book", label: "All assigned" },
   { id: "deliverability", label: "Deliverability" },
   { id: "at-risk", label: "At-risk" },
-  { id: "renewals", label: "Renewals" },
 ];
 
 interface SP {
@@ -71,6 +70,14 @@ export default async function CsmPage({
   searchParams: Promise<SP>;
 }) {
   const sp = await searchParams;
+  // Renewals moved to /am — redirect with the existing CSM filter so
+  // bookmarks land at the same data. Preserves ?csm= so deep-links
+  // to a specific CSM's renewal list keep working.
+  if (sp.tab === "renewals") {
+    const params = new URLSearchParams({ tab: "renewals" });
+    if (sp.csm) params.set("csm", sp.csm);
+    redirect(`/am?${params.toString()}`);
+  }
   // Legacy URLs may still link to ?tab=utilization. Feature/ad-network
   // filters now do that drill-down inside the consolidated book view.
   const rawTab = sp.tab ?? "book";
@@ -96,8 +103,6 @@ export default async function CsmPage({
     if (tab === "book") {
       const fullBook = filterCustomers(all, { csm }).map(withUtilization);
       body = <CustomerTable initialCustomers={fullBook} csms={csms} />;
-    } else if (tab === "renewals") {
-      body = <RenewalPanel customers={book} csms={csms} />;
     } else if (tab === "at-risk") {
       const result = await runAtRiskCheck({ customers: book, csmName: null });
       body = <AtRiskTable data={result} csms={csms} />;

@@ -1,6 +1,7 @@
 import { Suspense } from "react";
 import { redirect } from "next/navigation";
 import {
+  filterCustomers,
   isEnterprise,
   loadCustomers,
   resolveCsmFilter,
@@ -17,6 +18,7 @@ import type { Customer } from "@/lib/types";
 import { TabBar } from "@/components/tab-bar";
 import { ProactiveOutreachPanel } from "@/components/am/proactive-outreach-panel";
 import { PastDuePanel } from "@/components/am/past-due-panel";
+import { RenewalPanel } from "@/components/renewal-panel";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 120;
@@ -24,6 +26,7 @@ export const maxDuration = 120;
 const TABS = [
   { id: "proactive", label: "Proactive Outreach" },
   { id: "past-due", label: "Past Due" },
+  { id: "renewals", label: "Renewals" },
 ];
 
 // Per the AM Hackathon brief follow-up: surface Enterprise accounts at
@@ -190,6 +193,14 @@ export default async function AmPage({
           <PastDueTab csms={csms} csm={pastDueCsm} />
         </Suspense>
       );
+    } else if (tab === "renewals") {
+      // Renewals lived under /csm before — moved here so all "next
+      // action needed" cohorts (Proactive Outreach, Past Due,
+      // Renewals) live under one tab strip. Same filtering semantics
+      // as the rest of /am: viewer's CSM scope by default, ?csm=all
+      // for the team-wide view.
+      const book = filterCustomers(all, { csm });
+      body = <RenewalPanel customers={book} csms={csms} />;
     } else {
       body = <div className="text-sm text-muted">Unknown tab: {tab}</div>;
     }
