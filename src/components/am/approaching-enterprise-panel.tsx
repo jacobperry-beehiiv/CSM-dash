@@ -10,6 +10,7 @@ import {
 } from "./slack-bulk-compose";
 import { BulkEmailLauncher } from "./bulk-email-launcher";
 import { CustomerDetailPanel } from "../customer-detail-panel";
+import { SearchInput } from "../filters";
 import { usePublicationsIndex } from "@/lib/hooks/use-publications-index";
 import type { SettingsShape } from "@/lib/data/settings-types";
 import type { Customer } from "@/lib/types";
@@ -219,12 +220,10 @@ export function ApproachingEnterprisePanel({ rows }: Props) {
   return (
     <>
       <div className="flex flex-wrap items-center gap-2 mb-4">
-        <input
-          type="text"
-          placeholder="Search workspace / owner / CSM / publication ID…"
+        <SearchInput
           value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          className="px-3 py-2 border border-border-strong rounded-lg text-sm flex-1 min-w-[220px]"
+          onChange={setSearch}
+          placeholder="Search workspace / owner / CSM / publication ID…"
         />
         <span className="text-xs text-muted ml-auto">
           {totalAtOrAboveFloor} of {rows.length} q13268 rows at ≥80% of plan limit
