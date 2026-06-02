@@ -465,7 +465,21 @@ export function CustomerTable({
       case "arr":
         return fmtCurrency(c.arr);
       case "active_subs":
-        return fmtNumber(c.active_subs);
+        // Two-line shape matching the AM panels: active count on top,
+        // muted "/ cap" below. Gives the reader the % of plan they
+        // need to eyeball without a separate column. Falls back to a
+        // single dash when both are null.
+        if (c.active_subs == null && c.max_subscriptions == null) return "—";
+        return (
+          <div className="leading-tight">
+            <div>{fmtNumber(c.active_subs)}</div>
+            {c.max_subscriptions != null ? (
+              <div className="text-xs text-muted">
+                / {fmtNumber(c.max_subscriptions)}
+              </div>
+            ) : null}
+          </div>
+        );
       case "features_enabled": {
         const { active, total } = featureCounts(c);
         const ratio = active / total;

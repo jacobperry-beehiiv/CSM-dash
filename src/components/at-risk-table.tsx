@@ -597,6 +597,9 @@ export function AtRiskTable({
                         {c.active_subs != null ? (
                           <div className="text-xs text-muted">
                             {fmtNumber(c.active_subs)}
+                            {c.max_subscriptions != null
+                              ? ` / ${fmtNumber(c.max_subscriptions)}`
+                              : null}
                           </div>
                         ) : null}
                       </td>
