@@ -1,7 +1,7 @@
 "use client";
 
 import { Fragment, useEffect, useMemo, useState } from "react";
-import { fmtCurrency, fmtDate, fmtNumber, fmtPct } from "./format";
+import { fmtCurrency, fmtDate, fmtNumber, fmtPct, daysAgo } from "./format";
 import { OutreachModal } from "./outreach-modal";
 import { CustomerDetailPanel } from "./customer-detail-panel";
 import { RowActions } from "./row-actions";
@@ -64,13 +64,6 @@ function suggestedTemplate(flags: RiskFlag[]): TemplateScenario {
   if (codes.has("A")) return "dormant-no-send";
   if (codes.has("C")) return "growth-push-under-tier";
   return "general-checkin";
-}
-
-function daysAgo(s: string | null | undefined): number | null {
-  if (!s) return null;
-  const d = new Date(s);
-  if (isNaN(d.getTime())) return null;
-  return Math.floor((Date.now() - d.getTime()) / (1000 * 60 * 60 * 24));
 }
 
 function pctVal(c: Customer): number | null {
