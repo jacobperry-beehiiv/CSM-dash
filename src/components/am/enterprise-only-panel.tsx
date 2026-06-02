@@ -630,14 +630,27 @@ export function EnterpriseOnlyPanel({ rows, csms }: Props) {
   );
 }
 
-/** Inline chip showing where this account sits in the proactive-outreach
- *  lifecycle: pinged in Slack, outreach logged, or nudged. Invisible
- *  when no state exists yet (most rows on first load).
+/** Inline chip mirroring the row's Status column — single source of
+ *  truth for "where this account sits in the proactive-outreach
+ *  lifecycle". Reads entry.status (the explicit dropdown value the
+ *  engine auto-stamps and CSMs can override).
+ *
+ *  Color comes from a small lookup so well-known transitions
+ *  ("Pinged" / "Outreach made" / etc) get the same visual register
+ *  as before; unknown statuses (custom additions in /settings/slack)
+ *  render in a neutral surface so adding "In follow-up" doesn't
+ *  require a code change.
+ *
+ *  Legacy fallback: when entry.status is empty but the timestamps
+ *  show prior activity, we still render the derived chip so old
+ *  pre-status-field entries don't go dark on the row. This is the
+ *  ONLY remaining timestamp-derived path — savePingSent +
+ *  bulkSaveOutreachLogged both write entry.status now, so any new
+ *  activity skips the fallback entirely.
  *
  *  When `onClear` is provided AND a status is visible, a small "×"
- *  affordance follows the chip — click to wipe the proactive entry
- *  so the workspace becomes ping-eligible again (bypasses the
- *  5-day dedupe). */
+ *  follows the chip — click to wipe the proactive entry (bypasses
+ *  the 5-day dedupe). */
 function ProactiveStatusBadge({
   entry,
   onClear,
@@ -651,9 +664,6 @@ function ProactiveStatusBadge({
     <button
       type="button"
       onClick={(e) => {
-        // The row is wrapped in a click-to-expand handler; without
-        // stopPropagation a clear-click would also toggle the
-        // detail panel.
         e.stopPropagation();
         if (
           confirm(
@@ -671,6 +681,31 @@ function ProactiveStatusBadge({
     </button>
   ) : null;
 
+  // Primary path: explicit dropdown value drives the chip.
+  const status = entry.status?.trim() || null;
+  if (status) {
+    const cls = colorForStatus(status);
+    const tooltipBits: string[] = [];
+    if (entry.status_updated_at) {
+      tooltipBits.push(`Set ${fmtDate(entry.status_updated_at)}`);
+    }
+    if (entry.status_updated_by) {
+      tooltipBits.push(`by ${entry.status_updated_by}`);
+    }
+    return (
+      <span className="inline-flex items-baseline gap-1">
+        <span
+          className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium ${cls}`}
+          title={tooltipBits.join(" ") || status}
+        >
+          {status}
+        </span>
+        {clearChip}
+      </span>
+    );
+  }
+
+  // Legacy fallback for pre-status-field entries.
   if (entry.last_outreach_at) {
     return (
       <span className="inline-flex items-baseline gap-1">
@@ -714,4 +749,27 @@ function ProactiveStatusBadge({
     );
   }
   return null;
+}
+
+/** Color register for the explicit-status chip. Maps well-known
+ *  workflow values to the same color set the legacy timestamp-derived
+ *  badge used (so a "Pinged" chip stays blue, "Outreach made" stays
+ *  green, etc.). Everything else gets the neutral surface — admins
+ *  can add custom statuses in /settings/slack without code changes,
+ *  and they'll render in a clean default style. */
+function colorForStatus(status: string): string {
+  const normalized = status.toLowerCase();
+  if (normalized === "pinged") {
+    return "bg-blue-100 text-blue-800 dark:bg-blue-500/20 dark:text-blue-200";
+  }
+  if (normalized === "outreach made" || normalized === "renewed") {
+    return "bg-emerald-100 text-emerald-800 dark:bg-emerald-500/20 dark:text-emerald-200";
+  }
+  if (normalized === "awaiting response" || normalized === "nudge sent") {
+    return "bg-amber-100 text-amber-800 dark:bg-amber-500/20 dark:text-amber-200";
+  }
+  if (normalized === "lost") {
+    return "bg-slate-200 text-slate-800 dark:bg-slate-500/30 dark:text-slate-200";
+  }
+  return "bg-surface-2 text-fg border border-border";
 }

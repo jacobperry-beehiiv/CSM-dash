@@ -136,6 +136,13 @@ export interface AmSettings {
    * constant so a wiped settings doc doesn't break the dropdown.
    */
   proactive_outreach_statuses?: string[];
+  /**
+   * Configurable lifecycle-stage list — drives the Lifecycle column
+   * dropdown on /am Renewals. Pure workflow labels; nothing in the
+   * engine auto-applies these. Empty / unset falls back to
+   * DEFAULT_LIFECYCLE_STAGES.
+   */
+  lifecycle_stages?: string[];
 }
 
 /** Built-in status list. The first two names ("Pinged" and
@@ -151,6 +158,18 @@ export const DEFAULT_PROACTIVE_OUTREACH_STATUSES: string[] = [
   "Awaiting response",
   "Renewed",
   "Lost",
+];
+
+/** Built-in lifecycle stages — drives the Lifecycle column dropdown
+ *  on /am Renewals. Pure workflow labels; nothing in the engine
+ *  auto-applies these. Admins manage the list at /settings/slack. */
+export const DEFAULT_LIFECYCLE_STAGES: string[] = [
+  "Prospect",
+  "Onboarding",
+  "Active",
+  "At risk",
+  "Renewal conversation",
+  "Churned",
 ];
 
 export const DEFAULTS: SettingsShape = {
@@ -201,6 +220,7 @@ export const DEFAULTS: SettingsShape = {
     bulk_bcc_batch_size: 40,
     proactive_outreach_sweep_enabled: true,
     proactive_outreach_statuses: [...DEFAULT_PROACTIVE_OUTREACH_STATUSES],
+    lifecycle_stages: [...DEFAULT_LIFECYCLE_STAGES],
   },
 };
 

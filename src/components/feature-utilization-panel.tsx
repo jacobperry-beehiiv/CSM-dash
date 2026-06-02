@@ -50,7 +50,7 @@ export function FeatureUtilizationPanel({ workspaceId }: Props) {
     return (
       <div className="bg-surface rounded-md border border-border p-3 flex items-center gap-2 text-sm text-muted">
         <span className="inline-block w-3 h-3 border-2 border-border-strong border-t-gray-700 rounded-full animate-spin" />
-        Loading enterprise feature utilization…
+        Loading feature utilization…
       </div>
     );
   }
@@ -67,7 +67,7 @@ export function FeatureUtilizationPanel({ workspaceId }: Props) {
 
   return (
     <CollapsibleSection
-      title="Enterprise feature utilization"
+      title="Feature utilization"
       trailing={
         <span className="text-[10px] text-subtle">
           live · {fmtDate(data.generated_at)}

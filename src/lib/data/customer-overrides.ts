@@ -26,6 +26,13 @@ export interface CustomerOverride {
   csm_refreshed_at?: string;
   /** Viewer email that triggered the refresh — audit trail. */
   csm_refreshed_by?: string;
+  /** User-facing lifecycle stage — drives the Lifecycle column dropdown
+   *  on /am Renewals. Configurable list lives in
+   *  settings.am.lifecycle_stages so admins can rename / add / remove
+   *  values without code changes. Empty / undefined = no stage set. */
+  lifecycle_stage?: string;
+  lifecycle_stage_updated_at?: string;
+  lifecycle_stage_updated_by?: string;
 }
 
 export type OverrideMap = Record<string, CustomerOverride>;
@@ -75,6 +82,9 @@ export async function setOverride(
   applyField("customer_success_manager_email");
   applyField("csm_refreshed_at");
   applyField("csm_refreshed_by");
+  applyField("lifecycle_stage");
+  applyField("lifecycle_stage_updated_at");
+  applyField("lifecycle_stage_updated_by");
 
   if (Object.keys(current).length === 0) {
     delete map[workspaceId];

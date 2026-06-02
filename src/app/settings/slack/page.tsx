@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import {
+  DEFAULT_LIFECYCLE_STAGES,
   DEFAULT_PROACTIVE_OUTREACH_STATUSES,
   DEFAULTS,
   newChannelId,
@@ -400,6 +401,19 @@ export default function SlackSettingsPage() {
         }
       />
 
+      <LifecycleStagesSection
+        stages={settings.am?.lifecycle_stages ?? []}
+        onChange={(next) =>
+          setSettings((prev) => ({
+            ...prev,
+            am: {
+              ...(prev.am ?? {}),
+              lifecycle_stages: next,
+            },
+          }))
+        }
+      />
+
       <section className="bg-surface rounded-xl border border-border shadow-card p-4 space-y-3">
         <h2 className="text-sm font-semibold text-fg">CSM Slack IDs</h2>
         <p className="text-xs text-muted">
@@ -490,18 +504,30 @@ export default function SlackSettingsPage() {
   );
 }
 
-/** Manage the configurable status list that drives the Status column
- *  dropdown on the AM Proactive Outreach panel. Two of the entries —
- *  "Pinged" and "Outreach made" — are auto-applied by the engine.
- *  Removing them from this list leaves the engine writes intact but
- *  the dropdown no longer offers those values; the engine-supplied
- *  value renders as a (legacy) option until someone picks a
- *  configured one. */
-function ProactiveOutreachStatusesSection({
-  statuses,
+/** Reusable section for managing a string-list setting — used for
+ *  both Proactive Outreach statuses and Renewals lifecycle stages.
+ *  Add / remove with Enter to commit; "Restore defaults" reseeds
+ *  the list when needed. Empty list lets the consuming dropdown
+ *  fall back to its own constant. */
+function StringListSection({
+  title,
+  description,
+  values,
+  defaults,
+  inputPlaceholder,
+  addLabel,
+  emptyHint,
+  restoreTitle,
   onChange,
 }: {
-  statuses: string[];
+  title: string;
+  description: React.ReactNode;
+  values: string[];
+  defaults: string[];
+  inputPlaceholder: string;
+  addLabel: string;
+  emptyHint: string;
+  restoreTitle: string;
   onChange: (next: string[]) => void;
 }) {
   const [draft, setDraft] = useState("");
@@ -509,49 +535,32 @@ function ProactiveOutreachStatusesSection({
   function add() {
     const value = draft.trim();
     if (!value) return;
-    if (statuses.includes(value)) {
+    if (values.includes(value)) {
       setDraft("");
       return;
     }
-    onChange([...statuses, value]);
+    onChange([...values, value]);
     setDraft("");
   }
 
   function remove(s: string) {
-    onChange(statuses.filter((x) => x !== s));
+    onChange(values.filter((x) => x !== s));
   }
 
   function restoreDefaults() {
-    onChange([...DEFAULT_PROACTIVE_OUTREACH_STATUSES]);
+    onChange([...defaults]);
   }
 
   return (
     <section className="bg-surface rounded-xl border border-border shadow-card p-4 space-y-3">
-      <h2 className="text-sm font-semibold text-fg">
-        Proactive outreach statuses
-      </h2>
-      <p className="text-xs text-muted">
-        Drives the <strong>Status</strong> column dropdown on the AM
-        Proactive Outreach panel.{" "}
-        <code className="font-mono bg-surface-2 px-1 rounded">Pinged</code>{" "}
-        is auto-applied when a Slack ping fires;{" "}
-        <code className="font-mono bg-surface-2 px-1 rounded">
-          Outreach made
-        </code>{" "}
-        is auto-applied when a draft is created via the dashboard. The
-        rest of the list is manual workflow labels — rename them to
-        match how the team talks ("In follow-up", "Renewal won",
-        whatever).
-      </p>
+      <h2 className="text-sm font-semibold text-fg">{title}</h2>
+      <p className="text-xs text-muted">{description}</p>
 
       <div className="flex flex-wrap gap-1.5">
-        {statuses.length === 0 ? (
-          <span className="text-xs text-subtle italic">
-            No statuses configured — dropdown will fall back to the
-            built-in defaults.
-          </span>
+        {values.length === 0 ? (
+          <span className="text-xs text-subtle italic">{emptyHint}</span>
         ) : (
-          statuses.map((s) => (
+          values.map((s) => (
             <span
               key={s}
               className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md text-xs border border-border bg-canvas/40"
@@ -582,7 +591,7 @@ function ProactiveOutreachStatusesSection({
               add();
             }
           }}
-          placeholder="New status (e.g. Renewal at risk)"
+          placeholder={inputPlaceholder}
           className="px-3 py-2 border border-border-strong rounded-md text-sm min-w-[240px] flex-1 sm:flex-initial"
         />
         <button
@@ -591,17 +600,89 @@ function ProactiveOutreachStatusesSection({
           disabled={!draft.trim()}
           className="px-3 py-2 bg-accent text-accent-fg rounded-md text-sm font-medium hover:bg-accent-hover disabled:opacity-50"
         >
-          + Add status
+          {addLabel}
         </button>
         <button
           type="button"
           onClick={restoreDefaults}
           className="px-3 py-2 border border-border-strong rounded-md text-sm hover:bg-canvas"
-          title="Reset to the built-in list — Pinged, Outreach made, Awaiting response, Renewed, Lost."
+          title={restoreTitle}
         >
           Restore defaults
         </button>
       </div>
     </section>
+  );
+}
+
+/** Manage the configurable status list that drives the Status column
+ *  dropdown on the AM Proactive Outreach panel. Thin wrapper around
+ *  StringListSection so the existing call site keeps working. */
+function ProactiveOutreachStatusesSection({
+  statuses,
+  onChange,
+}: {
+  statuses: string[];
+  onChange: (next: string[]) => void;
+}) {
+  return (
+    <StringListSection
+      title="Proactive outreach statuses"
+      description={
+        <>
+          Drives the <strong>Status</strong> column dropdown on the AM
+          Proactive Outreach panel.{" "}
+          <code className="font-mono bg-surface-2 px-1 rounded">
+            Pinged
+          </code>{" "}
+          is auto-applied when a Slack ping fires;{" "}
+          <code className="font-mono bg-surface-2 px-1 rounded">
+            Outreach made
+          </code>{" "}
+          is auto-applied when a draft is created via the dashboard.
+          The rest of the list is manual workflow labels — rename
+          them to match how the team talks ("In follow-up", "Renewal
+          won", whatever).
+        </>
+      }
+      values={statuses}
+      defaults={DEFAULT_PROACTIVE_OUTREACH_STATUSES}
+      inputPlaceholder="New status (e.g. Renewal at risk)"
+      addLabel="+ Add status"
+      emptyHint="No statuses configured — dropdown will fall back to the built-in defaults."
+      restoreTitle="Reset to the built-in list — Pinged, Outreach made, Awaiting response, Renewed, Lost."
+      onChange={onChange}
+    />
+  );
+}
+
+/** Lifecycle stages — drives the Lifecycle column dropdown on /am
+ *  Renewals. Same UX as the Proactive Outreach statuses section. */
+function LifecycleStagesSection({
+  stages,
+  onChange,
+}: {
+  stages: string[];
+  onChange: (next: string[]) => void;
+}) {
+  return (
+    <StringListSection
+      title="Renewals lifecycle stages"
+      description={
+        <>
+          Drives the <strong>Lifecycle</strong> column dropdown on the
+          /am Renewals tab. Pure workflow labels — pick whatever
+          terminology fits how the team tracks accounts from
+          prospect to churn.
+        </>
+      }
+      values={stages}
+      defaults={DEFAULT_LIFECYCLE_STAGES}
+      inputPlaceholder="New stage (e.g. Renewal at risk)"
+      addLabel="+ Add stage"
+      emptyHint="No stages configured — dropdown will fall back to the built-in defaults."
+      restoreTitle="Reset to the built-in list — Prospect, Onboarding, Active, At risk, Renewal conversation, Churned."
+      onChange={onChange}
+    />
   );
 }
