@@ -28,6 +28,8 @@ import {
   type ReviewStatesMap,
 } from "@/lib/data/review-states-types";
 import { usePublicationsIndex } from "@/lib/hooks/use-publications-index";
+import { useStripeCustomerIndex } from "@/lib/hooks/use-stripe-customer-index";
+import { synthesizeCustomer } from "@/lib/data/synthesize-customer";
 import { stripeCustomerUrl } from "@/lib/links";
 import type { Customer } from "@/lib/types";
 import type {
@@ -283,6 +285,12 @@ export function PastDuePanel({ rows, csms, totalSourceRows }: Props) {
   // empty so search keeps working if the endpoint hiccups (just
   // without pub-ID lookup).
   const { ws2pubs } = usePublicationsIndex();
+  // Stripe → workspace fallback for rows whose stripe_customer_id
+  // isn't in the customer book (q10600 only carries paying-CSM-
+  // assigned accounts; q24620 surfaces everyone past-due). Lets us
+  // still synthesize a Customer + drive the notes section by
+  // workspace_id.
+  const { stripe2ws } = useStripeCustomerIndex();
 
   /** Apply search to the CSM-filtered rows, then dedupe per Stripe
    *  customer_id (q24620 can return multiple rows for the same
@@ -914,13 +922,32 @@ export function PastDuePanel({ rows, csms, totalSourceRows }: Props) {
                     const isEnt = isEnterprisePlan(r);
                     const isOpen = expanded.has(k);
                     // Resolve to the canonical Customer record so the
-                    // detail panel + notes editor have the full set of
-                    // workspace fields. Past-due q24620 only carries
-                    // billing-side data; everything HubSpot-shaped lives
-                    // in the customer book.
-                    const resolvedCustomer = r.customer_id
+                    // detail panel + notes editor have the full set
+                    // of workspace fields. Fallback chain:
+                    //   1. Customer book (q10600) — full record.
+                    //   2. Stripe → workspace index + synthesize a
+                    //      minimal Customer from the row data. Covers
+                    //      non-ENT accounts that q10600 doesn't carry
+                    //      (most past-due Below $3.5K rows).
+                    //   3. Synthesize without workspace_id — notes
+                    //      won't work but the rest of the panel reads
+                    //      cleanly instead of an error message.
+                    const booked = r.customer_id
                       ? customerByStripeId.get(r.customer_id) ?? null
                       : null;
+                    const resolvedCustomer = booked
+                      ? booked
+                      : synthesizeCustomer({
+                          workspace_id: r.customer_id
+                            ? stripe2ws[r.customer_id] ?? null
+                            : null,
+                          owner_email: r.email,
+                          stripe_customer_id: r.customer_id,
+                          customer_success_manager:
+                            r.customer_success_manager,
+                          stripe_plan: r.price_name,
+                          arr: r.arr_dollars,
+                        });
                     return (
                       <Fragment key={k}>
                       <tr
@@ -1105,21 +1132,17 @@ export function PastDuePanel({ rows, csms, totalSourceRows }: Props) {
                       {isOpen ? (
                         <tr className="bg-blue-50/40 dark:bg-blue-500/10 border-b border-border">
                           <td colSpan={9} className="px-6 py-4">
-                            {resolvedCustomer ? (
-                              <CustomerDetailPanel customer={resolvedCustomer} />
-                            ) : (
-                              <p className="text-sm text-muted italic">
-                                Couldn&rsquo;t resolve this past-due row to the
-                                customer book — notes &amp; the full detail
-                                panel need a matching{" "}
-                                <code className="font-mono">cus_…</code> in{" "}
-                                <code className="font-mono">/api/customers</code>
-                                .
-                                {customerBook.length === 0
-                                  ? " (Customer book still loading.)"
-                                  : null}
+                            <CustomerDetailPanel customer={resolvedCustomer} />
+                            {!booked && !resolvedCustomer.workspace_id ? (
+                              <p className="text-[11px] text-subtle italic mt-2">
+                                This account isn&rsquo;t in the customer
+                                book and we couldn&rsquo;t map its
+                                Stripe ID to a workspace, so the Notes
+                                + Publications sections aren&rsquo;t
+                                available. The rest of the row data is
+                                from q24620.
                               </p>
-                            )}
+                            ) : null}
                           </td>
                         </tr>
                       ) : null}

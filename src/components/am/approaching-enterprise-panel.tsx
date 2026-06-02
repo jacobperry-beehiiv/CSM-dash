@@ -19,7 +19,9 @@ import {
 } from "@/lib/data/review-states-types";
 import { SearchInput } from "../filters";
 import { usePublicationsIndex } from "@/lib/hooks/use-publications-index";
+import { useStripeCustomerIndex } from "@/lib/hooks/use-stripe-customer-index";
 import { useUrlSearch } from "@/lib/hooks/use-url-search";
+import { synthesizeCustomer } from "@/lib/data/synthesize-customer";
 import type { SettingsShape } from "@/lib/data/settings-types";
 import type { Customer } from "@/lib/types";
 
@@ -201,6 +203,12 @@ export function ApproachingEnterprisePanel({ rows }: Props) {
   // into the search input and finding the matching row. Soft-fails
   // empty if the endpoint is down.
   const { ws2pubs } = usePublicationsIndex();
+  // Stripe → workspace fallback for the customer-book miss case.
+  // q13268 surfaces approaching-cap rows whether or not they're in
+  // q10600; this lets us still resolve to a workspace_id (already
+  // on the row as organization_id anyway, but reused here for
+  // consistency with past-due).
+  const { stripe2ws } = useStripeCustomerIndex();
 
   // Filter to ≥80% utilization, then bucket. q13268 returns customers
   // approaching the 100K Enterprise threshold — they're already a curated
@@ -393,13 +401,31 @@ export function ApproachingEnterprisePanel({ rows }: Props) {
                     const k = rowKey(r, i);
                     const isChecked = selected.has(k);
                     const isOpen = expanded.has(k);
-                    // Resolve to a full Customer record for the detail
-                    // panel — q13268 only carries the public-facing
-                    // fields; merge-tag tokens + the notes section need
-                    // the canonical /api/customers row.
-                    const resolvedCustomer = r.stripe_customer_id
+                    // Resolve to a Customer record for the detail panel.
+                    // Fallback chain: book lookup → synthesize from row
+                    // data. q13268 carries organization_id directly so
+                    // workspace_id is available even when the book misses,
+                    // keeping the notes editor functional.
+                    const booked = r.stripe_customer_id
                       ? customerByStripeId.get(r.stripe_customer_id) ?? null
                       : null;
+                    const resolvedCustomer = booked
+                      ? booked
+                      : synthesizeCustomer({
+                          workspace_id:
+                            r.organization_id ??
+                            (r.stripe_customer_id
+                              ? stripe2ws[r.stripe_customer_id] ?? null
+                              : null),
+                          workspace_name: r.workspace_name,
+                          owner_email: r.owner_email,
+                          owner_name: r.owner_name,
+                          stripe_customer_id: r.stripe_customer_id,
+                          stripe_plan: r.plan_name,
+                          active_subs: r.total_subscriptions,
+                          max_subscriptions: r.max_subscriptions,
+                          interval: r.billing_interval,
+                        });
                     return (
                       <Fragment key={k}>
                       <tr
@@ -522,18 +548,17 @@ export function ApproachingEnterprisePanel({ rows }: Props) {
                       {isOpen ? (
                         <tr className="bg-blue-50/40 dark:bg-blue-500/10 border-b border-border">
                           <td colSpan={11} className="px-6 py-4">
-                            {resolvedCustomer ? (
-                              <CustomerDetailPanel customer={resolvedCustomer} />
-                            ) : (
-                              <p className="text-sm text-muted italic">
-                                Couldn&rsquo;t resolve this workspace to the
-                                customer book — notes &amp; the full detail
-                                panel need the canonical /api/customers row.
+                            <CustomerDetailPanel customer={resolvedCustomer} />
+                            {!booked ? (
+                              <p className="text-[11px] text-subtle italic mt-2">
+                                This workspace isn&rsquo;t in the
+                                customer book; the panel above is
+                                rendering from q13268 row data.
                                 {customerBook.length === 0
                                   ? " (Customer book still loading.)"
                                   : null}
                               </p>
-                            )}
+                            ) : null}
                           </td>
                         </tr>
                       ) : null}
