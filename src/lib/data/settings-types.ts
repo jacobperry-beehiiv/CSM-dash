@@ -124,7 +124,34 @@ export interface AmSettings {
    * migration, etc.).
    */
   proactive_outreach_sweep_enabled?: boolean;
+  /**
+   * Configurable list of statuses available on the Proactive Outreach
+   * panel's Status column dropdown. Two of the entries —
+   * "Pinged" and "Outreach made" — are auto-applied by the engine
+   * when a Slack ping fires or a draft is created via the dashboard.
+   * Anything beyond those is purely user-facing labeling; rename
+   * "Awaiting response" → "In follow-up" without code changes.
+   *
+   * Empty / unset falls back to the DEFAULT_PROACTIVE_OUTREACH_STATUSES
+   * constant so a wiped settings doc doesn't break the dropdown.
+   */
+  proactive_outreach_statuses?: string[];
 }
+
+/** Built-in status list. The first two names ("Pinged" and
+ *  "Outreach made") MUST stay in sync with the literals in
+ *  src/lib/data/proactive-outreach.ts — those are the engine's
+ *  auto-applied values. Admins can re-order / add / remove via
+ *  /settings/slack but should leave those two present or the
+ *  auto-status string will display alongside a stale dropdown
+ *  option set. */
+export const DEFAULT_PROACTIVE_OUTREACH_STATUSES: string[] = [
+  "Pinged",
+  "Outreach made",
+  "Awaiting response",
+  "Renewed",
+  "Lost",
+];
 
 export const DEFAULTS: SettingsShape = {
   flags: {
@@ -173,6 +200,7 @@ export const DEFAULTS: SettingsShape = {
     bulk_alias_email: "",
     bulk_bcc_batch_size: 40,
     proactive_outreach_sweep_enabled: true,
+    proactive_outreach_statuses: [...DEFAULT_PROACTIVE_OUTREACH_STATUSES],
   },
 };
 

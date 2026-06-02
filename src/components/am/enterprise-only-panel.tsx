@@ -12,6 +12,10 @@ import { BucketSection } from "./bucket-section";
 import { BulkEmailLauncher } from "./bulk-email-launcher";
 import { CustomerDetailPanel } from "../customer-detail-panel";
 import type { ProactiveOutreachMap } from "@/lib/data/proactive-outreach";
+import {
+  DEFAULT_PROACTIVE_OUTREACH_STATUSES,
+  type SettingsShape,
+} from "@/lib/data/settings-types";
 
 interface Props {
   rows: Customer[];
@@ -92,6 +96,23 @@ export function EnterpriseOnlyPanel({ rows, csms }: Props) {
   const [outreachFilter, setOutreachFilter] = useUrlSearch("outreach");
   const [sweepBusy, setSweepBusy] = useState(false);
   const [sweepReport, setSweepReport] = useState<string | null>(null);
+  // Statuses available in the Status column dropdown — sourced from
+  // /settings/slack so admins can rename / add / remove without
+  // shipping code. Defaults restored when settings is empty / not
+  // yet loaded.
+  const [statusOptions, setStatusOptions] = useState<string[]>(
+    DEFAULT_PROACTIVE_OUTREACH_STATUSES
+  );
+  useEffect(() => {
+    fetch("/api/settings")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => {
+        const s = (j as SettingsShape | null)?.am
+          ?.proactive_outreach_statuses;
+        if (Array.isArray(s) && s.length > 0) setStatusOptions(s);
+      })
+      .catch(() => {});
+  }, []);
   // Per-row expand state — matches the /csm CustomerTable pattern so
   // AM users get the same click-row-to-see-full-detail affordance the
   // brief calls out. Keyed by rowKey() so it survives re-renders.
@@ -111,6 +132,30 @@ export function EnterpriseOnlyPanel({ rows, csms }: Props) {
       .then((j) => setOutreachMap((j as ProactiveOutreachMap) ?? {}))
       .catch(() => {});
   }, []);
+
+  /** Persist an explicit status change for a workspace. Used by the
+   *  Status column dropdown — empty string clears the override back
+   *  to "derive from timestamps". Refetches the outreach map on
+   *  success so the badge + dropdown reflect the new value
+   *  immediately. */
+  const setStatus = useCallback(
+    async (workspaceId: string, status: string) => {
+      try {
+        const r = await fetch("/api/proactive-outreach/status", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            workspace_id: workspaceId,
+            status: status || null,
+          }),
+        });
+        if (r.ok) reloadOutreach();
+      } catch {
+        /* non-fatal — user can retry from the dropdown */
+      }
+    },
+    [reloadOutreach]
+  );
 
   // Wipe the proactive-outreach entry for a workspace so the 5-day
   // dedupe no longer applies — next sweep / manual ping fires fresh.
@@ -382,15 +427,20 @@ export function EnterpriseOnlyPanel({ rows, csms }: Props) {
                   {/* Chevron column — narrow click-target for the
                    *  expand/collapse toggle, matches /csm pattern. */}
                   <col className="w-6" />
-                  <col className="w-[22%]" />
+                  <col className="w-[20%]" />
+                  <col className="w-[7%]" />
+                  <col className="w-[10%]" />
                   <col className="w-[8%]" />
+                  <col className="w-[10%]" />
+                  <col className="w-[8%]" />
+                  {/* Status column — dropdown driven by the configurable
+                   *  statuses list in /settings/slack. Pinged / Outreach
+                   *  made auto-fill from the engine; everything else is
+                   *  manual.*/}
                   <col className="w-[12%]" />
-                  <col className="w-[9%]" />
-                  <col className="w-[12%]" />
-                  <col className="w-[9%]" />
-                  {/* Actions — Masquerade + h. + Draft. Bumped from 10%
-                   *  so text "Masquerade" doesn't spill leftward. */}
-                  <col className="w-[18%]" />
+                  {/* Actions column. Stacks Masquerade / HubSpot / Draft
+                   *  vertically so 15% is plenty. */}
+                  <col className="w-[15%]" />
                 </colgroup>
                 <thead>
                   <tr className="text-xs text-muted border-y border-border text-left">
@@ -402,6 +452,7 @@ export function EnterpriseOnlyPanel({ rows, csms }: Props) {
                     <th className="px-3 py-2 font-medium text-right">Price</th>
                     <th className="px-3 py-2 font-medium">CSM</th>
                     <th className="px-3 py-2 font-medium text-right">ARR</th>
+                    <th className="px-3 py-2 font-medium">Status</th>
                     <th className="px-3 py-2"></th>
                   </tr>
                 </thead>
@@ -487,12 +538,74 @@ export function EnterpriseOnlyPanel({ rows, csms }: Props) {
                         className="px-3 py-2"
                         onClick={(e) => e.stopPropagation()}
                       >
+                        {c.workspace_id ? (
+                          <select
+                            value={
+                              outreachMap[c.workspace_id]?.status ?? ""
+                            }
+                            onChange={(e) =>
+                              void setStatus(
+                                c.workspace_id!,
+                                e.target.value
+                              )
+                            }
+                            className="w-full px-2 py-1 text-xs border border-border-strong rounded-md bg-surface"
+                            title={
+                              outreachMap[c.workspace_id]?.status_updated_at
+                                ? `Set ${fmtDate(
+                                    outreachMap[c.workspace_id]
+                                      ?.status_updated_at ?? null
+                                  )}${
+                                    outreachMap[c.workspace_id]
+                                      ?.status_updated_by
+                                      ? ` by ${outreachMap[c.workspace_id]?.status_updated_by}`
+                                      : ""
+                                  }`
+                                : "Auto-updates when a Slack ping fires or a draft is created. Override manually here."
+                            }
+                          >
+                            <option value="">—</option>
+                            {/* Render the saved status if it's not in
+                             *  the configured list — keeps the value
+                             *  visible until an admin either picks a
+                             *  configured option or restores it to
+                             *  settings. */}
+                            {(() => {
+                              const current =
+                                outreachMap[c.workspace_id]?.status ?? "";
+                              const inList = statusOptions.includes(current);
+                              return (
+                                <>
+                                  {statusOptions.map((s) => (
+                                    <option key={s} value={s}>
+                                      {s}
+                                    </option>
+                                  ))}
+                                  {current && !inList ? (
+                                    <option value={current}>
+                                      {current} (legacy)
+                                    </option>
+                                  ) : null}
+                                </>
+                              );
+                            })()}
+                          </select>
+                        ) : (
+                          <span className="text-xs text-subtle italic">
+                            —
+                          </span>
+                        )}
+                      </td>
+                      <td
+                        className="px-3 py-2"
+                        onClick={(e) => e.stopPropagation()}
+                      >
                         <RowActions customer={c} onDraft={setOutreachFor} />
                       </td>
                     </tr>
                     {isOpen ? (
                       <tr className="bg-blue-50/40 dark:bg-blue-500/10 border-b border-border">
-                        <td colSpan={9} className="px-6 py-4">
+                        <td colSpan={10} className="px-6 py-4">
                           <CustomerDetailPanel customer={c} />
                         </td>
                       </tr>

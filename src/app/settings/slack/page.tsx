@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import {
+  DEFAULT_PROACTIVE_OUTREACH_STATUSES,
   DEFAULTS,
   newChannelId,
   PAST_DUE_CHANNEL_ID,
@@ -386,6 +387,19 @@ export default function SlackSettingsPage() {
         </label>
       </section>
 
+      <ProactiveOutreachStatusesSection
+        statuses={settings.am?.proactive_outreach_statuses ?? []}
+        onChange={(next) =>
+          setSettings((prev) => ({
+            ...prev,
+            am: {
+              ...(prev.am ?? {}),
+              proactive_outreach_statuses: next,
+            },
+          }))
+        }
+      />
+
       <section className="bg-surface rounded-xl border border-border shadow-card p-4 space-y-3">
         <h2 className="text-sm font-semibold text-fg">CSM Slack IDs</h2>
         <p className="text-xs text-muted">
@@ -473,5 +487,121 @@ export default function SlackSettingsPage() {
         </button>
       </div>
     </div>
+  );
+}
+
+/** Manage the configurable status list that drives the Status column
+ *  dropdown on the AM Proactive Outreach panel. Two of the entries —
+ *  "Pinged" and "Outreach made" — are auto-applied by the engine.
+ *  Removing them from this list leaves the engine writes intact but
+ *  the dropdown no longer offers those values; the engine-supplied
+ *  value renders as a (legacy) option until someone picks a
+ *  configured one. */
+function ProactiveOutreachStatusesSection({
+  statuses,
+  onChange,
+}: {
+  statuses: string[];
+  onChange: (next: string[]) => void;
+}) {
+  const [draft, setDraft] = useState("");
+
+  function add() {
+    const value = draft.trim();
+    if (!value) return;
+    if (statuses.includes(value)) {
+      setDraft("");
+      return;
+    }
+    onChange([...statuses, value]);
+    setDraft("");
+  }
+
+  function remove(s: string) {
+    onChange(statuses.filter((x) => x !== s));
+  }
+
+  function restoreDefaults() {
+    onChange([...DEFAULT_PROACTIVE_OUTREACH_STATUSES]);
+  }
+
+  return (
+    <section className="bg-surface rounded-xl border border-border shadow-card p-4 space-y-3">
+      <h2 className="text-sm font-semibold text-fg">
+        Proactive outreach statuses
+      </h2>
+      <p className="text-xs text-muted">
+        Drives the <strong>Status</strong> column dropdown on the AM
+        Proactive Outreach panel.{" "}
+        <code className="font-mono bg-surface-2 px-1 rounded">Pinged</code>{" "}
+        is auto-applied when a Slack ping fires;{" "}
+        <code className="font-mono bg-surface-2 px-1 rounded">
+          Outreach made
+        </code>{" "}
+        is auto-applied when a draft is created via the dashboard. The
+        rest of the list is manual workflow labels — rename them to
+        match how the team talks ("In follow-up", "Renewal won",
+        whatever).
+      </p>
+
+      <div className="flex flex-wrap gap-1.5">
+        {statuses.length === 0 ? (
+          <span className="text-xs text-subtle italic">
+            No statuses configured — dropdown will fall back to the
+            built-in defaults.
+          </span>
+        ) : (
+          statuses.map((s) => (
+            <span
+              key={s}
+              className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md text-xs border border-border bg-canvas/40"
+            >
+              <span className="font-mono">{s}</span>
+              <button
+                type="button"
+                onClick={() => remove(s)}
+                aria-label={`Remove ${s}`}
+                title={`Remove ${s}`}
+                className="text-muted hover:text-red-600"
+              >
+                ×
+              </button>
+            </span>
+          ))
+        )}
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2">
+        <input
+          type="text"
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              add();
+            }
+          }}
+          placeholder="New status (e.g. Renewal at risk)"
+          className="px-3 py-2 border border-border-strong rounded-md text-sm min-w-[240px] flex-1 sm:flex-initial"
+        />
+        <button
+          type="button"
+          onClick={add}
+          disabled={!draft.trim()}
+          className="px-3 py-2 bg-accent text-accent-fg rounded-md text-sm font-medium hover:bg-accent-hover disabled:opacity-50"
+        >
+          + Add status
+        </button>
+        <button
+          type="button"
+          onClick={restoreDefaults}
+          className="px-3 py-2 border border-border-strong rounded-md text-sm hover:bg-canvas"
+          title="Reset to the built-in list — Pinged, Outreach made, Awaiting response, Renewed, Lost."
+        >
+          Restore defaults
+        </button>
+      </div>
+    </section>
   );
 }

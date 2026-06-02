@@ -30,6 +30,22 @@ export interface ProactiveOutreachEntry {
   last_nudge_at?: string | null;
   /** Free-text note set when an AM marks outreach as logged. */
   note?: string | null;
+  /**
+   * Explicit user-facing status — drives the AM panel's Status column
+   * and the badge displayed alongside the company name. Independent
+   * of the timestamps above so the AM can override the auto-set
+   * value ("Pinged" / "Outreach made") with a custom step like
+   * "Awaiting response" or "Renewed".
+   *
+   * Empty / undefined → fall back to deriving from timestamps the way
+   * we did before this field existed.
+   *
+   * The allowed list lives in settings.am.proactive_outreach_statuses
+   * — admins can add/remove via /settings/slack.
+   */
+  status?: string | null;
+  status_updated_at?: string | null;
+  status_updated_by?: string | null;
 }
 
 export type ProactiveOutreachMap = Record<string, ProactiveOutreachEntry>;
@@ -42,14 +58,46 @@ export async function loadProactiveOutreach(): Promise<ProactiveOutreachMap> {
 
 export async function savePingSent(
   workspaceId: string,
-  meta: { messageTs?: string | null } = {}
+  meta: {
+    messageTs?: string | null;
+    /** Status string to stamp alongside the ping. Defaults to
+     *  "Pinged" so the engine and any future direct caller don't
+     *  have to repeat the label. */
+    status?: string | null;
+  } = {}
 ): Promise<ProactiveOutreachMap> {
   const map = { ...(await loadProactiveOutreach()) };
   const existing = map[workspaceId] ?? { ping_sent_at: "" };
+  const stamp = new Date().toISOString();
   map[workspaceId] = {
     ...existing,
-    ping_sent_at: existing.ping_sent_at || new Date().toISOString(),
+    ping_sent_at: existing.ping_sent_at || stamp,
     ping_message_ts: meta.messageTs ?? existing.ping_message_ts ?? null,
+    status: meta.status === undefined ? "Pinged" : meta.status,
+    status_updated_at: stamp,
+    status_updated_by: existing.status_updated_by ?? null,
+  };
+  await kvSet(KEY, map);
+  return map;
+}
+
+/** Set the explicit user-facing status for a workspace. Pass `null`
+ *  or `""` to clear back to "derive from timestamps" mode. Tracks
+ *  the viewer + timestamp for audit. */
+export async function setProactiveStatus(
+  workspaceId: string,
+  status: string | null,
+  meta: { updatedBy?: string | null } = {}
+): Promise<ProactiveOutreachMap> {
+  const map = { ...(await loadProactiveOutreach()) };
+  const existing = map[workspaceId] ?? { ping_sent_at: "" };
+  const stamp = new Date().toISOString();
+  const cleaned = status?.trim() || null;
+  map[workspaceId] = {
+    ...existing,
+    status: cleaned,
+    status_updated_at: stamp,
+    status_updated_by: meta.updatedBy ?? null,
   };
   await kvSet(KEY, map);
   return map;
@@ -99,11 +147,20 @@ export async function saveOutreachLogged(
 
 export async function bulkSaveOutreachLogged(
   workspaceIds: string[],
-  meta: { loggedBy?: string | null; note?: string | null } = {}
+  meta: {
+    loggedBy?: string | null;
+    note?: string | null;
+    /** Status to stamp alongside last_outreach_at. Defaults to
+     *  "Outreach made". Pass null to leave the status alone (e.g.
+     *  callers that want to keep "Pinged" visible). */
+    status?: string | null;
+  } = {}
 ): Promise<ProactiveOutreachMap> {
   if (workspaceIds.length === 0) return loadProactiveOutreach();
   const map = { ...(await loadProactiveOutreach()) };
   const stamp = new Date().toISOString();
+  const statusValue =
+    meta.status === undefined ? "Outreach made" : meta.status;
   for (const id of workspaceIds) {
     if (!id) continue;
     const existing = map[id];
@@ -113,6 +170,12 @@ export async function bulkSaveOutreachLogged(
         last_outreach_at: stamp,
         last_outreach_by: meta.loggedBy ?? null,
         note: meta.note ?? existing.note ?? null,
+        status: statusValue === null ? existing.status : statusValue,
+        status_updated_at: statusValue === null ? existing.status_updated_at : stamp,
+        status_updated_by:
+          statusValue === null
+            ? existing.status_updated_by
+            : meta.loggedBy ?? null,
       };
     } else {
       map[id] = {
@@ -120,6 +183,9 @@ export async function bulkSaveOutreachLogged(
         last_outreach_at: stamp,
         last_outreach_by: meta.loggedBy ?? null,
         note: meta.note ?? null,
+        status: statusValue,
+        status_updated_at: statusValue ? stamp : null,
+        status_updated_by: meta.loggedBy ?? null,
       };
     }
   }
