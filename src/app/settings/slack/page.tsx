@@ -415,6 +415,55 @@ export default function SlackSettingsPage() {
       />
 
       <section className="bg-surface rounded-xl border border-border shadow-card p-4 space-y-3">
+        <h2 className="text-sm font-semibold text-fg">
+          Per-CSM review digest
+        </h2>
+        <p className="text-xs text-muted">
+          One Slack message per CSM each morning summarizing how many
+          accounts need their attention — past-due / approaching cap /
+          upcoming renewal. The message links each count to the
+          dashboard filtered to that CSM&rsquo;s book + the workflow,
+          showing only rows still pending action. CSMs mark each one
+          <code className="font-mono bg-surface-2 px-1 rounded">Reach
+            out</code>{" "}
+          /{" "}
+          <code className="font-mono bg-surface-2 px-1 rounded">Skip</code>{" "}
+          /{" "}
+          <code className="font-mono bg-surface-2 px-1 rounded">Done</code>{" "}
+          on the row, and the next digest only resurfaces what&rsquo;s
+          still pending.
+        </p>
+        <label className="flex items-center gap-2 text-sm">
+          <span className="text-xs text-muted whitespace-nowrap min-w-[140px]">
+            Slack channel ID
+          </span>
+          <input
+            type="text"
+            value={settings.am?.daily_digest_channel_id ?? ""}
+            onChange={(e) =>
+              setSettings((prev) => ({
+                ...prev,
+                am: {
+                  ...(prev.am ?? {}),
+                  daily_digest_channel_id: e.target.value,
+                },
+              }))
+            }
+            placeholder="C0XXXXXXXXX"
+            className="flex-1 px-3 py-2 border border-border-strong rounded-md text-sm font-mono"
+          />
+        </label>
+        <p className="text-[11px] text-muted">
+          Channel ID (e.g.{" "}
+          <code className="font-mono">C0XXXXXXXXX</code>) — must
+          include the bot user. Leave blank to disable the digest:
+          the cron will return{" "}
+          <code className="font-mono">no_channel_configured: true</code>{" "}
+          rather than silently dropping messages.
+        </p>
+      </section>
+
+      <section className="bg-surface rounded-xl border border-border shadow-card p-4 space-y-3">
         <h2 className="text-sm font-semibold text-fg">CSM Slack IDs</h2>
         <p className="text-xs text-muted">
           Map each CSM&rsquo;s internal handle (the Metabase{" "}

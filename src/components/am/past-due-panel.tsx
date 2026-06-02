@@ -20,6 +20,7 @@ import { BulkEmailLauncher } from "./bulk-email-launcher";
 import { LowTierBulkSend } from "./low-tier-bulk-send";
 import { NotesChip } from "./notes-chip";
 import { ReviewStateCell } from "./review-state-cell";
+import { SendDigestButton } from "./send-digest-button";
 import { CustomerDetailPanel } from "../customer-detail-panel";
 import {
   needsReview,
@@ -820,6 +821,8 @@ export function PastDuePanel({ rows, csms, totalSourceRows }: Props) {
         >
           {historyBusy ? "Reconciling…" : "🕓 Refresh history"}
         </button>
+        <SendDigestButton workflows={["past_due"]} />
+
         <button
           onClick={() => setComposeOpen(true)}
           disabled={!settings || selected.size === 0}

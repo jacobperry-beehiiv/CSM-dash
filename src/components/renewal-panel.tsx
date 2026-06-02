@@ -22,6 +22,7 @@ import type {
 } from "@/lib/data/review-states-types";
 import { needsReview } from "@/lib/data/review-states-types";
 import { ReviewStateCell } from "./am/review-state-cell";
+import { SendDigestButton } from "./am/send-digest-button";
 
 /**
  * Computes the customer's next renewal/charge date.
@@ -342,6 +343,7 @@ export function RenewalPanel({ customers, csms }: Props) {
         emptyCount={customers.filter((c) => c.interval).length}
         options={intervalOptions}
       />
+      <SendDigestButton workflows={["renewals"]} />
     </FilterBar>
   );
 

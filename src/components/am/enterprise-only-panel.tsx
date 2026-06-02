@@ -12,6 +12,7 @@ import { BucketSection } from "./bucket-section";
 import { BulkEmailLauncher } from "./bulk-email-launcher";
 import { CustomerDetailPanel } from "../customer-detail-panel";
 import { ReviewStateCell } from "./review-state-cell";
+import { SendDigestButton } from "./send-digest-button";
 import type { ProactiveOutreachMap } from "@/lib/data/proactive-outreach";
 import {
   DEFAULT_PROACTIVE_OUTREACH_STATUSES,
@@ -418,6 +419,7 @@ export function EnterpriseOnlyPanel({ rows, csms }: Props) {
             ? "Pinging…"
             : `📣 Ping ${selected.size > 0 ? `${selected.size} ` : ""}selected on Slack`}
         </button>
+        <SendDigestButton workflows={["proactive"]} />
         <div className="flex-1" />
         {/* Enterprise outreach drafts auto-CC the assigned CSM per the
          *  brief. Same ccLookup pattern used on the Past Due Enterprise

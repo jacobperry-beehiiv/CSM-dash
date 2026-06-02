@@ -1,0 +1,72 @@
+name: review-digest-sweep
+
+# Daily per-CSM review digest. Hits the production dashboard with a
+# CRON_SECRET bearer to fire one Slack message per CSM summarizing
+# their pending reviews across past-due, proactive outreach, and
+# renewals. See:
+#   src/lib/engines/review-digest.ts (engine)
+#   src/app/api/review-digest/sweep/route.ts (endpoint)
+#
+# Required repo secrets (already used by the other crons):
+#   • CRON_SECRET    — bearer; same value as the Vercel env var
+#   • DASHBOARD_URL  — root URL, no trailing slash (e.g. https://csm-dash.vercel.app)
+#
+# Triggers:
+#   • automatically once daily at 13:30 UTC (≈8:30am Central / 9:30am ET)
+#   • manually via "Run workflow"
+#
+# Setup pre-flight checks (won't fire if missing):
+#   • am.daily_digest_channel_id must be set at /settings/slack →
+#     "Per-CSM review digest". The engine returns a non-error 200
+#     with no_channel_configured: true otherwise — the curl below
+#     surfaces that hint in the run log without failing the job.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "30 13 * * *"
+
+jobs:
+  digest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify required secrets are set
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          DASHBOARD_URL: ${{ secrets.DASHBOARD_URL }}
+        run: |
+          missing=()
+          for v in CRON_SECRET DASHBOARD_URL; do
+            if [ -z "${!v}" ]; then
+              missing+=("$v")
+            fi
+          done
+          if [ "${#missing[@]}" -ne 0 ]; then
+            echo "::error::Missing required repo secret(s): ${missing[*]}. Add them under Settings → Secrets and variables → Actions, then re-run."
+            exit 1
+          fi
+          echo "All required secrets present."
+
+      - name: POST /api/review-digest/sweep
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          DASHBOARD_URL: ${{ secrets.DASHBOARD_URL }}
+        run: |
+          set -e
+          response=$(curl -sS -w "\n%{http_code}" -X POST \
+            -H "Authorization: Bearer ${CRON_SECRET}" \
+            -H "Content-Type: application/json" \
+            "${DASHBOARD_URL}/api/review-digest/sweep")
+          body=$(echo "$response" | sed '$d')
+          code=$(echo "$response" | tail -n1)
+          echo "HTTP $code"
+          echo "$body"
+          if [ "$code" != "200" ]; then
+            echo "::error::Digest sweep failed with HTTP $code"
+            exit 1
+          fi
+          # Surface the no-channel-configured case clearly so the
+          # run log explains why no Slack messages went out.
+          if echo "$body" | grep -q '"no_channel_configured":true'; then
+            echo "::warning::Digest skipped — set am.daily_digest_channel_id at /settings/slack to enable."
+          fi

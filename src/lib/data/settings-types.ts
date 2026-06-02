@@ -143,6 +143,15 @@ export interface AmSettings {
    * DEFAULT_LIFECYCLE_STAGES.
    */
   lifecycle_stages?: string[];
+  /**
+   * Slack channel ID where the per-CSM review digest gets posted —
+   * one message per CSM saying "you have N accounts to review" with
+   * a deep-link to the filtered view. Channel must include the bot
+   * user. Leave blank to disable digest posting; the engine returns
+   * a clear no-channel-configured error rather than silently
+   * dropping messages.
+   */
+  daily_digest_channel_id?: string;
 }
 
 /** Built-in status list. The first two names ("Pinged" and
@@ -221,6 +230,7 @@ export const DEFAULTS: SettingsShape = {
     proactive_outreach_sweep_enabled: true,
     proactive_outreach_statuses: [...DEFAULT_PROACTIVE_OUTREACH_STATUSES],
     lifecycle_stages: [...DEFAULT_LIFECYCLE_STAGES],
+    daily_digest_channel_id: "",
   },
 };
 
