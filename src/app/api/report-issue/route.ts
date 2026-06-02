@@ -5,6 +5,10 @@ import {
   findSlackChannel,
   ISSUE_REPORTS_CHANNEL_ID,
 } from "@/lib/data/settings-types";
+import {
+  resolveSlackChannelId,
+  SLACK_CHANNEL_ID_RE,
+} from "@/lib/integrations/slack";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 30;
@@ -115,8 +119,33 @@ export async function POST(req: Request) {
 
   if (body.screenshot_base64 && body.screenshot_mime) {
     try {
+      // files.completeUploadExternal requires the canonical channel
+      // ID (^[CGDZ][A-Z0-9]{8,}$). chat.postMessage accepts a name,
+      // so admins occasionally configure a name (e.g. "bug-reports")
+      // that works for text but breaks the upload path. Resolve it
+      // here before the upload call — gracefully handles both
+      // "C01XXXXX" and "bug-reports" / "#bug-reports".
+      let canonicalChannelId: string | null = null;
+      if (SLACK_CHANNEL_ID_RE.test(cfg.channel_id)) {
+        canonicalChannelId = cfg.channel_id;
+      } else {
+        try {
+          canonicalChannelId = await resolveSlackChannelId(cfg.channel_id);
+        } catch (e) {
+          throw new Error(
+            `Couldn't resolve channel "${cfg.channel_id}" to an ID via Slack: ${
+              e instanceof Error ? e.message : "unknown"
+            }. The bot may need channels:read / groups:read scope.`
+          );
+        }
+        if (!canonicalChannelId) {
+          throw new Error(
+            `The configured issue-reports channel "${cfg.channel_id}" isn't a canonical Slack channel ID and no public/private channel with that name was found. Set it to a value like C01XXXXX at /settings/slack — copy from Slack's channel details panel.`
+          );
+        }
+      }
       await uploadScreenshot({
-        channelId: cfg.channel_id,
+        channelId: canonicalChannelId,
         base64: body.screenshot_base64,
         mime: body.screenshot_mime,
         initialComment: composed,

@@ -11,6 +11,29 @@ import {
   type SlackChannel,
 } from "@/lib/data/settings-types";
 
+/** Slack's canonical channel-ID regex (^[CGDZ][A-Z0-9]{8,}$). Some
+ *  endpoints (chat.postMessage) accept names; others (notably
+ *  files.completeUploadExternal — the screenshot upload path) strictly
+ *  require the ID. We warn here so admins don't paste a channel name
+ *  and only find out the upload silently breaks. */
+const CHANNEL_ID_REGEX = /^[CGDZ][A-Z0-9]{8,}$/;
+
+function ChannelIdHint({ value }: { value: string }) {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  if (CHANNEL_ID_REGEX.test(trimmed)) return null;
+  return (
+    <p className="mt-1 text-[11px] text-amber-700 dark:text-amber-300">
+      Doesn&rsquo;t look like a Slack channel ID. The screenshot upload
+      flow (files.completeUploadExternal) requires a canonical ID like{" "}
+      <code className="font-mono">C0AMK142WUR</code>. Open Slack →
+      channel name → <em>View channel details</em> → bottom of the
+      panel; copy the ID there. Text-only posts still work with a
+      name, but image uploads will fail.
+    </p>
+  );
+}
+
 export default function SlackSettingsPage() {
   const [settings, setSettings] = useState<SettingsShape>(DEFAULTS);
   const [loading, setLoading] = useState(true);
@@ -214,6 +237,7 @@ export default function SlackSettingsPage() {
                   placeholder="C0AMK142WUR"
                   className="w-full px-3 py-2 border border-border-strong rounded-md text-sm font-mono"
                 />
+                <ChannelIdHint value={c.channel_id} />
               </div>
               <div>
                 <label className="text-xs text-muted block mb-1">
@@ -437,21 +461,26 @@ export default function SlackSettingsPage() {
           <span className="text-xs text-muted whitespace-nowrap min-w-[140px]">
             Slack channel ID
           </span>
-          <input
-            type="text"
-            value={settings.am?.daily_digest_channel_id ?? ""}
-            onChange={(e) =>
-              setSettings((prev) => ({
-                ...prev,
-                am: {
-                  ...(prev.am ?? {}),
-                  daily_digest_channel_id: e.target.value,
-                },
-              }))
-            }
-            placeholder="C0XXXXXXXXX"
-            className="flex-1 px-3 py-2 border border-border-strong rounded-md text-sm font-mono"
-          />
+          <div className="flex-1 min-w-0">
+            <input
+              type="text"
+              value={settings.am?.daily_digest_channel_id ?? ""}
+              onChange={(e) =>
+                setSettings((prev) => ({
+                  ...prev,
+                  am: {
+                    ...(prev.am ?? {}),
+                    daily_digest_channel_id: e.target.value,
+                  },
+                }))
+              }
+              placeholder="C0XXXXXXXXX"
+              className="w-full px-3 py-2 border border-border-strong rounded-md text-sm font-mono"
+            />
+            <ChannelIdHint
+              value={settings.am?.daily_digest_channel_id ?? ""}
+            />
+          </div>
         </label>
         <p className="text-[11px] text-muted">
           Channel ID (e.g.{" "}
