@@ -11,13 +11,14 @@ import {
 import { BulkEmailLauncher } from "./bulk-email-launcher";
 import { NotesChip } from "./notes-chip";
 import { ReviewStateCell } from "./review-state-cell";
+import { CopyPubIdsButton } from "./copy-pub-ids-button";
 import { CustomerDetailPanel } from "../customer-detail-panel";
 import {
   needsReview,
   type ReviewState,
   type ReviewStatesMap,
 } from "@/lib/data/review-states-types";
-import { SearchInput } from "../filters";
+import { SearchInput, SelectFilter } from "../filters";
 import { usePublicationsIndex } from "@/lib/hooks/use-publications-index";
 import { useStripeCustomerIndex } from "@/lib/hooks/use-stripe-customer-index";
 import { useUrlSearch } from "@/lib/hooks/use-url-search";
@@ -123,6 +124,10 @@ export function ApproachingEnterprisePanel({ rows }: Props) {
   // changes update locally so the dropdown reflects immediately.
   const [reviewStates, setReviewStates] = useState<ReviewStatesMap>({});
   const [needsReviewFilter] = useUrlSearch("needs_review");
+  // Per-state filter for the Review column (digest workflow). Mirrors
+  // the Enterprise Only panel — overrides the broader needs_review=1
+  // hint when set, so deep-links from the digest land here exactly.
+  const [reviewFilter, setReviewFilter] = useUrlSearch("review");
   useEffect(() => {
     fetch("/api/review-states")
       .then((r) => (r.ok ? r.json() : null))
@@ -220,8 +225,19 @@ export function ApproachingEnterprisePanel({ rows }: Props) {
       .filter((r) => {
         const p = pctNum(r);
         if (p == null || p < 80) return false;
-        // ?needs_review=1 → only rows still pending action.
-        if (needsReviewFilter === "1") {
+        // Review-state filter takes precedence — when set, it's a
+        // specific value (needs_review / reach_out / skip / done)
+        // and overrides the broader needs_review=1 hint.
+        if (reviewFilter) {
+          const ws = r.organization_id ?? null;
+          const entry = ws ? reviewStates[ws]?.proactive : undefined;
+          if (reviewFilter === "needs_review") {
+            if (entry) return false;
+          } else if (entry?.state !== reviewFilter) {
+            return false;
+          }
+        } else if (needsReviewFilter === "1") {
+          // ?needs_review=1 → only rows still pending action.
           const ws = r.organization_id ?? null;
           if (ws && !needsReview(reviewStates[ws], "proactive")) return false;
         }
@@ -257,7 +273,15 @@ export function ApproachingEnterprisePanel({ rows }: Props) {
         return p != null && b.test(p);
       }),
     })).filter((g) => g.list.length > 0);
-  }, [rows, search, ws2pubs, customerByStripeId, needsReviewFilter, reviewStates]);
+  }, [
+    rows,
+    search,
+    ws2pubs,
+    customerByStripeId,
+    needsReviewFilter,
+    reviewFilter,
+    reviewStates,
+  ]);
 
   const totalAtOrAboveFloor = rows.filter((r) => {
     const p = pctNum(r);
@@ -279,6 +303,18 @@ export function ApproachingEnterprisePanel({ rows }: Props) {
           value={search}
           onChange={setSearch}
           placeholder="Search workspace / owner / CSM / publication ID…"
+        />
+        <SelectFilter
+          label="Review"
+          value={reviewFilter}
+          onChange={setReviewFilter}
+          emptyLabel="Any"
+          options={[
+            { value: "needs_review", label: "Needs review" },
+            { value: "reach_out", label: "Reach out" },
+            { value: "skip", label: "Skip" },
+            { value: "done", label: "Done" },
+          ]}
         />
         <span className="text-xs text-muted ml-auto">
           {totalAtOrAboveFloor} of {rows.length} q13268 rows at ≥80% of plan limit
@@ -304,6 +340,13 @@ export function ApproachingEnterprisePanel({ rows }: Props) {
         >
           Clear
         </button>
+        <CopyPubIdsButton
+          workspaceIds={visibleRows
+            .filter((r, i) => selected.has(rowKey(r, i)))
+            .map((r) => r.organization_id)
+            .filter((id): id is string => Boolean(id))}
+          ws2pubs={ws2pubs}
+        />
         <div className="flex-1" />
         <BulkEmailLauncher
           customers={(() => {

@@ -13,6 +13,8 @@ import { BulkEmailLauncher } from "./bulk-email-launcher";
 import { CustomerDetailPanel } from "../customer-detail-panel";
 import { ReviewStateCell } from "./review-state-cell";
 import { SendDigestButton } from "./send-digest-button";
+import { CopyPubIdsButton } from "./copy-pub-ids-button";
+import { usePublicationsIndex } from "@/lib/hooks/use-publications-index";
 import type { ProactiveOutreachMap } from "@/lib/data/proactive-outreach";
 import {
   DEFAULT_PROACTIVE_OUTREACH_STATUSES,
@@ -104,6 +106,12 @@ export function EnterpriseOnlyPanel({ rows, csms }: Props) {
   const [needsReviewFilter, setNeedsReviewFilter] = useUrlSearch(
     "needs_review"
   );
+  // Granular per-state Review filter. Coexists with the legacy
+  // ?needs_review=1 alias (used by the digest deep-links). When
+  // both are present, ?review= wins.
+  const [reviewFilter, setReviewFilter] = useUrlSearch("review");
+  // Publication-ID index for the "📋 Copy pub IDs" bulk action.
+  const { ws2pubs } = usePublicationsIndex();
   const [reviewStates, setReviewStates] = useState<ReviewStatesMap>({});
   useEffect(() => {
     fetch("/api/review-states")
@@ -240,6 +248,16 @@ export function EnterpriseOnlyPanel({ rows, csms }: Props) {
       return outreachFilter === "has" ? touched : !touched;
     });
     const filteredByReview = filteredByOutreach.filter((c) => {
+      // ?review=<state> takes precedence when present. Otherwise
+      // fall back to the legacy ?needs_review=1 alias used by the
+      // digest deep-links (matches null + reach_out).
+      if (reviewFilter) {
+        const entry = c.workspace_id
+          ? reviewStates[c.workspace_id]?.proactive
+          : undefined;
+        if (reviewFilter === "needs_review") return !entry;
+        return entry?.state === reviewFilter;
+      }
       if (needsReviewFilter !== "1") return true;
       return c.workspace_id
         ? needsReview(reviewStates[c.workspace_id], "proactive")
@@ -251,7 +269,14 @@ export function EnterpriseOnlyPanel({ rows, csms }: Props) {
         .filter((c) => b.test(pct(c)))
         .sort((a, b) => pct(b) - pct(a)),
     })).filter((g) => g.list.length > 0);
-  }, [rows, outreachFilter, outreachMap, needsReviewFilter, reviewStates]);
+  }, [
+    rows,
+    outreachFilter,
+    outreachMap,
+    needsReviewFilter,
+    reviewFilter,
+    reviewStates,
+  ]);
 
   const visibleRows = useMemo(
     () => buckets.flatMap((g) => g.list),
@@ -289,6 +314,18 @@ export function EnterpriseOnlyPanel({ rows, csms }: Props) {
           options={[
             { value: "none", label: "No outreach yet" },
             { value: "has", label: "Has outreach" },
+          ]}
+        />
+        <SelectFilter
+          label="Review"
+          value={reviewFilter}
+          onChange={setReviewFilter}
+          emptyLabel="Any"
+          options={[
+            { value: "needs_review", label: "Needs review" },
+            { value: "reach_out", label: "Reach out" },
+            { value: "skip", label: "Skip" },
+            { value: "done", label: "Done" },
           ]}
         />
         <span className="text-xs text-muted ml-auto">
@@ -420,6 +457,12 @@ export function EnterpriseOnlyPanel({ rows, csms }: Props) {
             : `📣 Ping ${selected.size > 0 ? `${selected.size} ` : ""}selected on Slack`}
         </button>
         <SendDigestButton workflows={["proactive"]} />
+        <CopyPubIdsButton
+          workspaceIds={selectedCustomers
+            .map((c) => c.workspace_id)
+            .filter((id): id is string => Boolean(id))}
+          ws2pubs={ws2pubs}
+        />
         <div className="flex-1" />
         {/* Enterprise outreach drafts auto-CC the assigned CSM per the
          *  brief. Same ccLookup pattern used on the Past Due Enterprise
