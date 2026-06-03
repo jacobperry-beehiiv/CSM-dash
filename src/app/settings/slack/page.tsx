@@ -17,11 +17,29 @@ import {
  *  require the ID. We warn here so admins don't paste a channel name
  *  and only find out the upload silently breaks. */
 const CHANNEL_ID_REGEX = /^[CGDZ][A-Z0-9]{8,}$/;
+/** Slack user-ID regex (^[UW]…). We surface a tailored hint when the
+ *  admin pastes a user ID — the resolver auto-opens a DM, but the
+ *  hint makes the intent visible. */
+const USER_ID_REGEX = /^[UW][A-Z0-9]{8,}$/;
 
 function ChannelIdHint({ value }: { value: string }) {
   const trimmed = value.trim();
   if (!trimmed) return null;
   if (CHANNEL_ID_REGEX.test(trimmed)) return null;
+  // U… / W… → user ID; the resolver opens a DM via conversations.open.
+  // Surface this so it's clear that's intentional, not a misconfig.
+  if (USER_ID_REGEX.test(trimmed)) {
+    return (
+      <p className="mt-1 text-[11px] text-blue-700 dark:text-blue-300">
+        Looks like a Slack user ID — messages will be sent as a DM to
+        that user via <code className="font-mono">conversations.open</code>.
+        Requires the bot to have <code className="font-mono">im:write</code>
+        {" "}scope and the receiving user to allow DMs from apps. To
+        send to a channel instead, paste a channel ID like{" "}
+        <code className="font-mono">C0AMK142WUR</code>.
+      </p>
+    );
+  }
   return (
     <p className="mt-1 text-[11px] text-amber-700 dark:text-amber-300">
       Doesn&rsquo;t look like a Slack channel ID. The screenshot upload
@@ -29,7 +47,8 @@ function ChannelIdHint({ value }: { value: string }) {
       <code className="font-mono">C0AMK142WUR</code>. Open Slack →
       channel name → <em>View channel details</em> → bottom of the
       panel; copy the ID there. Text-only posts still work with a
-      name, but image uploads will fail.
+      name, but image uploads will fail. To DM a single user instead,
+      paste their user ID (starts with <code className="font-mono">U</code>).
     </p>
   );
 }

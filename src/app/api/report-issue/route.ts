@@ -8,6 +8,7 @@ import {
 import {
   resolveSlackChannelId,
   SLACK_CHANNEL_ID_RE,
+  SLACK_USER_ID_RE,
 } from "@/lib/integrations/slack";
 
 export const dynamic = "force-dynamic";
@@ -121,10 +122,10 @@ export async function POST(req: Request) {
     try {
       // files.completeUploadExternal requires the canonical channel
       // ID (^[CGDZ][A-Z0-9]{8,}$). chat.postMessage accepts a name,
-      // so admins occasionally configure a name (e.g. "bug-reports")
-      // that works for text but breaks the upload path. Resolve it
-      // here before the upload call — gracefully handles both
-      // "C01XXXXX" and "bug-reports" / "#bug-reports".
+      // so admins occasionally configure something else (a name like
+      // "bug-reports", or a user ID for a DM). Resolve before the
+      // upload — handles "C01XXXXX" pass-through, "U…" → DM channel,
+      // and name → channels.list lookup.
       let canonicalChannelId: string | null = null;
       if (SLACK_CHANNEL_ID_RE.test(cfg.channel_id)) {
         canonicalChannelId = cfg.channel_id;
@@ -132,15 +133,19 @@ export async function POST(req: Request) {
         try {
           canonicalChannelId = await resolveSlackChannelId(cfg.channel_id);
         } catch (e) {
+          const detail = e instanceof Error ? e.message : "unknown";
+          if (SLACK_USER_ID_RE.test(cfg.channel_id.trim())) {
+            throw new Error(
+              `Couldn't open a DM with user "${cfg.channel_id}": ${detail}`
+            );
+          }
           throw new Error(
-            `Couldn't resolve channel "${cfg.channel_id}" to an ID via Slack: ${
-              e instanceof Error ? e.message : "unknown"
-            }. The bot may need channels:read / groups:read scope.`
+            `Couldn't resolve channel "${cfg.channel_id}" via Slack: ${detail}`
           );
         }
         if (!canonicalChannelId) {
           throw new Error(
-            `The configured issue-reports channel "${cfg.channel_id}" isn't a canonical Slack channel ID and no public/private channel with that name was found. Set it to a value like C01XXXXX at /settings/slack — copy from Slack's channel details panel.`
+            `The configured issue-reports channel "${cfg.channel_id}" isn't a canonical Slack channel ID and no public/private channel with that name was found. Set it to a value like C01XXXXX at /settings/slack — copy from Slack's channel details panel — or paste a U… user ID to send as a DM.`
           );
         }
       }

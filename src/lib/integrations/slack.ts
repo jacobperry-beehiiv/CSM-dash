@@ -82,6 +82,11 @@ export async function postDeliverabilityAlerts(
  *  invalid when a screenshot upload fails. */
 export const SLACK_CHANNEL_ID_RE = /^[CGDZ][A-Z0-9]{8,}$/;
 
+/** Slack user-ID prefix. When an admin configures the "channel" with
+ *  a user ID by mistake ("send me a DM"), the resolver opens a DM
+ *  channel and uses the returned channel ID instead. */
+export const SLACK_USER_ID_RE = /^[UW][A-Z0-9]{8,}$/;
+
 const channelNameCache = new Map<string, { expires: number; id: string | null }>();
 const CHANNEL_RESOLVE_TTL_MS = 5 * 60 * 1000;
 
@@ -107,6 +112,38 @@ export async function resolveSlackChannelId(
   if (!trimmed) return null;
   if (SLACK_CHANNEL_ID_RE.test(trimmed)) return trimmed;
   if (!SLACK_BOT_TOKEN) return null;
+
+  // User ID → open a DM with that user, use the resulting channel ID.
+  // Only needs `im:write` scope (which most bots already have for
+  // chat.postMessage to users), unlike the channels:read path below.
+  if (SLACK_USER_ID_RE.test(trimmed)) {
+    const cacheKey = `user:${trimmed}`;
+    const cached = channelNameCache.get(cacheKey);
+    if (cached && cached.expires > Date.now()) return cached.id;
+    const res = await fetch("https://slack.com/api/conversations.open", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${SLACK_BOT_TOKEN}`,
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: new URLSearchParams({ users: trimmed }),
+    });
+    const j = (await res.json()) as {
+      ok: boolean;
+      error?: string;
+      channel?: { id?: string };
+    };
+    if (!j.ok || !j.channel?.id) {
+      throw new Error(
+        `conversations.open for user ${trimmed}: ${j.error ?? "unknown"} — the bot may need im:write scope, or the user may have DMs from apps disabled.`
+      );
+    }
+    channelNameCache.set(cacheKey, {
+      expires: Date.now() + CHANNEL_RESOLVE_TTL_MS,
+      id: j.channel.id,
+    });
+    return j.channel.id;
+  }
 
   const wanted = trimmed.replace(/^#/, "").toLowerCase();
   const cacheKey = `name:${wanted}`;
