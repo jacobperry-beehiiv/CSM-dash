@@ -44,8 +44,41 @@ export const maxDuration = 15;
  */
 
 export async function POST(req: Request) {
+  // Read the body ONCE as raw text — verification needs the exact bytes
+  // Slack signed over, so we can't rely on req.json() further down.
+  const rawBody = await req.text();
+  const contentType = req.headers.get("content-type") ?? "";
+
+  // ── URL verification handshake — short-circuit BEFORE auth ────────
+  // Slack POSTs `{type: "url_verification", challenge: "..."}` when an
+  // admin first configures the Event Subscriptions request URL. We
+  // intentionally let this through without requiring SLACK_SIGNING_SECRET
+  // because (a) the response has no side effects, just echoes the
+  // challenge, and (b) the env-var-not-set case breaks the bootstrap
+  // flow ("can't add the URL until the secret is set, but the redeploy
+  // to pick up the secret hasn't happened yet"). Once the URL is
+  // verified, every subsequent inbound goes through the verification
+  // below.
+  if (contentType.includes("application/json")) {
+    try {
+      const parsed = JSON.parse(rawBody) as Partial<UrlVerification>;
+      if (
+        parsed &&
+        parsed.type === "url_verification" &&
+        typeof parsed.challenge === "string"
+      ) {
+        return NextResponse.json({ challenge: parsed.challenge });
+      }
+    } catch {
+      // Not JSON or malformed — fall through to the verified paths.
+    }
+  }
+
   const signingSecret = process.env.SLACK_SIGNING_SECRET;
   if (!signingSecret) {
+    console.warn(
+      "[slack-webhook] SLACK_SIGNING_SECRET not set — rejecting non-handshake request"
+    );
     return NextResponse.json(
       {
         error:
@@ -55,8 +88,6 @@ export async function POST(req: Request) {
     );
   }
 
-  // Read the body ONCE as raw text — verification needs the exact bytes.
-  const rawBody = await req.text();
   const verified = verifySlackSignature({
     rawBody,
     signatureHeader: req.headers.get("x-slack-signature"),
@@ -64,20 +95,23 @@ export async function POST(req: Request) {
     signingSecret,
   });
   if (!verified) {
+    console.warn(
+      "[slack-webhook] Signature verification failed",
+      {
+        hasSigHeader: Boolean(req.headers.get("x-slack-signature")),
+        hasTsHeader: Boolean(req.headers.get("x-slack-request-timestamp")),
+        contentType,
+        bodyLen: rawBody.length,
+      }
+    );
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const contentType = req.headers.get("content-type") ?? "";
   try {
     if (contentType.includes("application/json")) {
       const parsed = JSON.parse(rawBody) as
         | UrlVerification
         | SlackEventEnvelope;
-      if (parsed.type === "url_verification") {
-        // The challenge handshake. Slack's docs say either JSON or
-        // plain text works as long as the challenge value is echoed.
-        return NextResponse.json({ challenge: parsed.challenge });
-      }
       if (parsed.type === "event_callback") {
         await handleEvent(parsed.event);
         // ACK fast — any further work happens asynchronously in
