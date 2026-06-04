@@ -8,6 +8,7 @@ import { AdGapSummary } from "./ad-gap-summary";
 import { CadenceToggle } from "./cadence-toggle";
 import { HubSpotContactsSection } from "./hubspot-contacts-section";
 import { CustomerPublicationsList } from "./customer-publications-list";
+import { CustomerPaidSubsList } from "./customer-paid-subs-list";
 import { CollapsibleSection } from "./collapsible-section";
 import { CompanyNotes } from "./am/company-notes";
 import { CopyButton } from "./copy-button";
@@ -134,6 +135,10 @@ export function CustomerDetailPanel({
 
       {c.workspace_id ? (
         <CustomerPublicationsList workspaceId={c.workspace_id} />
+      ) : null}
+
+      {c.workspace_id ? (
+        <CustomerPaidSubsList workspaceId={c.workspace_id} />
       ) : null}
 
       <FeatureUtilizationPanel workspaceId={c.workspace_id} />
