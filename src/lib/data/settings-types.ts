@@ -98,7 +98,20 @@ export interface SettingsShape {
   };
   slack: SlackSettings;
   am?: AmSettings;
+  personal_todos?: PersonalTodosSettings;
 }
+
+/** Global config for the personal to-do list feature. All CSMs share
+ *  the same trigger emoji for now; per-user customization is a clean
+ *  follow-on if someone asks for it. */
+export interface PersonalTodosSettings {
+  /** Slack emoji NAME (no colons) that triggers "create a todo from
+   *  this message" when reacted with. Default `white_check_mark` (✅).
+   *  Admins can swap to e.g. `pushpin` (📌) or a custom workspace emoji. */
+  trigger_emoji?: string;
+}
+
+export const DEFAULT_TODO_TRIGGER_EMOJI = "white_check_mark";
 
 /** Account Management-specific config shared across the AM tab flows. */
 export interface AmSettings {
@@ -231,6 +244,9 @@ export const DEFAULTS: SettingsShape = {
     proactive_outreach_statuses: [...DEFAULT_PROACTIVE_OUTREACH_STATUSES],
     lifecycle_stages: [...DEFAULT_LIFECYCLE_STAGES],
     daily_digest_channel_id: "",
+  },
+  personal_todos: {
+    trigger_emoji: DEFAULT_TODO_TRIGGER_EMOJI,
   },
 };
 

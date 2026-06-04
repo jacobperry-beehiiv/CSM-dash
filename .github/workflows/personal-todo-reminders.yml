@@ -1,0 +1,65 @@
+name: personal-todo-reminders
+
+# Daily sweep for the per-user personal to-dos feature:
+#   1. Activates scheduled (future-dated) todos whose surface_at <= today
+#      — flips surface_at to null + DMs the owner once.
+#   2. Fires due-date reminders across the 4-stage ladder (3d out, 1d
+#      out, day-of, 3d overdue), dedupe-keyed per (user, todo, stage).
+#
+# Runs 30 minutes after the team-task-reminders job so the two sweeps
+# don't compete for KV writes or hammer Slack at the same instant.
+#
+# Required repo secrets (same as team-task-reminders.yml):
+#   • CRON_SECRET    — must match the value set in Vercel env so the
+#                       sweep's bearer-auth path succeeds.
+#   • DASHBOARD_URL  — root of the deployed dashboard, e.g.
+#                       https://csm-dash.vercel.app (no trailing /).
+#
+# Trigger:
+#   • automatically daily at 14:30 UTC (≈9:30am Central / 10:30am ET)
+#   • manually via "Run workflow" — useful right after deploy
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "30 14 * * *"
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify required secrets are set
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          DASHBOARD_URL: ${{ secrets.DASHBOARD_URL }}
+        run: |
+          missing=()
+          for v in CRON_SECRET DASHBOARD_URL; do
+            if [ -z "${!v}" ]; then
+              missing+=("$v")
+            fi
+          done
+          if [ "${#missing[@]}" -ne 0 ]; then
+            echo "::error::Missing required repo secret(s): ${missing[*]}. Add them under Settings → Secrets and variables → Actions, then re-run."
+            exit 1
+          fi
+          echo "All required secrets present."
+
+      - name: POST /api/personal-todos/sweep
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          DASHBOARD_URL: ${{ secrets.DASHBOARD_URL }}
+        run: |
+          set -e
+          response=$(curl -sS -w "\n%{http_code}" -X POST \
+            -H "Authorization: Bearer ${CRON_SECRET}" \
+            -H "Content-Type: application/json" \
+            "${DASHBOARD_URL}/api/personal-todos/sweep")
+          body=$(echo "$response" | sed '$d')
+          code=$(echo "$response" | tail -n1)
+          echo "HTTP $code"
+          echo "$body"
+          if [ "$code" != "200" ]; then
+            echo "::error::Sweep failed with HTTP $code"
+            exit 1
+          fi

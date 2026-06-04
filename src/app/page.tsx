@@ -8,6 +8,7 @@ import {
 import { auth } from "@/auth";
 import { fmtCurrency } from "@/components/format";
 import { TeamTasksPanel } from "@/components/team-tasks-panel";
+import { PersonalTodosPanel } from "@/components/personal-todos-panel";
 import { FeatureUpdatesPanel } from "@/components/feature-updates-panel";
 import type { Customer, Segment } from "@/lib/types";
 
@@ -83,6 +84,7 @@ export default async function MissionControl({
       </div>
 
       <TeamTasksPanel />
+      <PersonalTodosPanel />
       <FeatureUpdatesPanel />
     </>
   );

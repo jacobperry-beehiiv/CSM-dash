@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import {
   DEFAULT_LIFECYCLE_STAGES,
   DEFAULT_PROACTIVE_OUTREACH_STATUSES,
+  DEFAULT_TODO_TRIGGER_EMOJI,
   DEFAULTS,
   newChannelId,
   PAST_DUE_CHANNEL_ID,
@@ -588,6 +589,21 @@ export default function SlackSettingsPage() {
         )}
       </section>
 
+      <SlackInboundSection
+        triggerEmoji={
+          settings.personal_todos?.trigger_emoji ?? DEFAULT_TODO_TRIGGER_EMOJI
+        }
+        onTriggerEmojiChange={(next) =>
+          setSettings((prev) => ({
+            ...prev,
+            personal_todos: {
+              ...(prev.personal_todos ?? {}),
+              trigger_emoji: next,
+            },
+          }))
+        }
+      />
+
       <div className="flex items-center gap-2">
         <button
           onClick={save}
@@ -598,6 +614,161 @@ export default function SlackSettingsPage() {
         </button>
       </div>
     </div>
+  );
+}
+
+/**
+ * Slack inbound checklist + personal-todos trigger emoji. The
+ * dashboard is mostly outbound today; the personal-todos webhook
+ * is the first surface that *receives* from Slack, so this section
+ * spells out the (one-time) Slack-app config an admin has to do
+ * before the slash command / DM / reaction features start working.
+ */
+function SlackInboundSection({
+  triggerEmoji,
+  onTriggerEmojiChange,
+}: {
+  triggerEmoji: string;
+  onTriggerEmojiChange: (next: string) => void;
+}) {
+  const dashUrl =
+    process.env.NEXT_PUBLIC_DASHBOARD_URL ?? "https://csm-dash.vercel.app";
+  const webhookUrl = `${dashUrl.replace(/\/+$/, "")}/api/slack-webhook`;
+  return (
+    <section className="bg-surface rounded-xl border border-border shadow-card p-4 space-y-3">
+      <h2 className="text-sm font-semibold text-fg">
+        Slack inbound — personal to-dos
+      </h2>
+      <p className="text-xs text-muted">
+        One-time Slack app config so users can create personal to-dos via
+        Slack (slash command, DM, or reacting to a message). Verification
+        relies on a <code className="font-mono">SLACK_SIGNING_SECRET</code> env
+        var on the dashboard — set that in Vercel before enabling the
+        webhook in Slack.
+      </p>
+
+      <div className="space-y-2 text-xs">
+        <div className="flex items-start gap-2">
+          <span className="mt-0.5">1.</span>
+          <div className="flex-1">
+            <p className="text-fg font-medium">Set the request URL</p>
+            <p className="text-muted">
+              In Slack app config, point both the slash command and the
+              Event Subscriptions request URL to:
+            </p>
+            <code className="block mt-1 font-mono text-fg bg-canvas border border-border rounded px-2 py-1 break-all">
+              {webhookUrl}
+            </code>
+          </div>
+        </div>
+
+        <div className="flex items-start gap-2">
+          <span className="mt-0.5">2.</span>
+          <div className="flex-1">
+            <p className="text-fg font-medium">Add bot scopes</p>
+            <p className="text-muted">
+              On top of what the bot already has (
+              <code className="font-mono">chat:write</code>,{" "}
+              <code className="font-mono">im:write</code>,{" "}
+              <code className="font-mono">files:write</code>,{" "}
+              <code className="font-mono">channels:read</code>,{" "}
+              <code className="font-mono">groups:read</code>), add:
+            </p>
+            <ul className="mt-1 ml-5 list-disc text-muted">
+              <li>
+                <code className="font-mono">commands</code> — for the{" "}
+                <code className="font-mono">/todo</code> slash command
+              </li>
+              <li>
+                <code className="font-mono">im:history</code> — to read
+                inbound DMs
+              </li>
+              <li>
+                <code className="font-mono">channels:history</code> /{" "}
+                <code className="font-mono">groups:history</code> — to read
+                the reacted-to message text
+              </li>
+              <li>
+                <code className="font-mono">reactions:read</code> — for
+                the reaction trigger
+              </li>
+              <li>
+                <code className="font-mono">users:read</code> — for resolving
+                inbound user identity
+              </li>
+            </ul>
+            <p className="mt-1 text-muted">
+              Re-install the app to the workspace to grant the new scopes.
+            </p>
+          </div>
+        </div>
+
+        <div className="flex items-start gap-2">
+          <span className="mt-0.5">3.</span>
+          <div className="flex-1">
+            <p className="text-fg font-medium">Slash command</p>
+            <p className="text-muted">
+              Add <code className="font-mono">/todo</code> with the request
+              URL above. Optional usage hint: «What needs doing? on:YYYY-MM-DD
+              due:YYYY-MM-DD !high|!medium|!low»
+            </p>
+          </div>
+        </div>
+
+        <div className="flex items-start gap-2">
+          <span className="mt-0.5">4.</span>
+          <div className="flex-1">
+            <p className="text-fg font-medium">Event subscriptions</p>
+            <p className="text-muted">
+              Enable Event Subscriptions and subscribe to these bot
+              events:
+            </p>
+            <ul className="mt-1 ml-5 list-disc text-muted">
+              <li>
+                <code className="font-mono">message.im</code> — DMs to the
+                bot become to-dos
+              </li>
+              <li>
+                <code className="font-mono">reaction_added</code> —
+                reacting to any message with the trigger emoji captures it
+              </li>
+            </ul>
+          </div>
+        </div>
+
+        <div className="flex items-start gap-2">
+          <span className="mt-0.5">5.</span>
+          <div className="flex-1">
+            <p className="text-fg font-medium">CSM ↔ Slack ID mapping</p>
+            <p className="text-muted">
+              Every CSM who wants to use the Slack inputs needs an entry in
+              the «CSM Slack IDs» section above. Inbound resolves Slack
+              user_id → handle (from that map) → email (from the customer
+              book) → KV slice. Unmapped users get a friendly bounce DM.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <div className="border-t border-border pt-3 space-y-1">
+        <label className="text-xs font-medium text-fg block">
+          Reaction emoji
+        </label>
+        <p className="text-xs text-muted">
+          Slack emoji name (no colons) that triggers «create a to-do from
+          this message». Default <code className="font-mono">white_check_mark</code>{" "}
+          (✅). Try <code className="font-mono">pushpin</code> or a custom
+          workspace emoji if ✅ collides with other team norms.
+        </p>
+        <input
+          type="text"
+          value={triggerEmoji}
+          onChange={(e) => onTriggerEmojiChange(e.target.value.trim())}
+          placeholder={DEFAULT_TODO_TRIGGER_EMOJI}
+          className="px-2 py-1 text-sm font-mono border border-border-strong rounded-md bg-surface text-fg w-full max-w-xs"
+        />
+      </div>
+    </section>
   );
 }
 
