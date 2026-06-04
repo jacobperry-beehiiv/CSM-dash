@@ -2,25 +2,59 @@
 
 import { fmtCurrency, fmtNumber } from "./format";
 import { CollapsibleSection } from "./collapsible-section";
-import { useWorkspacePaidSubs } from "@/lib/hooks/customer-paid-subs-cache";
+import {
+  useWorkspacePaidSubs,
+  type TierPrice,
+} from "@/lib/hooks/customer-paid-subs-cache";
 
 /**
- * Per-workspace paid-subscriptions summary. Shows which tiers currently
- * have active subscribers (grouped by publication) and the lifetime
- * revenue earned via beehiiv's paid-subs product.
+ * Per-workspace paid-subscriptions summary. Surfaces every paid tier
+ * the publisher currently OFFERS — including tiers with zero subs —
+ * with the prices configured against each, plus active-sub counts and
+ * lifetime gross revenue.
  *
- * "Active paid subscriber" matches the canonical Metabase definition
- * (q3402/3403/3404): subscription with `status='active' AND
- * deleted_at IS NULL`, joined to a tier via subscription_tiers.
+ * "Offered" = `tiers.default = false AND prices.enabled = true` (see
+ * the route docstring). "Active paid subscriber" matches the canonical
+ * Metabase definition from q3402/3403/3404.
  *
- * Renders nothing-of-value when the workspace has zero tiers with
- * active subs — the section header still collapses cleanly so it
- * doesn't add clutter for publishers who haven't turned monetization
- * on.
+ * Sort order is highest-converted-tier first so the CSM scans the
+ * tiers most worth talking about at the top, and an unused $50/mo tier
+ * the publisher set up but never sold to anyone shows at the bottom.
  */
 
 interface Props {
   workspaceId: string;
+}
+
+/** "$5.00 / month" or "$50.00 / year" or "$10.00 one-time" — keeps
+ *  cents resolution because publishers do price like $4.99 and rounding
+ *  to whole dollars would lie. Multiplies cents → dollars locally;
+ *  `fmtCurrency` itself rounds to whole dollars which is the wrong
+ *  default for tier prices. */
+function formatPrice(p: TierPrice): string {
+  const dollars = (p.amount_cents ?? 0) / 100;
+  // Show cents when there's a non-zero fractional part; otherwise
+  // hide them so "$5" reads cleaner than "$5.00".
+  const amount = new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: (p.currency || "usd").toUpperCase(),
+    minimumFractionDigits: dollars % 1 === 0 ? 0 : 2,
+    maximumFractionDigits: 2,
+  }).format(dollars);
+  const interval = p.interval.toLowerCase();
+  if (interval === "month") return `${amount} / mo`;
+  if (interval === "year") return `${amount} / yr`;
+  if (interval === "week") return `${amount} / wk`;
+  if (interval === "day") return `${amount} / day`;
+  if (interval === "one_time" || interval === "one-time") {
+    return `${amount} one-time`;
+  }
+  if (interval === "donation" || interval === "name your price") {
+    return "Name your price";
+  }
+  // Unknown interval — fall back to "$X / <raw>" rather than dropping
+  // the signal entirely.
+  return interval ? `${amount} / ${interval}` : amount;
 }
 
 export function CustomerPaidSubsList({ workspaceId }: Props) {
@@ -32,40 +66,37 @@ export function CustomerPaidSubsList({ workspaceId }: Props) {
   const tierCount = summary?.tiers.length ?? 0;
   const titleSuffix = summary ? ` (${tierCount})` : "";
 
-  // Group tiers by publication so the UI reads "publication → tiers"
-  // instead of an unsorted flat list. Most workspaces only have one
-  // pub, but the few with multiple should still scan cleanly.
+  // Group tiers by publication so multi-newsletter workspaces stay
+  // readable. The endpoint sorts by active_subs DESC; preserve that
+  // order within each publication group by appending in iteration order.
   const grouped = summary
-    ? Object.entries(
-        summary.tiers.reduce<
-          Record<
-            string,
-            {
-              publication_id: string;
-              publication_name: string;
-              tiers: typeof summary.tiers;
-            }
-          >
-        >((acc, t) => {
-          const key = t.publication_id;
-          if (!acc[key]) {
-            acc[key] = {
+    ? (() => {
+        const groups: Array<{
+          publication_id: string;
+          publication_name: string;
+          tiers: typeof summary.tiers;
+        }> = [];
+        const idx = new Map<string, number>();
+        for (const t of summary.tiers) {
+          const at = idx.get(t.publication_id);
+          if (at == null) {
+            idx.set(t.publication_id, groups.length);
+            groups.push({
               publication_id: t.publication_id,
               publication_name: t.publication_name,
-              tiers: [],
-            };
+              tiers: [t],
+            });
+          } else {
+            groups[at].tiers.push(t);
           }
-          acc[key].tiers.push(t);
-          return acc;
-        }, {})
-      ).map(([, v]) => v)
+        }
+        return groups;
+      })()
     : [];
 
   return (
     <CollapsibleSection
       title={`Paid subscriptions${titleSuffix}`}
-      // Body owns padding because the empty/loading/list states need
-      // different visual treatments.
       bodyClassName=""
     >
       {error ? (
@@ -76,14 +107,13 @@ export function CustomerPaidSubsList({ workspaceId }: Props) {
         <div className="p-3 text-sm text-muted">Loading…</div>
       ) : summary.tiers.length === 0 ? (
         <div className="p-3 text-sm text-muted">
-          No paid tiers with active subscribers.
+          No paid tiers offered (publisher hasn't enabled monetization).
           {summary.total_revenue_lifetime > 0 ? (
             <>
               {" "}
-              Lifetime revenue:{" "}
+              Lifetime revenue still on file:{" "}
               <strong>{fmtCurrency(summary.total_revenue_lifetime)}</strong>{" "}
-              (historical — current subscribers have all churned or moved to
-              another tier).
+              (historical — tiers have since been retired).
             </>
           ) : null}
         </div>
@@ -91,20 +121,41 @@ export function CustomerPaidSubsList({ workspaceId }: Props) {
         <div className="divide-y divide-border">
           {grouped.map((g) => (
             <div key={g.publication_id} className="px-4 py-3">
-              <div className="text-xs font-medium text-muted uppercase tracking-wide mb-1">
+              <div className="text-xs font-medium text-muted uppercase tracking-wide mb-2">
                 {g.publication_name || "(unnamed publication)"}
               </div>
-              <ul className="space-y-1">
+              <ul className="space-y-2">
                 {g.tiers.map((t) => (
                   <li
                     key={t.tier_id}
-                    className="flex items-center justify-between text-sm"
+                    className="flex flex-col gap-0.5"
                   >
-                    <span className="text-fg">{t.tier_name}</span>
-                    <span className="text-muted">
-                      {fmtNumber(t.active_subs)} active
-                      {t.active_subs === 1 ? " sub" : " subs"}
-                    </span>
+                    <div className="flex items-center justify-between text-sm gap-3">
+                      <span className="text-fg font-medium">{t.tier_name}</span>
+                      <span
+                        className={
+                          t.active_subs > 0
+                            ? "text-muted shrink-0"
+                            : "text-subtle shrink-0"
+                        }
+                      >
+                        {fmtNumber(t.active_subs)} active
+                        {t.active_subs === 1 ? " sub" : " subs"}
+                      </span>
+                    </div>
+                    <div className="text-xs text-muted flex flex-wrap gap-x-3 gap-y-0.5 pl-0.5">
+                      {t.prices.length === 0 ? (
+                        <span className="text-subtle italic">
+                          No enabled prices
+                        </span>
+                      ) : (
+                        t.prices.map((p) => (
+                          <span key={p.price_id} className="whitespace-nowrap">
+                            {formatPrice(p)}
+                          </span>
+                        ))
+                      )}
+                    </div>
                   </li>
                 ))}
               </ul>

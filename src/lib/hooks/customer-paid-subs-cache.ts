@@ -12,12 +12,20 @@ import { useEffect, useState } from "react";
  * the cohort with at least one active subscriber.
  */
 
+export interface TierPrice {
+  price_id: string;
+  amount_cents: number;
+  currency: string;
+  interval: string;
+}
+
 export interface TierWithSubs {
   tier_id: string;
   tier_name: string;
   publication_id: string;
   publication_name: string;
   active_subs: number;
+  prices: TierPrice[];
 }
 
 export interface PaidSubsSummary {
