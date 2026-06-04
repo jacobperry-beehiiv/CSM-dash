@@ -53,6 +53,25 @@ export default auth((req) => {
   // .github/workflows/past-due-history-sweep.yml.
   if (pathname.startsWith("/api/past-due/history/sweep")) return;
 
+  // Daily per-CSM review digest. Dual session/bearer auth on the
+  // route itself; bypass the proxy so the cron path returns JSON
+  // instead of a 307 → /login.
+  if (pathname.startsWith("/api/review-digest/sweep")) return;
+
+  // Personal-todos sweep — same dual-auth shape. Activates scheduled
+  // (future-dated) todos when their surface_at hits and fires the
+  // 4-stage due-date reminder ladder. Cron at
+  // .github/workflows/personal-todo-reminders.yml.
+  if (pathname.startsWith("/api/personal-todos/sweep")) return;
+
+  // Slack inbound webhook for the personal-todos feature: slash
+  // command, DMs, reaction events. Slack signs every request with
+  // HMAC-SHA256 and the URL-verification handshake echoes a challenge
+  // back — the route does its own verification, so the proxy must
+  // let Slack's POSTs through. The earlier 307-to-/login response is
+  // what broke the URL-verification handshake on first setup.
+  if (pathname.startsWith("/api/slack-webhook")) return;
+
   if (!req.auth) {
     const url = req.nextUrl.clone();
     url.pathname = "/login";
