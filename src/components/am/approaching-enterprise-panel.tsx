@@ -345,7 +345,6 @@ export function ApproachingEnterprisePanel({ rows }: Props) {
             .filter((r, i) => selected.has(rowKey(r, i)))
             .map((r) => r.organization_id)
             .filter((id): id is string => Boolean(id))}
-          ws2pubs={ws2pubs}
         />
         <div className="flex-1" />
         <BulkEmailLauncher

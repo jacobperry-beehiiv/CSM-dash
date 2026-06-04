@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { fetchPublicationsForWorkspace } from "@/lib/hooks/customer-publications-cache";
 
 /**
  * Bulk-action button that gathers every publication ID owned by the
@@ -9,23 +10,22 @@ import { useState } from "react";
  * CSM can grab a clipboard-ready list to paste into Metabase / Stripe
  * metadata / a Slack message without expanding each row.
  *
- * Source of truth is the publications index (ws2pubs) — the same map
- * that drives publication-ID search. Each workspace contributes ALL
- * of its publications, not one. The toast surfaces the exact text
- * that landed on the clipboard so the user can verify nothing got
- * truncated client-side.
+ * Source of truth is `/api/customers/[workspace_id]/publications`,
+ * the same endpoint the expanded company view uses. Fetched on click
+ * via the shared `customer-publications-cache` module so:
+ *
+ *   - Already-expanded rows hit cache instantly.
+ *   - Repeat clicks on the same selection are free.
+ *   - We sidestep Metabase's 2000-row /api/dataset cap that truncates
+ *     the global publications-index.
+ *
+ * Concurrency is capped (~6 parallel) so a 30-row selection doesn't
+ * fan out 30 simultaneous Metabase queries.
  */
 
 interface Props {
-  /** Workspace IDs the user has selected. The button looks each up
-   *  in ws2pubs to produce the final pub-ID list. */
+  /** Workspace IDs the user has selected. */
   workspaceIds: string[];
-  /** Reverse map: workspace_id → publication_id[] — passed in by the
-   *  parent panel which already loads it via usePublicationsIndex.
-   *  Note: usePublicationsIndex stores BOTH the raw UUID and the
-   *  customer-facing `pub_<uuid>` form in this array, so we have to
-   *  dedupe per-publication before emitting. */
-  ws2pubs: Record<string, string[]>;
   /** Disable when the parent's selection state would produce zero
    *  output. Convenience for the toolbar — the button is no-op even
    *  if pressed, but disabling matches the other bulk-action buttons. */
@@ -40,48 +40,112 @@ interface CopyResult {
   pubCount: number;
   workspaceTotal: number;
   workspacesWithPubs: number;
+  workspaceErrors: number;
   error: string | null;
 }
 
-/** Normalize a list of mixed raw + `pub_`-prefixed IDs to one unique
- *  entry per publication. The publications-index hook doubles each
- *  pub (raw + prefixed) so substring search hits either form, but
- *  for export we want one ID per publication.
- *
- *  Returns the requested format. When `prefixed` is asked for we
- *  ensure every ID starts with `pub_`; when `raw` is asked for we
- *  strip the prefix if present.
- */
-function uniquePubs(list: string[], format: Format): string[] {
-  // Canonicalize: strip any pub_ prefix, dedupe at the raw-UUID level.
-  // That collapses the [raw, "pub_"+raw] doubling regardless of which
-  // form happens to come first.
-  const rawSet = new Set<string>();
+/** Strip any `pub_` prefix and emit the requested format. Input may
+ *  be a mix of raw UUIDs and prefixed forms (the publications endpoint
+ *  returns raw `id::text`, but historical data sometimes leaks the
+ *  prefix); we canonicalize before deduping so each publication
+ *  contributes one entry regardless of source format. */
+function uniquePubs(ids: string[], format: Format): string[] {
+  const seen = new Set<string>();
   const order: string[] = [];
-  for (const id of list) {
+  for (const id of ids) {
     const raw = id.startsWith("pub_") ? id.slice(4) : id;
     if (!raw) continue;
-    if (rawSet.has(raw)) continue;
-    rawSet.add(raw);
+    if (seen.has(raw)) continue;
+    seen.add(raw);
     order.push(raw);
   }
   if (format === "raw") return order;
   return order.map((r) => `pub_${r}`);
 }
 
-export function CopyPubIdsButton({ workspaceIds, ws2pubs, disabled }: Props) {
+/** Run `task` over `items` with at most `limit` concurrent in flight.
+ *  Resolves to results in input order. A task that throws fills its
+ *  slot with the rejection; the caller decides how to fold it. */
+async function mapConcurrent<T, R>(
+  items: T[],
+  limit: number,
+  task: (item: T, index: number) => Promise<R>
+): Promise<Array<{ ok: true; value: R } | { ok: false; error: unknown }>> {
+  const results: Array<
+    { ok: true; value: R } | { ok: false; error: unknown }
+  > = new Array(items.length);
+  let cursor = 0;
+  async function worker(): Promise<void> {
+    while (true) {
+      const i = cursor++;
+      if (i >= items.length) return;
+      try {
+        results[i] = { ok: true, value: await task(items[i], i) };
+      } catch (e) {
+        results[i] = { ok: false, error: e };
+      }
+    }
+  }
+  const workers = Array.from({ length: Math.min(limit, items.length) }, () =>
+    worker()
+  );
+  await Promise.all(workers);
+  return results;
+}
+
+export function CopyPubIdsButton({ workspaceIds, disabled }: Props) {
   const [result, setResult] = useState<CopyResult | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState<{ done: number; total: number } | null>(
+    null
+  );
 
   async function copy(format: Format) {
-    const all: string[] = [];
-    let workspacesWithPubs = 0;
-    for (const ws of workspaceIds) {
-      const list = ws2pubs[ws];
-      if (!list || list.length === 0) continue;
-      workspacesWithPubs++;
-      all.push(...list);
+    if (workspaceIds.length === 0) {
+      setResult({
+        format,
+        text: "",
+        pubCount: 0,
+        workspaceTotal: 0,
+        workspacesWithPubs: 0,
+        workspaceErrors: 0,
+        error: "Select rows first.",
+      });
+      return;
     }
-    const ids = uniquePubs(all, format);
+
+    setBusy(true);
+    setResult(null);
+    setProgress({ done: 0, total: workspaceIds.length });
+
+    // Concurrency cap of 6: the per-workspace endpoint typically returns
+    // in ~150-400ms; six parallel keeps Metabase comfortable while
+    // finishing a 30-workspace selection in ~2s worst case.
+    let done = 0;
+    const outcomes = await mapConcurrent(workspaceIds, 6, async (ws) => {
+      const pubs = await fetchPublicationsForWorkspace(ws);
+      done++;
+      setProgress({ done, total: workspaceIds.length });
+      return pubs.map((p) => p.publication_id);
+    });
+
+    setBusy(false);
+    setProgress(null);
+
+    let workspacesWithPubs = 0;
+    let workspaceErrors = 0;
+    const allIds: string[] = [];
+    for (const o of outcomes) {
+      if (!o.ok) {
+        workspaceErrors++;
+        continue;
+      }
+      if (o.value.length === 0) continue;
+      workspacesWithPubs++;
+      allIds.push(...o.value);
+    }
+
+    const ids = uniquePubs(allIds, format);
     const text = ids.join(", ");
 
     if (ids.length === 0) {
@@ -91,10 +155,11 @@ export function CopyPubIdsButton({ workspaceIds, ws2pubs, disabled }: Props) {
         pubCount: 0,
         workspaceTotal: workspaceIds.length,
         workspacesWithPubs,
+        workspaceErrors,
         error:
-          workspaceIds.length === 0
-            ? "Select rows first."
-            : "None of the selected workspaces have publications in the index.",
+          workspaceErrors === workspaceIds.length
+            ? "Every per-workspace fetch failed. Check the network tab and Metabase availability."
+            : "None of the selected workspaces have publications.",
       });
       return;
     }
@@ -107,6 +172,7 @@ export function CopyPubIdsButton({ workspaceIds, ws2pubs, disabled }: Props) {
         pubCount: ids.length,
         workspaceTotal: workspaceIds.length,
         workspacesWithPubs,
+        workspaceErrors,
         error: null,
       });
     } catch (e) {
@@ -116,6 +182,7 @@ export function CopyPubIdsButton({ workspaceIds, ws2pubs, disabled }: Props) {
         pubCount: ids.length,
         workspaceTotal: workspaceIds.length,
         workspacesWithPubs,
+        workspaceErrors,
         error: `Clipboard write failed: ${
           e instanceof Error ? e.message : "unknown"
         }`,
@@ -123,7 +190,11 @@ export function CopyPubIdsButton({ workspaceIds, ws2pubs, disabled }: Props) {
     }
   }
 
-  const isDisabled = disabled || workspaceIds.length === 0;
+  const isDisabled = disabled || workspaceIds.length === 0 || busy;
+  const skippedNoPubs =
+    result && !result.error
+      ? result.workspaceTotal - result.workspacesWithPubs - result.workspaceErrors
+      : 0;
 
   return (
     <span className="inline-flex flex-col gap-1">
@@ -139,8 +210,9 @@ export function CopyPubIdsButton({ workspaceIds, ws2pubs, disabled }: Props) {
               : `Copy pub_<uuid> form for the ${workspaceIds.length} selected workspace${workspaceIds.length === 1 ? "" : "s"}.`
           }
         >
-          📋 Copy pub IDs
-          {workspaceIds.length > 0 ? ` (${workspaceIds.length})` : ""}
+          {busy && progress
+            ? `Fetching… ${progress.done}/${progress.total}`
+            : `📋 Copy pub IDs${workspaceIds.length > 0 ? ` (${workspaceIds.length})` : ""}`}
         </button>
         <button
           type="button"
@@ -172,14 +244,17 @@ export function CopyPubIdsButton({ workspaceIds, ws2pubs, disabled }: Props) {
                 {result.workspaceTotal === 1 ? "" : "s"} (
                 {result.format === "prefixed" ? "pub_ form" : "raw UUIDs"}).
               </div>
-              {result.workspacesWithPubs < result.workspaceTotal ? (
+              {skippedNoPubs > 0 ? (
                 <div className="text-amber-700 dark:text-amber-300">
-                  {result.workspaceTotal - result.workspacesWithPubs} workspace
-                  {result.workspaceTotal - result.workspacesWithPubs === 1
-                    ? ""
-                    : "s"}{" "}
-                  had no publications in the index (deleted, brand-new, or
-                  ID mismatch).
+                  {skippedNoPubs} workspace
+                  {skippedNoPubs === 1 ? "" : "s"} had no publications.
+                </div>
+              ) : null}
+              {result.workspaceErrors > 0 ? (
+                <div className="text-amber-700 dark:text-amber-300">
+                  {result.workspaceErrors} per-workspace fetch
+                  {result.workspaceErrors === 1 ? "" : "es"} failed (Metabase /
+                  network).
                 </div>
               ) : null}
               <details className="mt-1">

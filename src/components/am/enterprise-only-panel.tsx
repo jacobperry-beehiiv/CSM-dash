@@ -461,7 +461,6 @@ export function EnterpriseOnlyPanel({ rows, csms }: Props) {
           workspaceIds={selectedCustomers
             .map((c) => c.workspace_id)
             .filter((id): id is string => Boolean(id))}
-          ws2pubs={ws2pubs}
         />
         <div className="flex-1" />
         {/* Enterprise outreach drafts auto-CC the assigned CSM per the

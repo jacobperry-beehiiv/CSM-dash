@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import { CopyButton } from "./copy-button";
 import { fmtNumber } from "./format";
 import { CollapsibleSection } from "./collapsible-section";
+import { useWorkspacePublications } from "@/lib/hooks/customer-publications-cache";
 
 /**
  * Scrollable list of every publication under a workspace. Replaces
@@ -12,48 +12,23 @@ import { CollapsibleSection } from "./collapsible-section";
  * list (with IDs to deep-link into Metabase / beehiiv) far more than
  * the four ambiguous "feature in use?" cards.
  *
- * Lazy-loaded on mount via /api/customers/[workspace_id]/publications.
+ * Lazy-loaded via the shared `customer-publications-cache` module so
+ * the AM bulk "Copy pub IDs" action reuses the same data we already
+ * pulled for the expanded view (and vice versa) — same endpoint, same
+ * cache, no duplicate Metabase round-trip.
+ *
  * Bounded height + overflow-y so a workspace with 50 publications
  * doesn't push the rest of the detail panel off-screen.
  */
-
-interface PublicationRow {
-  publication_id: string;
-  publication_name: string;
-  subscribers: number | null;
-}
 
 interface Props {
   workspaceId: string;
 }
 
 export function CustomerPublicationsList({ workspaceId }: Props) {
-  const [rows, setRows] = useState<PublicationRow[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    setRows(null);
-    setError(null);
-    fetch(`/api/customers/${encodeURIComponent(workspaceId)}/publications`)
-      .then(async (r) => {
-        if (!r.ok) {
-          const j = (await r.json().catch(() => ({}))) as { error?: string };
-          throw new Error(j.error ?? `HTTP ${r.status}`);
-        }
-        const j = (await r.json()) as { publications: PublicationRow[] };
-        if (cancelled) return;
-        setRows(j.publications);
-      })
-      .catch((e) => {
-        if (!cancelled) {
-          setError(e instanceof Error ? e.message : "Unknown error");
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [workspaceId]);
+  const state = useWorkspacePublications(workspaceId);
+  const rows = Array.isArray(state) ? state : null;
+  const error = state instanceof Error ? state.message : null;
 
   const titleSuffix = rows ? ` (${rows.length})` : "";
   return (
