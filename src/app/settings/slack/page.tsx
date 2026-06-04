@@ -709,12 +709,27 @@ function SlackInboundSection({
         <div className="flex items-start gap-2">
           <span className="mt-0.5">3.</span>
           <div className="flex-1">
-            <p className="text-fg font-medium">Slash command</p>
+            <p className="text-fg font-medium">Slash commands</p>
             <p className="text-muted">
-              Add <code className="font-mono">/todo</code> with the request
-              URL above. Optional usage hint: «What needs doing? on:YYYY-MM-DD
-              due:YYYY-MM-DD !high|!medium|!low»
+              All slash commands point at the same Request URL above. Add
+              each in <em>Slash Commands</em>:
             </p>
+            <ul className="mt-1 ml-5 list-disc text-muted">
+              <li>
+                <code className="font-mono">/todo</code> — create a personal
+                to-do. Inline form (<code className="font-mono">/todo Foo Co
+                check-in on:2026-07-01 !high</code>) or modal (<code className="font-mono">/todo</code>{" "}
+                with no text).
+              </li>
+              <li>
+                <code className="font-mono">/update-csm</code> — open a modal
+                that updates the assigned CSM in HubSpot for a given workspace
+                ID. Requires the bot's HubSpot integration to have{" "}
+                <code className="font-mono">crm.objects.companies.write</code>{" "}
+                scope (the HubSpot Private App or OAuth credentials the dash
+                uses).
+              </li>
+            </ul>
           </div>
         </div>
 

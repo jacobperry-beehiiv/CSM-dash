@@ -774,3 +774,124 @@ export async function fetchHubspotCompanyOwners(
   }
   return result;
 }
+
+// ─── Write helpers ────────────────────────────────────────────────────
+//
+// Used by the Slack-driven `/update-csm` slash command (and any future
+// "edit HubSpot from Slack" flows). All write paths require additional
+// HubSpot scopes beyond the read-only set the snapshot pipeline uses:
+//
+//   - crm.objects.companies.write  (for patchHubspotCompanyProperties)
+//   - crm.objects.owners.read       (for listHubspotOwners — read-only,
+//                                   already required by the existing
+//                                   fetchHubspotCompanyOwner code path)
+
+/**
+ * List every active HubSpot owner. Paged via the v3 owners endpoint
+ * with `limit=100`, walking `paging.next.after` until exhausted.
+ * Cached for 10 minutes — owner lists rarely change minute-to-minute
+ * and the Slack modal opens are bursty (one CSM clicks a slash command,
+ * the modal needs the full list once). Returns the full list sorted by
+ * name + email for stable rendering in dropdowns.
+ */
+let ownerListCache: { expires: number; data: HubspotOwner[] } | null = null;
+const OWNER_LIST_TTL_MS = 10 * 60 * 1000;
+
+export async function listHubspotOwners(): Promise<HubspotOwner[]> {
+  if (ownerListCache && ownerListCache.expires > Date.now()) {
+    return ownerListCache.data;
+  }
+  const token = await getAccessToken();
+  const collected: HubspotOwner[] = [];
+  let after: string | undefined;
+  // Cap pagination defensively — beehiiv has <100 owners; if HubSpot
+  // returns absurd amounts something's wrong and we'd rather bail
+  // than loop forever.
+  for (let page = 0; page < 20; page++) {
+    const params = new URLSearchParams({ limit: "100" });
+    if (after) params.set("after", after);
+    const res = await fetch(
+      `https://api.hubapi.com/crm/v3/owners?${params.toString()}`,
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      throw new Error(
+        `HubSpot owners list failed (${res.status}): ${body.slice(0, 200)}`
+      );
+    }
+    const json = (await res.json()) as {
+      results?: Array<{
+        id?: string;
+        email?: string | null;
+        firstName?: string | null;
+        lastName?: string | null;
+        archived?: boolean;
+      }>;
+      paging?: { next?: { after?: string } };
+    };
+    for (const o of json.results ?? []) {
+      if (o.archived) continue;
+      if (!o.id || !o.email) continue;
+      const name = [o.firstName, o.lastName]
+        .filter(Boolean)
+        .join(" ")
+        .trim();
+      collected.push({
+        owner_id: o.id,
+        owner_email: o.email.toLowerCase(),
+        owner_name: name || null,
+      });
+    }
+    after = json.paging?.next?.after;
+    if (!after) break;
+  }
+  collected.sort((a, b) => {
+    const an = a.owner_name ?? a.owner_email;
+    const bn = b.owner_name ?? b.owner_email;
+    return an.localeCompare(bn);
+  });
+  ownerListCache = {
+    expires: Date.now() + OWNER_LIST_TTL_MS,
+    data: collected,
+  };
+  return collected;
+}
+
+/**
+ * PATCH arbitrary properties on a HubSpot company. Used by the Slack
+ * `/update-csm` flow (sets `hubspot_owner_id`) and any future "edit
+ * HubSpot from Slack" flows that drop in via the views.ts dispatcher.
+ *
+ * Throws on non-2xx so the caller can surface a specific failure
+ * message back to Slack (response_action="errors" lights up the
+ * field-level error inline in the modal).
+ */
+export async function patchHubspotCompanyProperties(
+  companyId: string,
+  properties: Record<string, string | number | boolean | null>
+): Promise<void> {
+  const token = await getAccessToken();
+  const res = await fetch(
+    `https://api.hubapi.com/crm/v3/objects/companies/${encodeURIComponent(companyId)}`,
+    {
+      method: "PATCH",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ properties }),
+    }
+  );
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(
+      `HubSpot company ${companyId} PATCH failed (${res.status}): ${body.slice(0, 200)}`
+    );
+  }
+  // Cache busting note: `ownerCache` is keyed by ownerId, not companyId,
+  // so a PATCH that changes a company's owner_id doesn't strand stale
+  // data — the next fetchHubspotCompanyOwner() call re-reads the
+  // company row and looks up the new owner (whose cached profile is
+  // still valid). No bust needed.
+}

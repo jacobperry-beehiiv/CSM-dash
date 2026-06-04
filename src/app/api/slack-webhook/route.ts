@@ -6,6 +6,7 @@ import { resolveUserKeyForSlackId as resolveIdentity } from "@/lib/personal-todo
 import {
   buildTodoCreateView,
   dispatchViewSubmission,
+  lookupSlashHandler,
   openSlackView,
   type ViewSubmissionPayload,
 } from "@/lib/integrations/slack-views";
@@ -205,6 +206,27 @@ async function handleSlashCommand(
     via: resolved.via,
     userKey,
   });
+
+  // Slash command registry — multiple commands can target this
+  // endpoint and each can have its own flow. When no specific handler
+  // matches, we fall back to the to-do behavior below (preserves the
+  // "register any name and /todo works" UX from when /todo was the
+  // only command).
+  const slashHandler = lookupSlashHandler(slash.command);
+  if (slashHandler) {
+    const result = await slashHandler({
+      triggerId: slash.trigger_id,
+      inlineText: slash.text,
+      userKey,
+      slackUserId: slash.user_id,
+    });
+    // null → modal opened, no ack message needed (Slack just sees 200).
+    if (result === null) {
+      return new NextResponse(null, { status: 200 });
+    }
+    return NextResponse.json(result);
+  }
+
   const parsed = parseSlashTodoText(slash.text);
   if (!parsed.title) {
     // No inline text → open the guided modal. Two flows now:
@@ -336,16 +358,15 @@ async function handleViewSubmission(
     });
   }
   const result = await dispatchViewSubmission(payload, resolved.userKey);
-  // Empty submission → also DM the user a permanent ack so they have
-  // a confirmation in their DM history (the modal just disappears
-  // when we return {} which can feel like nothing happened).
-  if (!result.response_action) {
-    await ephemeralDm(
-      payload.user.id,
-      ":white_check_mark: Added to your to-dos."
-    );
+  // Strip our private `_ack_message` field before forwarding to Slack,
+  // and DM it to the submitter so the modal-disappears-into-the-void
+  // case still has a permanent confirmation in their DM history. Each
+  // handler composes its own success copy.
+  const { _ack_message, ...slackResponse } = result;
+  if (!result.response_action && _ack_message) {
+    await ephemeralDm(payload.user.id, String(_ack_message));
   }
-  return NextResponse.json(result);
+  return NextResponse.json(slackResponse);
 }
 
 // ─── Event subscriptions ──────────────────────────────────────────────

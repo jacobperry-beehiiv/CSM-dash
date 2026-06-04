@@ -23,6 +23,13 @@ import {
   type TodoPriority,
 } from "../personal-todos/types";
 import { applyTodoOps } from "../personal-todos/store";
+import {
+  listHubspotOwners,
+  patchHubspotCompanyProperties,
+  type HubspotOwner,
+} from "./hubspot";
+import { loadCustomers } from "../data/load-customers";
+import type { Customer } from "../types";
 
 // ─── Generic view-submission contract ─────────────────────────────────
 
@@ -61,6 +68,11 @@ export type ViewStateValue =
 export interface ViewSubmitResponse {
   response_action?: "errors" | "clear" | "push" | "update";
   errors?: Record<string, string>;
+  /** Optional ephemeral DM to send to the submitter after the modal
+   *  closes. The route reads this then strips it before forwarding
+   *  the rest to Slack — modal-disappears-without-feedback feels
+   *  broken, so every successful submission should set this. */
+  _ack_message?: string;
   // Allow extra fields for future expansion (push / update view JSON).
   [key: string]: unknown;
 }
@@ -278,30 +290,38 @@ export const todoCreateHandler: ViewSubmitHandler = async ({
     due_date: todo.due_date,
     priority: todo.priority,
   });
-  // Empty response closes the modal. We DM the user separately via
-  // the route so they get a permanent confirmation in their DM
-  // history instead of just the modal disappearing.
-  return {};
+  const ackLines = [`:white_check_mark: Added to your to-dos: "${todo.title}"`];
+  if (todo.surface_at) ackLines.push(`• Scheduled for ${todo.surface_at}`);
+  if (todo.due_date) ackLines.push(`• Due ${todo.due_date}`);
+  if (todo.priority) {
+    ackLines.push(
+      `• Priority: ${todo.priority[0].toUpperCase()}${todo.priority.slice(1)}`
+    );
+  }
+  return { _ack_message: ackLines.join("\n") };
 };
 
 // ─── Dispatcher ──────────────────────────────────────────────────────
 
-/** Registry: callback_id → submit handler. Add new entries here when
- *  introducing a new modal flow. The webhook router calls
- *  `dispatchViewSubmission` and gets back the response Slack expects. */
-export const VIEW_SUBMIT_HANDLERS: Record<string, ViewSubmitHandler> = {
-  [TODO_CREATE_CALLBACK_ID]: todoCreateHandler,
-};
-
 /** Look up + invoke the handler for a `view_submission` payload. When
  *  no handler is registered for the callback_id, log and respond with
  *  a clear close — Slack will dismiss the modal and we'll have a
- *  log line pointing at the missing handler. */
+ *  log line pointing at the missing handler.
+ *
+ *  The handler table is inlined here (rather than as a top-level
+ *  const) so module load order doesn't matter — each `export const`
+ *  handler defined later in the file is initialized by the time this
+ *  function is *called*, even though the table is *referenced* at
+ *  the top of the file. */
 export async function dispatchViewSubmission(
   payload: ViewSubmissionPayload,
   userKey: string
 ): Promise<ViewSubmitResponse> {
-  const handler = VIEW_SUBMIT_HANDLERS[payload.view.callback_id];
+  const handlers: Record<string, ViewSubmitHandler> = {
+    [TODO_CREATE_CALLBACK_ID]: todoCreateHandler,
+    [HUBSPOT_UPDATE_CSM_CALLBACK_ID]: hubspotUpdateCsmHandler,
+  };
+  const handler = handlers[payload.view.callback_id];
   if (!handler) {
     console.warn(
       "[slack-views] No handler for view callback_id",
@@ -313,6 +333,287 @@ export async function dispatchViewSubmission(
 }
 
 // ─── views.open helper ───────────────────────────────────────────────
+
+// ─── HubSpot CSM update modal ────────────────────────────────────────
+//
+// Slash `/update-csm` opens a Block Kit modal with two fields:
+//   - Workspace ID (text input — paste from the dashboard URL or the
+//     workspace ID copy button in the expanded company view).
+//   - CSM (static_select populated with the current HubSpot owners
+//     list, value = owner_id, label = "Name <email>").
+// On submit we resolve workspace_id → hubspot_company_id via the
+// customer book and PATCH the company.
+//
+// Designed to be the template for additional HubSpot field updates
+// (lifecycle stage, type, etc.) — copy the builder, add new blocks,
+// register a new callback_id + handler in the registries below.
+
+export const HUBSPOT_UPDATE_CSM_CALLBACK_ID = "hubspot_update_csm";
+
+/** Build the CSM-update modal. Owners are passed in (we fetch them
+ *  before opening the modal so the dropdown is populated immediately
+ *  — Slack doesn't accept empty static_selects). */
+export function buildHubspotUpdateCsmView(
+  owners: HubspotOwner[],
+  prefill?: { workspaceId?: string }
+): Record<string, unknown> {
+  // Cap at 100 — Slack's static_select hard limit. If beehiiv ever
+  // grows past 100 active HubSpot owners we'd switch to external_select
+  // (autocomplete from our backend). Today we have ~50-ish owners
+  // total, well under the cap.
+  const truncated = owners.slice(0, 100);
+  const options = truncated.map((o) => ({
+    text: {
+      type: "plain_text",
+      // Slack truncates option labels at 75 chars; we'd rather keep
+      // the email visible than the full name.
+      text: ((o.owner_name ? `${o.owner_name} ` : "") + `<${o.owner_email}>`).slice(0, 75),
+    },
+    value: o.owner_id,
+  }));
+  const omittedHint =
+    owners.length > truncated.length
+      ? ` (showing first 100 of ${owners.length})`
+      : "";
+  return {
+    type: "modal",
+    callback_id: HUBSPOT_UPDATE_CSM_CALLBACK_ID,
+    title: { type: "plain_text", text: "Update CSM in HubSpot" },
+    submit: { type: "plain_text", text: "Update" },
+    close: { type: "plain_text", text: "Cancel" },
+    blocks: [
+      {
+        type: "context",
+        elements: [
+          {
+            type: "mrkdwn",
+            text:
+              "Reassigns this company's HubSpot owner. The dashboard's *Refresh CSM from HubSpot* button on the customer row will pull the new value into the override store on next click.",
+          },
+        ],
+      },
+      {
+        type: "input",
+        block_id: "workspace_id",
+        label: { type: "plain_text", text: "Workspace ID" },
+        element: {
+          type: "plain_text_input",
+          action_id: "value",
+          placeholder: {
+            type: "plain_text",
+            text: "Paste from the dashboard — Copy workspace ID button",
+          },
+          ...(prefill?.workspaceId
+            ? { initial_value: prefill.workspaceId }
+            : {}),
+        },
+        hint: {
+          type: "plain_text",
+          text: "UUID. Resolves to the company via the customer book.",
+        },
+      },
+      {
+        type: "input",
+        block_id: "owner",
+        label: {
+          type: "plain_text",
+          text: `New CSM (HubSpot owner)${omittedHint}`,
+        },
+        element: {
+          type: "static_select",
+          action_id: "value",
+          placeholder: {
+            type: "plain_text",
+            text: "Pick a CSM",
+          },
+          options,
+        },
+      },
+    ],
+  };
+}
+
+/** Submission handler — workspace_id + owner_id → PATCH HubSpot. */
+export const hubspotUpdateCsmHandler: ViewSubmitHandler = async ({
+  payload,
+  userKey,
+}) => {
+  const workspaceIdRaw = getTextValue(payload, "workspace_id");
+  const ownerId = getSelectValue(payload, "owner");
+  if (!workspaceIdRaw) {
+    return {
+      response_action: "errors",
+      errors: { workspace_id: "Workspace ID is required." } as Record<
+        string,
+        string
+      >,
+    };
+  }
+  if (!ownerId) {
+    return {
+      response_action: "errors",
+      errors: { owner: "Pick a CSM." } as Record<string, string>,
+    };
+  }
+  const workspaceId = workspaceIdRaw.trim();
+
+  // Look up the customer to find the hubspot_company_id. We don't
+  // accept a raw HubSpot company ID directly because requiring a
+  // dashboard-side anchor catches mistyped IDs cleanly (and lets us
+  // surface the company name in the success message).
+  let customer: Customer | null = null;
+  try {
+    const customers = await loadCustomers();
+    customer =
+      customers.find(
+        (c) =>
+          c.workspace_id === workspaceId ||
+          c.workspace_id?.toLowerCase() === workspaceId.toLowerCase()
+      ) ?? null;
+  } catch (e) {
+    console.error(
+      "[slack-views] loadCustomers failed in hubspot_update_csm",
+      e
+    );
+  }
+  if (!customer) {
+    return {
+      response_action: "errors",
+      errors: {
+        workspace_id: `No customer found for workspace_id "${workspaceId}". Confirm the value (Copy workspace ID button on the dashboard).`,
+      } as Record<string, string>,
+    };
+  }
+  if (!customer.hubspot_company_id) {
+    return {
+      response_action: "errors",
+      errors: {
+        workspace_id: `${customer.company_name ?? customer.workspace_name ?? workspaceId} has no hubspot_company_id on file — can't reach HubSpot for it.`,
+      } as Record<string, string>,
+    };
+  }
+
+  try {
+    await patchHubspotCompanyProperties(customer.hubspot_company_id, {
+      hubspot_owner_id: ownerId,
+    });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error("[slack-views] HubSpot PATCH failed", {
+      userKey,
+      workspaceId,
+      ownerId,
+      error: msg,
+    });
+    return {
+      response_action: "errors",
+      errors: {
+        owner: `HubSpot PATCH failed: ${msg.slice(0, 150)}`,
+      } as Record<string, string>,
+    };
+  }
+  console.log("[slack-views] HubSpot CSM updated via Slack", {
+    userKey,
+    workspaceId,
+    hubspot_company_id: customer.hubspot_company_id,
+    new_owner_id: ownerId,
+  });
+  const companyName =
+    customer.company_name ?? customer.workspace_name ?? workspaceId;
+  return {
+    _ack_message:
+      `:white_check_mark: HubSpot CSM updated for *${companyName}*. ` +
+      `Click "Refresh CSM from HubSpot" on the row to pull the new owner into the dashboard override store.`,
+  };
+};
+
+// ─── Slash command registry ──────────────────────────────────────────
+//
+// Each entry maps a Slack slash command (with or without leading `/`)
+// to a handler. The webhook dispatches by command name so multiple
+// commands can coexist:
+//
+//   /todo         → opens the to-do modal (or inline parse if text given)
+//   /update-csm   → opens the HubSpot CSM-update modal
+//   /<anything>   → falls back to the to-do behavior (preserves the
+//                   "register any name and it just works" UX we had
+//                   when /todo was the only command)
+//
+// Adding a new slash flow: register the command name here with a
+// handler that opens the relevant modal via `openSlackView(triggerId, view)`,
+// then add the matching ViewSubmitHandler in VIEW_SUBMIT_HANDLERS so
+// the submission lands somewhere.
+
+export interface SlashHandlerContext {
+  triggerId: string;
+  inlineText: string;
+  userKey: string;
+  slackUserId: string;
+}
+
+/** Returns a Slack-formatted response object (ephemeral) — empty
+ *  `{}` means "no ack needed" (the modal that just opened is the ack). */
+export type SlashHandler = (
+  ctx: SlashHandlerContext
+) => Promise<{
+  response_type?: "ephemeral" | "in_channel";
+  text?: string;
+  // Allow other Slack response fields for future expansion.
+  [key: string]: unknown;
+} | null>;
+
+/** Handler for `/update-csm`. Always opens the modal — the inline
+ *  text is ignored for v1. (Future: pre-fill the workspace_id if
+ *  given.) */
+export const hubspotUpdateCsmSlashHandler: SlashHandler = async (ctx) => {
+  let owners: HubspotOwner[] = [];
+  try {
+    owners = await listHubspotOwners();
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error("[slack-views] listHubspotOwners failed", msg);
+    return {
+      response_type: "ephemeral",
+      text:
+        "Couldn't fetch HubSpot owners list to build the form: " +
+        msg.slice(0, 200) +
+        ". Check HUBSPOT_ACCESS_TOKEN on the dashboard and the bot's HubSpot scopes.",
+    };
+  }
+  if (owners.length === 0) {
+    return {
+      response_type: "ephemeral",
+      text:
+        "HubSpot returned 0 owners — can't build the CSM picker. Check the HubSpot integration is connected to the right portal.",
+    };
+  }
+  const view = buildHubspotUpdateCsmView(owners, {
+    workspaceId: ctx.inlineText.trim() || undefined,
+  });
+  const opened = await openSlackView(ctx.triggerId, view);
+  if (!opened.ok) {
+    return {
+      response_type: "ephemeral",
+      text:
+        "Couldn't open the form: " +
+        (opened.error ?? "unknown error"),
+    };
+  }
+  return null;
+};
+
+/** Slash command registry. Match is case-insensitive on the command
+ *  name (with or without the leading `/`). */
+export const SLASH_HANDLERS: Record<string, SlashHandler> = {
+  "update-csm": hubspotUpdateCsmSlashHandler,
+};
+
+/** Look up a slash handler for a given command name. Returns null
+ *  when no entry matches; the webhook falls back to the to-do flow. */
+export function lookupSlashHandler(commandRaw: string): SlashHandler | null {
+  const key = commandRaw.replace(/^\//, "").trim().toLowerCase();
+  return SLASH_HANDLERS[key] ?? null;
+}
 
 /** Open a modal in Slack. `trigger_id` comes from the originating
  *  slash command / interactive action and is only valid for ~3 seconds,
