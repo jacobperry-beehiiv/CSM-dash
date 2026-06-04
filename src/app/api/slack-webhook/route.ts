@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { loadCustomers } from "@/lib/data/load-customers";
 import { loadSettings } from "@/lib/data/settings";
 import { applyTodoOps } from "@/lib/personal-todos/store";
-import { userKeyFromSlackUserId } from "@/lib/personal-todos/identity";
+import { resolveUserKeyForSlackId as resolveIdentity } from "@/lib/personal-todos/identity";
 import {
   newTodoId,
   type PersonalTodo,
@@ -167,17 +167,29 @@ async function handleSlashCommand(
   // `/dash-todo`, etc. and they all create personal to-dos). The log
   // line above records the actual name so it's easy to spot if someone
   // ever points an unrelated slash command at this URL by mistake.
-  const userKey = await resolveUserKeyForSlackId(slash.user_id);
-  if (!userKey) {
+  const resolved = await resolveUserKeyForSlackId(slash.user_id);
+  if (!resolved.userKey) {
     console.warn(
-      "[slack-webhook] Slash invoker's Slack ID isn't mapped to a CSM",
-      { slack_user_id: slash.user_id, slack_user_name: slash.user_name }
+      "[slack-webhook] Slash invoker couldn't be resolved",
+      {
+        slack_user_id: slash.user_id,
+        slack_user_name: slash.user_name,
+        reason: resolved.reason,
+      }
     );
     return NextResponse.json({
       response_type: "ephemeral",
-      text: `Couldn't match your Slack ID (${slash.user_id}) to a CSM in the dashboard. Ask an admin to add the mapping at /settings/slack → CSM Slack IDs.`,
+      text: `Couldn't match your Slack ID (${slash.user_id}) — ${
+        resolved.reason ?? "no mapping found"
+      }. Ask Jacob to look at /settings/slack → CSM Slack IDs.`,
     });
   }
+  const userKey = resolved.userKey;
+  console.log("[slack-webhook] Slash invoker resolved", {
+    slack_user_id: slash.user_id,
+    via: resolved.via,
+    userKey,
+  });
   const parsed = parseSlashTodoText(slash.text);
   if (!parsed.title) {
     console.log("[slack-webhook] Slash command had no title — sent usage hint", {
@@ -254,15 +266,21 @@ async function handleDmMessage(
   if (event.bot_id) return;
   if (!event.user || !event.text) return;
 
-  const userKey = await resolveUserKeyForSlackId(event.user);
-  if (!userKey) {
-    // Friendly bounce — the user won't know why their DM didn't land.
+  const resolved = await resolveUserKeyForSlackId(event.user);
+  if (!resolved.userKey) {
+    console.warn("[slack-webhook] DM sender couldn't be resolved", {
+      slack_user_id: event.user,
+      reason: resolved.reason,
+    });
     await ephemeralDm(
       event.user,
-      `I couldn't match your Slack ID (${event.user}) to a CSM in the dashboard. Ask an admin to map you at /settings/slack.`
+      `I couldn't match your Slack ID (${event.user}) — ${
+        resolved.reason ?? "no mapping found"
+      }. Ask Jacob to look at /settings/slack → CSM Slack IDs.`
     );
     return;
   }
+  const userKey = resolved.userKey;
   const now = new Date().toISOString();
   const text = event.text.trim().slice(0, 500);
   const todo: PersonalTodo = {
@@ -320,18 +338,21 @@ async function handleReactionAdded(
     }
   );
 
-  const userKey = await resolveUserKeyForSlackId(event.user);
-  if (!userKey) {
-    console.warn(
-      "[slack-webhook] Reactor's Slack ID isn't mapped to a CSM",
-      { slack_user_id: event.user }
-    );
+  const resolved = await resolveUserKeyForSlackId(event.user);
+  if (!resolved.userKey) {
+    console.warn("[slack-webhook] Reactor couldn't be resolved", {
+      slack_user_id: event.user,
+      reason: resolved.reason,
+    });
     await ephemeralDm(
       event.user,
-      `I couldn't match your Slack ID (${event.user}) to a CSM in the dashboard. Ask an admin to map you at /settings/slack.`
+      `I couldn't match your Slack ID (${event.user}) — ${
+        resolved.reason ?? "no mapping found"
+      }. Ask Jacob to look at /settings/slack → CSM Slack IDs.`
     );
     return;
   }
+  const userKey = resolved.userKey;
 
   // Fetch the message text + permalink. Both calls go to Slack with the
   // bot token; the bot must be a member of the channel for
@@ -378,17 +399,17 @@ async function handleReactionAdded(
 
 // ─── Helpers ──────────────────────────────────────────────────────────
 
-async function resolveUserKeyForSlackId(
-  slackUserId: string
-): Promise<string | null> {
-  if (!slackUserId) return null;
+/** Wrapper around `resolveIdentity` from lib/personal-todos/identity.ts
+ *  that loads the settings + customer book on demand. Returns the rich
+ *  ResolveResult so the caller can include the failure reason in the
+ *  bounce DM (much more useful than a generic "couldn't match"). */
+async function resolveUserKeyForSlackId(slackUserId: string) {
+  if (!slackUserId) {
+    return { userKey: null, via: null, reason: "no slack user id" } as const;
+  }
   const settings = await loadSettings();
   const customers = await loadCustomers();
-  return userKeyFromSlackUserId(
-    slackUserId,
-    settings.slack.csm_user_ids,
-    customers
-  );
+  return resolveIdentity(slackUserId, settings.slack.csm_user_ids, customers);
 }
 
 async function fetchMessageText(

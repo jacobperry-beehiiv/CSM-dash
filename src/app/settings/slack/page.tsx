@@ -693,8 +693,11 @@ function SlackInboundSection({
                 the reaction trigger
               </li>
               <li>
-                <code className="font-mono">users:read</code> — for resolving
-                inbound user identity
+                <code className="font-mono">users:read</code> +{" "}
+                <code className="font-mono">users:read.email</code> — for
+                resolving inbound user identity (the .email scope is used as
+                the fallback when a CSM is mapped in the CSM Slack IDs table
+                but has no accounts in the customer book yet)
               </li>
             </ul>
             <p className="mt-1 text-muted">
