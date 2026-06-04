@@ -719,7 +719,24 @@ function SlackInboundSection({
         </div>
 
         <div className="flex items-start gap-2">
-          <span className="mt-0.5">4.</span>
+          <span className="mt-0.5">4a.</span>
+          <div className="flex-1">
+            <p className="text-fg font-medium">
+              Interactivity & Shortcuts
+            </p>
+            <p className="text-muted">
+              Toggle Interactivity ON, paste the same webhook URL into{" "}
+              <em>Request URL</em>, then click <em>Save Changes</em>. This
+              is what powers the guided modal: running <code className="font-mono">/todo</code>{" "}
+              with no text opens a Block Kit form, and the form's submission
+              comes back through this URL as a{" "}
+              <code className="font-mono">view_submission</code> payload.
+            </p>
+          </div>
+        </div>
+
+        <div className="flex items-start gap-2">
+          <span className="mt-0.5">4b.</span>
           <div className="flex-1">
             <p className="text-fg font-medium">Event subscriptions</p>
             <p className="text-muted">

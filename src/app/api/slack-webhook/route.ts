@@ -4,6 +4,12 @@ import { loadSettings } from "@/lib/data/settings";
 import { applyTodoOps } from "@/lib/personal-todos/store";
 import { resolveUserKeyForSlackId as resolveIdentity } from "@/lib/personal-todos/identity";
 import {
+  buildTodoCreateView,
+  dispatchViewSubmission,
+  openSlackView,
+  type ViewSubmissionPayload,
+} from "@/lib/integrations/slack-views";
+import {
   newTodoId,
   type PersonalTodo,
   type TodoSource,
@@ -125,6 +131,15 @@ export async function POST(req: Request) {
 
     if (contentType.includes("application/x-www-form-urlencoded")) {
       const params = new URLSearchParams(rawBody);
+      // Interactivity payloads (modal submissions, button clicks) come
+      // form-urlencoded with a single `payload` field carrying JSON.
+      // We branch on that BEFORE the slash-command branch so we don't
+      // try to read `command=` off an interactive payload (which has
+      // none).
+      const payloadRaw = params.get("payload");
+      if (payloadRaw) {
+        return await handleInteractivity(payloadRaw);
+      }
       const slash: SlackSlashCommand = {
         command: params.get("command") ?? "",
         text: params.get("text") ?? "",
@@ -192,15 +207,38 @@ async function handleSlashCommand(
   });
   const parsed = parseSlashTodoText(slash.text);
   if (!parsed.title) {
-    console.log("[slack-webhook] Slash command had no title — sent usage hint", {
-      raw_text: slash.text,
-    });
-    return NextResponse.json({
-      response_type: "ephemeral",
-      text:
-        "Add a title after `/todo` — e.g. `/todo Review Foo Co quarterly report`.\n" +
-        "Optional directives: `on:YYYY-MM-DD` (schedule), `due:YYYY-MM-DD`, `!high|!medium|!low`.",
-    });
+    // No inline text → open the guided modal. Two flows now:
+    //   /todo            → modal pops with empty fields
+    //   /todo Title here → inline-parses, no modal (fast path)
+    // The modal's submission lands back at this webhook as a
+    // view_submission interactive payload and is routed to
+    // `todoCreateHandler` by callback_id.
+    if (!slash.trigger_id) {
+      console.warn(
+        "[slack-webhook] Slash invocation with empty text and no trigger_id — can't open modal",
+        { user_id: slash.user_id }
+      );
+      return NextResponse.json({
+        response_type: "ephemeral",
+        text: "Slack didn't send a trigger_id so I can't open the form. Try `/todo Title here` to add inline.",
+      });
+    }
+    console.log(
+      "[slack-webhook] Slash had no inline text — opening modal",
+      { user_id: slash.user_id }
+    );
+    const opened = await openSlackView(slash.trigger_id, buildTodoCreateView());
+    if (!opened.ok) {
+      return NextResponse.json({
+        response_type: "ephemeral",
+        text:
+          "Couldn't open the form: " +
+          (opened.error ?? "unknown error") +
+          ". Try `/todo Title here` to add inline.",
+      });
+    }
+    // ACK with an empty 200 — the modal is already open, no message needed.
+    return new NextResponse(null, { status: 200 });
   }
   const now = new Date().toISOString();
   const todo: PersonalTodo = {
@@ -229,6 +267,85 @@ async function handleSlashCommand(
     response_type: "ephemeral",
     text: buildAddedAck(todo),
   });
+}
+
+// ─── Interactivity (modal submissions, button clicks) ───────────────
+//
+// Slack POSTs all interactive payloads (view_submission, block_actions,
+// shortcut, etc.) as `application/x-www-form-urlencoded` with a single
+// `payload` field containing JSON. Different request URL setting in
+// Slack ("Interactivity & Shortcuts" → Request URL) but identical
+// transport otherwise — we use the same webhook for both.
+//
+// Submission flow:
+//   1. User runs `/todo` → handleSlashCommand opens a modal via
+//      views.open with callback_id = "todo_create".
+//   2. User fills + submits → Slack POSTs view_submission here.
+//   3. We resolve user identity, dispatch by callback_id to a
+//      handler in lib/integrations/slack-views.ts, return Slack's
+//      expected response_action JSON.
+//
+// Other interactive types (block_actions, shortcut, etc.) are routed
+// the same way as we add support — extend handleInteractivity.
+
+async function handleInteractivity(payloadRaw: string): Promise<NextResponse> {
+  let payload: { type?: string } & Record<string, unknown>;
+  try {
+    payload = JSON.parse(payloadRaw);
+  } catch (e) {
+    console.warn("[slack-webhook] Couldn't parse interactivity payload", e);
+    return NextResponse.json({ ok: true });
+  }
+
+  if (payload.type === "view_submission") {
+    return await handleViewSubmission(payload as unknown as ViewSubmissionPayload);
+  }
+
+  // Other interactive types (block_actions, shortcut, view_closed)
+  // arrive here too. For now we ACK and log — fill in handlers as we
+  // wire up new flows.
+  console.log("[slack-webhook] Interactivity received — unhandled type", {
+    type: payload.type,
+  });
+  return NextResponse.json({ ok: true });
+}
+
+async function handleViewSubmission(
+  payload: ViewSubmissionPayload
+): Promise<NextResponse> {
+  console.log("[slack-webhook] View submission received", {
+    callback_id: payload.view.callback_id,
+    user_id: payload.user.id,
+  });
+  const resolved = await resolveUserKeyForSlackId(payload.user.id);
+  if (!resolved.userKey) {
+    console.warn(
+      "[slack-webhook] View submitter couldn't be resolved",
+      { slack_user_id: payload.user.id, reason: resolved.reason }
+    );
+    // Block-level error on the first input block so Slack re-renders
+    // the modal with a clear message instead of silently dismissing.
+    return NextResponse.json({
+      response_action: "errors",
+      errors: {
+        title:
+          "Couldn't match your Slack ID — " +
+          (resolved.reason ?? "no mapping") +
+          ". Ask Jacob to add you at /settings/slack → CSM Slack IDs.",
+      },
+    });
+  }
+  const result = await dispatchViewSubmission(payload, resolved.userKey);
+  // Empty submission → also DM the user a permanent ack so they have
+  // a confirmation in their DM history (the modal just disappears
+  // when we return {} which can feel like nothing happened).
+  if (!result.response_action) {
+    await ephemeralDm(
+      payload.user.id,
+      ":white_check_mark: Added to your to-dos."
+    );
+  }
+  return NextResponse.json(result);
 }
 
 // ─── Event subscriptions ──────────────────────────────────────────────
