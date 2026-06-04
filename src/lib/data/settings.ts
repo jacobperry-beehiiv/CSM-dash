@@ -88,6 +88,15 @@ function merge(partial: Partial<SettingsShape>): SettingsShape {
     } as SettingsShape["thresholds"],
     slack: migrateSlack(partial.slack),
     am: { ...DEFAULTS.am, ...(partial.am ?? {}) },
+    // personal_todos was added later than the merge() function — any
+    // field not listed here gets dropped on every loadSettings() call,
+    // which is why the trigger_emoji UI saves successfully but the
+    // webhook always reads the default. Anytime a new top-level field
+    // gets added to SettingsShape it has to land here too.
+    personal_todos: {
+      ...DEFAULTS.personal_todos,
+      ...(partial.personal_todos ?? {}),
+    },
   };
 }
 
