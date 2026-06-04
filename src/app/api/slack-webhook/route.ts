@@ -154,7 +154,16 @@ export async function POST(req: Request) {
 async function handleSlashCommand(
   slash: SlackSlashCommand
 ): Promise<NextResponse> {
+  console.log("[slack-webhook] Slash command received", {
+    command: slash.command,
+    text_preview: slash.text.slice(0, 80),
+    user_id: slash.user_id,
+    user_name: slash.user_name,
+  });
   if (slash.command !== "/todo") {
+    console.warn("[slack-webhook] Unknown slash command — ignored", {
+      command: slash.command,
+    });
     return NextResponse.json({
       response_type: "ephemeral",
       text: `Unknown command: ${slash.command}`,
@@ -162,13 +171,20 @@ async function handleSlashCommand(
   }
   const userKey = await resolveUserKeyForSlackId(slash.user_id);
   if (!userKey) {
+    console.warn(
+      "[slack-webhook] Slash invoker's Slack ID isn't mapped to a CSM",
+      { slack_user_id: slash.user_id, slack_user_name: slash.user_name }
+    );
     return NextResponse.json({
       response_type: "ephemeral",
-      text: `Couldn't match your Slack ID (${slash.user_id}) to a CSM in the dashboard. Ask an admin to map you at /settings/slack.`,
+      text: `Couldn't match your Slack ID (${slash.user_id}) to a CSM in the dashboard. Ask an admin to add the mapping at /settings/slack → CSM Slack IDs.`,
     });
   }
   const parsed = parseSlashTodoText(slash.text);
   if (!parsed.title) {
+    console.log("[slack-webhook] Slash command had no title — sent usage hint", {
+      raw_text: slash.text,
+    });
     return NextResponse.json({
       response_type: "ephemeral",
       text:
@@ -191,6 +207,14 @@ async function handleSlashCommand(
     updated_at: now,
   };
   await applyTodoOps(userKey, [{ type: "add", todo }]);
+  console.log("[slack-webhook] Slash → todo created", {
+    userKey,
+    todoId: todo.id,
+    title: todo.title.slice(0, 80),
+    surface_at: todo.surface_at,
+    due_date: todo.due_date,
+    priority: todo.priority,
+  });
   return NextResponse.json({
     response_type: "ephemeral",
     text: buildAddedAck(todo),
