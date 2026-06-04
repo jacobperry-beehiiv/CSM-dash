@@ -160,15 +160,13 @@ async function handleSlashCommand(
     user_id: slash.user_id,
     user_name: slash.user_name,
   });
-  if (slash.command !== "/todo") {
-    console.warn("[slack-webhook] Unknown slash command — ignored", {
-      command: slash.command,
-    });
-    return NextResponse.json({
-      response_type: "ephemeral",
-      text: `Unknown command: ${slash.command}`,
-    });
-  }
+  // We intentionally accept any slash command name. The endpoint is
+  // signature-verified and dedicated to this app — anything landing
+  // here is by definition ours, so being strict about the name just
+  // burns flexibility (admins can register `/todo`, `/csm-todo`,
+  // `/dash-todo`, etc. and they all create personal to-dos). The log
+  // line above records the actual name so it's easy to spot if someone
+  // ever points an unrelated slash command at this URL by mistake.
   const userKey = await resolveUserKeyForSlackId(slash.user_id);
   if (!userKey) {
     console.warn(
