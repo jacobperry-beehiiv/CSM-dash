@@ -25,11 +25,18 @@ interface Props {
    *  existing callers (at-risk-table) keep type-checking — the value
    *  is currently ignored. */
   hideFeatureBreakdown?: boolean;
+  /** Show the Paid Subscriptions section (tiers-with-subs + lifetime
+   *  revenue). Opt-in because it adds a Metabase round-trip on row
+   *  expand — only the /csm book view enables it. The AM workflow
+   *  panels skip it; they're focused on past-due / renewals / approach
+   *  signals rather than monetization breakdowns. */
+  showPaidSubs?: boolean;
 }
 
 export function CustomerDetailPanel({
   customer: c,
   topSlot,
+  showPaidSubs = false,
 }: Props) {
   return (
     <div className="space-y-4">
@@ -137,7 +144,7 @@ export function CustomerDetailPanel({
         <CustomerPublicationsList workspaceId={c.workspace_id} />
       ) : null}
 
-      {c.workspace_id ? (
+      {showPaidSubs && c.workspace_id ? (
         <CustomerPaidSubsList workspaceId={c.workspace_id} />
       ) : null}
 

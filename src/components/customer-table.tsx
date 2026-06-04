@@ -824,7 +824,7 @@ export function CustomerTable({
                   {isOpen && (
                     <tr className="bg-blue-50 dark:bg-blue-500/20 border-b border-border">
                       <td colSpan={COLUMNS.length + 3} className="px-6 py-4">
-                        <CustomerDetailPanel customer={c} />
+                        <CustomerDetailPanel customer={c} showPaidSubs />
                       </td>
                     </tr>
                   )}
