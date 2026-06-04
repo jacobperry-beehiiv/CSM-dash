@@ -208,6 +208,13 @@ async function handleEvent(event: SlackEvent): Promise<void> {
     await handleReactionAdded(event);
     return;
   }
+  // Subscribed but unhandled — make it visible so unexpected types
+  // don't disappear into the void.
+  console.warn(
+    "[slack-webhook] Received unhandled event type",
+    // @ts-expect-error narrow type lookup is fine at runtime
+    event?.type ?? "(missing)"
+  );
 }
 
 async function handleDmMessage(
@@ -261,14 +268,42 @@ async function handleDmMessage(
 async function handleReactionAdded(
   event: Extract<SlackEvent, { type: "reaction_added" }>
 ): Promise<void> {
-  if (event.item.type !== "message") return;
+  if (event.item.type !== "message") {
+    console.warn(
+      "[slack-webhook] reaction_added on non-message item — ignored",
+      { itemType: event.item.type, reactor: event.user }
+    );
+    return;
+  }
   const settings = await loadSettings();
   const triggerEmoji =
     settings.personal_todos?.trigger_emoji ?? DEFAULT_TODO_TRIGGER_EMOJI;
-  if (event.reaction !== triggerEmoji) return;
+  if (event.reaction !== triggerEmoji) {
+    // The single most common silent-no-op reason: the configured trigger
+    // emoji doesn't match what the user reacted with. Log both sides so
+    // an admin can copy the actual reaction name into /settings/slack.
+    console.warn(
+      "[slack-webhook] reaction didn't match trigger emoji — ignored",
+      { configured: triggerEmoji, received: event.reaction, reactor: event.user }
+    );
+    return;
+  }
+  console.log(
+    "[slack-webhook] Trigger reaction matched, processing",
+    {
+      reaction: event.reaction,
+      reactor: event.user,
+      channel: event.item.channel,
+      ts: event.item.ts,
+    }
+  );
 
   const userKey = await resolveUserKeyForSlackId(event.user);
   if (!userKey) {
+    console.warn(
+      "[slack-webhook] Reactor's Slack ID isn't mapped to a CSM",
+      { slack_user_id: event.user }
+    );
     await ephemeralDm(
       event.user,
       `I couldn't match your Slack ID (${event.user}) to a CSM in the dashboard. Ask an admin to map you at /settings/slack.`
@@ -306,6 +341,11 @@ async function handleReactionAdded(
     updated_at: now,
   };
   await applyTodoOps(userKey, [{ type: "add", todo }]);
+  console.log("[slack-webhook] Reaction → todo created", {
+    userKey,
+    todoId: todo.id,
+    title: todo.title.slice(0, 60),
+  });
   await ephemeralDm(
     event.user,
     permalink
