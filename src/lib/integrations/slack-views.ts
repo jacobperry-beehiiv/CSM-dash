@@ -668,8 +668,11 @@ export const hubspotUpdateCsmSlashHandler: SlashHandler = async (ctx) => {
 const FIND_MAX_MATCHES = 5;
 const FIND_MAX_PUBS_PER_WS = 25;
 
-/** Run a substring search against the customer book. Returns up to N
- *  matches sorted by ARR descending (most-significant accounts first). */
+/** Run a substring search against the customer book. Matches against
+ *  company_name, workspace_name, workspace_id, and owner_email.
+ *  Returns matches sorted by ARR descending (most-significant accounts
+ *  first). The caller merges these with publication-name matches before
+ *  capping at FIND_MAX_MATCHES. */
 function searchCustomers(customers: Customer[], query: string): Customer[] {
   const q = query.trim().toLowerCase();
   if (!q) return [];
@@ -690,6 +693,57 @@ function searchCustomers(customers: Customer[], query: string): Customer[] {
   return matches;
 }
 
+/** Publication-name substring search against the publications table.
+ *  Returns matched `{publication_id, name, organization_id}` rows; the
+ *  caller maps organization_id back to a Customer via the customer
+ *  book so the snapshot shows the company that owns the publication.
+ *
+ *  Why this is a separate query rather than joining publications into
+ *  the customer book: q10600 doesn't carry publication names, and
+ *  loading the full publications table client-side has already bitten
+ *  us once via Metabase's 2000-row /api/dataset cap. Running ILIKE on
+ *  the small subset Postgres returns is much cheaper than a full
+ *  client-side scan. */
+async function searchPublicationsByName(
+  query: string,
+  limit = 50
+): Promise<
+  Array<{ publication_id: string; name: string; organization_id: string }>
+> {
+  const q = query.trim();
+  if (!q) return [];
+  // Escape ILIKE-special chars (% and _) plus the SQL quote, then
+  // wrap with leading/trailing % for substring match.
+  const escaped = q.replace(/['\\%_]/g, (m) => "\\" + m);
+  const pattern = `%${escaped}%`;
+  const sql = `
+    SELECT
+      id::text              AS publication_id,
+      name                  AS name,
+      organization_id::text AS organization_id
+    FROM public.publications
+    WHERE deleted_at IS NULL
+      AND organization_id IS NOT NULL
+      AND name ILIKE '${pattern.replace(/'/g, "''")}'
+    ORDER BY name
+    LIMIT ${limit}
+  `;
+  try {
+    const rows = await runNativeQuery(DB.POSTGRES, sql);
+    return (rows as Array<Record<string, unknown>>).map((r) => ({
+      publication_id: String(r.publication_id ?? ""),
+      name: String(r.name ?? ""),
+      organization_id: String(r.organization_id ?? ""),
+    }));
+  } catch (e) {
+    console.warn(
+      "[slack-views] searchPublicationsByName failed",
+      e instanceof Error ? e.message : e
+    );
+    return [];
+  }
+}
+
 export const findSlashHandler: SlashHandler = async (ctx) => {
   const query = ctx.inlineText.trim();
   if (!query) {
@@ -697,7 +751,7 @@ export const findSlashHandler: SlashHandler = async (ctx) => {
       response_type: "ephemeral",
       text:
         "Add a search term — e.g. `/find acme` or `/find newsletter-name`. " +
-        "Matches against company name, workspace name, workspace ID, or owner email.",
+        "Matches against company name, workspace name, workspace ID, owner email, *and* publication names.",
     };
   }
   let customers: Customer[] = [];
@@ -709,14 +763,57 @@ export const findSlashHandler: SlashHandler = async (ctx) => {
       text: `Couldn't load the customer book: ${e instanceof Error ? e.message : String(e)}`,
     };
   }
-  const allMatches = searchCustomers(customers, query);
-  if (allMatches.length === 0) {
+
+  // Two search paths run in parallel:
+  //   - Customer book substring match (company / workspace / email)
+  //   - Publications-table ILIKE match by publication name
+  // The publication path returns organization_ids we then map back to
+  // a Customer via the book. Results merge into a single list keyed
+  // by workspace_id; publication-matched rows carry a list of which
+  // publication names hit so the snapshot can annotate them.
+  const [bookMatches, pubMatches] = await Promise.all([
+    Promise.resolve(searchCustomers(customers, query)),
+    searchPublicationsByName(query),
+  ]);
+
+  // Map workspace_id → array of matched publication names (for the
+  // annotation). Used only when a customer was surfaced via the
+  // publications path.
+  const matchedPubsByWs = new Map<string, string[]>();
+  for (const p of pubMatches) {
+    const list = matchedPubsByWs.get(p.organization_id) ?? [];
+    list.push(p.name);
+    matchedPubsByWs.set(p.organization_id, list);
+  }
+
+  // Merge: start with book matches (highest priority), then append
+  // publication matches whose workspace isn't already in the set.
+  // Dedupe keyed by workspace_id; book matches keep their ARR-sorted
+  // order at the top.
+  const seenWs = new Set<string>();
+  const merged: Customer[] = [];
+  for (const c of bookMatches) {
+    if (!c.workspace_id) continue;
+    if (seenWs.has(c.workspace_id)) continue;
+    seenWs.add(c.workspace_id);
+    merged.push(c);
+  }
+  for (const p of pubMatches) {
+    if (seenWs.has(p.organization_id)) continue;
+    const c = customers.find((cu) => cu.workspace_id === p.organization_id);
+    if (!c) continue; // pub exists but customer isn't in the book — skip
+    seenWs.add(p.organization_id);
+    merged.push(c);
+  }
+
+  if (merged.length === 0) {
     return {
       response_type: "ephemeral",
-      text: `No customers found for "${query}". Try a shorter substring or a workspace ID.`,
+      text: `No matches for "${query}". Tried company name, workspace name, workspace ID, owner email, and publication name.`,
     };
   }
-  const shown = allMatches.slice(0, FIND_MAX_MATCHES);
+
+  const shown = merged.slice(0, FIND_MAX_MATCHES);
   const ws2pubs = await fetchPublicationsForWorkspaces(
     shown
       .map((c) => c.workspace_id)
@@ -727,18 +824,15 @@ export const findSlashHandler: SlashHandler = async (ctx) => {
     process.env.NEXT_PUBLIC_DASHBOARD_URL ?? "https://csm-dash.vercel.app"
   ).replace(/\/+$/, "");
 
-  // Build a Block Kit response — one section per match, divider
-  // between. Easier to scan than a single mrkdwn blob, and emojis
-  // render reliably.
   const blocks: Array<Record<string, unknown>> = [
     {
       type: "section",
       text: {
         type: "mrkdwn",
         text:
-          `:mag: *${allMatches.length} match${allMatches.length === 1 ? "" : "es"} for "${query}"*` +
-          (allMatches.length > shown.length
-            ? ` (showing top ${shown.length} by ARR — refine your search to narrow further)`
+          `:mag: *${merged.length} match${merged.length === 1 ? "" : "es"} for "${query}"*` +
+          (merged.length > shown.length
+            ? ` (showing top ${shown.length} — refine your search to narrow further)`
             : ""),
       },
     },
@@ -748,19 +842,33 @@ export const findSlashHandler: SlashHandler = async (ctx) => {
     const pubs = c.workspace_id
       ? (ws2pubs.get(c.workspace_id) ?? []).slice(0, FIND_MAX_PUBS_PER_WS)
       : [];
+    const totalPubs = c.workspace_id
+      ? ws2pubs.get(c.workspace_id)?.length ?? 0
+      : 0;
     const pubList =
       pubs.length === 0
         ? "_no publications found_"
         : pubs.map((p) => `\`pub_${p}\``).join(", ") +
-          (c.workspace_id &&
-          (ws2pubs.get(c.workspace_id)?.length ?? 0) > FIND_MAX_PUBS_PER_WS
-            ? ` _(+${(ws2pubs.get(c.workspace_id)?.length ?? 0) - FIND_MAX_PUBS_PER_WS} more)_`
+          (totalPubs > FIND_MAX_PUBS_PER_WS
+            ? ` _(+${totalPubs - FIND_MAX_PUBS_PER_WS} more)_`
             : "");
     const name =
       c.company_name || c.workspace_name || "(unnamed customer)";
     const linkHref = c.workspace_id
       ? `${dashUrl}/account/${encodeURIComponent(c.workspace_id)}`
       : null;
+    // If this customer surfaced via a publication-name match, show
+    // which publication(s) hit so the CSM knows why the row appeared.
+    const matchedPubs = c.workspace_id
+      ? matchedPubsByWs.get(c.workspace_id) ?? []
+      : [];
+    const matchLine =
+      matchedPubs.length > 0
+        ? `\n_matched publication${matchedPubs.length === 1 ? "" : "s"}: ${matchedPubs
+            .slice(0, 3)
+            .map((n) => `*${n}*`)
+            .join(", ")}${matchedPubs.length > 3 ? ` +${matchedPubs.length - 3} more` : ""}_`
+        : "";
     blocks.push({ type: "divider" });
     blocks.push({
       type: "section",
@@ -770,6 +878,7 @@ export const findSlashHandler: SlashHandler = async (ctx) => {
           `*${name}*\n` +
           `Workspace ID: \`${wsId}\`\n` +
           `Publications: ${pubList}` +
+          matchLine +
           (linkHref ? `\n<${linkHref}|Open in dashboard ↗>` : ""),
       },
     });
@@ -778,8 +887,7 @@ export const findSlashHandler: SlashHandler = async (ctx) => {
   return {
     response_type: "ephemeral",
     blocks,
-    // Plain-text fallback for clients that don't render blocks.
-    text: `${allMatches.length} match(es) for "${query}"`,
+    text: `${merged.length} match(es) for "${query}"`,
   };
 };
 
