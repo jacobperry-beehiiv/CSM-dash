@@ -208,10 +208,7 @@ async function handleSlashCommand(
   });
 
   // Slash command registry — multiple commands can target this
-  // endpoint and each can have its own flow. When no specific handler
-  // matches, we fall back to the to-do behavior below (preserves the
-  // "register any name and /todo works" UX from when /todo was the
-  // only command).
+  // endpoint and each can have its own flow.
   const slashHandler = lookupSlashHandler(slash.command);
   if (slashHandler) {
     const result = await slashHandler({
@@ -225,6 +222,29 @@ async function handleSlashCommand(
       return new NextResponse(null, { status: 200 });
     }
     return NextResponse.json(result);
+  }
+
+  // No registry hit. We *used* to silently fall through to the to-do
+  // flow for any unknown command (so admins could register /todo
+  // under any name and it just worked), but that swallows commands
+  // that DIDN'T deploy yet — e.g. /find acme would land as a to-do
+  // titled "acme". Guard the fallback: only treat unrecognized
+  // commands as the to-do flow when the command name itself
+  // contains "todo" (case-insensitive). Otherwise return a clear
+  // error so the user knows the command isn't wired up.
+  const normalizedCommand = slash.command.replace(/^\//, "").toLowerCase();
+  if (!normalizedCommand.includes("todo")) {
+    console.warn(
+      "[slack-webhook] Slash command not in registry and not todo-shaped",
+      { command: slash.command }
+    );
+    return NextResponse.json({
+      response_type: "ephemeral",
+      text:
+        `Slash command \`${slash.command}\` isn't wired up yet. ` +
+        `If you just deployed it, wait for Vercel to finish building (~1-2 min) and try again. ` +
+        `Otherwise, register it in the Slack app config and add a handler in slack-views.ts.`,
+    });
   }
 
   const parsed = parseSlashTodoText(slash.text);
