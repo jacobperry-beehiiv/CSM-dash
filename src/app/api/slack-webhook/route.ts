@@ -8,6 +8,7 @@ import {
   dispatchViewSubmission,
   lookupSlashHandler,
   openSlackView,
+  SLASH_HANDLERS,
   type ViewSubmissionPayload,
 } from "@/lib/integrations/slack-views";
 import {
@@ -654,7 +655,9 @@ function buildAddedAck(todo: PersonalTodo): string {
 }
 
 // GET returns a small, helpful status for the admin who's debugging
-// the webhook URL. Doesn't leak any secrets.
+// the webhook URL. Doesn't leak any secrets. Includes the list of
+// slash commands the registry recognizes so admins can verify the
+// expected build is live without trying a command.
 export async function GET() {
   const signingSecretSet = Boolean(process.env.SLACK_SIGNING_SECRET);
   const botTokenSet = Boolean(process.env.SLACK_BOT_TOKEN);
@@ -663,5 +666,8 @@ export async function GET() {
     surface: "POST inbound only — Slack slash/events/reactions",
     SLACK_SIGNING_SECRET_set: signingSecretSet,
     SLACK_BOT_TOKEN_set: botTokenSet,
+    registered_slash_commands: Object.keys(SLASH_HANDLERS).sort(),
+    todo_fallback:
+      "Any slash command name containing 'todo' (case-insensitive) and not in the registry falls through to the to-do flow.",
   });
 }
