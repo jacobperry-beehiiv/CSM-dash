@@ -586,8 +586,79 @@ async function handleDmMessage(
     return;
   }
   const userKey = resolved.userKey;
-  const now = new Date().toISOString();
   const text = event.text.trim().slice(0, 500);
+
+  // ── Command-style DMs route to the same handlers as @-mentions ──
+  // Slack's `app_mention` event doesn't fire in DMs (every message
+  // in a DM is implicitly directed at the bot), so we duplicate the
+  // command-router logic here. Users can either say "find acme" or
+  // just paste a to-do title — the first word being a known command
+  // disambiguates.
+  const firstWordMatch = /^\s*(\S+)/.exec(text);
+  const firstWord = firstWordMatch ? firstWordMatch[1].toLowerCase() : "";
+  const rest = text.slice(firstWordMatch ? firstWordMatch[0].length : 0).trim();
+  const isCommand =
+    firstWord === "find" ||
+    firstWord === "search" ||
+    firstWord === "lookup" ||
+    firstWord === "ent-search" ||
+    firstWord === "help";
+  if (isCommand) {
+    console.log("[slack-webhook] DM command", {
+      command: firstWord,
+      args_preview: rest.slice(0, 80),
+    });
+    if (firstWord === "help") {
+      await ephemeralDm(
+        event.user,
+        "I respond to these DM commands (same as `@bot` in a channel):\n" +
+          "• `find <query>` — search customers + publications, results DM'd back\n" +
+          "• `help` — this list\n" +
+          "\nAnything else you DM me is captured as a personal to-do."
+      );
+      return;
+    }
+    // find / search / lookup / ent-search
+    if (!rest) {
+      await ephemeralDm(
+        event.user,
+        "Add a search term — e.g. `find acme`. Matches against company name, workspace name, workspace ID, owner email, *and* publication names."
+      );
+      return;
+    }
+    const blocks = await buildFindResultBlocks(rest);
+    if (!blocks) {
+      await ephemeralDm(
+        event.user,
+        `No matches for "${rest}". Tried company name, workspace name, workspace ID, owner email, and publication name.`
+      );
+      return;
+    }
+    // chat.postMessage to the user's DM channel — same channel the
+    // DM arrived on. Plain message (not ephemeral) since DMs are
+    // already private to the bot + user pair.
+    const token = process.env.SLACK_BOT_TOKEN;
+    if (token) {
+      await fetch("https://slack.com/api/chat.postMessage", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json; charset=utf-8",
+        },
+        body: JSON.stringify({
+          channel: event.channel,
+          text: `Search results for "${rest}"`,
+          blocks,
+          unfurl_links: false,
+          unfurl_media: false,
+        }),
+      });
+    }
+    return;
+  }
+
+  // ── Default: every other DM becomes a to-do ──
+  const now = new Date().toISOString();
   const todo: PersonalTodo = {
     id: newTodoId(),
     title: text || "(empty DM)",
