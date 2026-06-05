@@ -931,19 +931,32 @@ export const findSlashHandler: SlashHandler = async (ctx) => {
   ];
   for (const c of shown) {
     const wsId = c.workspace_id ?? "(no workspace_id)";
+    const wsTitle =
+      c.workspace_name && c.workspace_name !== c.company_name
+        ? c.workspace_name
+        : null;
     const pubs = c.workspace_id
       ? (ws2pubs.get(c.workspace_id) ?? []).slice(0, FIND_MAX_PUBS_PER_WS)
       : [];
     const totalPubs = c.workspace_id
       ? ws2pubs.get(c.workspace_id)?.length ?? 0
       : 0;
-    const pubList =
+    // Render each pub as "Newsletter Name `pub_<id>`" on its own bullet
+    // — easier to scan than a comma-separated string once titles are
+    // mixed in. Untitled rows fall back to the bare ID.
+    const pubLines =
       pubs.length === 0
-        ? "_no publications found_"
-        : pubs.map((p) => `\`pub_${p}\``).join(", ") +
-          (totalPubs > FIND_MAX_PUBS_PER_WS
-            ? ` _(+${totalPubs - FIND_MAX_PUBS_PER_WS} more)_`
-            : "");
+        ? ["  _no publications found_"]
+        : pubs.map((p) =>
+            p.name
+              ? `  • *${p.name}* \`pub_${p.id}\``
+              : `  • \`pub_${p.id}\``
+          );
+    if (totalPubs > FIND_MAX_PUBS_PER_WS) {
+      pubLines.push(
+        `  _(+${totalPubs - FIND_MAX_PUBS_PER_WS} more)_`
+      );
+    }
     const name =
       c.company_name || c.workspace_name || "(unnamed customer)";
     const linkHref = c.workspace_id
@@ -968,8 +981,8 @@ export const findSlashHandler: SlashHandler = async (ctx) => {
         type: "mrkdwn",
         text:
           `*${name}*\n` +
-          `Workspace ID: \`${wsId}\`\n` +
-          `Publications: ${pubList}` +
+          `Workspace: ${wsTitle ? `*${wsTitle}* ` : ""}\`${wsId}\`\n` +
+          `Publications:\n${pubLines.join("\n")}` +
           matchLine +
           (linkHref ? `\n<${linkHref}|Open in dashboard ↗>` : ""),
       },
@@ -1003,24 +1016,32 @@ export function lookupSlashHandler(commandRaw: string): SlashHandler | null {
   return SLASH_HANDLERS[key] ?? null;
 }
 
+/** Per-workspace publication record returned by
+ *  fetchPublicationsForWorkspaces. `id` is the raw UUID; callers
+ *  prepend `pub_` for display. */
+interface PubRow {
+  id: string;
+  name: string;
+}
+
 /**
  * Single-shot Postgres query: pull every non-deleted publication for
- * the given workspaces. Used by the `/find` slash command so it can
- * surface publication IDs in the snapshot without N round-trips to
- * the per-workspace publications endpoint.
+ * the given workspaces, including the publication name. Used by the
+ * `/find` slash command so the snapshot can show "Daily Brew \`pub_…\`"
+ * instead of just the bare ID.
  *
- * Returns a map keyed by workspace_id → array of raw publication IDs
- * (no pub_ prefix). The caller prepends the prefix for display.
+ * Returns a map keyed by workspace_id → array of {id, name} records.
  */
 async function fetchPublicationsForWorkspaces(
   workspaceIds: string[]
-): Promise<Map<string, string[]>> {
-  const result = new Map<string, string[]>();
+): Promise<Map<string, PubRow[]>> {
+  const result = new Map<string, PubRow[]>();
   if (workspaceIds.length === 0) return result;
   const safe = workspaceIds.map((id) => `'${id.replace(/'/g, "''")}'`);
   const sql = `
     SELECT
       id::text              AS publication_id,
+      name                  AS name,
       organization_id::text AS organization_id
     FROM public.publications
     WHERE organization_id IN (${safe.join(",")})
@@ -1032,9 +1053,10 @@ async function fetchPublicationsForWorkspaces(
     for (const r of rows as Array<Record<string, unknown>>) {
       const ws = String(r.organization_id ?? "");
       const pub = String(r.publication_id ?? "");
+      const name = String(r.name ?? "");
       if (!ws || !pub) continue;
       const list = result.get(ws) ?? [];
-      list.push(pub);
+      list.push({ id: pub, name });
       result.set(ws, list);
     }
   } catch (e) {
