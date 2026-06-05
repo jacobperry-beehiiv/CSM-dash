@@ -695,15 +695,37 @@ export function PastDuePanel({ rows, csms, totalSourceRows }: Props) {
             }
           };
           if (subtab === "below") {
+            // Under-$3.5K rows use the BCC-bundled LowTierBulkSend
+            // instead of per-customer Gmail drafts, but the AM still
+            // needs the manual "Mark touched" affordance for rows
+            // they emailed outside the dash (Loops, ad-hoc reply,
+            // etc.). Same handler the higher tiers use — q24620's
+            // customer_id IS the Stripe ID so no book lookup needed.
             return (
-              <LowTierBulkSend
-                customers={selectedCustomers}
-                settings={settings}
-                disabled={
-                  selected.size === 0 || customerBook.length === 0
-                }
-                onSent={() => reloadOutreach()}
-              />
+              <>
+                <LowTierBulkSend
+                  customers={selectedCustomers}
+                  settings={settings}
+                  disabled={
+                    selected.size === 0 || customerBook.length === 0
+                  }
+                  onSent={() => reloadOutreach()}
+                />
+                <button
+                  onClick={() => void markTouched()}
+                  disabled={selected.size === 0 || touchBusy}
+                  className="px-3 py-1.5 border border-border-strong rounded-md text-sm hover:bg-canvas disabled:opacity-50"
+                  title="Mark selected as Touched (first outreach sent — e.g. handled via Loops or another channel)"
+                >
+                  {touchBusy
+                    ? "Marking…"
+                    : `✓ Mark touched${
+                        markTouchCustomerIds.length > 0
+                          ? ` (${markTouchCustomerIds.length})`
+                          : ""
+                      }`}
+                </button>
+              </>
             );
           }
           // Enterprise + Above + Follow-Up all use BulkEmailLauncher.
