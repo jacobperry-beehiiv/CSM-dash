@@ -6,7 +6,9 @@ import { resolveUserKeyForSlackId as resolveIdentity } from "@/lib/personal-todo
 import {
   buildTodoCreateView,
   dispatchViewSubmission,
+  FIND_CUSTOMER_SHORTCUT_CALLBACK_ID,
   FIND_SHARE_ACTION_ID,
+  handleFindCustomerShortcut,
   handleFindShareAction,
   lookupSlashHandler,
   openSlackView,
@@ -362,10 +364,71 @@ async function handleInteractivity(payloadRaw: string): Promise<NextResponse> {
     return await handleBlockActions(payload);
   }
 
-  // Other interactive types (shortcut, view_closed) arrive here too.
-  // For now we ACK and log — fill in handlers as we wire up new flows.
+  if (payload.type === "message_action" || payload.type === "shortcut") {
+    return await handleShortcut(payload);
+  }
+
+  // Other interactive types (view_closed, etc.) arrive here too. For
+  // now we ACK and log — fill in handlers as we wire up new flows.
   console.log("[slack-webhook] Interactivity received — unhandled type", {
     type: payload.type,
+  });
+  return NextResponse.json({ ok: true });
+}
+
+interface ShortcutPayload {
+  type: "message_action" | "shortcut";
+  callback_id?: string;
+  trigger_id?: string;
+  user?: { id?: string };
+  // message_action only:
+  channel?: { id?: string };
+  message?: { ts?: string; thread_ts?: string };
+}
+
+/**
+ * Routes Slack shortcut payloads (both "shortcut" — global, accessible
+ * from the apps menu — and "message_action" — accessed from a
+ * message's "..." menu, carries channel + thread context). Message
+ * actions are what give us thread-aware search since custom slash
+ * commands are blocked in threads at the workspace / app-config layer.
+ */
+async function handleShortcut(
+  payload: { [key: string]: unknown } & { type?: string }
+): Promise<NextResponse> {
+  const typed = payload as ShortcutPayload;
+  console.log("[slack-webhook] Shortcut received", {
+    type: typed.type,
+    callback_id: typed.callback_id,
+    has_message_context: Boolean(typed.channel?.id),
+  });
+  if (
+    typed.callback_id === FIND_CUSTOMER_SHORTCUT_CALLBACK_ID &&
+    typed.trigger_id
+  ) {
+    // For thread context: prefer message.thread_ts (we're in a thread
+    // reply), fall back to message.ts (top-level message — using ts
+    // as thread_ts opens a NEW thread off that message, which is the
+    // user's likely intent when clicking the shortcut on a channel
+    // root message). For global shortcuts (no message context), both
+    // are null and the result posts at channel root.
+    const threadTs =
+      typed.message?.thread_ts ?? typed.message?.ts ?? null;
+    const channelId = typed.channel?.id ?? null;
+    const result = await handleFindCustomerShortcut({
+      triggerId: typed.trigger_id,
+      channelId,
+      threadTs,
+    });
+    if (!result.ok) {
+      console.warn("[slack-webhook] find-customer shortcut open failed", {
+        error: result.error,
+      });
+    }
+    return NextResponse.json({ ok: true });
+  }
+  console.warn("[slack-webhook] Unhandled shortcut callback_id", {
+    callback_id: typed.callback_id,
   });
   return NextResponse.json({ ok: true });
 }

@@ -370,6 +370,7 @@ export async function dispatchViewSubmission(
   const handlers: Record<string, ViewSubmitHandler> = {
     [TODO_CREATE_CALLBACK_ID]: todoCreateHandler,
     [HUBSPOT_UPDATE_CSM_CALLBACK_ID]: hubspotUpdateCsmHandler,
+    [FIND_CUSTOMER_VIEW_CALLBACK_ID]: findCustomerSubmitHandler,
   };
   const handler = handlers[payload.view.callback_id];
   if (!handler) {
@@ -1230,6 +1231,370 @@ export async function handleFindShareAction(args: {
     }),
   });
   return { ok: true };
+}
+
+// ─── Message-shortcut search flow (works in threads) ─────────────────
+//
+// Slack often blocks custom slash commands from firing inside threads
+// at the workspace / app-config level — "not supported in threads."
+// Message shortcuts have no such restriction: they hang off the "..."
+// menu on every Slack message and dispatch the same way no matter
+// where the message lives.
+//
+// Wire-up:
+//   1. Admin creates a "Find customer" message shortcut in the Slack
+//      app config with callback_id="find_customer_msg".
+//   2. User picks the shortcut from any message's "..." menu (works
+//      in threads).
+//   3. Slack POSTs a message_action payload — handleShortcut opens
+//      the search modal via views.open, stashing the channel +
+//      thread_ts in private_metadata so the submission knows where
+//      to reply.
+//   4. User types a query + submits. The view_submission handler
+//      runs the same merged search and posts the snapshot as an
+//      ephemeral in the right channel + thread.
+
+export const FIND_CUSTOMER_SHORTCUT_CALLBACK_ID = "find_customer_msg";
+export const FIND_CUSTOMER_VIEW_CALLBACK_ID = "find_customer_submit";
+
+/** Private-metadata blob carried from shortcut → modal → submission
+ *  so the result can be posted into the right context. JSON-encoded
+ *  in `view.private_metadata` (Slack's standard "carry context"
+ *  channel for modal flows). */
+interface FindCustomerPrivateMetadata {
+  channel_id: string | null;
+  thread_ts: string | null;
+}
+
+export function buildFindCustomerView(
+  ctx: FindCustomerPrivateMetadata
+): Record<string, unknown> {
+  return {
+    type: "modal",
+    callback_id: FIND_CUSTOMER_VIEW_CALLBACK_ID,
+    title: { type: "plain_text", text: "Find customer" },
+    submit: { type: "plain_text", text: "Search" },
+    close: { type: "plain_text", text: "Cancel" },
+    private_metadata: JSON.stringify(ctx),
+    blocks: [
+      {
+        type: "context",
+        elements: [
+          {
+            type: "mrkdwn",
+            text: ctx.thread_ts
+              ? "Results will post as a private (ephemeral) reply *inside this thread*."
+              : "Results will post as a private (ephemeral) reply in this channel.",
+          },
+        ],
+      },
+      {
+        type: "input",
+        block_id: "query",
+        label: { type: "plain_text", text: "Search term" },
+        element: {
+          type: "plain_text_input",
+          action_id: "value",
+          placeholder: {
+            type: "plain_text",
+            text: "Company name, workspace ID, owner email, or publication name",
+          },
+        },
+      },
+    ],
+  };
+}
+
+/** Shortcut handler — opens the modal. Slack's shortcut payload
+ *  carries trigger_id (for views.open) and, for message shortcuts,
+ *  the original channel + message_ts so we can preserve thread context. */
+export async function handleFindCustomerShortcut(args: {
+  triggerId: string;
+  channelId: string | null;
+  threadTs: string | null;
+}): Promise<{ ok: boolean; error?: string }> {
+  const view = buildFindCustomerView({
+    channel_id: args.channelId,
+    thread_ts: args.threadTs,
+  });
+  return openSlackView(args.triggerId, view);
+}
+
+/** View-submission handler for the find-customer modal. Runs the
+ *  same merged search as findSlashHandler, then posts the snapshot
+ *  via chat.postEphemeral into the original channel + thread. */
+export const findCustomerSubmitHandler: ViewSubmitHandler = async ({
+  payload,
+}) => {
+  const query = getTextValue(payload, "query");
+  if (!query) {
+    return {
+      response_action: "errors",
+      errors: { query: "Add a search term." } as Record<string, string>,
+    };
+  }
+  let meta: FindCustomerPrivateMetadata = {
+    channel_id: null,
+    thread_ts: null,
+  };
+  try {
+    if (payload.view.private_metadata) {
+      meta = JSON.parse(
+        payload.view.private_metadata
+      ) as FindCustomerPrivateMetadata;
+    }
+  } catch (e) {
+    console.warn(
+      "[slack-views] couldn't parse find-customer private_metadata",
+      e
+    );
+  }
+  if (!meta.channel_id) {
+    // Shouldn't happen for message-shortcuts but DM the user just
+    // in case so the modal isn't a silent dead-end.
+    return {
+      _ack_message:
+        ":warning: Couldn't determine which channel to reply in. Try invoking the shortcut from a message inside the channel.",
+    };
+  }
+
+  // Fire the search + ephemeral post asynchronously so the modal
+  // submission ACKs Slack within the 3s window. The user will see
+  // the result land in the thread shortly after the modal closes.
+  void postFindCustomerResultInThread({
+    query,
+    channelId: meta.channel_id,
+    threadTs: meta.thread_ts,
+    slackUserId: payload.user.id,
+  }).catch((e) => {
+    console.error(
+      "[slack-views] postFindCustomerResultInThread failed",
+      e
+    );
+  });
+
+  // No `_ack_message` here — the post happens in-channel/in-thread
+  // anyway, the DM would be duplicative.
+  return {};
+};
+
+/** Run the merged book + publications search and post the result as
+ *  an ephemeral in the target channel + thread. Mirrors the layout
+ *  of findSlashHandler's response. */
+async function postFindCustomerResultInThread(args: {
+  query: string;
+  channelId: string;
+  threadTs: string | null;
+  slackUserId: string;
+}): Promise<void> {
+  const token = process.env.SLACK_BOT_TOKEN;
+  if (!token) {
+    console.warn(
+      "[slack-views] postFindCustomerResultInThread: no SLACK_BOT_TOKEN"
+    );
+    return;
+  }
+  let customers: Customer[] = [];
+  try {
+    customers = await loadCustomers();
+  } catch (e) {
+    await postEphemeralFallback(token, args, {
+      text: `Couldn't load the customer book: ${
+        e instanceof Error ? e.message : String(e)
+      }`,
+    });
+    return;
+  }
+  const [bookMatches, pubMatches] = await Promise.all([
+    Promise.resolve(searchCustomers(customers, args.query)),
+    searchPublicationsByName(args.query),
+  ]);
+  const matchedPubsByWs = new Map<string, string[]>();
+  for (const p of pubMatches) {
+    const list = matchedPubsByWs.get(p.organization_id) ?? [];
+    list.push(p.name);
+    matchedPubsByWs.set(p.organization_id, list);
+  }
+  const seenWs = new Set<string>();
+  const merged: Customer[] = [];
+  for (const c of bookMatches) {
+    if (!c.workspace_id) continue;
+    if (seenWs.has(c.workspace_id)) continue;
+    seenWs.add(c.workspace_id);
+    merged.push(c);
+  }
+  for (const p of pubMatches) {
+    if (seenWs.has(p.organization_id)) continue;
+    const c = customers.find((cu) => cu.workspace_id === p.organization_id);
+    if (!c) continue;
+    seenWs.add(p.organization_id);
+    merged.push(c);
+  }
+  if (merged.length === 0) {
+    await postEphemeralFallback(token, args, {
+      text: `No matches for "${args.query}".`,
+    });
+    return;
+  }
+  const shown = merged.slice(0, FIND_MAX_MATCHES);
+  const ws2pubs = await fetchPublicationsForWorkspaces(
+    shown
+      .map((c) => c.workspace_id)
+      .filter((id): id is string => Boolean(id))
+  );
+  const dashUrl = (
+    process.env.NEXT_PUBLIC_DASHBOARD_URL ?? "https://csm-dash.vercel.app"
+  ).replace(/\/+$/, "");
+
+  const blocks: Array<Record<string, unknown>> = [
+    {
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text:
+          `:mag: *${merged.length} match${merged.length === 1 ? "" : "es"} for "${args.query}"*` +
+          (merged.length > shown.length
+            ? ` (showing top ${shown.length})`
+            : ""),
+      },
+    },
+  ];
+  for (const c of shown) {
+    const wsId = c.workspace_id ?? "(no workspace_id)";
+    const wsTitle =
+      c.workspace_name && c.workspace_name !== c.company_name
+        ? c.workspace_name
+        : null;
+    const pubs = c.workspace_id
+      ? (ws2pubs.get(c.workspace_id) ?? []).slice(0, FIND_MAX_PUBS_PER_WS)
+      : [];
+    const totalPubs = c.workspace_id
+      ? ws2pubs.get(c.workspace_id)?.length ?? 0
+      : 0;
+    const pubLines =
+      pubs.length === 0
+        ? ["  _no publications found_"]
+        : pubs.map((p) =>
+            p.name
+              ? `  • *${p.name}* \`pub_${p.id}\``
+              : `  • \`pub_${p.id}\``
+          );
+    if (totalPubs > FIND_MAX_PUBS_PER_WS) {
+      pubLines.push(`  _(+${totalPubs - FIND_MAX_PUBS_PER_WS} more)_`);
+    }
+    const name =
+      c.company_name || c.workspace_name || "(unnamed customer)";
+    const linkHref = c.workspace_id
+      ? `${dashUrl}/account/${encodeURIComponent(c.workspace_id)}`
+      : null;
+    const matchedPubs = c.workspace_id
+      ? matchedPubsByWs.get(c.workspace_id) ?? []
+      : [];
+    const matchLine =
+      matchedPubs.length > 0
+        ? `\n_matched publication${matchedPubs.length === 1 ? "" : "s"}: ${matchedPubs
+            .slice(0, 3)
+            .map((n) => `*${n}*`)
+            .join(", ")}${matchedPubs.length > 3 ? ` +${matchedPubs.length - 3} more` : ""}_`
+        : "";
+    blocks.push({ type: "divider" });
+    blocks.push({
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text:
+          `*${name}*\n` +
+          `Workspace: ${wsTitle ? `*${wsTitle}* ` : ""}\`${wsId}\`\n` +
+          `Publications:\n${pubLines.join("\n")}` +
+          matchLine +
+          (linkHref ? `\n<${linkHref}|Open in dashboard ↗>` : ""),
+      },
+    });
+  }
+  // Same "Share with channel" button so the user can publish the
+  // ephemeral if they want everyone in the thread to see it.
+  blocks.push({
+    type: "actions",
+    block_id: "find_actions",
+    elements: [
+      {
+        type: "button",
+        action_id: FIND_SHARE_ACTION_ID,
+        text: {
+          type: "plain_text",
+          text: ":speech_balloon: Share with channel",
+        },
+        value: JSON.stringify({
+          q: args.query,
+          ch: args.channelId,
+          th: args.threadTs,
+        } satisfies FindShareActionValue),
+      },
+    ],
+  });
+
+  const res = await fetch("https://slack.com/api/chat.postEphemeral", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json; charset=utf-8",
+    },
+    body: JSON.stringify({
+      channel: args.channelId,
+      user: args.slackUserId,
+      ...(args.threadTs ? { thread_ts: args.threadTs } : {}),
+      text: `${merged.length} match(es) for "${args.query}"`,
+      blocks,
+      unfurl_links: false,
+      unfurl_media: false,
+    }),
+  });
+  const j = (await res.json()) as { ok: boolean; error?: string };
+  if (!j.ok) {
+    console.warn(
+      "[slack-views] find-customer ephemeral post failed",
+      { error: j.error, channel: args.channelId }
+    );
+    // Last-resort: DM the user the result so they at least see it.
+    await fetch("https://slack.com/api/chat.postMessage", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json; charset=utf-8",
+      },
+      body: JSON.stringify({
+        channel: args.slackUserId,
+        text: `Couldn't post in-thread (${j.error ?? "unknown"}). Here's the result:`,
+        blocks,
+        unfurl_links: false,
+        unfurl_media: false,
+      }),
+    });
+  }
+}
+
+async function postEphemeralFallback(
+  token: string,
+  args: {
+    channelId: string;
+    threadTs: string | null;
+    slackUserId: string;
+  },
+  body: { text: string }
+): Promise<void> {
+  await fetch("https://slack.com/api/chat.postEphemeral", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json; charset=utf-8",
+    },
+    body: JSON.stringify({
+      channel: args.channelId,
+      user: args.slackUserId,
+      ...(args.threadTs ? { thread_ts: args.threadTs } : {}),
+      text: body.text,
+    }),
+  });
 }
 
 /** Slash command registry. Match is case-insensitive on the command

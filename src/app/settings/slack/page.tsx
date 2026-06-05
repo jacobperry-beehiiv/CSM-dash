@@ -736,10 +736,18 @@ function SlackInboundSection({
               <li>
                 <code className="font-mono">/find</code> (aliases:{" "}
                 <code className="font-mono">/lookup</code>,{" "}
-                <code className="font-mono">/search</code>) — search the
+                <code className="font-mono">/search</code>,{" "}
+                <code className="font-mono">/ent-search</code>) — search the
                 customer book by company / workspace name / workspace ID /
-                owner email. Returns an ephemeral snapshot with workspace ID
-                and publication IDs for up to 5 matches.
+                owner email / publication name. Returns an ephemeral snapshot
+                with workspace + publication IDs for up to 5 matches, with a
+                "Share with channel" button to publish to everyone.
+                <br />
+                <em>
+                  Note: custom slash commands often can't fire inside threads
+                  (Slack workspace limitation). For thread use, add the
+                  message shortcut below instead.
+                </em>
               </li>
             </ul>
           </div>
@@ -754,10 +762,37 @@ function SlackInboundSection({
             <p className="text-muted">
               Toggle Interactivity ON, paste the same webhook URL into{" "}
               <em>Request URL</em>, then click <em>Save Changes</em>. This
-              is what powers the guided modal: running <code className="font-mono">/todo</code>{" "}
-              with no text opens a Block Kit form, and the form's submission
-              comes back through this URL as a{" "}
-              <code className="font-mono">view_submission</code> payload.
+              powers (a) modal submissions (<code className="font-mono">/todo</code>{" "}
+              form, <code className="font-mono">/update-csm</code> form), (b)
+              the "Share with channel" button on <code className="font-mono">/find</code>{" "}
+              results, and (c) the message shortcut below.
+            </p>
+            <p className="text-muted mt-1">
+              While on the same page, scroll to <em>Shortcuts</em> →{" "}
+              <em>Create New Shortcut</em>:
+            </p>
+            <ul className="mt-1 ml-5 list-disc text-muted">
+              <li>
+                <em>On messages</em>
+              </li>
+              <li>
+                Name: <code className="font-mono">Find customer</code>
+              </li>
+              <li>
+                Short description: anything — e.g.{" "}
+                <em>Search customers + publications + post in-thread</em>
+              </li>
+              <li>
+                Callback ID:{" "}
+                <code className="font-mono">find_customer_msg</code>{" "}
+                <strong>(this must match exactly)</strong>
+              </li>
+            </ul>
+            <p className="text-muted mt-1">
+              Save. The shortcut now appears under the "..." menu on every
+              Slack message, including thread replies — that's how to
+              search from inside a thread when custom slash commands are
+              blocked there.
             </p>
           </div>
         </div>
