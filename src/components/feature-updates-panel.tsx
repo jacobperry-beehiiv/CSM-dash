@@ -5,7 +5,6 @@ import type {
   FeatureUpdate,
   FeatureUpdatesStore,
 } from "@/lib/feature-updates/types";
-import { slackChannelUrl } from "@/lib/links";
 
 /**
  * Read-only panel on the home page that shows the most recent
@@ -257,12 +256,35 @@ function ExpandedCard({
   const hasAnyField =
     fields.description ||
     fields.location ||
-    fields.channel ||
     fields.notes ||
     (fields.plan && fields.plan.length > 0) ||
     (fields.roles && fields.roles.length > 0) ||
     fields.resources.length > 0 ||
     fields.other.length > 0;
+
+  // Collapse all the prose-shaped content between the Description and
+  // Resources headers into one continuous text block. The parser
+  // sometimes splits author-written paragraphs across multiple
+  // "other" labels (e.g. a bullet line gets misread as a label
+  // followed by its bullet contents as the value) and the previous
+  // layout surfaced each as a separate FieldRow. Treating it as one
+  // block keeps the author's voice intact and the card scannable.
+  //
+  // Categorical fields (Plan, Roles, Platform Category) stay as
+  // labeled chips below the prose since those have semantic shape
+  // that's worth visualizing.
+  const proseParts: string[] = [];
+  if (fields.description) proseParts.push(fields.description);
+  for (const { label, value } of fields.other) {
+    // Render each "other" section as "**Label**\n<value>" so the
+    // author's labels stay readable inside the merged block.
+    proseParts.push(`*${label}*\n${value}`);
+  }
+  if (fields.notes) proseParts.push(fields.notes);
+  const proseHtml =
+    proseParts.length > 0
+      ? renderSlackMrkdwn(proseParts.join("\n\n"))
+      : null;
 
   return (
     <div className="mt-3 ml-5 rounded-lg border border-border bg-canvas/40 p-4 space-y-3">
@@ -294,20 +316,16 @@ function ExpandedCard({
         ) : null}
       </div>
 
-      {fields.description ? (
+      {proseHtml ? (
         <div
           className="text-sm text-fg whitespace-pre-wrap break-words leading-relaxed"
-          dangerouslySetInnerHTML={{
-            __html: renderSlackMrkdwn(fields.description),
-          }}
+          dangerouslySetInnerHTML={{ __html: proseHtml }}
         />
       ) : null}
 
       {(fields.plan && fields.plan.length > 0) ||
       (fields.roles && fields.roles.length > 0) ||
-      fields.location ||
-      fields.channel ||
-      fields.other.length > 0 ? (
+      fields.location ? (
         <div className="space-y-1.5">
           {fields.plan && fields.plan.length > 0 ? (
             <FieldRow label="Plan">
@@ -328,19 +346,6 @@ function ExpandedCard({
               <span className="text-sm text-fg">{fields.location}</span>
             </FieldRow>
           ) : null}
-          {fields.channel ? (
-            <FieldRow label="Channel">
-              <ChannelValue
-                raw={fields.channel}
-                fallbackHref={update.permalink ?? null}
-              />
-            </FieldRow>
-          ) : null}
-          {fields.other.map(({ label, value }) => (
-            <FieldRow key={label} label={label}>
-              <span className="text-sm text-fg break-words">{value}</span>
-            </FieldRow>
-          ))}
         </div>
       ) : null}
 
@@ -364,15 +369,6 @@ function ExpandedCard({
             );
           })}
         </div>
-      ) : null}
-
-      {fields.notes ? (
-        <div
-          className="text-xs text-muted whitespace-pre-wrap break-words pt-2 border-t border-border"
-          dangerouslySetInnerHTML={{
-            __html: renderSlackMrkdwn(fields.notes),
-          }}
-        />
       ) : null}
 
       {!hasAnyField ? (
@@ -403,45 +399,6 @@ function FieldRow({
         {children}
       </div>
     </div>
-  );
-}
-
-/** Render a Channel-field value as a Slack deep-link. Prefers the
- *  channel deep-link (when we can pull a channel ID out of the value);
- *  falls back to the feature-update's own Slack permalink when one is
- *  available so the field is always clickable even if the channel
- *  reference is malformed.
- *
- *  Stops click-propagation so the row's collapse handler doesn't
- *  fire when the user clicks the link. */
-function ChannelValue({
-  raw,
-  fallbackHref,
-}: {
-  raw: string;
-  fallbackHref: string | null;
-}) {
-  const { id, display } = parseChannelValue(raw);
-  const channelHref = id ? slackChannelUrl(id) : null;
-  const href = channelHref ?? fallbackHref;
-  if (!href) {
-    return <span className="text-sm text-fg">{display}</span>;
-  }
-  return (
-    <a
-      href={href}
-      target="_blank"
-      rel="noopener noreferrer"
-      onClick={(e) => e.stopPropagation()}
-      className="text-sm text-accent hover:underline"
-      title={
-        channelHref
-          ? `Open ${display} in Slack`
-          : "Open the original feature-update post in Slack"
-      }
-    >
-      {display}
-    </a>
   );
 }
 
@@ -723,48 +680,6 @@ function splitChips(value: string): string[] {
     .split(/\s*(?:,|\/|\sand\s)\s*/i)
     .map((s) => s.trim())
     .filter(Boolean);
-}
-
-/** The Channel field in a feature-update post is a Slack channel ref.
- *  It can land in our parser as any of these shapes:
- *    - Plain ID: "C093C6MDS1E"
- *    - Slack mrkdwn ref: "<#C093C6MDS1E|feature-updates>"
- *    - Archive URL: "https://beehiiv.slack.com/archives/C093C6MDS1E"
- *    - Plain text: "private channel" (no ID — render as-is)
- *  We normalize to a {id?, display} pair and let the renderer decide
- *  whether to make it a link. */
-function parseChannelValue(raw: string): { id?: string; display: string } {
-  const trimmed = raw.trim();
-
-  // Slack mrkdwn channel reference WITH friendly name: <#C…|foo>.
-  const mrkdwnNamed = /^<#([CGD][A-Z0-9]{6,})\|([^>]+)>$/.exec(trimmed);
-  if (mrkdwnNamed) {
-    return { id: mrkdwnNamed[1], display: `#${mrkdwnNamed[2]}` };
-  }
-
-  // Slack mrkdwn channel reference WITHOUT friendly name: <#C…>. Posts
-  // pasted into the channel field by users typing `#channel` get
-  // serialized this way by Slack — the ID is present but the name
-  // round-trip dropped it.
-  const mrkdwnBare = /^<#([CGD][A-Z0-9]{6,})>$/.exec(trimmed);
-  if (mrkdwnBare) {
-    return { id: mrkdwnBare[1], display: `#${mrkdwnBare[1]}` };
-  }
-
-  // Bare channel ID, no wrapper.
-  if (/^[CGD][A-Z0-9]{6,}$/.test(trimmed)) {
-    return { id: trimmed, display: `#${trimmed}` };
-  }
-
-  // Slack archive URL.
-  const archiveUrl = /^https?:\/\/[^/]*\.slack\.com\/archives\/([CGD][A-Z0-9]{6,})/.exec(
-    trimmed
-  );
-  if (archiveUrl) {
-    return { id: archiveUrl[1], display: `#${archiveUrl[1]}` };
-  }
-
-  return { display: trimmed };
 }
 
 /** Friendly icon + label for a URL based on its host. Fallback is the
