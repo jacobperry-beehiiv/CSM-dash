@@ -989,11 +989,248 @@ export const findSlashHandler: SlashHandler = async (ctx) => {
     });
   }
 
+  // Append a "Share with channel" button so the user can publish the
+  // (ephemeral) snapshot to the channel after they've reviewed it.
+  // value carries enough context to re-run the search server-side
+  // when the button fires — small enough to fit in Slack's 2000-char
+  // button value limit.
+  blocks.push({
+    type: "actions",
+    block_id: "find_actions",
+    elements: [
+      {
+        type: "button",
+        action_id: FIND_SHARE_ACTION_ID,
+        text: {
+          type: "plain_text",
+          text: ":speech_balloon: Share with channel",
+        },
+        value: JSON.stringify({
+          q: query,
+          ch: ctx.channelId,
+          th: ctx.threadTs ?? null,
+        } satisfies FindShareActionValue),
+      },
+    ],
+  });
+
   return ephemeralReplyMaybeInThread(ctx, {
     blocks,
     text: `${merged.length} match(es) for "${query}"`,
   });
 };
+
+// ─── /find: "Share with channel" button ──────────────────────────────
+
+export const FIND_SHARE_ACTION_ID = "find_share";
+
+interface FindShareActionValue {
+  /** The original query — re-run server-side on click to avoid
+   *  encoding the (potentially large) full result set in the
+   *  button value. */
+  q: string;
+  /** The channel the slash command was invoked in. */
+  ch: string;
+  /** The thread the slash command was invoked in, or null for
+   *  channel root. */
+  th: string | null;
+}
+
+/**
+ * Handler for the "Share with channel" button on a /find result.
+ * Re-runs the search and posts the snapshot as an in-channel message
+ * (visible to everyone) at the same thread location as the original
+ * ephemeral. Returns a `response_url` payload that replaces the
+ * ephemeral with a small confirmation.
+ *
+ * Why re-run instead of caching: button values are capped at 2000
+ * chars and a result with 5 matches + publication lists can blow
+ * past that easily. Re-running keeps the encoding simple, and search
+ * is cheap.
+ */
+export async function handleFindShareAction(args: {
+  value: string;
+  responseUrl: string;
+}): Promise<{ ok: boolean; error?: string }> {
+  let parsed: FindShareActionValue;
+  try {
+    parsed = JSON.parse(args.value) as FindShareActionValue;
+  } catch (e) {
+    return {
+      ok: false,
+      error: `bad action value: ${e instanceof Error ? e.message : "unknown"}`,
+    };
+  }
+  if (!parsed.q || !parsed.ch) {
+    return { ok: false, error: "missing query or channel" };
+  }
+
+  // Re-run the search using the same logic as the slash handler.
+  let customers: Customer[] = [];
+  try {
+    customers = await loadCustomers();
+  } catch (e) {
+    return {
+      ok: false,
+      error: `couldn't load customer book: ${e instanceof Error ? e.message : "unknown"}`,
+    };
+  }
+  const [bookMatches, pubMatches] = await Promise.all([
+    Promise.resolve(searchCustomers(customers, parsed.q)),
+    searchPublicationsByName(parsed.q),
+  ]);
+  const matchedPubsByWs = new Map<string, string[]>();
+  for (const p of pubMatches) {
+    const list = matchedPubsByWs.get(p.organization_id) ?? [];
+    list.push(p.name);
+    matchedPubsByWs.set(p.organization_id, list);
+  }
+  const seenWs = new Set<string>();
+  const merged: Customer[] = [];
+  for (const c of bookMatches) {
+    if (!c.workspace_id) continue;
+    if (seenWs.has(c.workspace_id)) continue;
+    seenWs.add(c.workspace_id);
+    merged.push(c);
+  }
+  for (const p of pubMatches) {
+    if (seenWs.has(p.organization_id)) continue;
+    const c = customers.find((cu) => cu.workspace_id === p.organization_id);
+    if (!c) continue;
+    seenWs.add(p.organization_id);
+    merged.push(c);
+  }
+  const shown = merged.slice(0, FIND_MAX_MATCHES);
+  const ws2pubs = await fetchPublicationsForWorkspaces(
+    shown
+      .map((c) => c.workspace_id)
+      .filter((id): id is string => Boolean(id))
+  );
+
+  const dashUrl = (
+    process.env.NEXT_PUBLIC_DASHBOARD_URL ?? "https://csm-dash.vercel.app"
+  ).replace(/\/+$/, "");
+
+  // Compose the public-share blocks. Same shape as the ephemeral
+  // (so the channel sees what the user saw), MINUS the share
+  // button (no point sharing again from a public post).
+  const blocks: Array<Record<string, unknown>> = [
+    {
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text:
+          `:mag: *Search results for "${parsed.q}"* — ${merged.length} match${merged.length === 1 ? "" : "es"}` +
+          (merged.length > shown.length
+            ? ` (showing top ${shown.length})`
+            : ""),
+      },
+    },
+  ];
+  for (const c of shown) {
+    const wsId = c.workspace_id ?? "(no workspace_id)";
+    const wsTitle =
+      c.workspace_name && c.workspace_name !== c.company_name
+        ? c.workspace_name
+        : null;
+    const pubs = c.workspace_id
+      ? (ws2pubs.get(c.workspace_id) ?? []).slice(0, FIND_MAX_PUBS_PER_WS)
+      : [];
+    const totalPubs = c.workspace_id
+      ? ws2pubs.get(c.workspace_id)?.length ?? 0
+      : 0;
+    const pubLines =
+      pubs.length === 0
+        ? ["  _no publications found_"]
+        : pubs.map((p) =>
+            p.name
+              ? `  • *${p.name}* \`pub_${p.id}\``
+              : `  • \`pub_${p.id}\``
+          );
+    if (totalPubs > FIND_MAX_PUBS_PER_WS) {
+      pubLines.push(`  _(+${totalPubs - FIND_MAX_PUBS_PER_WS} more)_`);
+    }
+    const name = c.company_name || c.workspace_name || "(unnamed customer)";
+    const linkHref = c.workspace_id
+      ? `${dashUrl}/account/${encodeURIComponent(c.workspace_id)}`
+      : null;
+    const matchedPubs = c.workspace_id
+      ? matchedPubsByWs.get(c.workspace_id) ?? []
+      : [];
+    const matchLine =
+      matchedPubs.length > 0
+        ? `\n_matched publication${matchedPubs.length === 1 ? "" : "s"}: ${matchedPubs
+            .slice(0, 3)
+            .map((n) => `*${n}*`)
+            .join(", ")}${matchedPubs.length > 3 ? ` +${matchedPubs.length - 3} more` : ""}_`
+        : "";
+    blocks.push({ type: "divider" });
+    blocks.push({
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text:
+          `*${name}*\n` +
+          `Workspace: ${wsTitle ? `*${wsTitle}* ` : ""}\`${wsId}\`\n` +
+          `Publications:\n${pubLines.join("\n")}` +
+          matchLine +
+          (linkHref ? `\n<${linkHref}|Open in dashboard ↗>` : ""),
+      },
+    });
+  }
+
+  // Post publicly via chat.postMessage so it's visible to everyone
+  // in the channel / thread. NOT response_url (which would replace
+  // the ephemeral with a public message — we want both: the
+  // ephemeral disappears, a fresh public message appears in-thread).
+  const token = process.env.SLACK_BOT_TOKEN;
+  if (!token) return { ok: false, error: "SLACK_BOT_TOKEN not set" };
+  const postRes = await fetch("https://slack.com/api/chat.postMessage", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json; charset=utf-8",
+    },
+    body: JSON.stringify({
+      channel: parsed.ch,
+      ...(parsed.th ? { thread_ts: parsed.th } : {}),
+      text: `Search results for "${parsed.q}"`,
+      blocks,
+      unfurl_links: false,
+      unfurl_media: false,
+    }),
+  });
+  const postJson = (await postRes.json()) as { ok: boolean; error?: string };
+  if (!postJson.ok) {
+    // Surface the failure back to the user via response_url so they
+    // know why their click didn't post anything. Common cause: bot
+    // isn't a member of the channel.
+    await fetch(args.responseUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json; charset=utf-8" },
+      body: JSON.stringify({
+        replace_original: true,
+        response_type: "ephemeral",
+        text: `:warning: Couldn't share to channel: ${postJson.error ?? "unknown"}. Make sure the bot is in this channel.`,
+      }),
+    });
+    return { ok: false, error: postJson.error };
+  }
+
+  // Replace the original ephemeral with a small confirmation so the
+  // user sees that the share happened (the public post is right
+  // below, but the ephemeral going to a "shared" state confirms it).
+  await fetch(args.responseUrl, {
+    method: "POST",
+    headers: { "Content-Type": "application/json; charset=utf-8" },
+    body: JSON.stringify({
+      replace_original: true,
+      response_type: "ephemeral",
+      text: `:speech_balloon: Shared with the channel.`,
+    }),
+  });
+  return { ok: true };
+}
 
 /** Slash command registry. Match is case-insensitive on the command
  *  name (with or without the leading `/`). */

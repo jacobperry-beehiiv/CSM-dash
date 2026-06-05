@@ -6,6 +6,8 @@ import { resolveUserKeyForSlackId as resolveIdentity } from "@/lib/personal-todo
 import {
   buildTodoCreateView,
   dispatchViewSubmission,
+  FIND_SHARE_ACTION_ID,
+  handleFindShareAction,
   lookupSlashHandler,
   openSlackView,
   SLASH_HANDLERS,
@@ -356,12 +358,71 @@ async function handleInteractivity(payloadRaw: string): Promise<NextResponse> {
     return await handleViewSubmission(payload as unknown as ViewSubmissionPayload);
   }
 
-  // Other interactive types (block_actions, shortcut, view_closed)
-  // arrive here too. For now we ACK and log — fill in handlers as we
-  // wire up new flows.
+  if (payload.type === "block_actions") {
+    return await handleBlockActions(payload);
+  }
+
+  // Other interactive types (shortcut, view_closed) arrive here too.
+  // For now we ACK and log — fill in handlers as we wire up new flows.
   console.log("[slack-webhook] Interactivity received — unhandled type", {
     type: payload.type,
   });
+  return NextResponse.json({ ok: true });
+}
+
+interface BlockActionsPayload {
+  type: "block_actions";
+  user?: { id?: string };
+  response_url?: string;
+  actions?: Array<{
+    action_id?: string;
+    value?: string;
+  }>;
+}
+
+/**
+ * block_actions dispatcher. Each interactive component (button,
+ * static_select, etc.) routes by `action_id` to a handler. Today
+ * there's just one — the "Share with channel" button on the /find
+ * snapshot — but the registry shape is in place so the next button
+ * (e.g. "Add this customer to my to-dos") is one match-case away.
+ */
+async function handleBlockActions(
+  payload: { [key: string]: unknown } & { type?: string }
+): Promise<NextResponse> {
+  const typed = payload as BlockActionsPayload;
+  const action = typed.actions?.[0];
+  if (!action || !action.action_id) {
+    console.warn("[slack-webhook] block_actions with no action_id", payload);
+    return NextResponse.json({ ok: true });
+  }
+  console.log("[slack-webhook] block_actions received", {
+    action_id: action.action_id,
+    user_id: typed.user?.id,
+  });
+
+  if (action.action_id === FIND_SHARE_ACTION_ID) {
+    if (!typed.response_url) {
+      console.warn("[slack-webhook] find_share without response_url");
+      return NextResponse.json({ ok: true });
+    }
+    // Fire-and-forget the share work so we can ACK Slack within its
+    // 3s window even if the search + Slack post takes longer. Errors
+    // are surfaced to the user via the response_url ephemeral, not
+    // back through the original POST response.
+    void handleFindShareAction({
+      value: action.value ?? "",
+      responseUrl: typed.response_url,
+    }).catch((e) => {
+      console.error("[slack-webhook] find_share handler threw", e);
+    });
+    return NextResponse.json({ ok: true });
+  }
+
+  console.warn(
+    "[slack-webhook] No handler registered for action_id",
+    { action_id: action.action_id }
+  );
   return NextResponse.json({ ok: true });
 }
 
