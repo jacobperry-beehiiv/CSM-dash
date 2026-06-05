@@ -4,6 +4,7 @@ import { loadSettings } from "@/lib/data/settings";
 import { applyTodoOps } from "@/lib/personal-todos/store";
 import { resolveUserKeyForSlackId as resolveIdentity } from "@/lib/personal-todos/identity";
 import {
+  buildFindResultBlocks,
   buildTodoCreateView,
   dispatchViewSubmission,
   FIND_CUSTOMER_SHORTCUT_CALLBACK_ID,
@@ -22,6 +23,7 @@ import {
 } from "@/lib/personal-todos/types";
 import {
   getBotUserId,
+  parseAppMentionText,
   parseSlashTodoText,
   verifySlackSignature,
   type SlackEvent,
@@ -541,6 +543,10 @@ async function handleEvent(event: SlackEvent): Promise<void> {
     await handleReactionAdded(event);
     return;
   }
+  if (event.type === "app_mention") {
+    await handleAppMention(event);
+    return;
+  }
   // Subscribed but unhandled — make it visible so unexpected types
   // don't disappear into the void.
   console.warn(
@@ -694,6 +700,144 @@ async function handleReactionAdded(
       ? `:white_check_mark: Added that message to your to-dos: ${permalink}`
       : `:white_check_mark: Added that message to your to-dos.`
   );
+}
+
+/**
+ * @-mention handler. Slack fires `app_mention` whenever someone tags
+ * the bot in any channel/thread the bot is a member of. Unlike
+ * custom slash commands (which Slack blocks in threads workspace-wide
+ * here), app mentions work everywhere, so this is the most reliable
+ * way to invoke bot commands from a thread.
+ *
+ * Supported commands (matched against the first word after the
+ * mention, case-insensitive):
+ *
+ *   @bot find <query>   →  same search as /find, posts publicly in
+ *                          the thread (everyone sees, since the
+ *                          mention itself is public)
+ *   @bot search …       →  alias
+ *   @bot lookup …       →  alias
+ *   @bot help           →  list available commands
+ *
+ * Posting reply pattern: chat.postMessage with `thread_ts` so the
+ * reply lands in the thread. Public — @-mentions are public actions
+ * and treating the reply as ephemeral feels wrong (the asker's
+ * question is already visible).
+ */
+async function handleAppMention(
+  event: Extract<SlackEvent, { type: "app_mention" }>
+): Promise<void> {
+  // Drop self-mentions (bot mentioning bot — shouldn't happen but
+  // safe to guard).
+  if (event.bot_id) {
+    console.log("[slack-webhook] app_mention from another bot — ignored", {
+      bot_id: event.bot_id,
+    });
+    return;
+  }
+  if (!event.user || !event.text) {
+    console.warn("[slack-webhook] app_mention missing user or text", event);
+    return;
+  }
+  const parsed = parseAppMentionText(event.text);
+  console.log("[slack-webhook] App mention received", {
+    user: event.user,
+    channel: event.channel,
+    in_thread: Boolean(event.thread_ts),
+    command: parsed.command,
+    args_preview: parsed.args.slice(0, 80),
+  });
+
+  const threadTs = event.thread_ts ?? event.ts;
+  const channel = event.channel;
+
+  // ── Help / no command ────────────────────────────────────────────
+  if (!parsed.command || parsed.command === "help") {
+    await postThreadReply(channel, threadTs, {
+      text:
+        "Hi! I respond to these @-mention commands:\n" +
+        "• `@bot find <query>` — search customers + publications, post results in this thread\n" +
+        "• `@bot help` — show this list",
+    });
+    return;
+  }
+
+  // ── Find / search / lookup ───────────────────────────────────────
+  if (
+    parsed.command === "find" ||
+    parsed.command === "search" ||
+    parsed.command === "lookup" ||
+    parsed.command === "ent-search"
+  ) {
+    if (!parsed.args.trim()) {
+      await postThreadReply(channel, threadTs, {
+        text:
+          "Add a search term — e.g. `@bot find acme`. " +
+          "Matches against company name, workspace name, workspace ID, owner email, *and* publication names.",
+      });
+      return;
+    }
+    const query = parsed.args.trim();
+    const blocks = await buildFindResultBlocks(query);
+    if (!blocks) {
+      await postThreadReply(channel, threadTs, {
+        text: `No matches for "${query}". Tried company name, workspace name, workspace ID, owner email, and publication name.`,
+      });
+      return;
+    }
+    await postThreadReply(channel, threadTs, {
+      text: `Search results for "${query}"`,
+      blocks,
+    });
+    return;
+  }
+
+  // Unknown command — friendly hint.
+  await postThreadReply(channel, threadTs, {
+    text:
+      `I don't recognize \`${parsed.command}\`. Try \`@bot help\` for the list of commands I support.`,
+  });
+}
+
+/** Post a public reply into a thread. Used by handleAppMention so the
+ *  whole thread can see the response, since the @-mention itself is
+ *  public. */
+async function postThreadReply(
+  channel: string,
+  threadTs: string,
+  body: { text?: string; blocks?: Array<Record<string, unknown>> }
+): Promise<void> {
+  const token = process.env.SLACK_BOT_TOKEN;
+  if (!token) return;
+  try {
+    const res = await fetch("https://slack.com/api/chat.postMessage", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json; charset=utf-8",
+      },
+      body: JSON.stringify({
+        channel,
+        thread_ts: threadTs,
+        text: body.text,
+        blocks: body.blocks,
+        unfurl_links: false,
+        unfurl_media: false,
+      }),
+    });
+    const j = (await res.json()) as { ok: boolean; error?: string };
+    if (!j.ok) {
+      console.warn("[slack-webhook] postThreadReply failed", {
+        error: j.error,
+        channel,
+      });
+    }
+  } catch (e) {
+    console.warn(
+      "[slack-webhook] postThreadReply threw",
+      e instanceof Error ? e.message : e
+    );
+  }
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────

@@ -1378,6 +1378,125 @@ export const findCustomerSubmitHandler: ViewSubmitHandler = async ({
   return {};
 };
 
+/**
+ * Build the standard /find result blocks for a query. Shared between
+ * the slash handler, the message-shortcut modal submission, and the
+ * @-mention handler so all three surfaces produce identical-looking
+ * snapshots. Returns `null` when the search has zero matches — caller
+ * decides how to convey "no results" since the right phrasing depends
+ * on the entry point (ephemeral vs public thread reply, etc.).
+ */
+export async function buildFindResultBlocks(
+  query: string
+): Promise<Array<Record<string, unknown>> | null> {
+  let customers: Customer[];
+  try {
+    customers = await loadCustomers();
+  } catch {
+    return null;
+  }
+  const [bookMatches, pubMatches] = await Promise.all([
+    Promise.resolve(searchCustomers(customers, query)),
+    searchPublicationsByName(query),
+  ]);
+  const matchedPubsByWs = new Map<string, string[]>();
+  for (const p of pubMatches) {
+    const list = matchedPubsByWs.get(p.organization_id) ?? [];
+    list.push(p.name);
+    matchedPubsByWs.set(p.organization_id, list);
+  }
+  const seenWs = new Set<string>();
+  const merged: Customer[] = [];
+  for (const c of bookMatches) {
+    if (!c.workspace_id) continue;
+    if (seenWs.has(c.workspace_id)) continue;
+    seenWs.add(c.workspace_id);
+    merged.push(c);
+  }
+  for (const p of pubMatches) {
+    if (seenWs.has(p.organization_id)) continue;
+    const c = customers.find((cu) => cu.workspace_id === p.organization_id);
+    if (!c) continue;
+    seenWs.add(p.organization_id);
+    merged.push(c);
+  }
+  if (merged.length === 0) return null;
+  const shown = merged.slice(0, FIND_MAX_MATCHES);
+  const ws2pubs = await fetchPublicationsForWorkspaces(
+    shown
+      .map((c) => c.workspace_id)
+      .filter((id): id is string => Boolean(id))
+  );
+  const dashUrl = (
+    process.env.NEXT_PUBLIC_DASHBOARD_URL ?? "https://csm-dash.vercel.app"
+  ).replace(/\/+$/, "");
+  const blocks: Array<Record<string, unknown>> = [
+    {
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text:
+          `:mag: *${merged.length} match${merged.length === 1 ? "" : "es"} for "${query}"*` +
+          (merged.length > shown.length
+            ? ` (showing top ${shown.length})`
+            : ""),
+      },
+    },
+  ];
+  for (const c of shown) {
+    const wsId = c.workspace_id ?? "(no workspace_id)";
+    const wsTitle =
+      c.workspace_name && c.workspace_name !== c.company_name
+        ? c.workspace_name
+        : null;
+    const pubs = c.workspace_id
+      ? (ws2pubs.get(c.workspace_id) ?? []).slice(0, FIND_MAX_PUBS_PER_WS)
+      : [];
+    const totalPubs = c.workspace_id
+      ? ws2pubs.get(c.workspace_id)?.length ?? 0
+      : 0;
+    const pubLines =
+      pubs.length === 0
+        ? ["  _no publications found_"]
+        : pubs.map((p) =>
+            p.name
+              ? `  • *${p.name}* \`pub_${p.id}\``
+              : `  • \`pub_${p.id}\``
+          );
+    if (totalPubs > FIND_MAX_PUBS_PER_WS) {
+      pubLines.push(`  _(+${totalPubs - FIND_MAX_PUBS_PER_WS} more)_`);
+    }
+    const name = c.company_name || c.workspace_name || "(unnamed customer)";
+    const linkHref = c.workspace_id
+      ? `${dashUrl}/account/${encodeURIComponent(c.workspace_id)}`
+      : null;
+    const matchedPubs = c.workspace_id
+      ? matchedPubsByWs.get(c.workspace_id) ?? []
+      : [];
+    const matchLine =
+      matchedPubs.length > 0
+        ? `\n_matched publication${matchedPubs.length === 1 ? "" : "s"}: ${matchedPubs
+            .slice(0, 3)
+            .map((n) => `*${n}*`)
+            .join(", ")}${matchedPubs.length > 3 ? ` +${matchedPubs.length - 3} more` : ""}_`
+        : "";
+    blocks.push({ type: "divider" });
+    blocks.push({
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text:
+          `*${name}*\n` +
+          `Workspace: ${wsTitle ? `*${wsTitle}* ` : ""}\`${wsId}\`\n` +
+          `Publications:\n${pubLines.join("\n")}` +
+          matchLine +
+          (linkHref ? `\n<${linkHref}|Open in dashboard ↗>` : ""),
+      },
+    });
+  }
+  return blocks;
+}
+
 /** Run the merged book + publications search and post the result as
  *  an ephemeral in the target channel + thread. Mirrors the layout
  *  of findSlashHandler's response. */

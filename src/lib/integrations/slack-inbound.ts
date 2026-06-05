@@ -100,7 +100,53 @@ export type SlackEvent =
       item: { type: string; channel: string; ts: string };
       item_user?: string;
       event_ts?: string;
+    }
+  | {
+      type: "app_mention";
+      user?: string;
+      bot_id?: string;
+      channel: string;
+      text?: string;
+      ts: string;
+      thread_ts?: string;
     };
+
+/** Parse an @-mention command. Slack delivers the bot mention as
+ *  `<@U02ABC123>` (the wrapped user_id), followed by the command +
+ *  args. We strip the mention prefix(es) and split into
+ *  `{command, args}` so the webhook can route by command name the
+ *  same way it does for slash commands.
+ *
+ *  Multiple-mention messages (e.g. `@bot @other hi`) get all leading
+ *  mentions stripped — useful when someone tags the bot alongside
+ *  another person to get attention. The first non-mention word is
+ *  the command. */
+export interface ParsedAppMention {
+  command: string;
+  args: string;
+}
+
+export function parseAppMentionText(text: string): ParsedAppMention {
+  if (!text) return { command: "", args: "" };
+  // Strip Slack's leading mention wrapper(s) until we hit a real word.
+  let remaining = text.trim();
+  while (remaining.startsWith("<@")) {
+    const closing = remaining.indexOf(">");
+    if (closing === -1) break;
+    remaining = remaining.slice(closing + 1).trim();
+  }
+  if (!remaining) return { command: "", args: "" };
+  // First token = command, rest = args. Lower-case the command so
+  // routing is case-insensitive (matches the slash registry shape).
+  const spaceIdx = remaining.search(/\s/);
+  if (spaceIdx === -1) {
+    return { command: remaining.toLowerCase(), args: "" };
+  }
+  return {
+    command: remaining.slice(0, spaceIdx).toLowerCase(),
+    args: remaining.slice(spaceIdx + 1).trim(),
+  };
+}
 
 /** Slash-command payload — Slack posts these as form-urlencoded, not
  *  JSON. Decoded into an object by the webhook before passing here.

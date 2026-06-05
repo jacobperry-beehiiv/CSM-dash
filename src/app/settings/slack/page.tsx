@@ -693,6 +693,11 @@ function SlackInboundSection({
                 the reaction trigger
               </li>
               <li>
+                <code className="font-mono">app_mentions:read</code> —
+                receive @-mention events (so you can ask the bot things in
+                threads with <code className="font-mono">@bot find acme</code>)
+              </li>
+              <li>
                 <code className="font-mono">users:read</code> +{" "}
                 <code className="font-mono">users:read.email</code> — for
                 resolving inbound user identity (the .email scope is used as
@@ -813,6 +818,13 @@ function SlackInboundSection({
               <li>
                 <code className="font-mono">reaction_added</code> —
                 reacting to any message with the trigger emoji captures it
+              </li>
+              <li>
+                <code className="font-mono">app_mention</code> — receive @
+                mentions so the bot can respond to{" "}
+                <code className="font-mono">@bot find acme</code> /{" "}
+                <code className="font-mono">@bot help</code> inside any
+                thread or channel where it's a member
               </li>
             </ul>
           </div>
