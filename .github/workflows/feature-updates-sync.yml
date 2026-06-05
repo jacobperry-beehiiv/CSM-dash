@@ -1,0 +1,62 @@
+name: feature-updates-sync
+
+# Daily pull from the product feature-updates Slack channel into the
+# dashboard's KV store. Mirrors the team-task-reminders pattern: an
+# external GitHub Actions cron hits the existing
+# /api/feature-updates/sync route with a CRON_SECRET bearer so the
+# deployed Vercel instance does the work.
+#
+# Required repo secrets (already set for the other cron workflows):
+#   • CRON_SECRET    — must match the same env var in Vercel.
+#   • DASHBOARD_URL  — e.g. https://csm-dash.vercel.app (no trailing /).
+#
+# Trigger:
+#   • automatically once daily at 13:30 UTC (~8:30am Central /
+#     9:30am ET). Offset from team-tasks (14:00) and personal-todos
+#     (14:30) so the three KV writes don't pile up.
+#   • manually via "Run workflow" in the GitHub Actions UI.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "30 13 * * *"
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify required secrets are set
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          DASHBOARD_URL: ${{ secrets.DASHBOARD_URL }}
+        run: |
+          missing=()
+          for v in CRON_SECRET DASHBOARD_URL; do
+            if [ -z "${!v}" ]; then
+              missing+=("$v")
+            fi
+          done
+          if [ "${#missing[@]}" -ne 0 ]; then
+            echo "::error::Missing required repo secret(s): ${missing[*]}. Add them under Settings → Secrets and variables → Actions, then re-run."
+            exit 1
+          fi
+          echo "All required secrets present."
+
+      - name: POST /api/feature-updates/sync
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          DASHBOARD_URL: ${{ secrets.DASHBOARD_URL }}
+        run: |
+          set -e
+          response=$(curl -sS -w "\n%{http_code}" -X POST \
+            -H "Authorization: Bearer ${CRON_SECRET}" \
+            -H "Content-Type: application/json" \
+            "${DASHBOARD_URL}/api/feature-updates/sync")
+          body=$(echo "$response" | sed '$d')
+          code=$(echo "$response" | tail -n1)
+          echo "HTTP $code"
+          echo "$body"
+          if [ "$code" != "200" ]; then
+            echo "::error::Sync failed with HTTP $code"
+            exit 1
+          fi

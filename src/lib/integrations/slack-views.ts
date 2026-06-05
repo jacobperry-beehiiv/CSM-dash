@@ -29,6 +29,7 @@ import {
   type HubspotOwner,
 } from "./hubspot";
 import { loadCustomers } from "../data/load-customers";
+import { masqueradeUrl } from "../links";
 import { DB, runNativeQuery } from "../metabase";
 import type { Customer } from "../types";
 
@@ -764,6 +765,26 @@ export const hubspotUpdateCsmSlashHandler: SlashHandler = async (ctx) => {
 const FIND_MAX_MATCHES = 5;
 const FIND_MAX_PUBS_PER_WS = 25;
 
+/** Footer-link block appended to every customer match in /find
+ *  snapshots: "Open in dashboard ↗" + (when an owner email is on
+ *  file) "Masquerade into workspace ↗". Returns a leading-newline
+ *  prefixed mrkdwn fragment ready to concatenate onto a section
+ *  text, or an empty string when neither link is available. */
+function buildFooterLinks(
+  dashboardHref: string | null,
+  ownerEmail: string | null | undefined
+): string {
+  const links: string[] = [];
+  if (dashboardHref) {
+    links.push(`<${dashboardHref}|Open in dashboard ↗>`);
+  }
+  const masq = masqueradeUrl(ownerEmail);
+  if (masq) {
+    links.push(`<${masq}|Masquerade ↗>`);
+  }
+  return links.length > 0 ? `\n${links.join(" · ")}` : "";
+}
+
 /** Run a substring search against the customer book. Matches against
  *  company_name, workspace_name, workspace_id, and owner_email.
  *  Returns matches sorted by ARR descending (most-significant accounts
@@ -985,7 +1006,7 @@ export const findSlashHandler: SlashHandler = async (ctx) => {
           `Workspace: ${wsTitle ? `*${wsTitle}* ` : ""}\`${wsId}\`\n` +
           `Publications:\n${pubLines.join("\n")}` +
           matchLine +
-          (linkHref ? `\n<${linkHref}|Open in dashboard ↗>` : ""),
+          buildFooterLinks(linkHref, c.owner_email),
       },
     });
   }
@@ -1175,7 +1196,7 @@ export async function handleFindShareAction(args: {
           `Workspace: ${wsTitle ? `*${wsTitle}* ` : ""}\`${wsId}\`\n` +
           `Publications:\n${pubLines.join("\n")}` +
           matchLine +
-          (linkHref ? `\n<${linkHref}|Open in dashboard ↗>` : ""),
+          buildFooterLinks(linkHref, c.owner_email),
       },
     });
   }
@@ -1490,7 +1511,7 @@ export async function buildFindResultBlocks(
           `Workspace: ${wsTitle ? `*${wsTitle}* ` : ""}\`${wsId}\`\n` +
           `Publications:\n${pubLines.join("\n")}` +
           matchLine +
-          (linkHref ? `\n<${linkHref}|Open in dashboard ↗>` : ""),
+          buildFooterLinks(linkHref, c.owner_email),
       },
     });
   }
@@ -1626,7 +1647,7 @@ async function postFindCustomerResultInThread(args: {
           `Workspace: ${wsTitle ? `*${wsTitle}* ` : ""}\`${wsId}\`\n` +
           `Publications:\n${pubLines.join("\n")}` +
           matchLine +
-          (linkHref ? `\n<${linkHref}|Open in dashboard ↗>` : ""),
+          buildFooterLinks(linkHref, c.owner_email),
       },
     });
   }

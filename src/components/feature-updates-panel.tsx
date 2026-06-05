@@ -324,13 +324,16 @@ function ExpandedCard({
             </FieldRow>
           ) : null}
           {fields.location ? (
-            <FieldRow label="Location">
+            <FieldRow label="Platform Category">
               <span className="text-sm text-fg">{fields.location}</span>
             </FieldRow>
           ) : null}
           {fields.channel ? (
             <FieldRow label="Channel">
-              <ChannelValue raw={fields.channel} />
+              <ChannelValue
+                raw={fields.channel}
+                fallbackHref={update.permalink ?? null}
+              />
             </FieldRow>
           ) : null}
           {fields.other.map(({ label, value }) => (
@@ -403,13 +406,24 @@ function FieldRow({
   );
 }
 
-/** Render a Channel-field value as a Slack deep-link when we can
- *  extract a channel ID from it; falls back to plain text otherwise.
- *  Stops click-propagation so the row's collapse handler doesn't fire
- *  when the user clicks the link. */
-function ChannelValue({ raw }: { raw: string }) {
+/** Render a Channel-field value as a Slack deep-link. Prefers the
+ *  channel deep-link (when we can pull a channel ID out of the value);
+ *  falls back to the feature-update's own Slack permalink when one is
+ *  available so the field is always clickable even if the channel
+ *  reference is malformed.
+ *
+ *  Stops click-propagation so the row's collapse handler doesn't
+ *  fire when the user clicks the link. */
+function ChannelValue({
+  raw,
+  fallbackHref,
+}: {
+  raw: string;
+  fallbackHref: string | null;
+}) {
   const { id, display } = parseChannelValue(raw);
-  const href = id ? slackChannelUrl(id) : null;
+  const channelHref = id ? slackChannelUrl(id) : null;
+  const href = channelHref ?? fallbackHref;
   if (!href) {
     return <span className="text-sm text-fg">{display}</span>;
   }
@@ -420,7 +434,11 @@ function ChannelValue({ raw }: { raw: string }) {
       rel="noopener noreferrer"
       onClick={(e) => e.stopPropagation()}
       className="text-sm text-accent hover:underline"
-      title={`Open ${display} in Slack`}
+      title={
+        channelHref
+          ? `Open ${display} in Slack`
+          : "Open the original feature-update post in Slack"
+      }
     >
       {display}
     </a>
@@ -718,13 +736,22 @@ function splitChips(value: string): string[] {
 function parseChannelValue(raw: string): { id?: string; display: string } {
   const trimmed = raw.trim();
 
-  // Slack mrkdwn channel reference — includes the friendly name.
-  const mrkdwnRef = /^<#([CGD][A-Z0-9]{6,})\|([^>]+)>$/.exec(trimmed);
-  if (mrkdwnRef) {
-    return { id: mrkdwnRef[1], display: `#${mrkdwnRef[2]}` };
+  // Slack mrkdwn channel reference WITH friendly name: <#C…|foo>.
+  const mrkdwnNamed = /^<#([CGD][A-Z0-9]{6,})\|([^>]+)>$/.exec(trimmed);
+  if (mrkdwnNamed) {
+    return { id: mrkdwnNamed[1], display: `#${mrkdwnNamed[2]}` };
   }
 
-  // Bare channel ID — no friendly name available.
+  // Slack mrkdwn channel reference WITHOUT friendly name: <#C…>. Posts
+  // pasted into the channel field by users typing `#channel` get
+  // serialized this way by Slack — the ID is present but the name
+  // round-trip dropped it.
+  const mrkdwnBare = /^<#([CGD][A-Z0-9]{6,})>$/.exec(trimmed);
+  if (mrkdwnBare) {
+    return { id: mrkdwnBare[1], display: `#${mrkdwnBare[1]}` };
+  }
+
+  // Bare channel ID, no wrapper.
   if (/^[CGD][A-Z0-9]{6,}$/.test(trimmed)) {
     return { id: trimmed, display: `#${trimmed}` };
   }
