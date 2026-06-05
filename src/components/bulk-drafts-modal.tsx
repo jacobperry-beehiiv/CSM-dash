@@ -366,6 +366,14 @@ export function BulkDraftsModal({
     if (actionableDrafts.length === 0) return;
     setGmailBusy(true);
     setGmailMessage(null);
+    console.log("[bulk-drafts] Submit", {
+      count: actionableDrafts.length,
+      with_cc: actionableDrafts.filter((d) => d.cc).length,
+      with_bcc: actionableDrafts.filter((d) => d.bcc).length,
+      with_from_alias: actionableDrafts.filter((d) => d.from).length,
+      with_tracking_id: actionableDrafts.filter((d) => d.tracking_id)
+        .length,
+    });
     try {
       const r = await fetch("/api/drafts/bulk-create", {
         method: "POST",
@@ -384,17 +392,59 @@ export function BulkDraftsModal({
             // the user's verified aliases and falls back to the
             // primary on mismatch so the draft still lands.
             from: d.from,
+            // Stable per-customer identifier so the server can echo
+            // back which input drafts actually succeeded (we only
+            // stamp those as "touched" / "outreach logged"). Without
+            // this we'd over-stamp partial failures.
+            tracking_id: d.tracking_id,
           })),
         }),
       });
-      const j = await r.json();
+      const j = (await r.json()) as {
+        created?: number;
+        failed?: number;
+        ids?: string[];
+        created_in?: string;
+        alias_fallbacks?: number;
+        succeeded_tracking_ids?: string[];
+        failed_tracking_ids?: string[];
+        errors?: Array<{
+          to: string;
+          tracking_id?: string;
+          error: string;
+        }>;
+        error?: string;
+      };
       if (!r.ok) throw new Error(j.error ?? `HTTP ${r.status}`);
+      console.log("[bulk-drafts] Response", {
+        created: j.created,
+        failed: j.failed,
+        alias_fallbacks: j.alias_fallbacks,
+        succeeded_tracking_ids_count: j.succeeded_tracking_ids?.length ?? 0,
+        failed_tracking_ids_count: j.failed_tracking_ids?.length ?? 0,
+        first_errors: j.errors?.slice(0, 3) ?? [],
+      });
       const where = j.created_in ?? gmail?.email ?? "your Gmail";
-      const fallbacks = (j.alias_fallbacks as number | undefined) ?? 0;
+      const fallbacks = j.alias_fallbacks ?? 0;
       const parts = [
         `Created ${j.created} draft${j.created === 1 ? "" : "s"} in ${where}'s Drafts folder`,
       ];
-      if (j.failed > 0) parts.push(`${j.failed} failed`);
+      if ((j.failed ?? 0) > 0) {
+        // List up to 3 specific failures inline so the user can fix
+        // them without going to Vercel logs. The rest live in the
+        // server log — surfaced via the success_rate field.
+        const firstErrors = (j.errors ?? []).slice(0, 3);
+        const errorList = firstErrors
+          .map((e) => `${e.to}: ${e.error.slice(0, 80)}`)
+          .join("; ");
+        const moreCount =
+          (j.failed ?? 0) - firstErrors.length;
+        parts.push(
+          `${j.failed} failed${errorList ? ` — ${errorList}` : ""}${
+            moreCount > 0 ? ` (+${moreCount} more)` : ""
+          }`
+        );
+      }
       if (fallbacks > 0) {
         // Drafts landed, but Gmail rejected the alias and we fell back
         // to the auth account. Tell the user so they can either flip
@@ -404,19 +454,28 @@ export function BulkDraftsModal({
         );
       }
       setGmailMessage(`${parts.join(" · ")}.`);
-      // Mark every tracked draft we attempted (Gmail's per-draft success
-      // is best-effort; failures are surfaced inline above). The
-      // touched-status flow trusts the user reviewed + sent from Gmail.
-      const handed = actionableDrafts
-        .map((d) => d.tracking_id)
-        .filter((id): id is string => Boolean(id));
+      // Only stamp lifecycle state for drafts the server confirmed
+      // landed. Falls back to the old "trust the submit" behavior
+      // when the response doesn't carry succeeded_tracking_ids (e.g.
+      // old server / cached preview) so we don't lose stamping
+      // entirely if a deploy lag bites.
+      let handed: string[];
+      if (Array.isArray(j.succeeded_tracking_ids)) {
+        handed = j.succeeded_tracking_ids;
+      } else {
+        handed = actionableDrafts
+          .map((d) => d.tracking_id)
+          .filter((id): id is string => Boolean(id));
+        console.warn(
+          "[bulk-drafts] Response missing succeeded_tracking_ids — falling back to client-side list",
+          { handed_count: handed.length }
+        );
+      }
       if (handed.length > 0 && onDraftCreated) onDraftCreated(handed);
     } catch (e) {
-      setGmailMessage(
-        `Gmail draft creation failed: ${
-          e instanceof Error ? e.message : "unknown"
-        }`
-      );
+      const msg = e instanceof Error ? e.message : "unknown";
+      console.error("[bulk-drafts] Top-level failure", msg);
+      setGmailMessage(`Gmail draft creation failed: ${msg}`);
     } finally {
       setGmailBusy(false);
     }

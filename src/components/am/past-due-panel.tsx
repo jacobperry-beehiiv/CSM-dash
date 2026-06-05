@@ -756,24 +756,43 @@ export function PastDuePanel({ rows, csms, totalSourceRows }: Props) {
                 onDraftCreated={async (ids) => {
                   // Auto-stamp "touched" (or "follow_up_sent" on the
                   // Follow-Up sub-tab) for every customer whose draft
-                  // got handed off to Gmail. Mirrors the manual "Mark
-                  // touched" button next to this, but fires on click
-                  // so the AM never has to remember the second step.
+                  // ACTUALLY landed in Gmail (the bulk-create route
+                  // now returns succeeded_tracking_ids, so this list
+                  // excludes the partial-failure overstamping the
+                  // older code path produced).
                   if (ids.length === 0) return;
+                  const targetStatus =
+                    subtab === "followup" ? "follow_up_sent" : "touched";
+                  console.log("[past-due] Auto-stamp after drafts", {
+                    subtab,
+                    count: ids.length,
+                    targetStatus,
+                  });
                   try {
                     const r = await fetch("/api/past-due/outreach", {
                       method: "PUT",
                       headers: { "Content-Type": "application/json" },
                       body: JSON.stringify({
                         customer_ids: ids,
-                        status:
-                          subtab === "followup"
-                            ? "follow_up_sent"
-                            : "touched",
+                        status: targetStatus,
                       }),
                     });
-                    if (r.ok) reloadOutreach();
-                  } catch {
+                    if (r.ok) {
+                      reloadOutreach();
+                    } else {
+                      const body = (await r
+                        .json()
+                        .catch(() => ({}))) as { error?: string };
+                      console.warn(
+                        "[past-due] Auto-stamp failed",
+                        body.error ?? `HTTP ${r.status}`
+                      );
+                    }
+                  } catch (e) {
+                    console.warn(
+                      "[past-due] Auto-stamp threw",
+                      e instanceof Error ? e.message : e
+                    );
                     /* non-fatal — manual button still works as fallback */
                   }
                 }}

@@ -18,13 +18,38 @@ interface PostBody {
      *  the alias (HTTP 400 — alias not verified on the auth account)
      *  the server retries once without it so the draft still lands. */
     from?: string;
+    /** Caller-supplied stable identifier for each input draft (e.g.
+     *  the customer's Stripe customer_id or workspace_id). Echoed back
+     *  in `succeeded_tracking_ids` / `failed_tracking_ids` so the
+     *  client can correlate which input drafts actually landed and
+     *  ONLY stamp lifecycle state for those. Pre-tracking-id we passed
+     *  every selected customer's id to onDraftCreated regardless of
+     *  whether their draft succeeded — overstamping in the partial-
+     *  failure case. */
+    tracking_id?: string;
   }>;
 }
 
+/**
+ * POST /api/drafts/bulk-create
+ *
+ * Sequentially creates Gmail drafts for each row in the request body.
+ * Returns a per-draft outcome split (succeeded_tracking_ids /
+ * failed_tracking_ids) so the caller can stamp lifecycle state
+ * accurately and surface specific failures to the user.
+ *
+ * Logs every action: receipt summary, per-draft attempt + result,
+ * final tally. Failures get their full Gmail-API error string in the
+ * `errors[]` response field (first 10) AND in Vercel logs (all of
+ * them) so partial batches don't go dark.
+ */
 export async function POST(req: Request) {
   try {
     const activeEmail = await getActiveEmail();
     if (!activeEmail) {
+      console.warn(
+        "[drafts/bulk-create] No active Gmail connection — rejecting"
+      );
       return NextResponse.json(
         {
           error:
@@ -36,23 +61,41 @@ export async function POST(req: Request) {
 
     const body = (await req.json()) as PostBody;
     if (!Array.isArray(body.drafts) || body.drafts.length === 0) {
+      console.warn(
+        "[drafts/bulk-create] Empty/missing drafts array — rejecting"
+      );
       return NextResponse.json(
         { error: "drafts must be a non-empty array" },
         { status: 400 }
       );
     }
 
+    const requestId = Math.random().toString(36).slice(2, 8);
+    console.log("[drafts/bulk-create] Request received", {
+      requestId,
+      activeEmail,
+      count: body.drafts.length,
+      with_cc: body.drafts.filter((d) => d.cc).length,
+      with_bcc: body.drafts.filter((d) => d.bcc).length,
+      with_from_alias: body.drafts.filter((d) => d.from).length,
+      with_tracking_id: body.drafts.filter((d) => d.tracking_id).length,
+    });
+
     let created = 0;
     let failed = 0;
-    /** Drafts where Gmail rejected the requested `from` alias and we
-     *  silently fell back to the auth account's primary. Surfaced so
-     *  the UI can warn that the alias isn't set up on this CSM's
-     *  Gmail without nuking the draft entirely. */
     let alias_fallbacks = 0;
-    const errors: Array<{ to: string; error: string }> = [];
+    const errors: Array<{
+      to: string;
+      tracking_id?: string;
+      error: string;
+    }> = [];
     const ids: string[] = [];
+    const succeeded_tracking_ids: string[] = [];
+    const failed_tracking_ids: string[] = [];
 
+    let i = 0;
     for (const d of body.drafts) {
+      i++;
       try {
         const r = await createGmailDraftFor(activeEmail, {
           to: d.to,
@@ -64,6 +107,15 @@ export async function POST(req: Request) {
         });
         ids.push(r.id);
         created++;
+        if (d.tracking_id) succeeded_tracking_ids.push(d.tracking_id);
+        console.log("[drafts/bulk-create] Draft created", {
+          requestId,
+          n: `${i}/${body.drafts.length}`,
+          to_preview: previewEmail(d.to),
+          gmail_draft_id: r.id,
+          tracking_id: d.tracking_id ?? null,
+          used_alias: d.from ?? null,
+        });
       } catch (e) {
         const msg = e instanceof Error ? e.message : "unknown";
         // Gmail returns 400 with a "Delegation denied" / "From: address
@@ -74,6 +126,15 @@ export async function POST(req: Request) {
         const looksLikeAliasReject =
           d.from && /Gmail API 400/.test(msg);
         if (looksLikeAliasReject) {
+          console.warn(
+            "[drafts/bulk-create] Alias rejected — retrying without",
+            {
+              requestId,
+              n: `${i}/${body.drafts.length}`,
+              alias: d.from,
+              error: msg.slice(0, 200),
+            }
+          );
           try {
             const r = await createGmailDraftFor(activeEmail, {
               to: d.to,
@@ -85,22 +146,64 @@ export async function POST(req: Request) {
             ids.push(r.id);
             created++;
             alias_fallbacks++;
+            if (d.tracking_id) succeeded_tracking_ids.push(d.tracking_id);
+            console.log(
+              "[drafts/bulk-create] Draft created (alias fallback)",
+              {
+                requestId,
+                n: `${i}/${body.drafts.length}`,
+                to_preview: previewEmail(d.to),
+                gmail_draft_id: r.id,
+                tracking_id: d.tracking_id ?? null,
+              }
+            );
             continue;
           } catch (e2) {
-            // Fallback also failed — fall through to the error path.
+            const msg2 = e2 instanceof Error ? e2.message : "unknown";
             failed++;
             errors.push({
               to: d.to,
-              error: e2 instanceof Error ? e2.message : "unknown",
+              tracking_id: d.tracking_id,
+              error: msg2,
             });
+            if (d.tracking_id) failed_tracking_ids.push(d.tracking_id);
+            console.error(
+              "[drafts/bulk-create] Draft failed (alias fallback also failed)",
+              {
+                requestId,
+                n: `${i}/${body.drafts.length}`,
+                to_preview: previewEmail(d.to),
+                tracking_id: d.tracking_id ?? null,
+                error: msg2.slice(0, 300),
+              }
+            );
             continue;
           }
         }
         failed++;
-        errors.push({ to: d.to, error: msg });
+        errors.push({ to: d.to, tracking_id: d.tracking_id, error: msg });
+        if (d.tracking_id) failed_tracking_ids.push(d.tracking_id);
+        console.error("[drafts/bulk-create] Draft failed", {
+          requestId,
+          n: `${i}/${body.drafts.length}`,
+          to_preview: previewEmail(d.to),
+          tracking_id: d.tracking_id ?? null,
+          error: msg.slice(0, 300),
+        });
         // Don't bail — keep going so the user gets as many drafts as possible.
       }
     }
+
+    console.log("[drafts/bulk-create] Done", {
+      requestId,
+      created,
+      failed,
+      alias_fallbacks,
+      success_rate:
+        body.drafts.length > 0
+          ? `${Math.round((created / body.drafts.length) * 100)}%`
+          : "n/a",
+    });
 
     return NextResponse.json({
       created,
@@ -108,12 +211,29 @@ export async function POST(req: Request) {
       ids,
       created_in: activeEmail,
       alias_fallbacks,
-      errors: errors.slice(0, 5),
+      succeeded_tracking_ids,
+      failed_tracking_ids,
+      errors: errors.slice(0, 10),
     });
   } catch (error) {
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Unknown error" },
-      { status: 500 }
-    );
+    const msg = error instanceof Error ? error.message : "Unknown error";
+    console.error("[drafts/bulk-create] Top-level handler error", msg);
+    return NextResponse.json({ error: msg }, { status: 500 });
   }
+}
+
+/** Redact emails in logs — first chars + domain, e.g. "ja***@beehiiv.com".
+ *  Loud enough to debug, quiet enough to not splash full PII into
+ *  Vercel's log stream. */
+function previewEmail(raw: string): string {
+  const trimmed = (raw ?? "").trim();
+  // Bulk drafts can include multiple comma-separated recipients (CC
+  // strings, etc.); just preview the first for log brevity.
+  const first = trimmed.split(",")[0]?.trim() ?? "";
+  const at = first.indexOf("@");
+  if (at <= 0) return first;
+  const local = first.slice(0, at);
+  const domain = first.slice(at);
+  if (local.length <= 3) return `${local}${domain}`;
+  return `${local.slice(0, 2)}***${domain}`;
 }
