@@ -29,6 +29,7 @@ import {
   type HubspotOwner,
 } from "./hubspot";
 import { loadCustomers } from "../data/load-customers";
+import { DB, runNativeQuery } from "../metabase";
 import type { Customer } from "../types";
 
 // ─── Generic view-submission contract ─────────────────────────────────
@@ -237,8 +238,55 @@ export function buildTodoCreateView(prefill?: {
           ...(initialOption ? { initial_option: initialOption } : {}),
         },
       },
+      {
+        type: "input",
+        block_id: "remind_via_slack",
+        optional: true,
+        label: { type: "plain_text", text: "Slack reminders" },
+        element: {
+          type: "checkboxes",
+          action_id: "value",
+          // Default: checked. Slack's `initial_options` makes the
+          // checkbox start ON. If the user unchecks before submit, the
+          // submission state will have `selected_options: []` and we
+          // interpret that as opt-out.
+          initial_options: [
+            {
+              text: {
+                type: "plain_text",
+                text: "Ping me on Slack at the deadline ladder (3 days out, 1 day out, due today, 3 days overdue)",
+              },
+              value: "yes",
+            },
+          ],
+          options: [
+            {
+              text: {
+                type: "plain_text",
+                text: "Ping me on Slack at the deadline ladder (3 days out, 1 day out, due today, 3 days overdue)",
+              },
+              value: "yes",
+            },
+          ],
+        },
+      },
     ],
   };
+}
+
+/** Extract the remind-via-Slack checkbox from a view-submission. The
+ *  Block Kit `checkboxes` element shape is different from inputs/
+ *  selects — `selected_options` is an array; non-empty means checked. */
+function getRemindViaSlackValue(payload: ViewSubmissionPayload): boolean {
+  const v = payload.view.state.values?.["remind_via_slack"]?.["value"];
+  if (!v) return true; // field not rendered → default ON
+  // Type guard for the checkboxes shape (not in our ViewStateValue
+  // union since we only modeled the three we used initially).
+  const selected = (
+    v as { type?: string; selected_options?: Array<{ value: string }> }
+  ).selected_options;
+  if (!Array.isArray(selected)) return true;
+  return selected.length > 0;
 }
 
 /** Submission handler for the to-do create modal. Reads values out of
@@ -267,6 +315,7 @@ export const todoCreateHandler: ViewSubmitHandler = async ({
       ? prioritySel
       : null;
 
+  const remind_via_slack = getRemindViaSlackValue(payload);
   const now = new Date().toISOString();
   const todo: PersonalTodo = {
     id: newTodoId(),
@@ -278,6 +327,7 @@ export const todoCreateHandler: ViewSubmitHandler = async ({
     source: surface_at ? "scheduled" : "slack_slash",
     source_meta: { slack_user_id: payload.user.id },
     completed_at: null,
+    remind_via_slack,
     created_at: now,
     updated_at: now,
   };
@@ -602,10 +652,146 @@ export const hubspotUpdateCsmSlashHandler: SlashHandler = async (ctx) => {
   return null;
 };
 
+// ─── /find — customer / publication search ───────────────────────────
+//
+// Slash `/find <query>` returns an ephemeral Slack message with a
+// short snapshot of every customer whose company / workspace name
+// matches the query. Minimal field set (per Jacob's pick): company
+// name, workspace ID, publication IDs. Bounded to 5 matches so a
+// vague query doesn't dump 200 rows into Slack.
+//
+// Publication IDs come straight from a single Postgres native query
+// scoped to the matching workspace IDs — same approach as the AM
+// "Copy pub IDs" button. Customer book lookup is in-process (loaded
+// already by other code paths and cached).
+
+const FIND_MAX_MATCHES = 5;
+const FIND_MAX_PUBS_PER_WS = 25;
+
+/** Run a substring search against the customer book. Returns up to N
+ *  matches sorted by ARR descending (most-significant accounts first). */
+function searchCustomers(customers: Customer[], query: string): Customer[] {
+  const q = query.trim().toLowerCase();
+  if (!q) return [];
+  const matches: Customer[] = [];
+  for (const c of customers) {
+    const hay = [
+      c.company_name,
+      c.workspace_name,
+      c.workspace_id,
+      c.owner_email,
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
+    if (hay.includes(q)) matches.push(c);
+  }
+  matches.sort((a, b) => (b.arr ?? 0) - (a.arr ?? 0));
+  return matches;
+}
+
+export const findSlashHandler: SlashHandler = async (ctx) => {
+  const query = ctx.inlineText.trim();
+  if (!query) {
+    return {
+      response_type: "ephemeral",
+      text:
+        "Add a search term — e.g. `/find acme` or `/find newsletter-name`. " +
+        "Matches against company name, workspace name, workspace ID, or owner email.",
+    };
+  }
+  let customers: Customer[] = [];
+  try {
+    customers = await loadCustomers();
+  } catch (e) {
+    return {
+      response_type: "ephemeral",
+      text: `Couldn't load the customer book: ${e instanceof Error ? e.message : String(e)}`,
+    };
+  }
+  const allMatches = searchCustomers(customers, query);
+  if (allMatches.length === 0) {
+    return {
+      response_type: "ephemeral",
+      text: `No customers found for "${query}". Try a shorter substring or a workspace ID.`,
+    };
+  }
+  const shown = allMatches.slice(0, FIND_MAX_MATCHES);
+  const ws2pubs = await fetchPublicationsForWorkspaces(
+    shown
+      .map((c) => c.workspace_id)
+      .filter((id): id is string => Boolean(id))
+  );
+
+  const dashUrl = (
+    process.env.NEXT_PUBLIC_DASHBOARD_URL ?? "https://csm-dash.vercel.app"
+  ).replace(/\/+$/, "");
+
+  // Build a Block Kit response — one section per match, divider
+  // between. Easier to scan than a single mrkdwn blob, and emojis
+  // render reliably.
+  const blocks: Array<Record<string, unknown>> = [
+    {
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text:
+          `:mag: *${allMatches.length} match${allMatches.length === 1 ? "" : "es"} for "${query}"*` +
+          (allMatches.length > shown.length
+            ? ` (showing top ${shown.length} by ARR — refine your search to narrow further)`
+            : ""),
+      },
+    },
+  ];
+  for (const c of shown) {
+    const wsId = c.workspace_id ?? "(no workspace_id)";
+    const pubs = c.workspace_id
+      ? (ws2pubs.get(c.workspace_id) ?? []).slice(0, FIND_MAX_PUBS_PER_WS)
+      : [];
+    const pubList =
+      pubs.length === 0
+        ? "_no publications found_"
+        : pubs.map((p) => `\`pub_${p}\``).join(", ") +
+          (c.workspace_id &&
+          (ws2pubs.get(c.workspace_id)?.length ?? 0) > FIND_MAX_PUBS_PER_WS
+            ? ` _(+${(ws2pubs.get(c.workspace_id)?.length ?? 0) - FIND_MAX_PUBS_PER_WS} more)_`
+            : "");
+    const name =
+      c.company_name || c.workspace_name || "(unnamed customer)";
+    const linkHref = c.workspace_id
+      ? `${dashUrl}/account/${encodeURIComponent(c.workspace_id)}`
+      : null;
+    blocks.push({ type: "divider" });
+    blocks.push({
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text:
+          `*${name}*\n` +
+          `Workspace ID: \`${wsId}\`\n` +
+          `Publications: ${pubList}` +
+          (linkHref ? `\n<${linkHref}|Open in dashboard ↗>` : ""),
+      },
+    });
+  }
+
+  return {
+    response_type: "ephemeral",
+    blocks,
+    // Plain-text fallback for clients that don't render blocks.
+    text: `${allMatches.length} match(es) for "${query}"`,
+  };
+};
+
 /** Slash command registry. Match is case-insensitive on the command
  *  name (with or without the leading `/`). */
 export const SLASH_HANDLERS: Record<string, SlashHandler> = {
   "update-csm": hubspotUpdateCsmSlashHandler,
+  find: findSlashHandler,
+  // Convenience aliases — admins sometimes register slightly different
+  // names in Slack. All hit the same handler.
+  lookup: findSlashHandler,
+  search: findSlashHandler,
 };
 
 /** Look up a slash handler for a given command name. Returns null
@@ -613,6 +799,49 @@ export const SLASH_HANDLERS: Record<string, SlashHandler> = {
 export function lookupSlashHandler(commandRaw: string): SlashHandler | null {
   const key = commandRaw.replace(/^\//, "").trim().toLowerCase();
   return SLASH_HANDLERS[key] ?? null;
+}
+
+/**
+ * Single-shot Postgres query: pull every non-deleted publication for
+ * the given workspaces. Used by the `/find` slash command so it can
+ * surface publication IDs in the snapshot without N round-trips to
+ * the per-workspace publications endpoint.
+ *
+ * Returns a map keyed by workspace_id → array of raw publication IDs
+ * (no pub_ prefix). The caller prepends the prefix for display.
+ */
+async function fetchPublicationsForWorkspaces(
+  workspaceIds: string[]
+): Promise<Map<string, string[]>> {
+  const result = new Map<string, string[]>();
+  if (workspaceIds.length === 0) return result;
+  const safe = workspaceIds.map((id) => `'${id.replace(/'/g, "''")}'`);
+  const sql = `
+    SELECT
+      id::text              AS publication_id,
+      organization_id::text AS organization_id
+    FROM public.publications
+    WHERE organization_id IN (${safe.join(",")})
+      AND deleted_at IS NULL
+    ORDER BY organization_id, name
+  `;
+  try {
+    const rows = await runNativeQuery(DB.POSTGRES, sql);
+    for (const r of rows as Array<Record<string, unknown>>) {
+      const ws = String(r.organization_id ?? "");
+      const pub = String(r.publication_id ?? "");
+      if (!ws || !pub) continue;
+      const list = result.get(ws) ?? [];
+      list.push(pub);
+      result.set(ws, list);
+    }
+  } catch (e) {
+    console.warn(
+      "[slack-views] fetchPublicationsForWorkspaces failed",
+      e instanceof Error ? e.message : e
+    );
+  }
+  return result;
 }
 
 /** Open a modal in Slack. `trigger_id` comes from the originating

@@ -560,6 +560,19 @@ function TodoRow({ todo, onToggle, onPatch, onDelete, dim }: RowProps) {
             <option value="medium">Medium</option>
             <option value="low">Low</option>
           </select>
+          <label
+            className="flex items-center gap-1"
+            title="When off, the daily Slack reminder ladder (3d/1d/0d/3d-overdue) skips this row. The activation DM for scheduled todos still fires either way."
+          >
+            <input
+              type="checkbox"
+              checked={todo.remind_via_slack !== false}
+              onChange={(e) =>
+                onPatch({ remind_via_slack: e.target.checked })
+              }
+            />
+            <span>Slack reminders</span>
+          </label>
         </div>
         {todo.details ? (
           <div className="mt-1 text-xs text-muted">{renderDetails(todo.details)}</div>

@@ -718,8 +718,12 @@ function SlackInboundSection({
               <li>
                 <code className="font-mono">/todo</code> — create a personal
                 to-do. Inline form (<code className="font-mono">/todo Foo Co
-                check-in on:2026-07-01 !high</code>) or modal (<code className="font-mono">/todo</code>{" "}
-                with no text).
+                check-in on:2026-07-01 !high !silent</code>) or modal (<code className="font-mono">/todo</code>{" "}
+                with no text). Inline directives: <code className="font-mono">on:</code> /{" "}
+                <code className="font-mono">due:</code> /{" "}
+                <code className="font-mono">!high|!medium|!low</code> /{" "}
+                <code className="font-mono">!silent</code> (suppress the
+                Slack reminder ladder).
               </li>
               <li>
                 <code className="font-mono">/update-csm</code> — open a modal
@@ -728,6 +732,14 @@ function SlackInboundSection({
                 <code className="font-mono">crm.objects.companies.write</code>{" "}
                 scope (the HubSpot Private App or OAuth credentials the dash
                 uses).
+              </li>
+              <li>
+                <code className="font-mono">/find</code> (aliases:{" "}
+                <code className="font-mono">/lookup</code>,{" "}
+                <code className="font-mono">/search</code>) — search the
+                customer book by company / workspace name / workspace ID /
+                owner email. Returns an ephemeral snapshot with workspace ID
+                and publication IDs for up to 5 matches.
               </li>
             </ul>
           </div>

@@ -273,6 +273,9 @@ async function handleSlashCommand(
     source: "slack_slash",
     source_meta: { slack_user_id: slash.user_id },
     completed_at: null,
+    // null parser value → default to true (reminders ON). `false`
+    // means the user added `!silent` / `!quiet`.
+    remind_via_slack: parsed.remind_via_slack !== false,
     created_at: now,
     updated_at: now,
   };

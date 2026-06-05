@@ -169,6 +169,12 @@ export interface ParsedSlashTodo {
   surface_at: string | null;
   due_date: string | null;
   priority: "high" | "medium" | "low" | null;
+  /** True when the user added `!silent` to the inline command,
+   *  opting out of the 4-stage Slack reminder ladder. Defaults to
+   *  `true` (= reminders enabled) when omitted; the type is nullable
+   *  so the caller can distinguish "unset" (use default) from
+   *  "explicitly off." */
+  remind_via_slack: boolean | null;
 }
 
 const YMD_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -179,6 +185,7 @@ export function parseSlashTodoText(text: string): ParsedSlashTodo {
     surface_at: null,
     due_date: null,
     priority: null,
+    remind_via_slack: null,
   };
   const remaining: string[] = [];
   // Use a permissive split so emojis / unicode don't choke.
@@ -198,6 +205,10 @@ export function parseSlashTodoText(text: string): ParsedSlashTodo {
       }
     } else if (token === "!high" || token === "!medium" || token === "!low") {
       result.priority = token.slice(1) as "high" | "medium" | "low";
+      continue;
+    } else if (token === "!silent" || token === "!quiet") {
+      // Suppress the daily Slack reminder ladder for this row.
+      result.remind_via_slack = false;
       continue;
     }
     remaining.push(token);

@@ -57,8 +57,21 @@ export interface PersonalTodo {
   source_meta: SlackSourceMeta | null;
   /** ISO timestamp when the todo was marked complete; null = open. */
   completed_at: string | null;
+  /** Opt-in for the daily due-date Slack reminder ladder (3d / 1d / 0d
+   *  / 3d-overdue). Defaults to true when undefined for back-compat
+   *  with rows created before the field existed. The sweep treats
+   *  `false` as "silent tracker" and skips ALL reminder stages; the
+   *  surface_at activation DM (which only fires once when a scheduled
+   *  todo becomes active) still runs regardless. */
+  remind_via_slack?: boolean;
   created_at: string;
   updated_at: string;
+}
+
+/** Treat undefined / true as "remind me." Centralized so the sweep,
+ *  the UI, and the Slack views all interpret the field the same way. */
+export function shouldRemindViaSlack(todo: PersonalTodo): boolean {
+  return todo.remind_via_slack !== false;
 }
 
 /**

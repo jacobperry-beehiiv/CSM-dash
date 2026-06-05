@@ -3,6 +3,7 @@ import { loadSettings } from "../data/settings";
 import { loadCustomers } from "../data/load-customers";
 import { loadAll, saveStateForSweep } from "./store";
 import {
+  shouldRemindViaSlack,
   todayYmdUtc,
   type PersonalTodo,
   type PersonalTodosState,
@@ -208,6 +209,10 @@ export async function runPersonalTodoSweep(
       // this only skips truly-future ones.
       if (t.surface_at && t.surface_at > todayYmd) continue;
       if (t.completed_at) continue;
+      // Silent-tracker opt-out — owner toggled "Don't ping me on
+      // Slack" for this row. The activation DM in pass 1 still fires
+      // (one-shot), but the 4-stage due-date ladder is skipped.
+      if (!shouldRemindViaSlack(t)) continue;
       if (!t.due_date) {
         result.skipped_no_due++;
         continue;
