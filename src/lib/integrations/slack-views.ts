@@ -599,6 +599,12 @@ export interface SlashHandlerContext {
   inlineText: string;
   userKey: string;
   slackUserId: string;
+  /** Slack's parent message timestamp when the slash command was
+   *  invoked from inside a thread. Pass this through to the response
+   *  (and any chat.postMessage call) so the bot's reply lands in the
+   *  same thread instead of the channel root. */
+  threadTs?: string;
+  channelId: string;
 }
 
 /** Returns a Slack-formatted response object (ephemeral) — empty
@@ -611,6 +617,95 @@ export type SlashHandler = (
   // Allow other Slack response fields for future expansion.
   [key: string]: unknown;
 } | null>;
+
+/**
+ * Helper used by slash handlers to send their ephemeral reply.
+ *
+ * Slack's immediate slash-command response (the JSON body returned to
+ * the original POST) does NOT support `thread_ts` — its ephemeral
+ * always lands at the channel root, even when the command was invoked
+ * from a thread. So when `threadTs` is present we side-channel the
+ * reply via `chat.postEphemeral`, which DOES accept `thread_ts`, and
+ * return null from the slash handler so the webhook responds with a
+ * bare 200.
+ *
+ * When `threadTs` is absent we fall back to returning the response
+ * object directly — Slack handles the standard channel-root display.
+ */
+export async function ephemeralReplyMaybeInThread(
+  ctx: SlashHandlerContext,
+  body: {
+    text?: string;
+    blocks?: Array<Record<string, unknown>>;
+  }
+): Promise<{ [key: string]: unknown } | null> {
+  if (!ctx.threadTs) {
+    return {
+      response_type: "ephemeral",
+      ...body,
+    };
+  }
+  // chat.postEphemeral with thread_ts — the message renders inside
+  // the thread, visible only to the user who ran the slash command.
+  const token = process.env.SLACK_BOT_TOKEN;
+  if (!token) {
+    // Fall back to channel-root ephemeral if the bot can't post.
+    console.warn(
+      "[slack-views] SLACK_BOT_TOKEN not set — can't post in-thread, falling back to channel root"
+    );
+    return {
+      response_type: "ephemeral",
+      ...body,
+    };
+  }
+  try {
+    const res = await fetch("https://slack.com/api/chat.postEphemeral", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json; charset=utf-8",
+      },
+      body: JSON.stringify({
+        channel: ctx.channelId,
+        user: ctx.slackUserId,
+        thread_ts: ctx.threadTs,
+        text: body.text,
+        blocks: body.blocks,
+        unfurl_links: false,
+        unfurl_media: false,
+      }),
+    });
+    const j = (await res.json()) as { ok: boolean; error?: string };
+    if (!j.ok) {
+      // Common failure: bot isn't a member of the channel. Surface
+      // that fallback so the user still sees their result (just in
+      // the channel root rather than the thread).
+      console.warn(
+        "[slack-views] chat.postEphemeral with thread_ts failed",
+        { error: j.error, channel: ctx.channelId }
+      );
+      return {
+        response_type: "ephemeral",
+        ...body,
+        text:
+          (body.text ?? "") +
+          `\n_(Couldn't post in-thread: ${j.error ?? "unknown"}. Invite the bot to this channel for threaded replies.)_`,
+      };
+    }
+  } catch (e) {
+    console.warn(
+      "[slack-views] chat.postEphemeral threw",
+      e instanceof Error ? e.message : e
+    );
+    return {
+      response_type: "ephemeral",
+      ...body,
+    };
+  }
+  // Posted in-thread successfully — return null so the immediate
+  // slash response is empty (bare 200, no message at channel root).
+  return null;
+}
 
 /** Handler for `/update-csm`. Always opens the modal — the inline
  *  text is ignored for v1. (Future: pre-fill the workspace_id if
@@ -747,21 +842,19 @@ async function searchPublicationsByName(
 export const findSlashHandler: SlashHandler = async (ctx) => {
   const query = ctx.inlineText.trim();
   if (!query) {
-    return {
-      response_type: "ephemeral",
+    return ephemeralReplyMaybeInThread(ctx, {
       text:
         "Add a search term — e.g. `/find acme` or `/find newsletter-name`. " +
         "Matches against company name, workspace name, workspace ID, owner email, *and* publication names.",
-    };
+    });
   }
   let customers: Customer[] = [];
   try {
     customers = await loadCustomers();
   } catch (e) {
-    return {
-      response_type: "ephemeral",
+    return ephemeralReplyMaybeInThread(ctx, {
       text: `Couldn't load the customer book: ${e instanceof Error ? e.message : String(e)}`,
-    };
+    });
   }
 
   // Two search paths run in parallel:
@@ -807,10 +900,9 @@ export const findSlashHandler: SlashHandler = async (ctx) => {
   }
 
   if (merged.length === 0) {
-    return {
-      response_type: "ephemeral",
+    return ephemeralReplyMaybeInThread(ctx, {
       text: `No matches for "${query}". Tried company name, workspace name, workspace ID, owner email, and publication name.`,
-    };
+    });
   }
 
   const shown = merged.slice(0, FIND_MAX_MATCHES);
@@ -884,11 +976,10 @@ export const findSlashHandler: SlashHandler = async (ctx) => {
     });
   }
 
-  return {
-    response_type: "ephemeral",
+  return ephemeralReplyMaybeInThread(ctx, {
     blocks,
     text: `${merged.length} match(es) for "${query}"`,
-  };
+  });
 };
 
 /** Slash command registry. Match is case-insensitive on the command

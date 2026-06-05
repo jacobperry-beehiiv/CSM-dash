@@ -150,6 +150,11 @@ export async function POST(req: Request) {
         channel_id: params.get("channel_id") ?? "",
         response_url: params.get("response_url") ?? "",
         trigger_id: params.get("trigger_id") ?? "",
+        // Slack passes `thread_ts` only when the command is invoked
+        // from within a thread reply input. Empty string is treated
+        // the same as missing so we don't accidentally root at the
+        // channel level.
+        thread_ts: params.get("thread_ts") || undefined,
       };
       return await handleSlashCommand(slash);
     }
@@ -176,6 +181,8 @@ async function handleSlashCommand(
     text_preview: slash.text.slice(0, 80),
     user_id: slash.user_id,
     user_name: slash.user_name,
+    in_thread: Boolean(slash.thread_ts),
+    channel_id: slash.channel_id,
   });
   // We intentionally accept any slash command name. The endpoint is
   // signature-verified and dedicated to this app — anything landing
@@ -217,6 +224,8 @@ async function handleSlashCommand(
       inlineText: slash.text,
       userKey,
       slackUserId: slash.user_id,
+      threadTs: slash.thread_ts,
+      channelId: slash.channel_id,
     });
     // null → modal opened, no ack message needed (Slack just sees 200).
     if (result === null) {

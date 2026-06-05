@@ -113,6 +113,11 @@ export interface SlackSlashCommand {
   channel_id: string;
   response_url: string;
   trigger_id: string;
+  /** Present when the command is invoked from within a thread. We
+   *  echo it back in the immediate response so the reply lands in the
+   *  thread rather than the channel root. Slack doesn't include this
+   *  field on commands invoked from the channel-level compose box. */
+  thread_ts?: string;
 }
 
 // ─── Bot-user-id cache ────────────────────────────────────────────────
