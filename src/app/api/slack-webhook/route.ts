@@ -406,15 +406,19 @@ async function handleBlockActions(
       console.warn("[slack-webhook] find_share without response_url");
       return NextResponse.json({ ok: true });
     }
-    // Fire-and-forget the share work so we can ACK Slack within its
-    // 3s window even if the search + Slack post takes longer. Errors
-    // are surfaced to the user via the response_url ephemeral, not
-    // back through the original POST response.
-    void handleFindShareAction({
+    // Await the share work — Vercel's serverless runtime kills the
+    // function as soon as the response returns, so a fire-and-forget
+    // void promise gets cut off mid-execution (the 13ms duration on
+    // the click attempt was the receipt — the actual share never
+    // ran). The work is fast (~1s typical: load book + search +
+    // post), well inside Slack's 3-second ACK window.
+    const result = await handleFindShareAction({
       value: action.value ?? "",
       responseUrl: typed.response_url,
-    }).catch((e) => {
-      console.error("[slack-webhook] find_share handler threw", e);
+    });
+    console.log("[slack-webhook] find_share completed", {
+      ok: result.ok,
+      error: result.error,
     });
     return NextResponse.json({ ok: true });
   }
