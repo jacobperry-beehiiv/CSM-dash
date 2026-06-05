@@ -792,6 +792,9 @@ export const SLASH_HANDLERS: Record<string, SlashHandler> = {
   // names in Slack. All hit the same handler.
   lookup: findSlashHandler,
   search: findSlashHandler,
+  "ent-search": findSlashHandler,
+  "find-customer": findSlashHandler,
+  "search-customer": findSlashHandler,
 };
 
 /** Look up a slash handler for a given command name. Returns null
