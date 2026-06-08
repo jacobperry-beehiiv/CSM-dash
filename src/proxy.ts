@@ -72,6 +72,14 @@ export default auth((req) => {
   // what broke the URL-verification handshake on first setup.
   if (pathname.startsWith("/api/slack-webhook")) return;
 
+  // Gmail-direct "Last contacted" lookup. Returns JSON to dashboard
+  // pages on every render (via a batch POST) and to per-row refresh
+  // buttons (via GET). Does its own session + Gmail-active-email
+  // checks inside the route, so the proxy must let it through —
+  // otherwise the batch POST gets 307'd to /login as HTML and the
+  // client's JSON parser blows up.
+  if (pathname.startsWith("/api/last-contact/gmail")) return;
+
   if (!req.auth) {
     const url = req.nextUrl.clone();
     url.pathname = "/login";

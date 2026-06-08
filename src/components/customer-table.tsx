@@ -17,6 +17,7 @@ import { FeatureUtilizationFilter } from "./feature-utilization-filter";
 import { fmtCurrency, fmtDate, fmtNumber, daysUntil } from "./format";
 import { featureCounts } from "@/lib/features";
 import { lastContacted } from "@/lib/customer-helpers";
+import { useGmailLastContact } from "@/lib/hooks/use-gmail-last-contact";
 import { isVisibleToCsm } from "@/lib/templates/types";
 import { useViewerEmail } from "@/lib/auth-client";
 import type { StoredTemplate } from "@/lib/templates/types";
@@ -88,6 +89,29 @@ export function CustomerTable({
 }) {
   const viewerEmail = useViewerEmail();
   const router = useRouter();
+
+  // Gmail-direct "Last contacted" overlay. Batches one POST per page
+  // load using the active CSM's Gmail token. Results merge into
+  // lastContacted() per row via the new gmailDate option. Failure
+  // modes (no active Gmail, missing scope, network blip) are
+  // non-fatal — the column falls back to HubSpot values.
+  const ownerEmailList = useMemo(
+    () =>
+      initialCustomers
+        .map((c) => c.owner_email ?? "")
+        .filter((e): e is string => Boolean(e)),
+    [initialCustomers]
+  );
+  const gmail = useGmailLastContact(ownerEmailList);
+  const gmailDateFor = useCallback(
+    (c: Customer): string | undefined => {
+      const email = (c.owner_email ?? "").trim().toLowerCase();
+      if (!email) return undefined;
+      return gmail.dateMap[email] ?? undefined;
+    },
+    [gmail.dateMap]
+  );
+
   // CSM sweep state. The sweep batches HubSpot owner lookups across
   // the entire book and writes customer-overrides for any reassigned
   // rows — see /api/customer-overrides/refresh-all-csms.
@@ -177,8 +201,12 @@ export function CustomerTable({
     }
 
     list = [...list].sort((a, b) => {
-      const av = pickSortValue(a, sortKey);
-      const bv = pickSortValue(b, sortKey);
+      const av = pickSortValue(a, sortKey, {
+        gmailDateFor: (c) => gmailDateFor(c),
+      });
+      const bv = pickSortValue(b, sortKey, {
+        gmailDateFor: (c) => gmailDateFor(c),
+      });
       if (av == null && bv == null) return 0;
       if (av == null) return 1;
       if (bv == null) return -1;
@@ -190,7 +218,16 @@ export function CustomerTable({
       return sortDir === "asc" ? na - nb : nb - na;
     });
     return list;
-  }, [initialCustomers, search, featurePredicate, statusFilter, sortKey, sortDir, ws2pubs]);
+  }, [
+    initialCustomers,
+    search,
+    featurePredicate,
+    statusFilter,
+    sortKey,
+    sortDir,
+    ws2pubs,
+    gmailDateFor,
+  ]);
 
   // Counts shown next to each option in the lifecycle dropdown so the
   // viewer sees how many rows each filter would yield. Derived from
@@ -554,13 +591,19 @@ export function CustomerTable({
           <span className="text-muted text-xs">{fmtDate(c.last_send)}</span>
         );
       case "property_notes_last_contacted": {
-        // Resolve max(HubSpot activity rollup, notes_last_contacted). The
-        // legacy column key is preserved so the existing sort still works.
-        const lc = lastContacted(c);
+        // Resolve max(HubSpot activity rollup, notes_last_contacted,
+        // Gmail). Gmail overlay comes from the per-CSM /api/last-
+        // contact/gmail batch fetched on mount. The legacy column key
+        // is preserved so the existing sort still works.
+        const lc = lastContacted(c, { gmailDate: gmailDateFor(c) });
         return (
           <span
             className="text-muted text-xs"
-            title={lc.date ? `Source: ${lc.source}` : "No HubSpot activity recorded"}
+            title={
+              lc.date
+                ? `Source: ${lc.source}`
+                : "No activity recorded across HubSpot or Gmail"
+            }
           >
             {fmtDate(lc.date)}
           </span>
@@ -573,6 +616,22 @@ export function CustomerTable({
 
   return (
     <>
+      {gmail.scopeMissing ? (
+        <div className="mb-4 px-4 py-3 rounded-lg border border-amber-300 bg-amber-50 dark:bg-amber-500/10 text-amber-900 dark:text-amber-200 text-sm flex items-center gap-3">
+          <span aria-hidden>🔄</span>
+          <span className="flex-1">
+            Reconnect Gmail to enable Gmail-source contact dates — the
+            "Last contacted" column will pull from your actual sent /
+            received mail instead of HubSpot's activity rollup.
+          </span>
+          <a
+            href="/settings/gmail"
+            className="text-amber-900 dark:text-amber-100 underline hover:no-underline font-medium"
+          >
+            Open settings →
+          </a>
+        </div>
+      ) : null}
       <MetricCards customers={filtered} />
       <FilterBar>
         <SearchInput
@@ -824,7 +883,18 @@ export function CustomerTable({
                   {isOpen && (
                     <tr className="bg-blue-50 dark:bg-blue-500/20 border-b border-border">
                       <td colSpan={COLUMNS.length + 3} className="px-6 py-4">
-                        <CustomerDetailPanel customer={c} showPaidSubs />
+                        <CustomerDetailPanel
+                          customer={c}
+                          showPaidSubs
+                          gmailDate={gmailDateFor(c)}
+                          onGmailRefresh={
+                            c.owner_email
+                              ? () =>
+                                  gmail.refresh(c.owner_email as string)
+                              : undefined
+                          }
+                          gmailScopeMissing={gmail.scopeMissing}
+                        />
                       </td>
                     </tr>
                   )}
@@ -862,10 +932,17 @@ export function CustomerTable({
   );
 }
 
-function pickSortValue(c: CustomerWithMetrics, key: SortKey): unknown {
+function pickSortValue(
+  c: CustomerWithMetrics,
+  key: SortKey,
+  opts?: { gmailDateFor?: (c: Customer) => string | undefined }
+): unknown {
   if (key === "features_enabled") return featureCounts(c).active;
-  // Sort the "Last contacted" column by the merged date, not the raw
-  // narrow HubSpot field, so what the user sees and sorts on match.
-  if (key === "property_notes_last_contacted") return lastContacted(c).date;
+  // Sort the "Last contacted" column by the merged date — including
+  // the Gmail overlay when the parent passed gmailDateFor — so what
+  // the user sees and sorts on match.
+  if (key === "property_notes_last_contacted") {
+    return lastContacted(c, { gmailDate: opts?.gmailDateFor?.(c) }).date;
+  }
   return c[key as keyof CustomerWithMetrics];
 }

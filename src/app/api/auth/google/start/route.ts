@@ -12,6 +12,12 @@ const CORE_SCOPES = [
   // Compose lets us create drafts. We deliberately do NOT request
   // gmail.send — this app drafts only; the CSM still hits send manually.
   "https://www.googleapis.com/auth/gmail.compose",
+  // Read-only message access for the "Last contacted via Gmail"
+  // enrichment. Used by /api/last-contact/gmail to query the active
+  // CSM's mailbox for the most-recent message with a given recipient.
+  // Until a CSM reconsents with this scope, the dashboard falls back
+  // to the HubSpot-derived last-contacted value with no broken state.
+  "https://www.googleapis.com/auth/gmail.readonly",
 ];
 
 /** Optional scope added later for alias auto-discovery. Has to be

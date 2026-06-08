@@ -88,30 +88,42 @@ export function flagC(c: Customer): RiskFlag | null {
 
 // ─── Flag H: stale contact (last_contacted exceeds threshold) ───────
 // Reads through lastContacted() which merges HubSpot's broader activity
-// rollup with the narrower notes_last_contacted field. A null here is a
-// stronger "we have no record of contact across any HubSpot activity
-// type" signal than the legacy implementation produced.
+// rollup with the narrower notes_last_contacted field — and, when
+// callers pre-fetch a Gmail-direct date for the active CSM, that
+// source too. The label flips between "Stale HubSpot activity" and
+// "Stale email activity" depending on which source won the merge, so
+// CSMs can tell at a glance whether the signal is HubSpot's gap-prone
+// rollup or their own ground-truth Gmail.
 export function flagH(
   c: Customer,
   thresholdDays: number,
-  now = new Date()
+  now = new Date(),
+  opts?: { gmailDate?: string | null }
 ): RiskFlag | null {
-  const resolved = lastContacted(c);
+  const resolved = lastContacted(c, {
+    gmailDate: opts?.gmailDate ?? undefined,
+  });
   const last = parseDate(resolved.date);
+  const isGmailSource = resolved.source === "gmail";
   if (!last) {
     return {
       code: "H",
-      label: "No HubSpot activity",
-      detail:
-        "No HubSpot-tracked email / call / note activity recorded across any contact at this company.",
+      label: isGmailSource ? "No email activity" : "No HubSpot activity",
+      detail: isGmailSource
+        ? "No Gmail message exchanged with this account's owner email."
+        : "No HubSpot-tracked email / call / note activity recorded across any contact at this company.",
     };
   }
   const days = daysBetween(last, now);
   if (days >= thresholdDays) {
     return {
       code: "H",
-      label: `Stale HubSpot activity (${days}d)`,
-      detail: `Last contacted ${days} days ago via ${resolved.source} (threshold ${thresholdDays}d).`,
+      label: isGmailSource
+        ? `Stale email activity (${days}d)`
+        : `Stale HubSpot activity (${days}d)`,
+      detail: isGmailSource
+        ? `Last contacted ${days} days ago via Gmail (you) — threshold ${thresholdDays}d.`
+        : `Last contacted ${days} days ago via ${resolved.source} (threshold ${thresholdDays}d).`,
     };
   }
   return null;

@@ -31,12 +31,34 @@ interface Props {
    *  panels skip it; they're focused on past-due / renewals / approach
    *  signals rather than monetization breakdowns. */
   showPaidSubs?: boolean;
+  /** Pre-fetched Gmail-direct "last contacted" ISO date for this
+   *  customer's owner_email. Merged into the panel's "Last contacted"
+   *  row via lastContacted(c, { gmailDate }). Comes from the parent
+   *  table's useGmailLastContact() hook so a row in the table and the
+   *  row's expanded panel show the same merged date.
+   *
+   *  Pass undefined when no Gmail data is available (no connection,
+   *  scope missing, or just an unmatched email) — the panel will
+   *  render HubSpot values only, same as before this feature shipped. */
+  gmailDate?: string;
+  /** Called when the user clicks the per-row "🔄 Refresh from Gmail"
+   *  button. Force-busts the cache on the server and re-fetches just
+   *  this row's value. Hidden when undefined (no owner_email or no
+   *  Gmail connection). */
+  onGmailRefresh?: () => void;
+  /** Active CSM's Gmail token doesn't have gmail.readonly granted.
+   *  Hides the per-row refresh button and shows a small inline
+   *  "Reconnect Gmail" hint instead. */
+  gmailScopeMissing?: boolean;
 }
 
 export function CustomerDetailPanel({
   customer: c,
   topSlot,
   showPaidSubs = false,
+  gmailDate,
+  onGmailRefresh,
+  gmailScopeMissing,
 }: Props) {
   return (
     <div className="space-y-4">
@@ -113,9 +135,61 @@ export function CustomerDetailPanel({
           <Row
             label="Last contacted"
             value={
-              <span title={`Source: ${lastContacted(c).source}`}>
-                {fmtDate(lastContacted(c).date)}
-              </span>
+              (() => {
+                const lc = lastContacted(c, { gmailDate });
+                return (
+                  <span className="inline-flex items-center gap-2">
+                    <span title={`Source: ${lc.source}`}>
+                      {fmtDate(lc.date)}
+                    </span>
+                    <span
+                      className={`text-[10px] px-1.5 py-0.5 rounded font-mono ${
+                        lc.source === "gmail"
+                          ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-500/20 dark:text-emerald-200"
+                          : lc.source === "none"
+                            ? "bg-canvas text-subtle"
+                            : "bg-surface-2 text-muted"
+                      }`}
+                      title={
+                        lc.source === "gmail"
+                          ? "Resolved from your Gmail mailbox (most-recent message with this account's owner email)."
+                          : lc.source === "hubspot activity rollup"
+                            ? "Resolved from HubSpot's company-level activity rollup."
+                            : lc.source === "hubspot notes_last_contacted"
+                              ? "Resolved from HubSpot's narrow notes_last_contacted property."
+                              : "No activity found in HubSpot or Gmail."
+                      }
+                    >
+                      {lc.source === "gmail"
+                        ? "Gmail"
+                        : lc.source === "hubspot activity rollup"
+                          ? "HubSpot"
+                          : lc.source === "hubspot notes_last_contacted"
+                            ? "HubSpot (manual)"
+                            : "—"}
+                    </span>
+                    {onGmailRefresh && !gmailScopeMissing ? (
+                      <button
+                        type="button"
+                        onClick={onGmailRefresh}
+                        className="text-[11px] text-accent hover:underline"
+                        title="Force-fetch from your Gmail right now, bypassing the 6h cache."
+                      >
+                        🔄 Refresh from Gmail
+                      </button>
+                    ) : null}
+                    {gmailScopeMissing ? (
+                      <a
+                        href="/settings/gmail"
+                        className="text-[11px] text-amber-700 dark:text-amber-300 hover:underline"
+                        title="Gmail read scope isn't granted yet — reconnect to enable Gmail-source contact dates."
+                      >
+                        Reconnect Gmail
+                      </a>
+                    ) : null}
+                  </span>
+                );
+              })()
             }
           />
         </Section>

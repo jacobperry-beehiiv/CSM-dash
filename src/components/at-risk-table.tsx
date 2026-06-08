@@ -1,9 +1,10 @@
 "use client";
 
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { fmtCurrency, fmtDate, fmtNumber, fmtPct, daysAgo } from "./format";
 import { OutreachModal } from "./outreach-modal";
 import { CustomerDetailPanel } from "./customer-detail-panel";
+import { useGmailLastContact } from "@/lib/hooks/use-gmail-last-contact";
 import { RowActions } from "./row-actions";
 import { BulkEmailLauncher } from "./am/bulk-email-launcher";
 import { RiskLevelChip } from "./risk-level-chip";
@@ -134,6 +135,29 @@ export function AtRiskTable({
   const [search, setSearch] = useUrlSearch("q");
   // Publications index for the "paste a pub_… UUID" affordance.
   const { ws2pubs } = usePublicationsIndex();
+
+  // Gmail-direct "Last contacted" overlay. Same hook as the customer
+  // table — batches one POST on mount, results are merged into the
+  // detail panel's "Last contacted" row when expanded. The at-risk
+  // page benefits especially because Flag H ("Stale HubSpot
+  // activity") often fires on accounts a CSM actually emailed last
+  // week; the Gmail overlay surfaces the correction visually.
+  const ownerEmailList = useMemo(
+    () =>
+      data.accounts
+        .map((a) => a.customer.owner_email ?? "")
+        .filter((e): e is string => Boolean(e)),
+    [data.accounts]
+  );
+  const gmail = useGmailLastContact(ownerEmailList);
+  const gmailDateFor = useCallback(
+    (c: Customer): string | undefined => {
+      const email = (c.owner_email ?? "").trim().toLowerCase();
+      if (!email) return undefined;
+      return gmail.dateMap[email] ?? undefined;
+    },
+    [gmail.dateMap]
+  );
 
   // Flag filter state. Empty pickedFlags = no filter (show all accounts).
   // combine = "any" matches accounts with at least one picked flag;
@@ -670,6 +694,14 @@ export function AtRiskTable({
                           <CustomerDetailPanel
                             customer={c}
                             hideFeatureBreakdown
+                            gmailDate={gmailDateFor(c)}
+                            onGmailRefresh={
+                              c.owner_email
+                                ? () =>
+                                    gmail.refresh(c.owner_email as string)
+                                : undefined
+                            }
+                            gmailScopeMissing={gmail.scopeMissing}
                             topSlot={
                               <div className="space-y-3">
                                 <div className="rounded-md border border-amber-200 dark:border-amber-500/30 bg-amber-50 dark:bg-amber-500/10 p-3">
