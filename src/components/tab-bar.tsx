@@ -27,7 +27,13 @@ export function TabBar({ tabs, defaultTab, param = "tab" }: Props) {
   }
 
   return (
-    <div className="border-b border-border mb-6 flex gap-1 overflow-x-auto">
+    // No overflow-x-auto here — with only a handful of tabs there's
+    // nothing to scroll, and some browsers (notably Chromium-on-macOS
+    // when classic scrollbars are enabled) reserve a vertical scrollbar
+    // slot anyway, which made the tab strip look like it was wrapped
+    // in an iframe. Wrap instead if a future page adds enough tabs to
+    // overflow the viewport.
+    <div className="border-b border-border mb-6 flex flex-wrap gap-1">
       {tabs.map((t) => {
         const active = current === t.id;
         return (
