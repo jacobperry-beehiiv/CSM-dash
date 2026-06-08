@@ -342,8 +342,10 @@ function ExpandedCard({
             </FieldRow>
           ) : null}
           {fields.location ? (
-            <FieldRow label="Platform Category">
-              <span className="text-sm text-fg">{fields.location}</span>
+            <FieldRow label="Where to find it">
+              <span className="text-sm text-fg">
+                {unescapeSlackText(fields.location)}
+              </span>
             </FieldRow>
           ) : null}
         </div>
@@ -803,9 +805,37 @@ function parseFields(body: string): ParsedFields {
  * NOT support raw HTML or arbitrary attributes — the input is
  * untrusted Slack content.
  */
+/**
+ * Decode the three HTML entities Slack escapes in plain text fields
+ * (<, >, & — done so Slack's own <@USER> / <URL> mrkdwn syntax can
+ * be parsed unambiguously). Use ONLY for text that won't pass through
+ * renderSlackMrkdwn — that function does its own escape-then-render
+ * pass and decoding the entities upstream would let raw HTML slip
+ * through into innerHTML. Safe here because the consuming code path
+ * sets the result as React text content (auto-escaped).
+ */
+function unescapeSlackText(input: string): string {
+  return input
+    .replace(/&gt;/g, ">")
+    .replace(/&lt;/g, "<")
+    .replace(/&amp;/g, "&");
+}
+
 function renderSlackMrkdwn(input: string): string {
-  // 1. Escape any literal HTML chars first.
+  // 0. Decode Slack's content-level entities first. Slack escapes <,
+  //    >, and & in user-typed text (so "1 > 2" arrives as "1 &gt; 2")
+  //    to avoid colliding with its own <@USER> / <URL> syntax, where
+  //    the `<` and `>` are literal. Decoding here recovers user
+  //    intent before our HTML-escape pass re-encodes everything,
+  //    otherwise the rendered output shows literal "&gt;" to the user.
+  //    Order matters: do `&amp;` LAST so we don't unescape `&amp;gt;`
+  //    into `&gt;` only to drop it.
   let s = input
+    .replace(/&gt;/g, ">")
+    .replace(/&lt;/g, "<")
+    .replace(/&amp;/g, "&");
+  // 1. Escape any literal HTML chars first.
+  s = s
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");
