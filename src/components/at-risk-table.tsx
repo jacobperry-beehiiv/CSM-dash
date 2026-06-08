@@ -5,6 +5,7 @@ import { fmtCurrency, fmtDate, fmtNumber, fmtPct, daysAgo } from "./format";
 import { OutreachModal } from "./outreach-modal";
 import { CustomerDetailPanel } from "./customer-detail-panel";
 import { useGmailLastContact } from "@/lib/hooks/use-gmail-last-contact";
+import { lastContacted } from "@/lib/customer-helpers";
 import { RowActions } from "./row-actions";
 import { BulkEmailLauncher } from "./am/bulk-email-launcher";
 import { RiskLevelChip } from "./risk-level-chip";
@@ -512,16 +513,21 @@ export function AtRiskTable({
             <colgroup>
               <col className="w-8" />
               <col className="w-8" />
-              <col className="w-[16%]" />
+              <col className="w-[14%]" />
               <col className="w-[6%]" />
               <col className="w-[8%]" />
               <col className="w-[8%]" />
-              <col className="w-[10%]" />
-              <col className="w-[7%]" />
-              <col className="w-[7%]" />
-              <col className="w-[14%] hidden lg:table-cell" />
+              <col className="w-[8%]" />
+              {/* Last contacted — Gmail / HubSpot merged date with
+               *  source pill. Hidden below lg since it's secondary to
+               *  the structured flag/risk cells and we don't want to
+               *  squeeze them on narrower viewports. */}
+              <col className="w-[9%] hidden lg:table-cell" />
+              <col className="w-[6%]" />
+              <col className="w-[6%]" />
+              <col className="w-[12%] hidden lg:table-cell" />
               {/* Actions — wide enough for Masquerade + h. + Draft. */}
-              <col className="w-[18%]" />
+              <col className="w-[15%]" />
             </colgroup>
             <thead className="bg-canvas">
               <tr className="text-left border-b border-border">
@@ -532,6 +538,9 @@ export function AtRiskTable({
                 <th className="px-3 py-3 font-medium text-muted">Last send</th>
                 <th className="px-3 py-3 font-medium text-muted">Flags</th>
                 <th className="px-3 py-3 font-medium text-muted">Last login</th>
+                <th className="px-3 py-3 font-medium text-muted hidden lg:table-cell whitespace-nowrap">
+                  Last contacted
+                </th>
                 <th className="px-3 py-3 font-medium text-muted text-right">% subs</th>
                 <th className="px-3 py-3 font-medium text-muted">Risk</th>
                 <th className="px-3 py-3 font-medium text-muted hidden lg:table-cell">
@@ -656,6 +665,47 @@ export function AtRiskTable({
                           <span className="italic text-muted">14d+</span>
                         )}
                       </td>
+                      {/* Last contacted — merges HubSpot's activity rollup
+                       *  with the active CSM's Gmail (pre-fetched once per
+                       *  page load via useGmailLastContact). A green
+                       *  "Gmail" pill flags rows where Gmail beat HubSpot
+                       *  so a CSM eyeballing the at-risk list sees at a
+                       *  glance which rows might be wrongly flagged. */}
+                      <td className="px-3 py-3 hidden lg:table-cell">
+                        {(() => {
+                          const lc = lastContacted(c, {
+                            gmailDate: gmailDateFor(c),
+                          });
+                          if (!lc.date) {
+                            return (
+                              <span className="italic text-muted text-xs">
+                                —
+                              </span>
+                            );
+                          }
+                          const days = daysAgo(lc.date);
+                          return (
+                            <div>
+                              <div className="flex items-center gap-1.5">
+                                <span>{fmtDate(lc.date)}</span>
+                                {lc.source === "gmail" ? (
+                                  <span
+                                    className="text-[9px] px-1 py-px rounded font-mono bg-emerald-100 text-emerald-800 dark:bg-emerald-500/20 dark:text-emerald-200"
+                                    title="Resolved from your Gmail mailbox — fresher than the HubSpot rollup."
+                                  >
+                                    G
+                                  </span>
+                                ) : null}
+                              </div>
+                              {days != null ? (
+                                <div className="text-xs text-muted">
+                                  {days}d ago
+                                </div>
+                              ) : null}
+                            </div>
+                          );
+                        })()}
+                      </td>
                       <td className={`px-3 py-3 text-right ${subsCls}`}>
                         <div>{fmtPct(subs)}</div>
                         {c.active_subs != null ? (
@@ -690,7 +740,7 @@ export function AtRiskTable({
                     </tr>
                     {isOpen && (
                       <tr className="bg-blue-50 dark:bg-blue-500/20 border-b border-border">
-                        <td colSpan={11} className="px-6 py-4">
+                        <td colSpan={12} className="px-6 py-4">
                           <CustomerDetailPanel
                             customer={c}
                             hideFeatureBreakdown
