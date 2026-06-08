@@ -5,6 +5,11 @@ import { fmtCurrency, fmtDate, fmtNumber, fmtPct, daysAgo } from "./format";
 import { OutreachModal } from "./outreach-modal";
 import { CustomerDetailPanel } from "./customer-detail-panel";
 import { useGmailLastContact } from "@/lib/hooks/use-gmail-last-contact";
+import {
+  useColumnVisibility,
+  type ColumnDef,
+} from "@/lib/hooks/use-column-visibility";
+import { ColumnPicker } from "./column-picker";
 import { lastContacted } from "@/lib/customer-helpers";
 import { RowActions } from "./row-actions";
 import { BulkEmailLauncher } from "./am/bulk-email-launcher";
@@ -115,6 +120,27 @@ function pctVal(c: Customer): number | null {
     : c.percent_of_max_subs * 100;
 }
 
+/**
+ * Toggleable column list for the at-risk table. Stable `key` strings
+ * are persisted to localStorage by useColumnVisibility — don't rename
+ * them (the picker will silently reset visibility for everyone).
+ *
+ * The four anchoring cells (selection checkbox, expand chevron,
+ * Account name, Actions buttons) are NOT in this list — they're
+ * always rendered. Everything below is opt-out-able via the
+ * "Columns" dropdown above the table.
+ */
+const AT_RISK_COLUMNS: ColumnDef[] = [
+  { key: "arr", label: "ARR" },
+  { key: "last_send", label: "Last send" },
+  { key: "flags", label: "Flags" },
+  { key: "last_login", label: "Last login" },
+  { key: "last_contacted", label: "Last contacted" },
+  { key: "pct_subs", label: "% subs" },
+  { key: "risk", label: "Risk" },
+  { key: "recommended_action", label: "Recommended action" },
+];
+
 export function AtRiskTable({
   data,
   csms,
@@ -151,6 +177,18 @@ export function AtRiskTable({
     [data.accounts]
   );
   const gmail = useGmailLastContact(ownerEmailList);
+  // Per-table column visibility. Persists to
+  // `csm:table-columns:at-risk` in localStorage so a CSM's
+  // hide/show preferences survive reloads + nav.
+  const columns = useColumnVisibility("at-risk", AT_RISK_COLUMNS);
+  // colSpan for the expanded-details row: 4 always-on cells
+  // (checkbox, expand, account, actions) + however many toggleable
+  // columns are currently visible.
+  const visibleToggleableCount = AT_RISK_COLUMNS.filter((c) =>
+    columns.isVisible(c.key)
+  ).length;
+  const expandedColSpan = 4 + visibleToggleableCount;
+
   const gmailDateFor = useCallback(
     (c: Customer): string | undefined => {
       const email = (c.owner_email ?? "").trim().toLowerCase();
@@ -508,44 +546,67 @@ export function AtRiskTable({
           filter to see results.
         </div>
       ) : (
-        <div className="rounded-xl border border-border bg-surface shadow-card">
-          <table className="w-full text-sm table-fixed">
-            <colgroup>
-              <col className="w-8" />
-              <col className="w-8" />
-              <col className="w-[14%]" />
-              <col className="w-[6%]" />
-              <col className="w-[8%]" />
-              <col className="w-[8%]" />
-              <col className="w-[8%]" />
-              {/* Last contacted — Gmail / HubSpot merged date with
-               *  source pill. Hidden below lg since it's secondary to
-               *  the structured flag/risk cells and we don't want to
-               *  squeeze them on narrower viewports. */}
-              <col className="w-[9%] hidden lg:table-cell" />
-              <col className="w-[6%]" />
-              <col className="w-[6%]" />
-              <col className="w-[12%] hidden lg:table-cell" />
-              {/* Actions — wide enough for Masquerade + h. + Draft. */}
-              <col className="w-[15%]" />
-            </colgroup>
+        <>
+          {/* Right-aligned "Columns ▾" picker above the table. Each
+           *  CSM's hide-set persists in localStorage so the choice
+           *  survives reloads. */}
+          <div className="flex justify-end">
+            <ColumnPicker state={columns} align="right" />
+          </div>
+        <div className="rounded-xl border border-border bg-surface shadow-card overflow-x-auto">
+          {/* table-auto (no table-fixed) lets the browser size each
+           *  column to its content. Combined with `whitespace-nowrap`
+           *  on the date / numeric cells, this stops "May 12, 2026"
+           *  wrapping across three lines like it did with the old
+           *  hand-tuned table-fixed widths.
+           *
+           *  Hidden columns disappear entirely from the DOM (not just
+           *  visually) so the remaining columns get the freed width.
+           *  The wrapper has overflow-x-auto so unusually wide
+           *  selection sets degrade to a horizontal scroll rather
+           *  than crushing every cell. */}
+          <table className="w-full text-sm">
             <thead className="bg-canvas">
               <tr className="text-left border-b border-border">
-                <th className="px-3 py-3"></th>
-                <th className="px-3 py-3"></th>
+                <th className="px-3 py-3 w-8"></th>
+                <th className="px-3 py-3 w-8"></th>
                 <th className="px-3 py-3 font-medium text-muted">Account</th>
-                <th className="px-3 py-3 font-medium text-muted text-right">ARR</th>
-                <th className="px-3 py-3 font-medium text-muted">Last send</th>
-                <th className="px-3 py-3 font-medium text-muted">Flags</th>
-                <th className="px-3 py-3 font-medium text-muted">Last login</th>
-                <th className="px-3 py-3 font-medium text-muted hidden lg:table-cell whitespace-nowrap">
-                  Last contacted
-                </th>
-                <th className="px-3 py-3 font-medium text-muted text-right">% subs</th>
-                <th className="px-3 py-3 font-medium text-muted">Risk</th>
-                <th className="px-3 py-3 font-medium text-muted hidden lg:table-cell">
-                  Recommended action
-                </th>
+                {columns.isVisible("arr") ? (
+                  <th className="px-3 py-3 font-medium text-muted text-right whitespace-nowrap">
+                    ARR
+                  </th>
+                ) : null}
+                {columns.isVisible("last_send") ? (
+                  <th className="px-3 py-3 font-medium text-muted whitespace-nowrap">
+                    Last send
+                  </th>
+                ) : null}
+                {columns.isVisible("flags") ? (
+                  <th className="px-3 py-3 font-medium text-muted">Flags</th>
+                ) : null}
+                {columns.isVisible("last_login") ? (
+                  <th className="px-3 py-3 font-medium text-muted whitespace-nowrap">
+                    Last login
+                  </th>
+                ) : null}
+                {columns.isVisible("last_contacted") ? (
+                  <th className="px-3 py-3 font-medium text-muted whitespace-nowrap">
+                    Last contacted
+                  </th>
+                ) : null}
+                {columns.isVisible("pct_subs") ? (
+                  <th className="px-3 py-3 font-medium text-muted text-right whitespace-nowrap">
+                    % subs
+                  </th>
+                ) : null}
+                {columns.isVisible("risk") ? (
+                  <th className="px-3 py-3 font-medium text-muted">Risk</th>
+                ) : null}
+                {columns.isVisible("recommended_action") ? (
+                  <th className="px-3 py-3 font-medium text-muted">
+                    Recommended action
+                  </th>
+                ) : null}
                 <th className="px-3 py-3"></th>
               </tr>
             </thead>
@@ -603,7 +664,7 @@ export function AtRiskTable({
                           ▸
                         </span>
                       </td>
-                      <td className="px-3 py-3 break-words">
+                      <td className="px-3 py-3 break-words min-w-[180px]">
                         <div className="font-medium text-fg">
                           {c.company_name ?? c.workspace_name}
                         </div>
@@ -612,19 +673,24 @@ export function AtRiskTable({
                             "unassigned"}
                         </div>
                       </td>
-                      <td className="px-3 py-3 text-right font-medium">
-                        {fmtCurrency(c.arr)}
-                      </td>
-                      <td className={`px-3 py-3 ${lastSendCls}`}>
-                        <div>{fmtDate(c.last_send)}</div>
-                        {lastSendDays != null ? (
-                          <div className="text-xs text-muted">
-                            {lastSendDays}d ago
-                          </div>
-                        ) : (
-                          <div className="text-xs text-muted">never</div>
-                        )}
-                      </td>
+                      {columns.isVisible("arr") ? (
+                        <td className="px-3 py-3 text-right font-medium whitespace-nowrap">
+                          {fmtCurrency(c.arr)}
+                        </td>
+                      ) : null}
+                      {columns.isVisible("last_send") ? (
+                        <td className={`px-3 py-3 whitespace-nowrap ${lastSendCls}`}>
+                          <div>{fmtDate(c.last_send)}</div>
+                          {lastSendDays != null ? (
+                            <div className="text-xs text-muted">
+                              {lastSendDays}d ago
+                            </div>
+                          ) : (
+                            <div className="text-xs text-muted">never</div>
+                          )}
+                        </td>
+                      ) : null}
+                      {columns.isVisible("flags") ? (
                       <td className="px-3 py-3">
                         {/* Compact badges per flag raised on this row. Sorted
                             by the canonical FLAG_META order (most-common
@@ -651,27 +717,31 @@ export function AtRiskTable({
                           ) : null}
                         </div>
                       </td>
-                      <td className={`px-3 py-3 ${lastLoginCls}`}>
-                        {c.last_log_in ? (
-                          <>
-                            <div>{fmtDate(c.last_log_in)}</div>
-                            {lastLoginDays != null ? (
-                              <div className="text-xs text-muted">
-                                {lastLoginDays}d ago
-                              </div>
-                            ) : null}
-                          </>
-                        ) : (
-                          <span className="italic text-muted">14d+</span>
-                        )}
-                      </td>
+                      ) : null}
+                      {columns.isVisible("last_login") ? (
+                        <td className={`px-3 py-3 whitespace-nowrap ${lastLoginCls}`}>
+                          {c.last_log_in ? (
+                            <>
+                              <div>{fmtDate(c.last_log_in)}</div>
+                              {lastLoginDays != null ? (
+                                <div className="text-xs text-muted">
+                                  {lastLoginDays}d ago
+                                </div>
+                              ) : null}
+                            </>
+                          ) : (
+                            <span className="italic text-muted">14d+</span>
+                          )}
+                        </td>
+                      ) : null}
                       {/* Last contacted — merges HubSpot's activity rollup
                        *  with the active CSM's Gmail (pre-fetched once per
                        *  page load via useGmailLastContact). A green
                        *  "Gmail" pill flags rows where Gmail beat HubSpot
                        *  so a CSM eyeballing the at-risk list sees at a
                        *  glance which rows might be wrongly flagged. */}
-                      <td className="px-3 py-3 hidden lg:table-cell">
+                      {columns.isVisible("last_contacted") ? (
+                      <td className="px-3 py-3 whitespace-nowrap">
                         {(() => {
                           const lc = lastContacted(c, {
                             gmailDate: gmailDateFor(c),
@@ -733,27 +803,34 @@ export function AtRiskTable({
                           );
                         })()}
                       </td>
-                      <td className={`px-3 py-3 text-right ${subsCls}`}>
-                        <div>{fmtPct(subs)}</div>
-                        {c.active_subs != null ? (
-                          <div className="text-xs text-muted">
-                            {fmtNumber(c.active_subs)}
-                            {c.max_subscriptions != null
-                              ? ` / ${fmtNumber(c.max_subscriptions)}`
-                              : null}
-                          </div>
-                        ) : null}
-                      </td>
-                      <td className="px-3 py-3">
-                        <RiskLevelChip
-                          level={c.property_risk_level}
-                          detail={c.property_risk_level_detail}
-                        />
-                      </td>
-                      <td className="px-3 py-3 text-fg text-xs break-words hidden lg:table-cell">
-                        {a.recommended_action}
-                      </td>
-                      <td className="px-3 py-3">
+                      ) : null}
+                      {columns.isVisible("pct_subs") ? (
+                        <td className={`px-3 py-3 text-right whitespace-nowrap ${subsCls}`}>
+                          <div>{fmtPct(subs)}</div>
+                          {c.active_subs != null ? (
+                            <div className="text-xs text-muted">
+                              {fmtNumber(c.active_subs)}
+                              {c.max_subscriptions != null
+                                ? ` / ${fmtNumber(c.max_subscriptions)}`
+                                : null}
+                            </div>
+                          ) : null}
+                        </td>
+                      ) : null}
+                      {columns.isVisible("risk") ? (
+                        <td className="px-3 py-3">
+                          <RiskLevelChip
+                            level={c.property_risk_level}
+                            detail={c.property_risk_level_detail}
+                          />
+                        </td>
+                      ) : null}
+                      {columns.isVisible("recommended_action") ? (
+                        <td className="px-3 py-3 text-fg text-xs break-words min-w-[180px] max-w-[260px]">
+                          {a.recommended_action}
+                        </td>
+                      ) : null}
+                      <td className="px-3 py-3 whitespace-nowrap">
                         <RowActions
                           customer={c}
                           onDraft={() =>
@@ -767,7 +844,7 @@ export function AtRiskTable({
                     </tr>
                     {isOpen && (
                       <tr className="bg-blue-50 dark:bg-blue-500/20 border-b border-border">
-                        <td colSpan={12} className="px-6 py-4">
+                        <td colSpan={expandedColSpan} className="px-6 py-4">
                           <CustomerDetailPanel
                             customer={c}
                             hideFeatureBreakdown
@@ -832,6 +909,7 @@ export function AtRiskTable({
             </tbody>
           </table>
         </div>
+        </>
       )}
 
       <p className="text-xs text-subtle">

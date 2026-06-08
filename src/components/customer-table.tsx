@@ -18,6 +18,11 @@ import { fmtCurrency, fmtDate, fmtNumber, daysUntil } from "./format";
 import { featureCounts } from "@/lib/features";
 import { lastContacted } from "@/lib/customer-helpers";
 import { useGmailLastContact } from "@/lib/hooks/use-gmail-last-contact";
+import {
+  useColumnVisibility,
+  type ColumnDef as VisibilityColumnDef,
+} from "@/lib/hooks/use-column-visibility";
+import { ColumnPicker } from "./column-picker";
 import { isVisibleToCsm } from "@/lib/templates/types";
 import { useViewerEmail } from "@/lib/auth-client";
 import type { StoredTemplate } from "@/lib/templates/types";
@@ -80,6 +85,18 @@ const SHOW_CLASS: Record<NonNullable<ColumnDef["showAt"]>, string> = {
   xl: "hidden xl:table-cell",
 };
 
+/**
+ * Column-visibility metadata, derived from COLUMNS. Company is
+ * required (it's the row anchor — without it the Account name
+ * disappears). Everything else is toggleable via the picker. Keys
+ * mirror COLUMNS[].key 1:1 so columns.isVisible(col.key) just works.
+ */
+const VISIBILITY_COLUMNS: VisibilityColumnDef[] = COLUMNS.map((c) => ({
+  key: c.key,
+  label: c.label,
+  required: c.key === "company_name",
+}));
+
 export function CustomerTable({
   initialCustomers,
   csms,
@@ -89,6 +106,11 @@ export function CustomerTable({
 }) {
   const viewerEmail = useViewerEmail();
   const router = useRouter();
+
+  // Per-table column visibility (localStorage-backed). Company is
+  // required so the column picker never offers to hide it. Everything
+  // else is toggleable via the "Columns ▾" dropdown above the table.
+  const columns = useColumnVisibility("customer-book", VISIBILITY_COLUMNS);
 
   // Gmail-direct "Last contacted" overlay. Batches one POST per page
   // load using the active CSM's Gmail token. Results merge into
@@ -776,12 +798,20 @@ export function CustomerTable({
           {csmSweepMessage}
         </div>
       ) : null}
-      <div className="rounded-xl border border-border bg-surface shadow-card">
+      {/* "Columns ▾" picker — right-aligned above the table so it
+       *  doesn't crowd the filter chips above. Hidden columns
+       *  disappear from the DOM and their width is redistributed to
+       *  the remaining ones (so hiding "Last send" gives Company /
+       *  Engagement / CSM noticeably more breathing room). */}
+      <div className="flex justify-end mb-2">
+        <ColumnPicker state={columns} align="right" />
+      </div>
+      <div className="rounded-xl border border-border bg-surface shadow-card overflow-x-auto">
         <table className="w-full text-sm table-fixed">
           <colgroup>
             <col className="w-8" />
             <col className="w-8" />
-            {COLUMNS.map((c) => (
+            {COLUMNS.filter((c) => columns.isVisible(c.key)).map((c) => (
               <col key={c.key} className={`${c.width} ${SHOW_CLASS[c.showAt ?? "always"]}`} />
             ))}
             {/* Actions column. RowActions now stacks Masquerade /
@@ -796,7 +826,7 @@ export function CustomerTable({
             <tr className="bg-canvas border-b border-border">
               <th className="px-3 py-3 w-8"></th>
               <th className="px-3 py-3 w-8"></th>
-              {COLUMNS.map((col) => (
+              {COLUMNS.filter((col) => columns.isVisible(col.key)).map((col) => (
                 <th
                   key={col.key}
                   onClick={() => toggleSort(col.key)}
@@ -860,7 +890,7 @@ export function CustomerTable({
                         ▸
                       </span>
                     </td>
-                    {COLUMNS.map((col) => (
+                    {COLUMNS.filter((col) => columns.isVisible(col.key)).map((col) => (
                       <td
                         key={col.key}
                         // overflow-hidden so a too-wide chip (e.g.
@@ -882,7 +912,13 @@ export function CustomerTable({
                   </tr>
                   {isOpen && (
                     <tr className="bg-blue-50 dark:bg-blue-500/20 border-b border-border">
-                      <td colSpan={COLUMNS.length + 3} className="px-6 py-4">
+                      <td
+                        colSpan={
+                          COLUMNS.filter((col) => columns.isVisible(col.key))
+                            .length + 3
+                        }
+                        className="px-6 py-4"
+                      >
                         <CustomerDetailPanel
                           customer={c}
                           showPaidSubs
