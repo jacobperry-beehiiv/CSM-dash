@@ -215,8 +215,15 @@ const atRiskList: Tool = {
   description:
     "List flagged at-risk Enterprise accounts. Optional filters: " +
     "`csm` narrows to one CSM's book; `flags` filters to accounts " +
-    "carrying any of the given flag codes (A=Dormant, B=Inactive, " +
-    "C=Under tier, G=CSM-flagged, H=Stale contact, etc.).",
+    "carrying any of the given flag codes:\n" +
+    "  A = No publishing 10d+ (no recent send)\n" +
+    "  B = No login 14d+ (no admin login to beehiiv)\n" +
+    "  C = Under cap (<75% of subscriber limit)\n" +
+    "  D = Frustration signal (Gmail negative sentiment)\n" +
+    "  E = No outbound 90d+ (no Gmail to company)\n" +
+    "  F = News mention\n" +
+    "  G = CSM-flagged risk (Yellow/Red on HubSpot)\n" +
+    "  H = Stale HubSpot activity 45d+",
   inputSchema: {
     type: "object",
     properties: {

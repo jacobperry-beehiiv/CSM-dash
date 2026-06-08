@@ -36,12 +36,16 @@ function parseDate(s: string | null | undefined): Date | null {
 }
 
 // ─── Flag A: hasn't sent in 10+ days ────────────────────────────────
+// Label intentionally specific ("No publishing") — kept distinct from
+// Flag B ("No login") because the two used to share the vague
+// "Dormant" / "Inactive" naming that left CSMs hovering for tooltips
+// to tell which signal had fired.
 export function flagA(c: Customer, now = new Date()): RiskFlag | null {
   const last = parseDate(c.last_send);
   if (!last) {
     return {
       code: "A",
-      label: "No send",
+      label: "No publishing (never)",
       detail: "Never sent a post",
     };
   }
@@ -49,7 +53,7 @@ export function flagA(c: Customer, now = new Date()): RiskFlag | null {
   if (days >= DAYS_NO_SEND) {
     return {
       code: "A",
-      label: "Dormant",
+      label: `No publishing (${days}d)`,
       detail: `No send in ${days} days (last: ${last.toISOString().slice(0, 10)})`,
     };
   }
@@ -62,8 +66,8 @@ export function flagB(c: Customer): RiskFlag | null {
   if (c.last_log_in == null) {
     return {
       code: "B",
-      label: "No login",
-      detail: "No login detected in 14+ days",
+      label: "No login (14d+)",
+      detail: "No admin login to beehiiv detected in 14+ days",
     };
   }
   return null;
@@ -77,7 +81,7 @@ export function flagC(c: Customer): RiskFlag | null {
   const pctStr = (pct * 100).toFixed(0);
   return {
     code: "C",
-    label: "Under tier",
+    label: `Under cap (${pctStr}%)`,
     detail: `${pctStr}% of max subs (${c.active_subs ?? 0} / ${c.max_subscriptions ?? "?"})`,
   };
 }
@@ -97,15 +101,16 @@ export function flagH(
   if (!last) {
     return {
       code: "H",
-      label: "Stale contact",
-      detail: "No HubSpot activity recorded across any contact at this company.",
+      label: "No HubSpot activity",
+      detail:
+        "No HubSpot-tracked email / call / note activity recorded across any contact at this company.",
     };
   }
   const days = daysBetween(last, now);
   if (days >= thresholdDays) {
     return {
       code: "H",
-      label: "Stale contact",
+      label: `Stale HubSpot activity (${days}d)`,
       detail: `Last contacted ${days} days ago via ${resolved.source} (threshold ${thresholdDays}d).`,
     };
   }
@@ -120,15 +125,16 @@ export function flagG(c: Customer): RiskFlag | null {
   if (norm === "red") {
     return {
       code: "G",
-      label: "CSM: Red",
-      detail: c.property_risk_level_detail ?? "CSM marked as Red risk",
+      label: "CSM-flagged: Red",
+      detail: c.property_risk_level_detail ?? "CSM marked as Red risk in HubSpot",
     };
   }
   if (norm === "yellow") {
     return {
       code: "G",
-      label: "CSM: Yellow",
-      detail: c.property_risk_level_detail ?? "CSM marked as Yellow risk",
+      label: "CSM-flagged: Yellow",
+      detail:
+        c.property_risk_level_detail ?? "CSM marked as Yellow risk in HubSpot",
     };
   }
   return null;

@@ -25,18 +25,58 @@ import type {
 } from "@/lib/types";
 import type { TemplateScenario } from "@/lib/templates/templates";
 
-// Short, human-readable label per flag code — drives the filter chips.
-// Order matters: the strip renders flags in this declared order so the
-// most-common codes (A/B/C/G/H) come first.
+// Short, human-readable label per flag code — drives the filter chips
+// and the per-row flag chips. Labels are deliberately specific about
+// the trigger ("No publishing 10d+") rather than vague ("Dormant") so
+// you can tell at a glance which signal fired without hovering for
+// the tooltip. Engine labels in lib/engines/at-risk.ts use the same
+// strings (the row chip rendering reads `f.label` from the engine
+// directly) so the two surfaces stay consistent.
+//
+// Order matters: the strip renders flags in this declared order so
+// the most-common codes (A/B/C/G/H) come first.
 const FLAG_META: Array<{ code: RiskFlagCode; label: string; description: string }> = [
-  { code: "A", label: "Dormant", description: "Last send >10 days ago or never" },
-  { code: "B", label: "Inactive", description: "No login in last 14 days" },
-  { code: "C", label: "Under tier", description: "Below 75% of subscriber cap" },
-  { code: "G", label: "CSM-flagged", description: "Yellow / Red in HubSpot" },
-  { code: "H", label: "Stale contact", description: "Last contact >45 days ago" },
-  { code: "D", label: "Frustration", description: "Negative-sentiment Gmail signal" },
-  { code: "E", label: "No contact", description: "No outbound in 90+ days (Gmail)" },
-  { code: "F", label: "News", description: "Notable news on contact / company" },
+  {
+    code: "A",
+    label: "No publishing (10d+)",
+    description: "Hasn't sent a post in 10+ days, or never sent",
+  },
+  {
+    code: "B",
+    label: "No login (14d+)",
+    description: "No admin login to beehiiv in the last 14 days",
+  },
+  {
+    code: "C",
+    label: "Under cap (<75%)",
+    description: "Active subscribers below 75% of plan limit",
+  },
+  {
+    code: "G",
+    label: "CSM-flagged risk",
+    description: "Yellow / Red risk level set on the HubSpot company record",
+  },
+  {
+    code: "H",
+    label: "Stale HubSpot activity (45d+)",
+    description:
+      "No HubSpot-tracked email / call / note activity across any contact at this company in 45+ days",
+  },
+  {
+    code: "D",
+    label: "Frustration signal",
+    description: "Negative-sentiment Gmail signal detected in last 30 days",
+  },
+  {
+    code: "E",
+    label: "No outbound (90d+)",
+    description: "No outbound email to this company in 90+ days (Gmail-detected)",
+  },
+  {
+    code: "F",
+    label: "News mention",
+    description: "Notable news (acquisition, layoffs, etc.) on contact or company",
+  },
 ];
 
 interface RunResult {
