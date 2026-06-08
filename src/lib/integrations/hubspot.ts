@@ -895,3 +895,85 @@ export async function patchHubspotCompanyProperties(
   // company row and looks up the new owner (whose cached profile is
   // still valid). No bust needed.
 }
+
+/**
+ * Create a HubSpot Note engagement associated with a company. Used by
+ * the dashboard's CompanyNotes section to mirror a note into HubSpot
+ * so the timeline on the company record stays in sync with the
+ * dashboard scratchpad.
+ *
+ *   POST /crm/v3/objects/notes
+ *
+ * Body: {
+ *   properties: {
+ *     hs_note_body:   <html-or-text body>,
+ *     hs_timestamp:   <epoch ms or ISO — when the note "happened">,
+ *     hubspot_owner_id?: <owner_id, when we want the note attributed>
+ *   },
+ *   associations: [{ to: { id }, types: [{...note-to-company}] }]
+ * }
+ *
+ * Returns the new note's HubSpot id. Throws on non-2xx so the caller
+ * can surface a specific message to the user.
+ *
+ * Required HubSpot Private App scope: `crm.objects.notes.write`. The
+ * existing read scopes (`crm.objects.companies.read`,
+ * `crm.objects.notes.read`) aren't sufficient for this; the dashboard
+ * settings page checklist calls this out.
+ */
+export async function createHubspotCompanyNote(
+  companyId: string,
+  body: string,
+  opts?: { timestamp?: string; hubspotOwnerId?: string }
+): Promise<{ id: string }> {
+  const token = await getAccessToken();
+  // hs_timestamp accepts either epoch ms (number) or ISO string. ISO
+  // is friendlier to read in logs; HubSpot parses both.
+  const ts = opts?.timestamp ?? new Date().toISOString();
+  // typeId 190 = note-to-company association (HubSpot v4 association
+  // category id). We hardcode this rather than calling the schema
+  // endpoint every time — note→company doesn't change shape.
+  const associationTypeId = 190;
+  const payload = {
+    properties: {
+      hs_note_body: body,
+      hs_timestamp: ts,
+      ...(opts?.hubspotOwnerId
+        ? { hubspot_owner_id: opts.hubspotOwnerId }
+        : {}),
+    },
+    associations: [
+      {
+        to: { id: companyId },
+        types: [
+          {
+            associationCategory: "HUBSPOT_DEFINED",
+            associationTypeId,
+          },
+        ],
+      },
+    ],
+  };
+  const res = await fetch(
+    "https://api.hubapi.com/crm/v3/objects/notes",
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    }
+  );
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(
+      `HubSpot note create failed (${res.status}): ${text.slice(0, 200)}`
+    );
+  }
+  const j = (await res.json()) as { id?: string };
+  if (!j.id) {
+    throw new Error("HubSpot note create returned no id");
+  }
+  return { id: j.id };
+}

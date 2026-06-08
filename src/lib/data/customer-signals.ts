@@ -226,3 +226,35 @@ export async function deleteSignal(
   await kvSet(keyFor(workspaceId), next);
   return true;
 }
+
+/**
+ * Merge new fields into an existing signal's `metadata` bag. Used when
+ * we need to stamp a side-effect onto an already-persisted signal (e.g.
+ * the HubSpot note id returned after the user clicks "Post to HubSpot"
+ * on a dashboard note). Leaves the rest of the signal untouched —
+ * including `text`, `kind`, and the timestamps — so audit-style fields
+ * stay stable.
+ *
+ * Returns the updated signal, or null when no signal with that id
+ * exists in the workspace's row.
+ */
+export async function mergeSignalMetadata(
+  workspaceId: string,
+  signalId: string,
+  patch: Record<string, unknown>
+): Promise<CustomerSignal | null> {
+  const list = (await kvGet<CustomerSignal[]>(keyFor(workspaceId))) ?? [];
+  let updated: CustomerSignal | null = null;
+  const next = list.map((s) => {
+    if (s.id !== signalId) return s;
+    const merged: CustomerSignal = {
+      ...s,
+      metadata: { ...(s.metadata ?? {}), ...patch },
+    };
+    updated = merged;
+    return merged;
+  });
+  if (!updated) return null;
+  await kvSet(keyFor(workspaceId), next);
+  return updated;
+}
