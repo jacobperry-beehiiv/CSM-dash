@@ -809,6 +809,21 @@ function renderSlackMrkdwn(input: string): string {
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");
+  // 1a. Strip Slack team / broadcast mentions before the renderer
+  //     touches them — these add noise to the dashboard view (they
+  //     don't fire any pings here) and look like raw markup in the
+  //     panel: <!subteam^S07BPSLAZB5>, <!subteam^S05…|cs-team>,
+  //     <!here>, <!channel>, <!everyone>.
+  s = s
+    .replace(/&lt;!subteam\^[A-Z0-9]+(?:\|[^&]+)?&gt;/g, "")
+    .replace(/&lt;!(here|channel|everyone)&gt;/g, "");
+  // Collapse the whitespace the removals left behind (multiple spaces,
+  // or blank-only lines created by stripping a line of mentions).
+  s = s
+    .replace(/[ \t]{2,}/g, " ")
+    .replace(/\n[ \t]+\n/g, "\n\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
   // 2. Code blocks (```...```) — handled first so inline rules don't
   //    eat backticks inside them.
   s = s.replace(/```([\s\S]+?)```/g, (_m, body: string) => {
