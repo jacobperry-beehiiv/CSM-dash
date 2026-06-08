@@ -745,6 +745,13 @@ export function AtRiskTable({
                             customer={c}
                             hideFeatureBreakdown
                             gmailDate={gmailDateFor(c)}
+                            gmailMatch={
+                              c.owner_email
+                                ? gmail.matchMap[
+                                    c.owner_email.trim().toLowerCase()
+                                  ] ?? null
+                                : null
+                            }
                             onGmailRefresh={
                               c.owner_email
                                 ? () =>

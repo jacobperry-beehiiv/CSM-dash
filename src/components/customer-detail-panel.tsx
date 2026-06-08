@@ -50,6 +50,10 @@ interface Props {
    *  Hides the per-row refresh button and shows a small inline
    *  "Reconnect Gmail" hint instead. */
   gmailScopeMissing?: boolean;
+  /** Subject + From of the Gmail message that lit up the date —
+   *  surfaced under the date so a CSM can sanity-check that an OOO
+   *  auto-reply or newsletter isn't the reason "today" appears. */
+  gmailMatch?: { subject: string | null; from: string | null } | null;
 }
 
 export function CustomerDetailPanel({
@@ -59,6 +63,7 @@ export function CustomerDetailPanel({
   gmailDate,
   onGmailRefresh,
   gmailScopeMissing,
+  gmailMatch,
 }: Props) {
   return (
     <div className="space-y-4">
@@ -137,57 +142,82 @@ export function CustomerDetailPanel({
             value={
               (() => {
                 const lc = lastContacted(c, { gmailDate });
+                const showMatchHint =
+                  lc.source === "gmail" &&
+                  gmailMatch &&
+                  (gmailMatch.subject || gmailMatch.from);
                 return (
-                  <span className="inline-flex items-center gap-2">
-                    <span title={`Source: ${lc.source}`}>
-                      {fmtDate(lc.date)}
-                    </span>
-                    <span
-                      className={`text-[10px] px-1.5 py-0.5 rounded font-mono ${
-                        lc.source === "gmail"
-                          ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-500/20 dark:text-emerald-200"
-                          : lc.source === "none"
-                            ? "bg-canvas text-subtle"
-                            : "bg-surface-2 text-muted"
-                      }`}
-                      title={
-                        lc.source === "gmail"
-                          ? "Resolved from your Gmail mailbox (most-recent message with this account's owner email)."
+                  <div className="flex flex-col gap-0.5">
+                    <span className="inline-flex items-center gap-2 flex-wrap">
+                      <span title={`Source: ${lc.source}`}>
+                        {fmtDate(lc.date)}
+                      </span>
+                      <span
+                        className={`text-[10px] px-1.5 py-0.5 rounded font-mono ${
+                          lc.source === "gmail"
+                            ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-500/20 dark:text-emerald-200"
+                            : lc.source === "none"
+                              ? "bg-canvas text-subtle"
+                              : "bg-surface-2 text-muted"
+                        }`}
+                        title={
+                          lc.source === "gmail"
+                            ? "Resolved from your Gmail mailbox (most-recent direct message with this account's owner email, excluding bounces / OOO / promo categories)."
+                            : lc.source === "hubspot activity rollup"
+                              ? "Resolved from HubSpot's company-level activity rollup. Note: HubSpot's rollup includes email-open events from their tracking pixel, which can bump the date even when no human reply happened."
+                              : lc.source === "hubspot notes_last_contacted"
+                                ? "Resolved from HubSpot's narrow notes_last_contacted property (manual marking)."
+                                : "No activity found in HubSpot or Gmail."
+                        }
+                      >
+                        {lc.source === "gmail"
+                          ? "Gmail"
                           : lc.source === "hubspot activity rollup"
-                            ? "Resolved from HubSpot's company-level activity rollup."
+                            ? "HubSpot"
                             : lc.source === "hubspot notes_last_contacted"
-                              ? "Resolved from HubSpot's narrow notes_last_contacted property."
-                              : "No activity found in HubSpot or Gmail."
-                      }
-                    >
-                      {lc.source === "gmail"
-                        ? "Gmail"
-                        : lc.source === "hubspot activity rollup"
-                          ? "HubSpot"
-                          : lc.source === "hubspot notes_last_contacted"
-                            ? "HubSpot (manual)"
-                            : "—"}
+                              ? "HubSpot (manual)"
+                              : "—"}
+                      </span>
+                      {onGmailRefresh && !gmailScopeMissing ? (
+                        <button
+                          type="button"
+                          onClick={onGmailRefresh}
+                          className="text-[11px] text-accent hover:underline"
+                          title="Force-fetch from your Gmail right now, bypassing the 6h cache."
+                        >
+                          🔄 Refresh from Gmail
+                        </button>
+                      ) : null}
+                      {gmailScopeMissing ? (
+                        <a
+                          href="/settings/gmail"
+                          className="text-[11px] text-amber-700 dark:text-amber-300 hover:underline"
+                          title="Gmail read scope isn't granted yet — reconnect to enable Gmail-source contact dates."
+                        >
+                          Reconnect Gmail
+                        </a>
+                      ) : null}
                     </span>
-                    {onGmailRefresh && !gmailScopeMissing ? (
-                      <button
-                        type="button"
-                        onClick={onGmailRefresh}
-                        className="text-[11px] text-accent hover:underline"
-                        title="Force-fetch from your Gmail right now, bypassing the 6h cache."
+                    {showMatchHint ? (
+                      <span
+                        className="text-[11px] text-muted truncate max-w-md"
+                        title={
+                          [
+                            gmailMatch?.from
+                              ? `From: ${gmailMatch.from}`
+                              : null,
+                            gmailMatch?.subject
+                              ? `Subject: ${gmailMatch.subject}`
+                              : null,
+                          ]
+                            .filter(Boolean)
+                            .join("\n")
+                        }
                       >
-                        🔄 Refresh from Gmail
-                      </button>
+                        matched: <em>{gmailMatch?.subject ?? "(no subject)"}</em>
+                      </span>
                     ) : null}
-                    {gmailScopeMissing ? (
-                      <a
-                        href="/settings/gmail"
-                        className="text-[11px] text-amber-700 dark:text-amber-300 hover:underline"
-                        title="Gmail read scope isn't granted yet — reconnect to enable Gmail-source contact dates."
-                      >
-                        Reconnect Gmail
-                      </a>
-                    ) : null}
-                  </span>
+                  </div>
                 );
               })()
             }

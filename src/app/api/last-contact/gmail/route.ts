@@ -71,6 +71,8 @@ export async function GET(req: Request) {
     });
     return NextResponse.json({
       date: entry.date,
+      subject: entry.subject,
+      from: entry.from,
       source: "gmail",
       fetched_at: entry.fetched_at,
       cached: entry.cached,

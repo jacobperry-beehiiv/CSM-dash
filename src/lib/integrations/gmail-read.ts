@@ -25,6 +25,14 @@ export interface GmailLastContactResult {
    *  when the active CSM has never emailed (or been emailed by) the
    *  target. */
   date: string | null;
+  /** Subject of the matching message, for the tooltip on the detail
+   *  panel. Lets a CSM eyeball "wait, an OOO auto-reply lit up
+   *  today?" and re-categorize their workflow accordingly. */
+  subject: string | null;
+  /** Gmail's `from` header for the matching message — so we can see
+   *  whether the match was outbound (CSM → contact), inbound
+   *  (contact → CSM), or some forwarded weirdness. */
+  from: string | null;
   /** ISO timestamp of when we ran the Gmail query. Helps the UI show
    *  "as of 2 hours ago" when the cache served a stale-ish value. */
   fetched_at: string;
@@ -60,6 +68,8 @@ function cacheKeyFor(csmEmail: string, targetEmail: string): string {
 
 interface CachedEntry {
   date: string | null;
+  subject: string | null;
+  from: string | null;
   fetched_at: string;
 }
 
@@ -67,13 +77,23 @@ async function readCache(
   csmEmail: string,
   targetEmail: string
 ): Promise<CachedEntry | null> {
-  const entry = await kvGet<CachedEntry>(cacheKeyFor(csmEmail, targetEmail));
+  const entry = await kvGet<Partial<CachedEntry>>(
+    cacheKeyFor(csmEmail, targetEmail)
+  );
   if (!entry) return null;
   // TTL enforced on read since KV doesn't expire keys for us.
-  const fetchedMs = Date.parse(entry.fetched_at);
+  const fetchedMs = Date.parse(entry.fetched_at ?? "");
   if (!Number.isFinite(fetchedMs)) return null;
   if (Date.now() - fetchedMs > CACHE_TTL_MS) return null;
-  return entry;
+  // Backwards-compat: cached entries written before subject/from were
+  // added carry only { date, fetched_at }. Normalize missing fields
+  // to null so consumers don't have to deal with undefined.
+  return {
+    date: entry.date ?? null,
+    subject: entry.subject ?? null,
+    from: entry.from ?? null,
+    fetched_at: entry.fetched_at as string,
+  };
 }
 
 async function writeCache(
@@ -115,8 +135,23 @@ export async function lastEmailWith(
   // (descending date) + maxResults=1 already gives us the latest.
   // Escape any colon / quote chars defensively so a pathological
   // email can't break the query.
+  //
+  // Filter out noise that's been making "today" defaults appear for
+  // accounts CSMs haven't actually emailed in weeks:
+  //   - category:promotions / social / updates / forums — newsletters,
+  //     drip campaigns, social pings.
+  //   - bounce-back / OOO senders (mailer-daemon, postmaster).
+  //   - no-reply addresses (transactional notifications).
+  // Gmail's `-operator` syntax excludes matches. The OR before the
+  // filters means the noise filters apply to the union (from OR to)
+  // — parentheses make that explicit so a future tweak doesn't shift
+  // operator precedence.
   const safe = targetEmail.trim().toLowerCase().replace(/["\\]/g, "");
-  const q = `from:${safe} OR to:${safe}`;
+  const q =
+    `(from:${safe} OR to:${safe})` +
+    ` -category:promotions -category:social -category:updates -category:forums` +
+    ` -from:mailer-daemon -from:postmaster` +
+    ` -from:noreply -from:no-reply -from:notifications`;
   const listUrl =
     `https://gmail.googleapis.com/gmail/v1/users/me/messages` +
     `?q=${encodeURIComponent(q)}&maxResults=1`;
@@ -144,14 +179,23 @@ export async function lastEmailWith(
   const firstId = list.messages?.[0]?.id;
   const fetched_at = new Date().toISOString();
   if (!firstId) {
-    return { date: null, fetched_at };
+    return { date: null, subject: null, from: null, fetched_at };
   }
 
-  // Pull just the internalDate; format=minimal keeps the payload tiny.
+  // Pull internalDate + Subject + From headers. format=metadata is
+  // smaller than format=full but still gives us enough header data to
+  // show "matched: <subject>" in the detail panel tooltip — invaluable
+  // for debugging why a date looks wrong ("oh, an OOO auto-reply
+  // bumped today").
+  const getParams = new URLSearchParams({
+    format: "metadata",
+  });
+  getParams.append("metadataHeaders", "Subject");
+  getParams.append("metadataHeaders", "From");
   const getUrl =
     `https://gmail.googleapis.com/gmail/v1/users/me/messages/` +
     encodeURIComponent(firstId) +
-    `?format=minimal`;
+    `?${getParams.toString()}`;
   const getRes = await fetch(getUrl, {
     headers: { Authorization: `Bearer ${token}` },
   });
@@ -161,16 +205,36 @@ export async function lastEmailWith(
       `Gmail messages.get failed (${getRes.status}): ${body.slice(0, 200)}`
     );
   }
-  const msg = (await getRes.json()) as { internalDate?: string };
+  const msg = (await getRes.json()) as {
+    internalDate?: string;
+    payload?: {
+      headers?: Array<{ name?: string; value?: string }>;
+    };
+  };
+  let subject: string | null = null;
+  let from: string | null = null;
+  for (const h of msg.payload?.headers ?? []) {
+    const name = (h.name ?? "").toLowerCase();
+    if (name === "subject" && typeof h.value === "string") {
+      subject = h.value;
+    } else if (name === "from" && typeof h.value === "string") {
+      from = h.value;
+    }
+  }
   if (!msg.internalDate) {
-    return { date: null, fetched_at };
+    return { date: null, subject, from, fetched_at };
   }
   // Gmail returns internalDate as a string of epoch milliseconds.
   const ms = Number(msg.internalDate);
   if (!Number.isFinite(ms)) {
-    return { date: null, fetched_at };
+    return { date: null, subject, from, fetched_at };
   }
-  return { date: new Date(ms).toISOString(), fetched_at };
+  return {
+    date: new Date(ms).toISOString(),
+    subject,
+    from,
+    fetched_at,
+  };
 }
 
 /**
@@ -188,12 +252,24 @@ export async function lastEmailWithCached(
   if (!opts?.forceFresh) {
     const cached = await readCache(csmEmail, targetEmail);
     if (cached) {
-      return { date: cached.date, fetched_at: cached.fetched_at, cached: true };
+      return {
+        date: cached.date,
+        subject: cached.subject,
+        from: cached.from,
+        fetched_at: cached.fetched_at,
+        cached: true,
+      };
     }
   }
   const fresh = await lastEmailWith(csmEmail, targetEmail);
   await writeCache(csmEmail, targetEmail, fresh);
-  return { date: fresh.date, fetched_at: fresh.fetched_at, cached: false };
+  return {
+    date: fresh.date,
+    subject: fresh.subject,
+    from: fresh.from,
+    fetched_at: fresh.fetched_at,
+    cached: false,
+  };
 }
 
 /**
@@ -230,6 +306,8 @@ export async function lastEmailWithBatch(
       if (cached) {
         result[target] = {
           date: cached.date,
+          subject: cached.subject,
+          from: cached.from,
           fetched_at: cached.fetched_at,
           cached: true,
         };
@@ -256,6 +334,8 @@ export async function lastEmailWithBatch(
         await writeCache(csmEmail, target, fresh);
         result[target] = {
           date: fresh.date,
+          subject: fresh.subject,
+          from: fresh.from,
           fetched_at: fresh.fetched_at,
           cached: false,
         };

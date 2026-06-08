@@ -887,6 +887,13 @@ export function CustomerTable({
                           customer={c}
                           showPaidSubs
                           gmailDate={gmailDateFor(c)}
+                          gmailMatch={
+                            c.owner_email
+                              ? gmail.matchMap[
+                                  c.owner_email.trim().toLowerCase()
+                                ] ?? null
+                              : null
+                          }
                           onGmailRefresh={
                             c.owner_email
                               ? () =>

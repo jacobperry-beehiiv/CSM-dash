@@ -38,9 +38,20 @@ export interface GmailLastContactMap {
   [targetEmail: string]: string | null;
 }
 
+export interface GmailMatchDetail {
+  subject: string | null;
+  from: string | null;
+}
+
 export interface GmailLastContactState {
   /** Date per target email. Always lower-cased keys. */
   dateMap: GmailLastContactMap;
+  /** Matching-message metadata per target email — subject + from
+   *  headers. Used by the detail panel's tooltip so a CSM can see
+   *  WHICH message matched (e.g. "Out of office" auto-reply vs.
+   *  "Re: Q3 renewal call") and decide whether the date is
+   *  meaningful. */
+  matchMap: Record<string, GmailMatchDetail>;
   /** True between mount and first response. */
   loading: boolean;
   /** Active CSM doesn't have gmail.readonly granted on their token. */
@@ -56,6 +67,9 @@ export interface GmailLastContactState {
 
 export function useGmailLastContact(emails: string[]): GmailLastContactState {
   const [dateMap, setDateMap] = useState<GmailLastContactMap>({});
+  const [matchMap, setMatchMap] = useState<
+    Record<string, GmailMatchDetail>
+  >({});
   const [loading, setLoading] = useState(true);
   const [scopeMissing, setScopeMissing] = useState(false);
   const [noActiveGmail, setNoActiveGmail] = useState(false);
@@ -94,7 +108,13 @@ export function useGmailLastContact(emails: string[]): GmailLastContactState {
           .catch(() => ({}))) as {
           results?: Record<
             string,
-            { date: string | null; cached: boolean; fetched_at: string }
+            {
+              date: string | null;
+              subject?: string | null;
+              from?: string | null;
+              cached: boolean;
+              fetched_at: string;
+            }
           >;
           needs_reconsent?: boolean;
           no_active_gmail?: boolean;
@@ -113,11 +133,18 @@ export function useGmailLastContact(emails: string[]): GmailLastContactState {
           setError(json.error ?? `HTTP ${r.status}`);
           return;
         }
-        const next: GmailLastContactMap = {};
+        const nextDate: GmailLastContactMap = {};
+        const nextMatch: Record<string, GmailMatchDetail> = {};
         for (const [email, entry] of Object.entries(json.results ?? {})) {
-          next[email.toLowerCase()] = entry.date;
+          const k = email.toLowerCase();
+          nextDate[k] = entry.date;
+          nextMatch[k] = {
+            subject: entry.subject ?? null,
+            from: entry.from ?? null,
+          };
         }
-        setDateMap(next);
+        setDateMap(nextDate);
+        setMatchMap(nextMatch);
       })
       .catch((e) => {
         if (cancelled) return;
@@ -140,6 +167,8 @@ export function useGmailLastContact(emails: string[]): GmailLastContactState {
       );
       const json = (await r.json().catch(() => ({}))) as {
         date?: string | null;
+        subject?: string | null;
+        from?: string | null;
         needs_reconsent?: boolean;
         no_active_gmail?: boolean;
         error?: string;
@@ -157,10 +186,25 @@ export function useGmailLastContact(emails: string[]): GmailLastContactState {
         return;
       }
       setDateMap((prev) => ({ ...prev, [target]: json.date ?? null }));
+      setMatchMap((prev) => ({
+        ...prev,
+        [target]: {
+          subject: json.subject ?? null,
+          from: json.from ?? null,
+        },
+      }));
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to fetch");
     }
   }, []);
 
-  return { dateMap, loading, scopeMissing, noActiveGmail, error, refresh };
+  return {
+    dateMap,
+    matchMap,
+    loading,
+    scopeMissing,
+    noActiveGmail,
+    error,
+    refresh,
+  };
 }
