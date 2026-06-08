@@ -29,7 +29,7 @@ import {
   type HubspotOwner,
 } from "./hubspot";
 import { loadCustomers } from "../data/load-customers";
-import { masqueradeUrl } from "../links";
+import { masqueradeUrl, stripeCustomerUrl } from "../links";
 import { DB, runNativeQuery } from "../metabase";
 import type { Customer } from "../types";
 
@@ -1512,6 +1512,88 @@ export async function buildFindResultBlocks(
           `Publications:\n${pubLines.join("\n")}` +
           matchLine +
           buildFooterLinks(linkHref, c.owner_email),
+      },
+    });
+  }
+  return blocks;
+}
+
+/**
+ * Build a compact Block Kit response for `@bot stripe <query>` /
+ * `stripe <query>` (DM). Same search machinery as buildFindResultBlocks
+ * but the per-row output is narrowly scoped — company name and a
+ * single Stripe-dashboard link — since the CSM typically wants to
+ * click through, not skim publication metadata. Caps the visible
+ * matches at 5 like /find, drops customers that have no
+ * stripe_customer_id (the dashboard URL requires one).
+ *
+ * Returns `null` when there are zero usable matches so the caller can
+ * print a contextual "no matches" message.
+ */
+export async function buildStripeResultBlocks(
+  query: string
+): Promise<Array<Record<string, unknown>> | null> {
+  let customers: Customer[];
+  try {
+    customers = await loadCustomers();
+  } catch {
+    return null;
+  }
+  // Reuse the same merged book + publication-name search as /find so
+  // `stripe newsletter-name` resolves to the parent workspace and its
+  // Stripe link, same as you'd expect from /find.
+  const [bookMatches, pubMatches] = await Promise.all([
+    Promise.resolve(searchCustomers(customers, query)),
+    searchPublicationsByName(query),
+  ]);
+  const seenWs = new Set<string>();
+  const merged: Customer[] = [];
+  for (const c of bookMatches) {
+    if (!c.workspace_id) continue;
+    if (seenWs.has(c.workspace_id)) continue;
+    seenWs.add(c.workspace_id);
+    merged.push(c);
+  }
+  for (const p of pubMatches) {
+    if (seenWs.has(p.organization_id)) continue;
+    const c = customers.find((cu) => cu.workspace_id === p.organization_id);
+    if (!c) continue;
+    seenWs.add(p.organization_id);
+    merged.push(c);
+  }
+  // Drop matches without a Stripe customer id — the whole point of
+  // this response is the link, and an entry without one is more
+  // confusing than helpful.
+  const withStripe = merged.filter((c) => c.stripe_customer_id);
+  if (withStripe.length === 0) return null;
+  const shown = withStripe.slice(0, FIND_MAX_MATCHES);
+
+  const blocks: Array<Record<string, unknown>> = [
+    {
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text:
+          `:credit_card: *${withStripe.length} Stripe match${withStripe.length === 1 ? "" : "es"} for "${query}"*` +
+          (withStripe.length > shown.length
+            ? ` (showing top ${shown.length})`
+            : ""),
+      },
+    },
+  ];
+  for (const c of shown) {
+    const name = c.company_name || c.workspace_name || "(unnamed customer)";
+    const stripeHref = stripeCustomerUrl(c.stripe_customer_id);
+    if (!stripeHref) continue;
+    blocks.push({ type: "divider" });
+    blocks.push({
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text:
+          `*${name}*\n` +
+          `Stripe: \`${c.stripe_customer_id}\`\n` +
+          `<${stripeHref}|Open in Stripe ↗>`,
       },
     });
   }

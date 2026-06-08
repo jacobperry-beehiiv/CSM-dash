@@ -5,6 +5,7 @@ import { applyTodoOps } from "@/lib/personal-todos/store";
 import { resolveUserKeyForSlackId as resolveIdentity } from "@/lib/personal-todos/identity";
 import {
   buildFindResultBlocks,
+  buildStripeResultBlocks,
   buildTodoCreateView,
   dispatchViewSubmission,
   FIND_CUSTOMER_SHORTCUT_CALLBACK_ID,
@@ -602,6 +603,7 @@ async function handleDmMessage(
     firstWord === "search" ||
     firstWord === "lookup" ||
     firstWord === "ent-search" ||
+    firstWord === "stripe" ||
     firstWord === "help";
   if (isCommand) {
     console.log("[slack-webhook] DM command", {
@@ -613,11 +615,52 @@ async function handleDmMessage(
         event.user,
         "I respond to these DM commands (same as `@bot` in a channel):\n" +
           "• `find <query>` — search customers + publications, results DM'd back\n" +
+          "• `stripe <query>` — return a Stripe-dashboard link for the matching workspace\n" +
           "• `help` — this list\n" +
           "\nAnything else you DM me is captured as a personal to-do."
       );
       return;
     }
+
+    const token = process.env.SLACK_BOT_TOKEN;
+    // stripe — single-purpose link lookup. Same merged search as
+    // `find` so `stripe newsletter-name` resolves to the parent
+    // workspace's Stripe link.
+    if (firstWord === "stripe") {
+      if (!rest) {
+        await ephemeralDm(
+          event.user,
+          "Add a search term — e.g. `stripe acme`. Returns the Stripe-dashboard URL for the matching customer."
+        );
+        return;
+      }
+      const blocks = await buildStripeResultBlocks(rest);
+      if (!blocks) {
+        await ephemeralDm(
+          event.user,
+          `No Stripe link found for "${rest}" — either no customer matches, or the matches have no Stripe customer ID on file.`
+        );
+        return;
+      }
+      if (token) {
+        await fetch("https://slack.com/api/chat.postMessage", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json; charset=utf-8",
+          },
+          body: JSON.stringify({
+            channel: event.channel,
+            text: `Stripe link for "${rest}"`,
+            blocks,
+            unfurl_links: false,
+            unfurl_media: false,
+          }),
+        });
+      }
+      return;
+    }
+
     // find / search / lookup / ent-search
     if (!rest) {
       await ephemeralDm(
@@ -637,7 +680,6 @@ async function handleDmMessage(
     // chat.postMessage to the user's DM channel — same channel the
     // DM arrived on. Plain message (not ephemeral) since DMs are
     // already private to the bot + user pair.
-    const token = process.env.SLACK_BOT_TOKEN;
     if (token) {
       await fetch("https://slack.com/api/chat.postMessage", {
         method: "POST",
@@ -828,6 +870,7 @@ async function handleAppMention(
       text:
         "Hi! I respond to these @-mention commands:\n" +
         "• `@bot find <query>` — search customers + publications, post results in this thread\n" +
+        "• `@bot stripe <query>` — return a Stripe-dashboard link for the matching workspace(s)\n" +
         "• `@bot help` — show this list",
     });
     return;
@@ -858,6 +901,31 @@ async function handleAppMention(
     }
     await postThreadReply(channel, threadTs, {
       text: `Search results for "${query}"`,
+      blocks,
+    });
+    return;
+  }
+
+  // ── Stripe link lookup ────────────────────────────────────────────
+  if (parsed.command === "stripe") {
+    if (!parsed.args.trim()) {
+      await postThreadReply(channel, threadTs, {
+        text:
+          "Add a search term — e.g. `@bot stripe acme`. " +
+          "Returns the Stripe-dashboard URL for the matching customer.",
+      });
+      return;
+    }
+    const query = parsed.args.trim();
+    const blocks = await buildStripeResultBlocks(query);
+    if (!blocks) {
+      await postThreadReply(channel, threadTs, {
+        text: `No Stripe link found for "${query}" — either no customer matches, or the matches have no Stripe customer ID on file.`,
+      });
+      return;
+    }
+    await postThreadReply(channel, threadTs, {
+      text: `Stripe link for "${query}"`,
       blocks,
     });
     return;
