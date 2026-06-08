@@ -806,7 +806,7 @@ export function CustomerTable({
       <div className="flex justify-end mb-2">
         <ColumnPicker state={columns} align="right" />
       </div>
-      <div className="rounded-xl border border-border bg-surface shadow-card overflow-x-auto">
+      <div className="rounded-xl border border-border bg-surface shadow-card">
         <table className="w-full text-sm table-fixed">
           <colgroup>
             <col className="w-8" />
@@ -824,8 +824,8 @@ export function CustomerTable({
           </colgroup>
           <thead>
             <tr className="bg-canvas border-b border-border">
-              <th className="px-3 py-3 w-8"></th>
-              <th className="px-3 py-3 w-8"></th>
+              <th className="px-2 py-2.5 w-8"></th>
+              <th className="px-2 py-2.5 w-8"></th>
               {COLUMNS.filter((col) => columns.isVisible(col.key)).map((col) => (
                 <th
                   key={col.key}
@@ -834,7 +834,7 @@ export function CustomerTable({
                   // table-fixed, a too-long header would otherwise
                   // bleed into the next cell (e.g. "EngagementCSM"
                   // smashed together). Clip instead.
-                  className={`px-3 py-3 font-medium text-muted cursor-pointer hover:bg-surface-2 select-none overflow-hidden whitespace-nowrap text-ellipsis ${
+                  className={`px-2 py-2.5 font-medium text-muted cursor-pointer hover:bg-surface-2 select-none overflow-hidden whitespace-nowrap text-ellipsis ${
                     col.align === "right" ? "text-right" : "text-left"
                   } ${SHOW_CLASS[col.showAt ?? "always"]}`}
                   title={col.label}
@@ -847,7 +847,7 @@ export function CustomerTable({
                   )}
                 </th>
               ))}
-              <th className="px-3 py-3"></th>
+              <th className="px-2 py-2.5"></th>
             </tr>
           </thead>
           <tbody>
@@ -863,7 +863,7 @@ export function CustomerTable({
                     }`}
                   >
                     <td
-                      className="px-3 py-2.5"
+                      className="px-2 py-2"
                       onClick={(e) => e.stopPropagation()}
                     >
                       <input
@@ -881,7 +881,7 @@ export function CustomerTable({
                         aria-label={`Select ${c.company_name ?? "row"}`}
                       />
                     </td>
-                    <td className="px-3 py-2.5 text-subtle select-none">
+                    <td className="px-2 py-2 text-subtle select-none">
                       <span
                         className={`inline-block transition-transform ${
                           isOpen ? "rotate-90" : ""
@@ -899,14 +899,14 @@ export function CustomerTable({
                         // renderers can still opt-in to multi-line
                         // layouts (Company, Next charge) — their
                         // outer wrappers govern wrapping.
-                        className={`px-3 py-2.5 overflow-hidden ${
+                        className={`px-2 py-2 overflow-hidden ${
                           col.align === "right" ? "text-right" : ""
                         } ${SHOW_CLASS[col.showAt ?? "always"]}`}
                       >
                         {renderCell(c, col.key)}
                       </td>
                     ))}
-                    <td className="px-3 py-2.5 text-right">
+                    <td className="px-2 py-2 text-right">
                       <RowActions customer={c} onDraft={setOutreachFor} />
                     </td>
                   </tr>

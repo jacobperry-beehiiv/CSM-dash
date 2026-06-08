@@ -553,7 +553,7 @@ export function AtRiskTable({
           <div className="flex justify-end">
             <ColumnPicker state={columns} align="right" />
           </div>
-        <div className="rounded-xl border border-border bg-surface shadow-card overflow-x-auto">
+        <div className="rounded-xl border border-border bg-surface shadow-card">
           {/* table-auto (no table-fixed) lets the browser size each
            *  column to its content. Combined with `whitespace-nowrap`
            *  on the date / numeric cells, this stops "May 12, 2026"
@@ -562,52 +562,53 @@ export function AtRiskTable({
            *
            *  Hidden columns disappear entirely from the DOM (not just
            *  visually) so the remaining columns get the freed width.
-           *  The wrapper has overflow-x-auto so unusually wide
-           *  selection sets degrade to a horizontal scroll rather
-           *  than crushing every cell. */}
+           *  No horizontal-scroll fallback: when the column set is
+           *  too wide to fit, the "Columns ▾" picker is the relief
+           *  valve — hide a column to free real estate. This keeps
+           *  every cell on one row at every visible-column subset. */}
           <table className="w-full text-sm">
             <thead className="bg-canvas">
               <tr className="text-left border-b border-border">
-                <th className="px-3 py-3 w-8"></th>
-                <th className="px-3 py-3 w-8"></th>
-                <th className="px-3 py-3 font-medium text-muted">Account</th>
+                <th className="px-2 py-2.5 w-8"></th>
+                <th className="px-2 py-2.5 w-8"></th>
+                <th className="px-2 py-2.5 font-medium text-muted">Account</th>
                 {columns.isVisible("arr") ? (
-                  <th className="px-3 py-3 font-medium text-muted text-right whitespace-nowrap">
+                  <th className="px-2 py-2.5 font-medium text-muted text-right whitespace-nowrap">
                     ARR
                   </th>
                 ) : null}
                 {columns.isVisible("last_send") ? (
-                  <th className="px-3 py-3 font-medium text-muted whitespace-nowrap">
+                  <th className="px-2 py-2.5 font-medium text-muted whitespace-nowrap">
                     Last send
                   </th>
                 ) : null}
                 {columns.isVisible("flags") ? (
-                  <th className="px-3 py-3 font-medium text-muted">Flags</th>
+                  <th className="px-2 py-2.5 font-medium text-muted">Flags</th>
                 ) : null}
                 {columns.isVisible("last_login") ? (
-                  <th className="px-3 py-3 font-medium text-muted whitespace-nowrap">
+                  <th className="px-2 py-2.5 font-medium text-muted whitespace-nowrap">
                     Last login
                   </th>
                 ) : null}
                 {columns.isVisible("last_contacted") ? (
-                  <th className="px-3 py-3 font-medium text-muted whitespace-nowrap">
+                  <th className="px-2 py-2.5 font-medium text-muted whitespace-nowrap">
                     Last contacted
                   </th>
                 ) : null}
                 {columns.isVisible("pct_subs") ? (
-                  <th className="px-3 py-3 font-medium text-muted text-right whitespace-nowrap">
+                  <th className="px-2 py-2.5 font-medium text-muted text-right whitespace-nowrap">
                     % subs
                   </th>
                 ) : null}
                 {columns.isVisible("risk") ? (
-                  <th className="px-3 py-3 font-medium text-muted">Risk</th>
+                  <th className="px-2 py-2.5 font-medium text-muted">Risk</th>
                 ) : null}
                 {columns.isVisible("recommended_action") ? (
-                  <th className="px-3 py-3 font-medium text-muted">
+                  <th className="px-2 py-2.5 font-medium text-muted">
                     Recommended action
                   </th>
                 ) : null}
-                <th className="px-3 py-3"></th>
+                <th className="px-2 py-2.5"></th>
               </tr>
             </thead>
             <tbody>
@@ -644,7 +645,7 @@ export function AtRiskTable({
                       }`}
                     >
                       <td
-                        className="px-3 py-3"
+                        className="px-2 py-2.5"
                         onClick={(e) => e.stopPropagation()}
                       >
                         <input
@@ -655,7 +656,7 @@ export function AtRiskTable({
                           aria-label={`Select ${c.company_name ?? "row"}`}
                         />
                       </td>
-                      <td className="px-3 py-3 text-subtle select-none">
+                      <td className="px-2 py-2.5 text-subtle select-none">
                         <span
                           className={`inline-block transition-transform ${
                             isOpen ? "rotate-90" : ""
@@ -664,7 +665,7 @@ export function AtRiskTable({
                           ▸
                         </span>
                       </td>
-                      <td className="px-3 py-3 break-words min-w-[180px]">
+                      <td className="px-2 py-2.5 break-words">
                         <div className="font-medium text-fg">
                           {c.company_name ?? c.workspace_name}
                         </div>
@@ -674,12 +675,12 @@ export function AtRiskTable({
                         </div>
                       </td>
                       {columns.isVisible("arr") ? (
-                        <td className="px-3 py-3 text-right font-medium whitespace-nowrap">
+                        <td className="px-2 py-2.5 text-right font-medium whitespace-nowrap">
                           {fmtCurrency(c.arr)}
                         </td>
                       ) : null}
                       {columns.isVisible("last_send") ? (
-                        <td className={`px-3 py-3 whitespace-nowrap ${lastSendCls}`}>
+                        <td className={`px-2 py-2.5 whitespace-nowrap ${lastSendCls}`}>
                           <div>{fmtDate(c.last_send)}</div>
                           {lastSendDays != null ? (
                             <div className="text-xs text-muted">
@@ -691,7 +692,7 @@ export function AtRiskTable({
                         </td>
                       ) : null}
                       {columns.isVisible("flags") ? (
-                      <td className="px-3 py-3">
+                      <td className="px-2 py-2.5">
                         {/* Compact badges per flag raised on this row. Sorted
                             by the canonical FLAG_META order (most-common
                             codes first) so the row reads consistently. Title
@@ -719,7 +720,7 @@ export function AtRiskTable({
                       </td>
                       ) : null}
                       {columns.isVisible("last_login") ? (
-                        <td className={`px-3 py-3 whitespace-nowrap ${lastLoginCls}`}>
+                        <td className={`px-2 py-2.5 whitespace-nowrap ${lastLoginCls}`}>
                           {c.last_log_in ? (
                             <>
                               <div>{fmtDate(c.last_log_in)}</div>
@@ -741,7 +742,7 @@ export function AtRiskTable({
                        *  so a CSM eyeballing the at-risk list sees at a
                        *  glance which rows might be wrongly flagged. */}
                       {columns.isVisible("last_contacted") ? (
-                      <td className="px-3 py-3 whitespace-nowrap">
+                      <td className="px-2 py-2.5 whitespace-nowrap">
                         {(() => {
                           const lc = lastContacted(c, {
                             gmailDate: gmailDateFor(c),
@@ -805,7 +806,7 @@ export function AtRiskTable({
                       </td>
                       ) : null}
                       {columns.isVisible("pct_subs") ? (
-                        <td className={`px-3 py-3 text-right whitespace-nowrap ${subsCls}`}>
+                        <td className={`px-2 py-2.5 text-right whitespace-nowrap ${subsCls}`}>
                           <div>{fmtPct(subs)}</div>
                           {c.active_subs != null ? (
                             <div className="text-xs text-muted">
@@ -818,7 +819,7 @@ export function AtRiskTable({
                         </td>
                       ) : null}
                       {columns.isVisible("risk") ? (
-                        <td className="px-3 py-3">
+                        <td className="px-2 py-2.5">
                           <RiskLevelChip
                             level={c.property_risk_level}
                             detail={c.property_risk_level_detail}
@@ -826,11 +827,11 @@ export function AtRiskTable({
                         </td>
                       ) : null}
                       {columns.isVisible("recommended_action") ? (
-                        <td className="px-3 py-3 text-fg text-xs break-words min-w-[180px] max-w-[260px]">
+                        <td className="px-2 py-2.5 text-fg text-xs break-words max-w-[220px]">
                           {a.recommended_action}
                         </td>
                       ) : null}
-                      <td className="px-3 py-3 whitespace-nowrap">
+                      <td className="px-2 py-2.5 whitespace-nowrap">
                         <RowActions
                           customer={c}
                           onDraft={() =>
