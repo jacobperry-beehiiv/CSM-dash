@@ -684,6 +684,18 @@ export function AtRiskTable({
                             );
                           }
                           const days = daysAgo(lc.date);
+                          // When the source is Gmail, surface the matching
+                          // message's Subject directly in the column so a
+                          // CSM eyeballing the at-risk list can immediately
+                          // tell whether a "today" date came from a real
+                          // reply or a stray system message. Avoids forcing
+                          // them to expand the row.
+                          const match =
+                            lc.source === "gmail" && c.owner_email
+                              ? gmail.matchMap[
+                                  c.owner_email.trim().toLowerCase()
+                                ] ?? null
+                              : null;
                           return (
                             <div>
                               <div className="flex items-center gap-1.5">
@@ -700,6 +712,21 @@ export function AtRiskTable({
                               {days != null ? (
                                 <div className="text-xs text-muted">
                                   {days}d ago
+                                </div>
+                              ) : null}
+                              {match && (match.subject || match.from) ? (
+                                <div
+                                  className="text-[10px] text-subtle truncate max-w-[200px] italic"
+                                  title={[
+                                    match.from ? `From: ${match.from}` : null,
+                                    match.subject
+                                      ? `Subject: ${match.subject}`
+                                      : null,
+                                  ]
+                                    .filter(Boolean)
+                                    .join("\n")}
+                                >
+                                  {match.subject ?? "(no subject)"}
                                 </div>
                               ) : null}
                             </div>

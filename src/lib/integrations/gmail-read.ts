@@ -50,7 +50,12 @@ export class GmailReadScopeError extends Error {
   }
 }
 
-const CACHE_KEY_PREFIX = "csm:last-contact-gmail:v1:";
+// v2 bump (2026-06-08): tightened the Gmail noise filter (excludes
+// drafts, chats, scheduled sends, calendar-invite/HubSpot/Intercom
+// system senders). Bumping the prefix forces a full re-fetch so
+// already-cached "today" entries from the v1 query get invalidated
+// instead of lingering for 6h.
+const CACHE_KEY_PREFIX = "csm:last-contact-gmail:v2:";
 const CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
 /** Cap on parallel Gmail calls inside one batch. Gmail's per-user
  *  quota is 250 req/sec; 8 in flight + ~250ms per call leaves plenty
@@ -147,11 +152,42 @@ export async function lastEmailWith(
   // — parentheses make that explicit so a future tweak doesn't shift
   // operator precedence.
   const safe = targetEmail.trim().toLowerCase().replace(/["\\]/g, "");
+  // Compose the query in pieces so it's legible. Key categories of
+  // noise we've seen light up "today" for accounts CSMs haven't
+  // actually emailed:
+  //
+  //   1. Drafts. Gmail's `from:` matches messages in the Drafts
+  //      label by default — a half-written reply sitting in drafts
+  //      becomes the "most recent message." `-in:drafts` fixes this.
+  //   2. Chats. Hangouts/Chat history surfaces here as separate
+  //      messages with the same from/to fields. `-in:chats`.
+  //   3. Scheduled sends. Messages queued for later sit in Scheduled
+  //      and match. `-in:scheduled`.
+  //   4. Category filters (promotions/social/updates/forums). Cuts
+  //      newsletters + transactional/system mail Google has already
+  //      labeled.
+  //   5. System senders Gmail doesn't always category-label:
+  //      - mailer-daemon/postmaster: bounces/NDRs.
+  //      - noreply/no-reply/notifications: transactional alerts.
+  //      - calendar-notification: invite responses (accept/decline
+  //        often comes through as a normal-looking email).
+  //      - hubspot/intercom/zapier subdomains: third-party automation
+  //        masquerading as the customer's domain (HubSpot's "you've
+  //        been mentioned" emails were a known culprit).
+  //
+  // Gmail's `-operator` syntax excludes matches. Parentheses around
+  // the `(from:X OR to:X)` keep the precedence explicit so the noise
+  // filters apply to the union, not just the `to:` half.
   const q =
     `(from:${safe} OR to:${safe})` +
+    ` -in:drafts -in:chats -in:scheduled` +
     ` -category:promotions -category:social -category:updates -category:forums` +
     ` -from:mailer-daemon -from:postmaster` +
-    ` -from:noreply -from:no-reply -from:notifications`;
+    ` -from:noreply -from:no-reply -from:notifications` +
+    ` -from:calendar-notification@google.com` +
+    ` -from:notifications@hubspot.com -from:notifications@github.com` +
+    ` -from:noreply@intercom.io -from:notify@intercom.io` +
+    ` -from:notifications@zapier.com`;
   const listUrl =
     `https://gmail.googleapis.com/gmail/v1/users/me/messages` +
     `?q=${encodeURIComponent(q)}&maxResults=1`;
