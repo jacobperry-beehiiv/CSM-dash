@@ -72,9 +72,17 @@ interface Props {
    */
   deepLinkBase?: string;
   /**
-   * Short noun for the rollup intro line, e.g. "past-due accounts"
-   * or "approaching-cap accounts". Drives the auto-generated text
-   * "You have N <noun> to review:".
+   * Phrase that finishes the rollup intro line — "...that need review
+   * for {rollupContext}." Examples: "proactive outreach", "past-due".
+   * Drives the auto-generated CTA: "Hey @CSM you have N accounts
+   * that need review for {rollupContext}." Followed by the deep
+   * link as the primary call-to-action.
+   */
+  rollupContext?: string;
+  /**
+   * Plural noun for the count itself — defaults to "accounts" but
+   * surfaces (renewals, deliverability, etc.) can swap it. The full
+   * line reads "you have *N noun* that need review for {context}".
    */
   rollupNoun?: string;
   /**
@@ -89,17 +97,22 @@ interface Props {
 type Mode = "combined" | "per-company" | "per-csm";
 
 /** Pre-build the per-CSM rollup messages from the per-row list.
- *  Groups by csmHandle, formats one message per CSM with the count,
- *  optional @mention, optional deep link, and a bullet list of the
- *  rolled-up rows. Unassigned rows ("csmHandle: null") collapse into
- *  one "Unassigned" group at the end so they don't get lost.
+ *  Groups by csmHandle and emits ONE short message per group, in the
+ *  shape "Hey @CSM you have *N noun* that need review for
+ *  {context}. <link>" — no bulleted list. The link is the only CTA,
+ *  on the theory that the recipient should click through to triage
+ *  in the dashboard rather than scan a wall of bullets in Slack.
+ *
+ *  Unassigned rows ("csmHandle: null") collapse into one
+ *  "Unassigned" group at the end so they don't get lost.
  *
  *  Stable across re-renders for a given input — pure function of
  *  the per-company list + deep-link base. */
 function buildCsmRollupMessages(
   perCompany: BulkSlackMessage[],
   deepLinkBase: string | undefined,
-  rollupNoun: string
+  rollupNoun: string,
+  rollupContext: string
 ): Array<{
   id: string;
   label: string;
@@ -139,23 +152,23 @@ function buildCsmRollupMessages(
       ? g.handle.replace(/_/g, " ")
       : "Unassigned";
     const mention = g.slackId ? `<@${g.slackId}>` : friendlyHandle;
-    const bullets = g.rows
-      .map((r) => `• ${r.csmRollupLine ?? r.label}`)
-      .join("\n");
     let link: string | null = null;
     if (deepLinkBase && g.handle) {
       const sep = deepLinkBase.includes("?") ? "&" : "?";
       link = `${deepLinkBase}${sep}csm=${encodeURIComponent(g.handle)}`;
     }
-    const header = `${mention} — *${g.rows.length}* ${rollupNoun} to review:`;
-    const linkLine = link ? `\n\n<${link}|Open filtered list ↗>` : "";
+    const count = g.rows.length;
+    const headline = `Hey ${mention}, you have *${count} ${rollupNoun}* that need review for ${rollupContext}.`;
+    const linkLine = link
+      ? `\n\n<${link}|Open the filtered list ↗>`
+      : "";
     return {
       id: `csm:${key}`,
       label: friendlyHandle,
-      text: `${header}\n${bullets}${linkLine}`,
+      text: `${headline}${linkLine}`,
       csmHandle: g.handle,
       csmSlackId: g.slackId,
-      count: g.rows.length,
+      count,
     };
   });
 }
@@ -167,6 +180,7 @@ export function SlackBulkCompose({
   initialChannel,
   defaultMode = "per-csm",
   deepLinkBase,
+  rollupContext = "review",
   rollupNoun = "accounts",
   createTodoOnRollup = false,
   onClose,
@@ -181,7 +195,12 @@ export function SlackBulkCompose({
   // changes (which doesn't happen mid-modal session — selected rows
   // are locked when the modal opens).
   const [csmMessages, setCsmMessages] = useState(() =>
-    buildCsmRollupMessages(perCompanyMessages, deepLinkBase, rollupNoun)
+    buildCsmRollupMessages(
+      perCompanyMessages,
+      deepLinkBase,
+      rollupNoun,
+      rollupContext
+    )
   );
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<string | null>(null);
@@ -262,7 +281,7 @@ export function SlackBulkCompose({
                       : null;
                   return {
                     csm_handle: m.csmHandle,
-                    title: `Review ${m.count} ${rollupNoun}`,
+                    title: `Review ${m.count} ${rollupNoun} for ${rollupContext}`,
                     details: link
                       ? `Sent via dashboard Slack ping. Open: ${link}`
                       : `Sent via dashboard Slack ping.`,

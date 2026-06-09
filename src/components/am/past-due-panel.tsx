@@ -1347,7 +1347,8 @@ export function PastDuePanel({ rows, csms, totalSourceRows }: Props) {
             perCompanyMessages={perCompany}
             defaultMode="per-csm"
             deepLinkBase={deepLinkBase}
-            rollupNoun="past-due accounts"
+            rollupNoun="accounts"
+            rollupContext="past-due"
             createTodoOnRollup
             onClose={() => setComposeOpen(false)}
           />

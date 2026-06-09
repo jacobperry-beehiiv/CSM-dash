@@ -786,7 +786,8 @@ export function ApproachingEnterprisePanel({ rows }: Props) {
             perCompanyMessages={perCompany}
             defaultMode="per-csm"
             deepLinkBase={deepLinkBase}
-            rollupNoun="approaching-cap accounts"
+            rollupNoun="accounts"
+            rollupContext="proactive outreach"
             createTodoOnRollup
             onClose={() => setComposeOpen(false)}
           />
