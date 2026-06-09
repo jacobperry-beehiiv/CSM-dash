@@ -424,7 +424,7 @@ export function DeliverabilityPanel({
                               title="Masquerade into workspace"
                               className="px-2 py-1 text-xs border border-border-strong rounded-md hover:bg-canvas"
                             >
-                              Masquerade
+                              Masq
                             </a>
                           ) : null}
                           {mbUrl ? (

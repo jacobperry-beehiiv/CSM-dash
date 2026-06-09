@@ -50,7 +50,7 @@ export function RowActions({ customer, onDraft }: Props) {
           title="Masquerade into workspace"
           className={btn}
         >
-          Masquerade
+          Masq
         </a>
       ) : null}
       {hubspot ? (
