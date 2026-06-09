@@ -519,9 +519,14 @@ export async function searchCompaniesByStripeIds(
 
     if (!res.ok) {
       const body = await res.text().catch(() => "");
-      const msg = `HubSpot search HTTP ${res.status}: ${body.slice(0, 300)}`;
+      // 1500-char window so the full HubSpot scope-error body fits
+      // (the response lists every required scope after the leading
+      // "One or more of the following scopes are required" string,
+      // and the 300-char truncation we were using cut off the
+      // actually-actionable part).
+      const msg = `HubSpot search HTTP ${res.status}: ${body.slice(0, 1500)}`;
       console.error(
-        `[hubspot] stripe-id search batch ${i / BATCH_SIZE} HTTP ${res.status}: ${body.slice(0, 200)}`
+        `[hubspot] stripe-id search batch ${i / BATCH_SIZE} HTTP ${res.status}: ${body.slice(0, 1500)}`
       );
       if (opts.throwOnApiError) throw new Error(msg);
       continue;
