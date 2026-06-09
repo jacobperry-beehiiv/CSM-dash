@@ -13,6 +13,7 @@ import { CollapsibleSection } from "./collapsible-section";
 import { CompanyNotes } from "./am/company-notes";
 import { CopyButton } from "./copy-button";
 import { CsmRefreshRow } from "./csm-refresh-row";
+import { HubSpotLinkBadge } from "./hubspot-link-badge";
 import { stripeCustomerUrl } from "@/lib/links";
 
 interface Props {
@@ -106,6 +107,19 @@ export function CustomerDetailPanel({
               />
             </>
           ) : null}
+          {/* HubSpot link badge — confidence indicator for the join
+           *  between this row and its HubSpot company record. Set by
+           *  scripts/sync.ts based on which resolution path won. Drives
+           *  whether the write-side affordances (CSM refresh, post-
+           *  note, /update-csm) can find the HubSpot company. */}
+          <span className="text-subtle">·</span>
+          <HubSpotLinkBadge
+            linkSource={c.hubspot_link_source ?? null}
+            warning={c.hubspot_link_warning ?? null}
+            hubspotCompanyId={c.hubspot_company_id ?? null}
+            workspaceId={c.workspace_id ?? null}
+            hasStripeId={Boolean(c.stripe_customer_id)}
+          />
         </div>
       ) : null}
 

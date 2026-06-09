@@ -33,6 +33,18 @@ export interface CustomerOverride {
   lifecycle_stage?: string;
   lifecycle_stage_updated_at?: string;
   lifecycle_stage_updated_by?: string;
+  /** Override for `hubspot_company_id` — set by the manual
+   *  "Re-resolve via Stripe ID" affordance when the sync snapshot
+   *  has the wrong value (or none). Trumps the snapshot column when
+   *  the dashboard renders, just like the CSM overrides do.
+   *
+   *  Paired with `hubspot_link_source` so the UI reflects the
+   *  manual re-resolve as "linked via Stripe ID" instantly without
+   *  waiting for the next sync. */
+  hubspot_company_id?: string;
+  hubspot_link_source?: "stripe_id" | "email_fallback" | "none";
+  hubspot_link_refreshed_at?: string;
+  hubspot_link_refreshed_by?: string;
 }
 
 export type OverrideMap = Record<string, CustomerOverride>;
@@ -85,6 +97,10 @@ export async function setOverride(
   applyField("lifecycle_stage");
   applyField("lifecycle_stage_updated_at");
   applyField("lifecycle_stage_updated_by");
+  applyField("hubspot_company_id");
+  applyField("hubspot_link_source");
+  applyField("hubspot_link_refreshed_at");
+  applyField("hubspot_link_refreshed_by");
 
   if (Object.keys(current).length === 0) {
     delete map[workspaceId];
@@ -111,6 +127,14 @@ export function applyOverride(
     customer_success_manager_email:
       ov.customer_success_manager_email ??
       customer.customer_success_manager_email,
+    // HubSpot link overrides — when set, trump the sync snapshot.
+    // Lets the "Re-resolve via Stripe ID" button flip the link badge
+    // green and unblock the write paths (CSM refresh, post-note) the
+    // moment the user clicks, instead of waiting for the next sync.
+    hubspot_company_id:
+      ov.hubspot_company_id ?? customer.hubspot_company_id,
+    hubspot_link_source:
+      ov.hubspot_link_source ?? customer.hubspot_link_source,
   };
 }
 

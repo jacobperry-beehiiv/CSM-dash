@@ -401,6 +401,144 @@ interface ContactBatchResponse {
 }
 
 /**
+ * Look up HubSpot company records by their Stripe customer ID custom
+ * property. This is the *primary* HubSpot join key used by sync.ts —
+ * Stripe IDs are stable across HubSpot company merges / record drift
+ * in a way that the q10600-sourced `hubspot_company_id` column isn't.
+ *
+ * Uses POST /crm/v3/objects/companies/search with one filterGroup:
+ *   propertyName: "stripe_customer_id"
+ *   operator: "IN"
+ *   values: [cus_…, cus_…, …]
+ *
+ * HubSpot caps `IN` filter values at 100 per request, so we chunk
+ * the same way the existing batch reads do (BATCH_SIZE = 100, with
+ * INTER_BATCH_DELAY_MS pacing).
+ *
+ * Returns Map<stripeId, HubspotCompanySummary> with each company's
+ * HubSpot record ID, name, owner ID, and activity props pre-fetched
+ * — folding the work that would otherwise need a follow-up
+ * fetchLastActivity() call.
+ *
+ * Required scope: crm.objects.companies.read (already required by
+ * the existing readers).
+ */
+export interface HubspotCompanySummary {
+  companyId: string;
+  name: string | null;
+  ownerId: string | null;
+  stripeCustomerId: string;
+  activity: CompanyActivity | null;
+}
+
+const COMPANY_SEARCH_ENDPOINT =
+  "https://api.hubapi.com/crm/v3/objects/companies/search";
+
+interface CompanySearchResponse {
+  total: number;
+  results: Array<{
+    id: string;
+    properties: Partial<
+      Record<ActivityProp | "name" | "hubspot_owner_id" | "stripe_customer_id", string | null>
+    >;
+  }>;
+  paging?: { next?: { after?: string } };
+}
+
+export async function searchCompaniesByStripeIds(
+  stripeIds: string[]
+): Promise<Map<string, HubspotCompanySummary>> {
+  const result = new Map<string, HubspotCompanySummary>();
+  const unique = [...new Set(stripeIds.filter(Boolean))];
+  if (unique.length === 0) return result;
+
+  const token = await getAccessToken();
+  // Properties returned per match. We pull the activity props here
+  // too so a sync pass that wants `last_activity_at` doesn't have to
+  // call fetchLastActivity() afterward against the same companies.
+  const requestedProperties = [
+    "name",
+    "hubspot_owner_id",
+    "stripe_customer_id",
+    ...ACTIVITY_PROPS,
+  ];
+
+  for (let i = 0; i < unique.length; i += BATCH_SIZE) {
+    const slice = unique.slice(i, i + BATCH_SIZE);
+    if (i > 0) await sleep(INTER_BATCH_DELAY_MS);
+
+    let res: Response;
+    try {
+      res = await fetch(COMPANY_SEARCH_ENDPOINT, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          filterGroups: [
+            {
+              filters: [
+                {
+                  propertyName: "stripe_customer_id",
+                  operator: "IN",
+                  values: slice,
+                },
+              ],
+            },
+          ],
+          properties: requestedProperties,
+          limit: BATCH_SIZE,
+        }),
+      });
+    } catch (e) {
+      console.error(
+        `[hubspot] stripe-id search batch ${i / BATCH_SIZE} network error:`,
+        e instanceof Error ? e.message : e
+      );
+      continue;
+    }
+
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      console.error(
+        `[hubspot] stripe-id search batch ${i / BATCH_SIZE} HTTP ${res.status}: ${body.slice(0, 200)}`
+      );
+      continue;
+    }
+
+    const json = (await res.json()) as CompanySearchResponse;
+    for (const company of json.results ?? []) {
+      const stripeId = company.properties.stripe_customer_id;
+      if (!stripeId) continue;
+      // Pull activity rollup at the same time — saves a second
+      // batch call later when the sync wants last_activity_at.
+      const winner = pickLatest(
+        company.properties as Partial<Record<ActivityProp, string | null>>
+      );
+      result.set(stripeId, {
+        companyId: company.id,
+        name: company.properties.name ?? null,
+        ownerId: company.properties.hubspot_owner_id ?? null,
+        stripeCustomerId: stripeId,
+        activity: winner
+          ? {
+              last_activity_at: winner.last_activity_at,
+              source: winner.source,
+            }
+          : null,
+      });
+    }
+    // Note: HubSpot's search endpoint paginates at 100. We're
+    // chunking input to ≤100 IDs per request so the `IN` filter
+    // returns at most 100 matches — pagination doesn't kick in.
+    // If the IN-cap rises in the future, walk paging.next.after.
+  }
+
+  return result;
+}
+
+/**
  * Resolve a list of contact emails → most-recent company activity for the
  * company each contact is primarily associated with.
  *

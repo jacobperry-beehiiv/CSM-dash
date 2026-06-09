@@ -59,6 +59,28 @@ export interface Customer {
    * "who at this company is HubSpot tracking?" beyond just owner_email.
    */
   hubspot_contacts?: HubSpotContactRef[] | null;
+  /**
+   * How sync.ts resolved this row's HubSpot company link.
+   *   "stripe_id"      — resolved via the stripe_customer_id property
+   *                      on the HubSpot company (primary path).
+   *   "email_fallback" — Stripe-ID lookup returned nothing, so we
+   *                      walked owner_email → contact → primary
+   *                      company instead.
+   *   "none"           — neither resolved; row has no HubSpot link.
+   *
+   * Surfaced in the detail panel so a CSM can tell at a glance how
+   * trustworthy the link is (and whether they need to add the Stripe
+   * ID to the HubSpot company record).
+   */
+  hubspot_link_source?: "stripe_id" | "email_fallback" | "none";
+  /**
+   * Set when the resolver detected a conflict during sync — e.g., the
+   * q10600 `hubspot_company_id` column doesn't match what the
+   * Stripe-ID lookup returned (likely a HubSpot company merge). UI
+   * surfaces this as an amber "Link mismatch" badge with the
+   * conflicting IDs in the tooltip.
+   */
+  hubspot_link_warning?: string | null;
 }
 
 export interface HubSpotContactRef {

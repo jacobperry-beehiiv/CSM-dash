@@ -25,6 +25,7 @@ import { fetchDeliverabilityPosts } from "../src/lib/engines/deliverability";
 import {
   fetchLastActivity,
   fetchLastActivityByEmail,
+  searchCompaniesByStripeIds,
 } from "../src/lib/integrations/hubspot";
 
 const DELIVERABILITY_LOOKBACK_DAYS = 15;
@@ -43,25 +44,6 @@ const COHORT_QUESTIONS: Array<{ id: number; basename: string; label: string }> =
   { id: 13268, basename: "approaching-enterprise", label: "approaching-enterprise" },
   { id: 24620, basename: "past-due", label: "past-due" },
 ];
-
-/**
- * Column names q10600 might expose the HubSpot company ID under. We accept
- * any of them so the question can be edited without a sync deploy.
- */
-const COMPANY_ID_KEYS = [
-  "hubspot_company_id",
-  "hs_object_id",
-  "property_hs_object_id",
-  "company_id_hubspot",
-] as const;
-
-function pickCompanyId(row: Record<string, unknown>): string | null {
-  for (const k of COMPANY_ID_KEYS) {
-    const v = row[k];
-    if (v != null && v !== "") return String(v);
-  }
-  return null;
-}
 
 async function main() {
   if (!process.env.METABASE_URL) {
@@ -85,11 +67,21 @@ async function main() {
   console.error(`[sync] fetched ${rows.length} rows in ${elapsed}s`);
 
   // ─── HubSpot enrichment ─────────────────────────────────────────────
-  // For every row that exposes a HubSpot company ID, look up the most-
-  // recent activity across HubSpot's three rollup properties and stamp
-  // it onto the row. Soft-fails: if neither HUBSPOT_ACCESS_TOKEN nor
-  // HUBSPOT_CLIENT_ID+HUBSPOT_CLIENT_SECRET are set, or the HubSpot
-  // API errors, sync continues with the un-enriched rows.
+  // Resolve each row's HubSpot company link via the Stripe customer ID
+  // custom property on the HubSpot company record. Stripe IDs are
+  // stable across HubSpot company merges / record drift in a way that
+  // q10600's hubspot_company_id column isn't — so we use them as the
+  // primary join key and stamp the resolved company ID onto the row.
+  //
+  // Fallback chain:
+  //   1. stripe_customer_id → searchCompaniesByStripeIds (primary)
+  //   2. owner_email → fetchLastActivityByEmail (only when (1) misses)
+  //   3. No HubSpot link
+  //
+  // Sets the new `hubspot_link_source` field on each row so the UI
+  // can show a confidence indicator. Soft-fails: if HubSpot auth is
+  // missing or the API errors, sync continues with the un-enriched
+  // rows (hubspot_link_source stays unset).
   const hasHubSpotAuth =
     !!process.env.HUBSPOT_ACCESS_TOKEN ||
     (!!process.env.HUBSPOT_CLIENT_ID && !!process.env.HUBSPOT_CLIENT_SECRET);
@@ -97,53 +89,124 @@ async function main() {
     const enrichStarted = Date.now();
     const typedRows = rows as Record<string, unknown>[];
 
-    // Path A: rows already carry a HubSpot company ID — fastest.
-    const idToRow = new Map<string, Record<string, unknown>>();
-    for (const r of typedRows) {
-      const id = pickCompanyId(r);
-      if (id) idToRow.set(id, r);
-    }
-    const idsAvailable = idToRow.size;
-
-    // Path B: fall back to owner_email lookup when no company IDs are
-    // present. q10600 doesn't expose hs_object_id today; this lets us
-    // ship enrichment without waiting on a Metabase question edit.
+    // Bucket rows by stripe_customer_id (primary) and owner_email
+    // (fallback). One row can only land in one bucket — if it has a
+    // Stripe ID we always try that first and only fall back to email
+    // if the Stripe-ID lookup misses.
+    const stripeToRows = new Map<string, Record<string, unknown>[]>();
     const emailToRow = new Map<string, Record<string, unknown>>();
-    if (idsAvailable === 0) {
-      for (const r of typedRows) {
-        const email =
-          typeof r.owner_email === "string" && r.owner_email
-            ? r.owner_email.toLowerCase()
-            : null;
-        if (email && !emailToRow.has(email)) emailToRow.set(email, r);
+    for (const r of typedRows) {
+      const stripeId =
+        typeof r.stripe_customer_id === "string" && r.stripe_customer_id
+          ? r.stripe_customer_id
+          : null;
+      if (stripeId) {
+        const arr = stripeToRows.get(stripeId) ?? [];
+        arr.push(r);
+        stripeToRows.set(stripeId, arr);
       }
+      const email =
+        typeof r.owner_email === "string" && r.owner_email
+          ? r.owner_email.toLowerCase()
+          : null;
+      if (email && !emailToRow.has(email)) emailToRow.set(email, r);
     }
 
     try {
-      let filled = 0;
-      if (idsAvailable > 0) {
+      const stripeIds = [...stripeToRows.keys()];
+      let resolvedByStripe = 0;
+      let resolvedByEmail = 0;
+      let unresolved = 0;
+      let stripeMismatch = 0;
+
+      // ─── Pass 1: Stripe-ID lookup ───
+      if (stripeIds.length > 0) {
         console.error(
-          `[sync] enriching ${idsAvailable} rows from HubSpot by company ID…`
+          `[sync] resolving ${stripeIds.length} unique Stripe IDs via HubSpot search…`
         );
-        const activity = await fetchLastActivity([...idToRow.keys()]);
-        for (const [id, row] of idToRow) {
-          row.hubspot_company_id = id;
-          const hit = activity.get(id);
-          if (hit) {
-            row.last_activity_at = hit.last_activity_at;
-            row.last_activity_source = hit.source;
-            if (hit.contacts && hit.contacts.length > 0) {
-              row.hubspot_contacts = hit.contacts;
+        const stripeMatches = await searchCompaniesByStripeIds(stripeIds);
+        for (const [stripeId, rowsForStripeId] of stripeToRows) {
+          const match = stripeMatches.get(stripeId);
+          if (!match) continue;
+          for (const row of rowsForStripeId) {
+            // Detect drift between q10600's hubspot_company_id column
+            // and what the Stripe-ID search returned — likely a
+            // HubSpot company merge upstream. Stripe-ID is canonical
+            // (per the design), so overwrite the column but stash a
+            // warning on the row so the UI can flag it.
+            const q10600Id =
+              typeof row.hubspot_company_id === "string" &&
+              row.hubspot_company_id
+                ? row.hubspot_company_id
+                : null;
+            if (q10600Id && q10600Id !== match.companyId) {
+              row.hubspot_link_warning = `q10600 said company ${q10600Id}, Stripe-ID lookup resolved ${match.companyId}`;
+              stripeMismatch++;
+            } else {
+              row.hubspot_link_warning = null;
             }
-            filled++;
+            row.hubspot_company_id = match.companyId;
+            row.hubspot_link_source = "stripe_id";
+            if (match.activity?.last_activity_at) {
+              row.last_activity_at = match.activity.last_activity_at;
+              row.last_activity_source = match.activity.source;
+            }
+            resolvedByStripe++;
           }
         }
-      } else if (emailToRow.size > 0) {
+      }
+
+      // Fold in the existing contact-fetch behavior from
+      // fetchLastActivity() for everyone we just resolved via Stripe
+      // ID. The search returned activity rollups inline (last activity
+      // + source) but NOT the hubspot_contacts list — that lives on
+      // the v4 associations endpoint, which is still in fetchLastActivity.
+      const stripeResolvedIds: string[] = [];
+      for (const r of typedRows) {
+        if (
+          r.hubspot_link_source === "stripe_id" &&
+          typeof r.hubspot_company_id === "string"
+        ) {
+          stripeResolvedIds.push(r.hubspot_company_id);
+        }
+      }
+      if (stripeResolvedIds.length > 0) {
         console.error(
-          `[sync] no company IDs in q10600 — enriching ${emailToRow.size} rows from HubSpot by owner_email…`
+          `[sync] backfilling contacts for ${stripeResolvedIds.length} Stripe-resolved rows…`
         );
-        const activity = await fetchLastActivityByEmail([...emailToRow.keys()]);
-        for (const [email, row] of emailToRow) {
+        const activity = await fetchLastActivity(stripeResolvedIds);
+        const idToRow = new Map<string, Record<string, unknown>>();
+        for (const r of typedRows) {
+          if (
+            r.hubspot_link_source === "stripe_id" &&
+            typeof r.hubspot_company_id === "string"
+          ) {
+            idToRow.set(r.hubspot_company_id, r);
+          }
+        }
+        for (const [id, row] of idToRow) {
+          const hit = activity.get(id);
+          if (hit?.contacts && hit.contacts.length > 0) {
+            row.hubspot_contacts = hit.contacts;
+          }
+        }
+      }
+
+      // ─── Pass 2: owner_email fallback for rows the Stripe-ID
+      // search missed. Skip rows already resolved by stripe_id. ───
+      const fallbackEmails = new Map<string, Record<string, unknown>>();
+      for (const [email, row] of emailToRow) {
+        if (row.hubspot_link_source === "stripe_id") continue;
+        fallbackEmails.set(email, row);
+      }
+      if (fallbackEmails.size > 0) {
+        console.error(
+          `[sync] Stripe-ID lookup missed ${fallbackEmails.size} rows — falling back to owner_email…`
+        );
+        const activity = await fetchLastActivityByEmail([
+          ...fallbackEmails.keys(),
+        ]);
+        for (const [email, row] of fallbackEmails) {
           const hit = activity.get(email);
           if (hit) {
             row.last_activity_at = hit.last_activity_at;
@@ -151,17 +214,25 @@ async function main() {
             if (hit.contacts && hit.contacts.length > 0) {
               row.hubspot_contacts = hit.contacts;
             }
-            filled++;
+            row.hubspot_link_source = "email_fallback";
+            resolvedByEmail++;
           }
         }
-      } else {
-        console.error(
-          "[sync] no HubSpot company IDs or owner_emails found — nothing to enrich"
-        );
       }
+
+      // ─── Final pass: mark everyone still un-resolved. ───
+      for (const r of typedRows) {
+        if (!r.hubspot_link_source) {
+          r.hubspot_link_source = "none";
+          unresolved++;
+        }
+      }
+
       const enrichElapsed = ((Date.now() - enrichStarted) / 1000).toFixed(1);
       console.error(
-        `[sync] HubSpot enriched ${filled} rows in ${enrichElapsed}s`
+        `[sync] HubSpot resolution complete in ${enrichElapsed}s: ${resolvedByStripe} via Stripe ID${
+          stripeMismatch > 0 ? ` (${stripeMismatch} drift-corrected)` : ""
+        }, ${resolvedByEmail} via email, ${unresolved} unresolved`
       );
     } catch (e) {
       console.error(
