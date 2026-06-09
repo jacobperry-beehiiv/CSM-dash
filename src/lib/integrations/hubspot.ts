@@ -481,6 +481,28 @@ export async function searchCompaniesByStripeIds(
     const slice = unique.slice(i, i + BATCH_SIZE);
     if (i > 0) await sleep(INTER_BATCH_DELAY_MS);
 
+    // Use EQ when querying a single Stripe ID — HubSpot accepts IN
+    // with a one-element array but EQ is the more natural shape and
+    // sidesteps any edge cases in their IN-filter validation. Keep IN
+    // for multi-ID batches (sync.ts path).
+    const filter =
+      slice.length === 1
+        ? {
+            propertyName: "stripe_customer_id",
+            operator: "EQ",
+            value: slice[0],
+          }
+        : {
+            propertyName: "stripe_customer_id",
+            operator: "IN",
+            values: slice,
+          };
+    const body = {
+      filterGroups: [{ filters: [filter] }],
+      properties: requestedProperties,
+      limit: BATCH_SIZE,
+    };
+
     let res: Response;
     try {
       res = await fetch(COMPANY_SEARCH_ENDPOINT, {
@@ -489,21 +511,7 @@ export async function searchCompaniesByStripeIds(
           Authorization: `Bearer ${token}`,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({
-          filterGroups: [
-            {
-              filters: [
-                {
-                  propertyName: "stripe_customer_id",
-                  operator: "IN",
-                  values: slice,
-                },
-              ],
-            },
-          ],
-          properties: requestedProperties,
-          limit: BATCH_SIZE,
-        }),
+        body: JSON.stringify(body),
       });
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -518,15 +526,21 @@ export async function searchCompaniesByStripeIds(
     }
 
     if (!res.ok) {
-      const body = await res.text().catch(() => "");
-      // 1500-char window so the full HubSpot scope-error body fits
-      // (the response lists every required scope after the leading
-      // "One or more of the following scopes are required" string,
-      // and the 300-char truncation we were using cut off the
-      // actually-actionable part).
-      const msg = `HubSpot search HTTP ${res.status}: ${body.slice(0, 1500)}`;
+      const respBody = await res.text().catch(() => "");
+      // 1500-char window for both the thrown message and the log so
+      // the full HubSpot error body fits — generic 400s come back
+      // without an actionable hint until you can see the request
+      // shape, and scope-error 403s list the required scopes after
+      // the leading "One or more of the following scopes are
+      // required" string that the prior 300-char truncation cut off.
+      const msg = `HubSpot search HTTP ${res.status}: ${respBody.slice(0, 1500)}`;
       console.error(
-        `[hubspot] stripe-id search batch ${i / BATCH_SIZE} HTTP ${res.status}: ${body.slice(0, 1500)}`
+        `[hubspot] stripe-id search batch ${i / BATCH_SIZE} HTTP ${res.status}: ${respBody.slice(0, 1500)}`,
+        // Log the request body alongside the response so a 400
+        // ("There was a problem with the request") is debuggable
+        // without instrumenting the helper a second time. The Stripe
+        // IDs aren't secret in this context.
+        { request_body: body }
       );
       if (opts.throwOnApiError) throw new Error(msg);
       continue;
