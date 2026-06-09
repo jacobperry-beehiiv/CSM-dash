@@ -1,0 +1,581 @@
+"use client";
+
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { useViewerEmail } from "@/lib/auth-client";
+import {
+  newRequestId,
+  sortRequests,
+  PRIORITY_LABEL,
+  STATUS_LABEL,
+  type FeatureRequest,
+  type FeatureRequestOp,
+  type FeatureRequestPriority,
+  type FeatureRequestStatus,
+} from "@/lib/feature-requests/types";
+
+/**
+ * Feature-request board UI.
+ *
+ *   - Inline composer at the top (description / CSM-AM / priority).
+ *   - List ordered by manual rank, with ties broken by votes desc.
+ *   - Per-row Vote button toggles the viewer's vote in/out.
+ *   - ↑ / ↓ arrows reorder a row within the list.
+ *   - Each row has an inline editor (description / priority / status)
+ *     plus a delete button. Permissions are intentionally relaxed —
+ *     anyone signed-in can edit anything, mirroring team-tasks.
+ *   - Background poll every 20s so votes / reorders from teammates
+ *     show up without a manual refresh.
+ *
+ * Network model is the same atomic-ops PATCH pattern as
+ * personal-todos / team-tasks: every mutation lands as a discrete op,
+ * the server reads-applies-writes against the latest snapshot, and
+ * concurrent edits merge instead of stomping each other.
+ *
+ * Optimistic local updates keep the UI feeling instant; failed
+ * server responses surface a small banner so the user knows a write
+ * dropped on the floor.
+ */
+
+const CSM_PRESETS = [
+  "Jacob Perry",
+  "Olivia Chen",
+  "Mac",
+  "Hayden",
+  "Mik",
+  "Chris",
+  "Jess",
+  "Luke",
+];
+
+export function FeatureRequestsPanel() {
+  const viewerEmail = useViewerEmail();
+  const [requests, setRequests] = useState<FeatureRequest[] | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [writeError, setWriteError] = useState<string | null>(null);
+
+  // Composer state.
+  const [draftDescription, setDraftDescription] = useState("");
+  const [draftSubmitter, setDraftSubmitter] = useState("");
+  const [draftPriority, setDraftPriority] =
+    useState<FeatureRequestPriority>("medium");
+  const [submitting, setSubmitting] = useState(false);
+
+  // Per-request inline-edit state. Keyed by request id; absence means
+  // not-editing. Stores draft text so a typo doesn't fire a network
+  // request on every keystroke — we commit on Save click.
+  const [editing, setEditing] = useState<
+    Record<string, { description: string }>
+  >({});
+
+  // ── Load + poll ──
+  const refresh = useCallback(async () => {
+    try {
+      const r = await fetch("/api/feature-requests");
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const json = (await r.json()) as { requests: FeatureRequest[] };
+      setRequests(json.requests);
+      setLoadError(null);
+    } catch (e) {
+      setLoadError(e instanceof Error ? e.message : "Failed to load");
+    }
+  }, []);
+
+  useEffect(() => {
+    void refresh();
+    const id = window.setInterval(refresh, 20_000);
+    return () => window.clearInterval(id);
+  }, [refresh]);
+
+  // Default the composer's submitter field to the viewer's CSM name
+  // (best-effort — falls back to the email prefix when we don't have
+  // a humanized version). Doesn't overwrite manual edits.
+  useEffect(() => {
+    if (draftSubmitter) return;
+    if (!viewerEmail) return;
+    const prefix = viewerEmail.split("@")[0] ?? "";
+    const guess = prefix
+      .split(".")
+      .map((p) => p.charAt(0).toUpperCase() + p.slice(1))
+      .join(" ");
+    setDraftSubmitter(guess);
+  }, [viewerEmail, draftSubmitter]);
+
+  // ── Server-talking helper ──
+  const sendOps = useCallback(
+    async (ops: FeatureRequestOp[]): Promise<boolean> => {
+      try {
+        const r = await fetch("/api/feature-requests", {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ops }),
+        });
+        if (!r.ok) {
+          const body = (await r.json().catch(() => ({}))) as { error?: string };
+          throw new Error(body.error ?? `HTTP ${r.status}`);
+        }
+        const json = (await r.json()) as { requests: FeatureRequest[] };
+        setRequests(json.requests);
+        setWriteError(null);
+        return true;
+      } catch (e) {
+        setWriteError(e instanceof Error ? e.message : "Save failed");
+        // Bring local state back into sync with the server so a
+        // failed optimistic update doesn't linger as a phantom row.
+        void refresh();
+        return false;
+      }
+    },
+    [refresh]
+  );
+
+  // ── Composer ──
+  async function addFromComposer() {
+    const description = draftDescription.trim();
+    if (!description) return;
+    if (!viewerEmail) return;
+    const submitter =
+      draftSubmitter.trim() || viewerEmail.split("@")[0] || "Anonymous";
+    setSubmitting(true);
+    const now = new Date().toISOString();
+    const request: FeatureRequest = {
+      id: newRequestId(),
+      description,
+      submitter,
+      submitter_email: viewerEmail,
+      priority: draftPriority,
+      status: "open",
+      votes: [],
+      rank: 999_999, // placeholder; server reassigns to current max+1
+      created_at: now,
+      updated_at: now,
+    };
+    // Optimistic insert at the bottom so the user sees their entry
+    // immediately. Server response replaces this with the canonical
+    // list (with the real rank applied).
+    setRequests((prev) => (prev ? [...prev, request] : [request]));
+    const ok = await sendOps([{ type: "add", request }]);
+    if (ok) {
+      setDraftDescription("");
+      setDraftPriority("medium");
+      // Keep the submitter field — most users will file several in a
+      // row under the same name.
+    }
+    setSubmitting(false);
+  }
+
+  // ── Voting ──
+  async function toggleVote(req: FeatureRequest) {
+    if (!viewerEmail) return;
+    const me = viewerEmail.toLowerCase();
+    const hasVoted = req.votes.includes(me);
+    // Optimistic vote toggle for snappy feedback.
+    setRequests((prev) =>
+      prev
+        ? prev.map((r) =>
+            r.id !== req.id
+              ? r
+              : {
+                  ...r,
+                  votes: hasVoted
+                    ? r.votes.filter((v) => v !== me)
+                    : [...r.votes, me],
+                }
+          )
+        : prev
+    );
+    await sendOps([
+      {
+        type: hasVoted ? "unvote" : "vote",
+        requestId: req.id,
+        voterEmail: me,
+      },
+    ]);
+  }
+
+  // ── Reorder ──
+  /** Move a request up or down by one slot in the sorted order. The
+   *  server snaps every other row to match (rank = index) so a
+   *  partial reorder doesn't leave gaps. */
+  async function moveRequest(req: FeatureRequest, direction: "up" | "down") {
+    if (!requests) return;
+    const sorted = sortRequests(requests);
+    const idx = sorted.findIndex((r) => r.id === req.id);
+    if (idx < 0) return;
+    const swapWith = direction === "up" ? idx - 1 : idx + 1;
+    if (swapWith < 0 || swapWith >= sorted.length) return;
+    const next = sorted.slice();
+    const [moved] = next.splice(idx, 1);
+    next.splice(swapWith, 0, moved);
+    // Optimistic local reorder via rank field.
+    const orderedIds = next.map((r) => r.id);
+    setRequests((prev) =>
+      prev
+        ? prev.map((r) => {
+            const rank = orderedIds.indexOf(r.id);
+            return rank < 0 ? r : { ...r, rank };
+          })
+        : prev
+    );
+    await sendOps([{ type: "reorder", orderedIds }]);
+  }
+
+  // ── Per-row patches (priority, status, description) ──
+  async function patchRequest(
+    id: string,
+    patch: Partial<
+      Pick<FeatureRequest, "description" | "priority" | "status" | "submitter">
+    >
+  ) {
+    setRequests((prev) =>
+      prev
+        ? prev.map((r) =>
+            r.id !== id ? r : { ...r, ...patch, updated_at: new Date().toISOString() }
+          )
+        : prev
+    );
+    await sendOps([{ type: "patch", requestId: id, patch }]);
+  }
+
+  async function deleteRequest(id: string) {
+    if (!confirm("Delete this feature request? This can't be undone.")) return;
+    setRequests((prev) => (prev ? prev.filter((r) => r.id !== id) : prev));
+    await sendOps([{ type: "delete", requestId: id }]);
+  }
+
+  // ── Sorted view + counters ──
+  const sortedRequests = useMemo(
+    () => (requests ? sortRequests(requests) : []),
+    [requests]
+  );
+  const openCount = sortedRequests.filter((r) => r.status === "open").length;
+  const inProgressCount = sortedRequests.filter(
+    (r) => r.status === "in_progress"
+  ).length;
+  const shippedCount = sortedRequests.filter(
+    (r) => r.status === "shipped"
+  ).length;
+
+  return (
+    <div className="bg-surface border border-border rounded-xl shadow-card overflow-hidden">
+      <header className="px-5 py-3 border-b border-border flex flex-wrap items-baseline gap-x-4 gap-y-1">
+        <div>
+          <h2 className="text-lg font-semibold tracking-tight text-fg">
+            Feature requests
+          </h2>
+          <p className="text-xs text-muted mt-0.5">
+            Submit a request, vote on others, drag-rank the queue. The
+            board is shared across the CSM team.
+          </p>
+        </div>
+        <div className="ml-auto text-[12px] text-muted">
+          {openCount} open · {inProgressCount} in progress · {shippedCount}{" "}
+          shipped
+        </div>
+      </header>
+
+      {/* Composer */}
+      <div className="px-5 py-3 bg-canvas/30 border-b border-border space-y-2">
+        <textarea
+          value={draftDescription}
+          onChange={(e) => setDraftDescription(e.target.value)}
+          placeholder="What would make the dashboard better? (Markdown links work too.)"
+          rows={2}
+          className="w-full px-3 py-2 text-sm border border-border-strong rounded-md bg-surface text-fg resize-y"
+        />
+        <div className="flex flex-wrap items-center gap-2">
+          <label className="text-xs text-muted flex items-center gap-1.5">
+            CSM/AM
+            <input
+              type="text"
+              value={draftSubmitter}
+              onChange={(e) => setDraftSubmitter(e.target.value)}
+              list="csm-presets"
+              placeholder="Your name"
+              className="px-2 py-1 text-xs border border-border-strong rounded-md bg-surface text-fg min-w-[140px]"
+            />
+            <datalist id="csm-presets">
+              {CSM_PRESETS.map((c) => (
+                <option key={c} value={c} />
+              ))}
+            </datalist>
+          </label>
+          <label className="text-xs text-muted flex items-center gap-1.5">
+            Priority
+            <select
+              value={draftPriority}
+              onChange={(e) =>
+                setDraftPriority(e.target.value as FeatureRequestPriority)
+              }
+              className="px-2 py-1 text-xs border border-border-strong rounded-md bg-surface text-fg"
+            >
+              <option value="high">High</option>
+              <option value="medium">Medium</option>
+              <option value="low">Low</option>
+            </select>
+          </label>
+          <div className="flex-1" />
+          <button
+            type="button"
+            onClick={addFromComposer}
+            disabled={
+              !draftDescription.trim() || submitting || !viewerEmail
+            }
+            className="px-3 py-1.5 bg-accent text-accent-fg rounded-md text-sm font-medium hover:bg-accent-hover disabled:opacity-50"
+          >
+            {submitting ? "Submitting…" : "Submit"}
+          </button>
+        </div>
+        {!viewerEmail ? (
+          <p className="text-[11px] text-amber-600 dark:text-amber-300">
+            Sign in to submit requests.
+          </p>
+        ) : null}
+      </div>
+
+      {/* Status messages */}
+      {loadError ? (
+        <div className="px-5 py-2 text-xs text-red-600 dark:text-red-300 bg-red-50 dark:bg-red-500/10 border-b border-red-200 dark:border-red-500/30">
+          Couldn&apos;t load requests: {loadError}
+        </div>
+      ) : null}
+      {writeError ? (
+        <div className="px-5 py-2 text-xs text-red-600 dark:text-red-300 bg-red-50 dark:bg-red-500/10 border-b border-red-200 dark:border-red-500/30">
+          Last save failed: {writeError}
+        </div>
+      ) : null}
+
+      {/* List */}
+      {requests === null ? (
+        <div className="px-5 py-6 text-sm text-muted">Loading…</div>
+      ) : sortedRequests.length === 0 ? (
+        <div className="px-5 py-6 text-sm text-muted">
+          No requests yet. Be the first to submit one above.
+        </div>
+      ) : (
+        <ul className="divide-y divide-border">
+          {sortedRequests.map((req, idx) => {
+            const isFirst = idx === 0;
+            const isLast = idx === sortedRequests.length - 1;
+            const voted = viewerEmail
+              ? req.votes.includes(viewerEmail.toLowerCase())
+              : false;
+            const editState = editing[req.id];
+            return (
+              <li
+                key={req.id}
+                className="px-5 py-3 flex items-start gap-3 hover:bg-canvas/30 transition-colors"
+              >
+                {/* Reorder arrows */}
+                <div className="flex flex-col items-center gap-0.5 text-subtle pt-1">
+                  <button
+                    type="button"
+                    onClick={() => void moveRequest(req, "up")}
+                    disabled={isFirst}
+                    className="px-1 hover:text-fg disabled:opacity-30 disabled:cursor-not-allowed"
+                    title="Move up"
+                    aria-label="Move up"
+                  >
+                    ▲
+                  </button>
+                  <span
+                    className="text-[10px] font-mono"
+                    title="Manual rank — drives the order. Edit via ↑ / ↓."
+                  >
+                    #{idx + 1}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => void moveRequest(req, "down")}
+                    disabled={isLast}
+                    className="px-1 hover:text-fg disabled:opacity-30 disabled:cursor-not-allowed"
+                    title="Move down"
+                    aria-label="Move down"
+                  >
+                    ▼
+                  </button>
+                </div>
+
+                {/* Vote button + count */}
+                <button
+                  type="button"
+                  onClick={() => void toggleVote(req)}
+                  disabled={!viewerEmail}
+                  className={`flex flex-col items-center justify-center min-w-[48px] px-2 py-1 rounded-md border text-[11px] font-medium transition-colors disabled:opacity-50 ${
+                    voted
+                      ? "bg-accent text-accent-fg border-accent"
+                      : "bg-surface border-border-strong text-fg hover:bg-canvas"
+                  }`}
+                  title={voted ? "Remove your vote" : "Vote for this"}
+                >
+                  <span className="text-lg leading-none">▲</span>
+                  <span className="font-mono">{req.votes.length}</span>
+                </button>
+
+                {/* Body */}
+                <div className="flex-1 min-w-0">
+                  {editState ? (
+                    <div className="space-y-2">
+                      <textarea
+                        value={editState.description}
+                        onChange={(e) =>
+                          setEditing((prev) => ({
+                            ...prev,
+                            [req.id]: { description: e.target.value },
+                          }))
+                        }
+                        rows={3}
+                        className="w-full px-2 py-1.5 text-sm border border-border-strong rounded-md bg-surface text-fg resize-y"
+                      />
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const description = editState.description.trim();
+                            if (description && description !== req.description) {
+                              void patchRequest(req.id, { description });
+                            }
+                            setEditing((prev) => {
+                              const next = { ...prev };
+                              delete next[req.id];
+                              return next;
+                            });
+                          }}
+                          className="px-2 py-1 text-xs bg-accent text-accent-fg rounded-md hover:bg-accent-hover"
+                        >
+                          Save
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setEditing((prev) => {
+                              const next = { ...prev };
+                              delete next[req.id];
+                              return next;
+                            })
+                          }
+                          className="px-2 py-1 text-xs border border-border-strong rounded-md hover:bg-canvas"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="text-sm text-fg whitespace-pre-wrap break-words">
+                      {req.description}
+                    </p>
+                  )}
+
+                  <div className="mt-1.5 flex flex-wrap items-center gap-2 text-[11px]">
+                    <span
+                      className="text-muted"
+                      title={`Submitted by ${req.submitter_email}`}
+                    >
+                      {req.submitter || "—"}
+                    </span>
+                    <span className="text-subtle">·</span>
+                    <PrioritySelect
+                      value={req.priority}
+                      onChange={(v) =>
+                        void patchRequest(req.id, { priority: v })
+                      }
+                    />
+                    <StatusSelect
+                      value={req.status}
+                      onChange={(v) => void patchRequest(req.id, { status: v })}
+                    />
+                    <span className="text-subtle">·</span>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setEditing((prev) => ({
+                          ...prev,
+                          [req.id]: { description: req.description },
+                        }))
+                      }
+                      className="text-accent hover:underline"
+                    >
+                      Edit
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void deleteRequest(req.id)}
+                      className="text-red-600 dark:text-red-300 hover:underline"
+                    >
+                      Delete
+                    </button>
+                  </div>
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+/** Inline priority dropdown with subtle color cues so a high-priority
+ *  row reads quickly in a long list. */
+function PrioritySelect({
+  value,
+  onChange,
+}: {
+  value: FeatureRequestPriority;
+  onChange: (v: FeatureRequestPriority) => void;
+}) {
+  const color =
+    value === "high"
+      ? "text-red-700 dark:text-red-300 border-red-200 dark:border-red-500/40"
+      : value === "medium"
+        ? "text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-500/40"
+        : "text-muted border-border";
+  return (
+    <select
+      value={value}
+      onChange={(e) => onChange(e.target.value as FeatureRequestPriority)}
+      className={`px-1.5 py-0.5 text-[11px] rounded border bg-surface font-medium ${color}`}
+      title="Priority"
+    >
+      <option value="high">High</option>
+      <option value="medium">Medium</option>
+      <option value="low">Low</option>
+    </select>
+  );
+}
+
+/** Inline status dropdown with status-mapped colors so a "shipped"
+ *  row reads visibly different from "in progress". */
+function StatusSelect({
+  value,
+  onChange,
+}: {
+  value: FeatureRequestStatus;
+  onChange: (v: FeatureRequestStatus) => void;
+}) {
+  const color =
+    value === "shipped"
+      ? "text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-500/40"
+      : value === "in_progress"
+        ? "text-blue-700 dark:text-blue-300 border-blue-200 dark:border-blue-500/40"
+        : value === "declined"
+          ? "text-subtle border-border line-through"
+          : "text-muted border-border";
+  return (
+    <select
+      value={value}
+      onChange={(e) => onChange(e.target.value as FeatureRequestStatus)}
+      className={`px-1.5 py-0.5 text-[11px] rounded border bg-surface font-medium ${color}`}
+      title="Status"
+    >
+      {(Object.keys(STATUS_LABEL) as FeatureRequestStatus[]).map((s) => (
+        <option key={s} value={s}>
+          {STATUS_LABEL[s]}
+        </option>
+      ))}
+    </select>
+  );
+}
+
+// Suppress unused-import warning on PRIORITY_LABEL — re-exported for
+// consumers that want consistent labels but unused in this file.
+void PRIORITY_LABEL;

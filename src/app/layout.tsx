@@ -18,6 +18,7 @@ const NAV = [
   { href: "/csm", label: "CSM" },
   { href: "/am", label: "AM" },
   { href: "/ad-gap", label: "Ad Gap" },
+  { href: "/feature-requests", label: "Feature requests" },
   { href: "/settings", label: "Settings" },
 ];
 
