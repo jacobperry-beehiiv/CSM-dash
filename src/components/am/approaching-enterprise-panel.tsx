@@ -788,6 +788,9 @@ export function ApproachingEnterprisePanel({ rows }: Props) {
             deepLinkBase={deepLinkBase}
             rollupNoun="accounts"
             rollupContext="proactive outreach"
+            // Admin-editable template from /settings/slack. Falls
+            // back to the hard-coded default when unset.
+            rollupTemplate={cfg?.rollup_template}
             createTodoOnRollup
             onClose={() => setComposeOpen(false)}
           />

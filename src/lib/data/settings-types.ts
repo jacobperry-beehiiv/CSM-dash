@@ -41,6 +41,32 @@ export interface SlackChannel {
    *  mapped). When unset or empty, falls back to the hard-coded format
    *  the dashboard shipped with. */
   row_template?: string;
+  /**
+   * Optional per-CSM rollup template — used when the AM panels send
+   * the "Slack the channel" action in Per-CSM mode. Renders ONE
+   * message per CSM with the count + filtered deep link, instead of
+   * one message per company.
+   *
+   * Available tokens (all resolved per-CSM):
+   *   {{csm_mention}}     <@U…> when mapped in csm_user_ids,
+   *                       falls back to "Olivia Chen" plain text.
+   *   {{csm_name}}        Humanized handle ("Olivia Chen").
+   *   {{csm_handle}}      Raw handle ("Olivia_Chen") — useful inside
+   *                       the URL as ?csm=…
+   *   {{count}}           Number of selected accounts for this CSM.
+   *   {{rollup_noun}}     Plural noun from the surface ("accounts").
+   *   {{rollup_context}}  Surface label ("past-due outreach" /
+   *                       "proactive outreach").
+   *   {{filtered_url}}    Deep link to the panel pre-filtered to this
+   *                       CSM. Drop into a `<…|label>` wrapper to
+   *                       render as a Slack hyperlink.
+   *   {{filtered_link}}   Convenience pre-wrapped variant:
+   *                       <{{filtered_url}}|Open the filtered list ↗>
+   *
+   * When unset / empty, falls back to the hard-coded default that
+   * shipped with the dashboard — same text the panel emits today.
+   */
+  rollup_template?: string;
 }
 
 /** Stable id reserved for the past-due alert. The /am page looks this

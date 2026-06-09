@@ -1353,6 +1353,9 @@ export function PastDuePanel({ rows, csms, totalSourceRows }: Props) {
             // motion name. "past-due outreach" reads as a complete
             // phrase, where the prior "past-due" alone felt clipped.
             rollupContext="past-due outreach"
+            // Admin-editable template from /settings/slack. Falls
+            // back to the hard-coded default when unset.
+            rollupTemplate={pastDueCfg?.rollup_template}
             createTodoOnRollup
             onClose={() => setComposeOpen(false)}
           />

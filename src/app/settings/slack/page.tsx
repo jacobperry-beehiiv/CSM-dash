@@ -8,9 +8,11 @@ import {
   DEFAULTS,
   newChannelId,
   PAST_DUE_CHANNEL_ID,
+  PROACTIVE_OUTREACH_CHANNEL_ID,
   type SettingsShape,
   type SlackChannel,
 } from "@/lib/data/settings-types";
+import { DEFAULT_ROLLUP_TEMPLATE } from "@/components/am/slack-bulk-compose";
 
 /** Slack's canonical channel-ID regex (^[CGDZ][A-Z0-9]{8,}$). Some
  *  endpoints (chat.postMessage) accept names; others (notably
@@ -353,6 +355,76 @@ export default function SlackSettingsPage() {
                       </p>
                     </div>
                   </details>
+                </div>
+              ) : null}
+              {/* Per-CSM rollup template — surfaced on the two AM
+               *  channels that use Per-CSM mode by default (past-due
+               *  and proactive outreach). Defaults to the constant
+               *  the panel falls back to, so an unset field renders
+               *  the same as before this field shipped. */}
+              {c.id === PAST_DUE_CHANNEL_ID ||
+              c.id === PROACTIVE_OUTREACH_CHANNEL_ID ? (
+                <div>
+                  <label className="text-xs text-muted block mb-1">
+                    Per-CSM rollup template
+                  </label>
+                  <textarea
+                    value={c.rollup_template ?? ""}
+                    onChange={(e) =>
+                      patchChannel(c.id, { rollup_template: e.target.value })
+                    }
+                    rows={4}
+                    placeholder={DEFAULT_ROLLUP_TEMPLATE}
+                    className="w-full px-3 py-2 border border-border-strong rounded-md text-sm font-mono"
+                  />
+                  <p className="text-[11px] text-muted mt-1">
+                    Drives the &ldquo;📣 Slack the channel&rdquo;{" "}
+                    <strong>Per CSM</strong> mode — one message per
+                    owning CSM with their count + a filtered deep
+                    link. Leave blank to use the built-in default.
+                    Per-CSM tokens:{" "}
+                    <code className="font-mono bg-surface-2 px-1 rounded">
+                      {"{{csm_mention}}"}
+                    </code>
+                    ,{" "}
+                    <code className="font-mono bg-surface-2 px-1 rounded">
+                      {"{{csm_name}}"}
+                    </code>
+                    ,{" "}
+                    <code className="font-mono bg-surface-2 px-1 rounded">
+                      {"{{csm_handle}}"}
+                    </code>
+                    ,{" "}
+                    <code className="font-mono bg-surface-2 px-1 rounded">
+                      {"{{count}}"}
+                    </code>
+                    ,{" "}
+                    <code className="font-mono bg-surface-2 px-1 rounded">
+                      {"{{rollup_noun}}"}
+                    </code>{" "}
+                    (&ldquo;accounts&rdquo;),{" "}
+                    <code className="font-mono bg-surface-2 px-1 rounded">
+                      {"{{rollup_context}}"}
+                    </code>{" "}
+                    (
+                    {c.id === PAST_DUE_CHANNEL_ID
+                      ? "“past-due outreach”"
+                      : "“proactive outreach”"}
+                    ),{" "}
+                    <code className="font-mono bg-surface-2 px-1 rounded">
+                      {"{{filtered_url}}"}
+                    </code>{" "}
+                    (deep link, drop into{" "}
+                    <code className="font-mono">
+                      {"<{{filtered_url}}|label>"}
+                    </code>{" "}
+                    for a custom link), or{" "}
+                    <code className="font-mono bg-surface-2 px-1 rounded">
+                      {"{{filtered_link}}"}
+                    </code>{" "}
+                    for the pre-wrapped &ldquo;Open the filtered list
+                    ↗&rdquo; CTA.
+                  </p>
                 </div>
               ) : null}
             </div>

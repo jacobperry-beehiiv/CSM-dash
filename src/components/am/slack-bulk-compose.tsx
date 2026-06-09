@@ -86,6 +86,14 @@ interface Props {
    */
   rollupNoun?: string;
   /**
+   * Admin-editable per-CSM rollup template, sourced from
+   * settings.slack.channels[].rollup_template. Resolved with the
+   * tokens documented on SlackChannel.rollup_template. Unset / empty
+   * → falls back to the hard-coded DEFAULT_ROLLUP_TEMPLATE constant
+   * so deployments without a custom template keep working.
+   */
+  rollupTemplate?: string;
+  /**
    * When set, the per-CSM rollup also creates a personal todo for
    * each CSM the message goes to. The todo title is auto-built
    * from the rollup noun + count + deep link.
@@ -96,23 +104,57 @@ interface Props {
 
 type Mode = "combined" | "per-company" | "per-csm";
 
+/** Hard-coded fallback template — used when no
+ *  `settings.slack.channels[].rollup_template` is configured. Same
+ *  copy the panel emitted in the prior implementation, ported into
+ *  the token resolver so editing it later is a one-field settings
+ *  change instead of a code change. */
+export const DEFAULT_ROLLUP_TEMPLATE =
+  "Hey {{csm_mention}}, you have *{{count}} {{rollup_noun}}* that need review for {{rollup_context}}.\n\n{{filtered_link}}";
+
+/** Resolve a Slack-mrkdwn rollup template against the per-CSM
+ *  context. Unknown tokens are left as `{{token}}` so a typo in the
+ *  settings UI shows up in the message rather than being silently
+ *  dropped — easier to debug. Tokens are case-sensitive (the
+ *  underlying regex matches the lowercase token list documented on
+ *  SlackChannel.rollup_template). */
+function renderRollupTemplate(
+  template: string,
+  tokens: {
+    csm_mention: string;
+    csm_name: string;
+    csm_handle: string;
+    count: string;
+    rollup_noun: string;
+    rollup_context: string;
+    filtered_url: string;
+    filtered_link: string;
+  }
+): string {
+  return template.replace(/\{\{\s*([a-z_]+)\s*\}\}/g, (full, raw: string) => {
+    const key = raw as keyof typeof tokens;
+    return Object.prototype.hasOwnProperty.call(tokens, key)
+      ? tokens[key]
+      : full;
+  });
+}
+
 /** Pre-build the per-CSM rollup messages from the per-row list.
- *  Groups by csmHandle and emits ONE short message per group, in the
- *  shape "Hey @CSM you have *N noun* that need review for
- *  {context}. <link>" — no bulleted list. The link is the only CTA,
- *  on the theory that the recipient should click through to triage
- *  in the dashboard rather than scan a wall of bullets in Slack.
+ *  Groups by csmHandle and emits ONE short message per group,
+ *  rendered from the supplied rollup template (or the hard-coded
+ *  default when none is set).
  *
  *  Unassigned rows ("csmHandle: null") collapse into one
  *  "Unassigned" group at the end so they don't get lost.
  *
  *  Stable across re-renders for a given input — pure function of
- *  the per-company list + deep-link base. */
+ *  the per-company list + deep-link base + template. */
 function buildCsmRollupMessages(
   perCompany: BulkSlackMessage[],
   deepLinkBase: string | undefined,
   rollupNoun: string,
-  rollupContext: string
+  rollupContext: string,
+  rollupTemplate: string
 ): Array<{
   id: string;
   label: string;
@@ -152,20 +194,32 @@ function buildCsmRollupMessages(
       ? g.handle.replace(/_/g, " ")
       : "Unassigned";
     const mention = g.slackId ? `<@${g.slackId}>` : friendlyHandle;
-    let link: string | null = null;
+    let link = "";
     if (deepLinkBase && g.handle) {
       const sep = deepLinkBase.includes("?") ? "&" : "?";
       link = `${deepLinkBase}${sep}csm=${encodeURIComponent(g.handle)}`;
     }
     const count = g.rows.length;
-    const headline = `Hey ${mention}, you have *${count} ${rollupNoun}* that need review for ${rollupContext}.`;
-    const linkLine = link
-      ? `\n\n<${link}|Open the filtered list ↗>`
-      : "";
+    const text = renderRollupTemplate(rollupTemplate, {
+      csm_mention: mention,
+      csm_name: friendlyHandle,
+      csm_handle: g.handle ?? "",
+      count: String(count),
+      rollup_noun: rollupNoun,
+      rollup_context: rollupContext,
+      filtered_url: link,
+      // Pre-wrapped link so a template that just wants the standard
+      // CTA can drop {{filtered_link}} instead of authoring the
+      // Slack-mrkdwn `<url|label>` form by hand. Renders empty when
+      // we don't have a link (unassigned rows, no deepLinkBase).
+      filtered_link: link
+        ? `<${link}|Open the filtered list ↗>`
+        : "",
+    });
     return {
       id: `csm:${key}`,
       label: friendlyHandle,
-      text: `${headline}${linkLine}`,
+      text,
       csmHandle: g.handle,
       csmSlackId: g.slackId,
       count,
@@ -182,9 +236,17 @@ export function SlackBulkCompose({
   deepLinkBase,
   rollupContext = "review",
   rollupNoun = "accounts",
+  rollupTemplate,
   createTodoOnRollup = false,
   onClose,
 }: Props) {
+  // Resolved template — caller can override via settings, falls back
+  // to the documented default. Computed inline so a settings tweak
+  // takes effect on the next render without a remount.
+  const resolvedTemplate =
+    rollupTemplate && rollupTemplate.trim()
+      ? rollupTemplate
+      : DEFAULT_ROLLUP_TEMPLATE;
   const [channel, setChannel] = useState(initialChannel);
   const [mode, setMode] = useState<Mode>(defaultMode);
   const [combined, setCombined] = useState(initialCombinedText);
@@ -199,7 +261,8 @@ export function SlackBulkCompose({
       perCompanyMessages,
       deepLinkBase,
       rollupNoun,
-      rollupContext
+      rollupContext,
+      resolvedTemplate
     )
   );
   const [busy, setBusy] = useState(false);
