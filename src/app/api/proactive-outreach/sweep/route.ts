@@ -75,10 +75,20 @@ export async function POST(req: Request) {
       ...result,
     });
   } catch (e) {
-    return NextResponse.json(
-      { error: e instanceof Error ? e.message : "Unknown error" },
-      { status: 500 }
-    );
+    // Surface the full stack to Vercel logs so we can debug 500s
+    // without round-tripping through the user. The response body
+    // stays sanitized (message only) to avoid leaking internals to
+    // the browser.
+    const message = e instanceof Error ? e.message : "Unknown error";
+    const stack = e instanceof Error ? e.stack : undefined;
+    console.error("[proactive-outreach/sweep] 500", {
+      message,
+      stack,
+      workspace_ids_count: workspaceIds?.length ?? 0,
+      dry_run: dryRun,
+      triggered_by: auth_result,
+    });
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }
 
