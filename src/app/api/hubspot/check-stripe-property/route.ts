@@ -112,7 +112,7 @@ export async function GET() {
       matches.length === 0
         ? "No HubSpot company properties match /stripe/i. Stripe ID may live on a different object (Deal, Contact) or hasn't been added to the schema yet."
         : matches.length === 1
-          ? `One match. The dashboard filters on \`stripe_customer_id\` — if that's the value of \`name\` above, the property is correctly named. If not, update searchCompaniesByStripeIds to use the actual \`name\`.`
-          : `Multiple matches — pick the one whose \`name\` is what the dashboard should filter on. Currently filtering on \`stripe_customer_id\`.`,
+          ? `One match. Confirm \`name\` above matches the STRIPE_PROPERTY constant in src/lib/integrations/hubspot.ts (currently \`stripe_customer_id__saas_\`). If they differ, update the constant.`
+          : `Multiple matches — confirm the one whose \`name\` matches the STRIPE_PROPERTY constant in src/lib/integrations/hubspot.ts (currently \`stripe_customer_id__saas_\`).`,
   });
 }

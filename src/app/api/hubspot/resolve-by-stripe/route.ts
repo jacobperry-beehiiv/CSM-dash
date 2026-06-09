@@ -17,7 +17,8 @@ export const maxDuration = 30;
  * fresh Stripe-ID addition in HubSpot — or when a HubSpot company
  * was merged / recreated and the snapshot's `hubspot_company_id` is
  * pointing at a tombstone. Looks up the customer's Stripe ID in
- * HubSpot via the `stripe_customer_id` custom property, writes the
+ * HubSpot via the configured Stripe-ID custom property (see
+ * STRIPE_PROPERTY in src/lib/integrations/hubspot.ts), writes the
  * resolved company ID into the customer-overrides KV, and invalidates
  * the load-customers cache so the next render picks it up.
  *
@@ -119,7 +120,7 @@ export async function POST(req: Request) {
   if (!match) {
     return NextResponse.json(
       {
-        error: `No HubSpot company has \`stripe_customer_id\` = ${stripeId}. Add the Stripe ID to the HubSpot company record before retrying.`,
+        error: `No HubSpot company has Stripe ID ${stripeId} on its "Stripe Customer ID (SaaS)" property. Add the Stripe ID to the HubSpot company record before retrying.`,
       },
       { status: 404 }
     );

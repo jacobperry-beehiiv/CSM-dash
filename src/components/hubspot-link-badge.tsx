@@ -111,7 +111,7 @@ export function HubSpotLinkBadge({
       pillClass =
         "bg-emerald-100 text-emerald-800 dark:bg-emerald-500/20 dark:text-emerald-200";
       label = "🔗 HubSpot linked";
-      tooltip = `Resolved via stripe_customer_id property — company ${
+      tooltip = `Resolved via HubSpot's "Stripe Customer ID (SaaS)" property — company ${
         hubspotCompanyId ?? "—"
       }. Healthy join: writes to HubSpot will land on the right record.`;
       break;
@@ -119,14 +119,14 @@ export function HubSpotLinkBadge({
       pillClass =
         "bg-amber-100 text-amber-800 dark:bg-amber-500/20 dark:text-amber-200";
       label = "⚠ Email-fallback link";
-      tooltip = `Stripe-ID lookup missed; resolved by owner_email → primary company instead. Add the Stripe ID to the HubSpot company record to upgrade this link to the primary source.`;
+      tooltip = `Stripe-ID lookup missed; resolved by owner_email → primary company instead. Set the Stripe ID on the HubSpot company's "Stripe Customer ID (SaaS)" property to upgrade this link.`;
       break;
     default:
       pillClass =
         "bg-red-100 text-red-800 dark:bg-red-500/20 dark:text-red-200";
       label = "⚠ No HubSpot link";
       tooltip = hasStripeId
-        ? `No HubSpot company has stripe_customer_id = ${"(this row's Stripe ID)"}. Add it to the HubSpot company, then click Re-resolve.`
+        ? `No HubSpot company has this row's Stripe ID on its "Stripe Customer ID (SaaS)" property. Set it on the HubSpot company, then click Re-resolve.`
         : "No Stripe customer ID on file — can't auto-resolve the HubSpot company. Set the Stripe ID in Metabase first.";
       break;
   }

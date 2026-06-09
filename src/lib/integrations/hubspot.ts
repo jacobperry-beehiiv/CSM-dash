@@ -406,23 +406,37 @@ interface ContactBatchResponse {
  * Stripe IDs are stable across HubSpot company merges / record drift
  * in a way that the q10600-sourced `hubspot_company_id` column isn't.
  *
- * Uses POST /crm/v3/objects/companies/search with one filterGroup:
- *   propertyName: "stripe_customer_id"
- *   operator: "IN"
- *   values: [cus_…, cus_…, …]
- *
- * HubSpot caps `IN` filter values at 100 per request, so we chunk
- * the same way the existing batch reads do (BATCH_SIZE = 100, with
- * INTER_BATCH_DELAY_MS pacing).
+ * Uses POST /crm/v3/objects/companies/search filtering on the
+ * STRIPE_PROPERTY constant below. HubSpot caps `IN` filter values at
+ * 100 per request, so we chunk the same way the existing batch reads
+ * do (BATCH_SIZE = 100, with INTER_BATCH_DELAY_MS pacing).
  *
  * Returns Map<stripeId, HubspotCompanySummary> with each company's
  * HubSpot record ID, name, owner ID, and activity props pre-fetched
  * — folding the work that would otherwise need a follow-up
  * fetchLastActivity() call.
  *
- * Required scope: crm.objects.companies.read (already required by
- * the existing readers).
+ * Required scopes:
+ *   - crm.objects.companies.read
+ *   - crm.schemas.companies.read  (specifically for filtering by a
+ *     custom property; the read-only paths above don't need this)
  */
+
+/**
+ * The HubSpot company-object property that stores the Stripe customer
+ * ID. The *internal* name (not the display label) — admins see this
+ * as "Stripe Customer ID (SaaS)" in the property editor; HubSpot's
+ * API expects the snake-cased / underscore-suffixed slug.
+ *
+ * To confirm the current value, GET
+ * /api/hubspot/check-stripe-property — it lists every company
+ * property whose name or label contains "stripe". If this string
+ * ever drifts (e.g., admin renames the property), the search returns
+ * HTTP 400 "There was a problem with the request" and the resolver
+ * stops working until the constant is updated to match.
+ */
+const STRIPE_PROPERTY = "stripe_customer_id__saas_";
+
 export interface HubspotCompanySummary {
   companyId: string;
   name: string | null;
@@ -438,9 +452,10 @@ interface CompanySearchResponse {
   total: number;
   results: Array<{
     id: string;
-    properties: Partial<
-      Record<ActivityProp | "name" | "hubspot_owner_id" | "stripe_customer_id", string | null>
-    >;
+    // Loosely typed because the property keys are admin-configurable
+    // — STRIPE_PROPERTY can change. Reading by index instead of by a
+    // hard-coded key keeps the type honest.
+    properties: Record<string, string | null | undefined>;
   }>;
   paging?: { next?: { after?: string } };
 }
@@ -473,7 +488,7 @@ export async function searchCompaniesByStripeIds(
   const requestedProperties = [
     "name",
     "hubspot_owner_id",
-    "stripe_customer_id",
+    STRIPE_PROPERTY,
     ...ACTIVITY_PROPS,
   ];
 
@@ -488,12 +503,12 @@ export async function searchCompaniesByStripeIds(
     const filter =
       slice.length === 1
         ? {
-            propertyName: "stripe_customer_id",
+            propertyName: STRIPE_PROPERTY,
             operator: "EQ",
             value: slice[0],
           }
         : {
-            propertyName: "stripe_customer_id",
+            propertyName: STRIPE_PROPERTY,
             operator: "IN",
             values: slice,
           };
@@ -562,10 +577,10 @@ export async function searchCompaniesByStripeIds(
       // Defensive: HubSpot occasionally returns search results with
       // no `properties` object when a property is restricted by
       // user-level visibility settings. Skip those rather than
-      // throwing — they couldn't satisfy the stripe_customer_id
-      // filter anyway, but the response shape isn't guaranteed.
+      // throwing — they couldn't satisfy the Stripe-ID filter
+      // anyway, but the response shape isn't guaranteed.
       const properties = company.properties ?? {};
-      const stripeId = properties.stripe_customer_id;
+      const stripeId = properties[STRIPE_PROPERTY];
       if (!stripeId) continue;
       const winner = pickLatest(
         properties as Partial<Record<ActivityProp, string | null>>
