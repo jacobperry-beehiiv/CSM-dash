@@ -87,7 +87,13 @@ export async function POST(req: Request) {
 
   let matches: Awaited<ReturnType<typeof searchCompaniesByStripeIds>>;
   try {
-    matches = await searchCompaniesByStripeIds([stripeId]);
+    // Strict mode — surface HubSpot's actual error message to the UI
+    // (e.g. "property `stripe_customer_id` isn't searchable", "scope
+    // missing"). The sync.ts pass uses the default soft-fail mode so
+    // a single bad batch doesn't kill the whole enrichment run.
+    matches = await searchCompaniesByStripeIds([stripeId], {
+      throwOnApiError: true,
+    });
   } catch (e) {
     // Surface the full stack to Vercel logs so we can debug 502s
     // without round-tripping through the user. Likely causes:

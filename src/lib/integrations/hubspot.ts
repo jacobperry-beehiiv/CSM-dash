@@ -446,7 +446,21 @@ interface CompanySearchResponse {
 }
 
 export async function searchCompaniesByStripeIds(
-  stripeIds: string[]
+  stripeIds: string[],
+  opts: {
+    /**
+     * When true, throw on the FIRST batch that errors at the
+     * HubSpot API level (non-2xx, non-JSON, etc.). When false
+     * (default), log + continue so a single bad batch doesn't kill
+     * an entire sync pass.
+     *
+     * The single-row /resolve-by-stripe endpoint passes true so the
+     * UI sees "property not searchable" / "invalid scope" verbatim
+     * instead of a vague "no HubSpot company has this Stripe ID."
+     * scripts/sync.ts passes false so partial results still land.
+     */
+    throwOnApiError?: boolean;
+  } = {}
 ): Promise<Map<string, HubspotCompanySummary>> {
   const result = new Map<string, HubspotCompanySummary>();
   const unique = [...new Set(stripeIds.filter(Boolean))];
@@ -492,34 +506,55 @@ export async function searchCompaniesByStripeIds(
         }),
       });
     } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
       console.error(
         `[hubspot] stripe-id search batch ${i / BATCH_SIZE} network error:`,
-        e instanceof Error ? e.message : e
+        msg
       );
+      if (opts.throwOnApiError) {
+        throw new Error(`HubSpot search network error: ${msg}`);
+      }
       continue;
     }
 
     if (!res.ok) {
       const body = await res.text().catch(() => "");
+      const msg = `HubSpot search HTTP ${res.status}: ${body.slice(0, 300)}`;
       console.error(
         `[hubspot] stripe-id search batch ${i / BATCH_SIZE} HTTP ${res.status}: ${body.slice(0, 200)}`
       );
+      if (opts.throwOnApiError) throw new Error(msg);
       continue;
     }
 
-    const json = (await res.json()) as CompanySearchResponse;
+    let json: CompanySearchResponse;
+    try {
+      json = (await res.json()) as CompanySearchResponse;
+    } catch (e) {
+      const msg = `HubSpot search returned non-JSON body: ${
+        e instanceof Error ? e.message : "unknown"
+      }`;
+      console.error(`[hubspot] stripe-id search batch ${i / BATCH_SIZE}: ${msg}`);
+      if (opts.throwOnApiError) throw new Error(msg);
+      continue;
+    }
+
     for (const company of json.results ?? []) {
-      const stripeId = company.properties.stripe_customer_id;
+      // Defensive: HubSpot occasionally returns search results with
+      // no `properties` object when a property is restricted by
+      // user-level visibility settings. Skip those rather than
+      // throwing — they couldn't satisfy the stripe_customer_id
+      // filter anyway, but the response shape isn't guaranteed.
+      const properties = company.properties ?? {};
+      const stripeId = properties.stripe_customer_id;
       if (!stripeId) continue;
-      // Pull activity rollup at the same time — saves a second
-      // batch call later when the sync wants last_activity_at.
       const winner = pickLatest(
-        company.properties as Partial<Record<ActivityProp, string | null>>
+        properties as Partial<Record<ActivityProp, string | null>>
       );
       result.set(stripeId, {
         companyId: company.id,
-        name: company.properties.name ?? null,
-        ownerId: company.properties.hubspot_owner_id ?? null,
+        name: properties.name ?? null,
+        ownerId: properties.hubspot_owner_id ?? null,
         stripeCustomerId: stripeId,
         activity: winner
           ? {
