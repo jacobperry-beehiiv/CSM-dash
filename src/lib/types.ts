@@ -16,6 +16,29 @@ export interface Customer {
   property_main_contact: string | null;
   stripe_plan: string | null;
   interval: string | null;
+  /**
+   * Months between billing triggers, sourced from Stripe via Metabase
+   * q23101 (multi-month renewal cohort) at sync time. Stamped only on
+   * customers whose cadence isn't a vanilla monthly or annual:
+   *   3   → quarterly
+   *   4   → every 4 months
+   *   6   → semi-annual
+   *   12  → annual (set explicitly when the multi-month query
+   *         surfaces them, but the default annual customers
+   *         coming from q10600 carry only `interval: "year"` and
+   *         leave this null)
+   *   24  → biennial
+   *   ... → every N months
+   *
+   * Drives the cadence bucket on the Renewals tab via
+   * intervalBucket() so the dropdown can offer Quarterly /
+   * Semi-annual / Biennial as distinct filters instead of
+   * lumping everything non-monthly into one bucket.
+   *
+   * Null when q23101 returned no row for this customer (the
+   * common case — most accounts are monthly or annual).
+   */
+  interval_count?: number | null;
   last_send: string | null;
   last_log_in: string | null;
   mon_since_1st_ent: number | null;

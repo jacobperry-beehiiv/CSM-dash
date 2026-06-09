@@ -98,26 +98,76 @@ const BUCKETS: Bucket[] = [
 ];
 
 /**
- * Collapse the raw `interval` string to a canonical bucket so the
- * cadence dropdown doesn't duplicate entries. Metabase emits "month"
- * / "year" on most rows; the manual customer-override path writes
- * "month" / "annual"; some older rows have "monthly" / "yearly".
- * Without bucketing the dropdown ends up with two "Annual" options
- * (one matching "year", one matching "annual") that filter to
- * disjoint sets.
+ * Collapse a customer's billing cadence to a canonical bucket so the
+ * cadence dropdown doesn't duplicate entries. Honors two signals:
+ *
+ *   1. `interval_count` (months between charges, sourced from
+ *      Metabase q23101 at sync time) — wins when set, because a
+ *      customer billed every 3 months has `interval: "month"` from
+ *      Stripe and would otherwise mis-bucket as Monthly.
+ *
+ *   2. The raw `interval` string ("month" / "monthly" / "year" /
+ *      "annual" / "yearly") — fallback for rows that don't have an
+ *      interval_count populated (the majority — most customers are
+ *      a true monthly or annual).
+ *
+ * Returns short snake-case bucket ids that the renewal-table filter
+ * predicates compare against directly.
  */
-function intervalBucket(raw: string | null | undefined): string {
-  if (!raw) return "";
-  const t = raw.trim().toLowerCase();
+function intervalBucket(c: {
+  interval: string | null;
+  interval_count?: number | null;
+}): string {
+  // Multi-month signal wins. The dropdown bucket names need to match
+  // bucketLabel() below so the filter chip + the dropdown agree.
+  const count = c.interval_count;
+  if (typeof count === "number" && count > 0) {
+    if (count === 1) return "monthly";
+    if (count === 3) return "quarterly";
+    if (count === 4) return "every_4_months";
+    if (count === 6) return "semi_annual";
+    if (count === 12) return "annual";
+    if (count === 24) return "biennial";
+    if (count === 36) return "triennial";
+    // Generic catch-all for any other multi-month cadence we haven't
+    // hand-labeled yet. Key encodes the count so distinct values
+    // bucket separately ("every_5_months" vs "every_7_months").
+    return `every_${count}_months`;
+  }
+  // Fallback to the raw interval string.
+  if (!c.interval) return "";
+  const t = c.interval.trim().toLowerCase();
   if (t === "month" || t === "monthly") return "monthly";
   if (t === "year" || t === "annual" || t === "yearly") return "annual";
   return t;
 }
 
 function bucketLabel(bucket: string): string {
-  if (bucket === "monthly") return "Monthly";
-  if (bucket === "annual") return "Annual";
-  return bucket.charAt(0).toUpperCase() + bucket.slice(1);
+  switch (bucket) {
+    case "monthly":
+      return "Monthly";
+    case "quarterly":
+      return "Quarterly";
+    case "every_4_months":
+      return "Every 4 months";
+    case "semi_annual":
+      return "Semi-annual";
+    case "annual":
+      return "Annual";
+    case "biennial":
+      return "Biennial";
+    case "triennial":
+      return "Triennial";
+    default: {
+      // Catch-all decoding for the every_N_months synthetic
+      // buckets — surfaces e.g. "Every 5 months" without an
+      // explicit case above. Falls back to title-casing the raw
+      // bucket string for anything we don't recognize.
+      const m = bucket.match(/^every_(\d+)_months$/);
+      if (m) return `Every ${m[1]} months`;
+      return bucket.charAt(0).toUpperCase() + bucket.slice(1);
+    }
+  }
 }
 
 export function RenewalPanel({ customers, csms }: Props) {
@@ -268,7 +318,7 @@ export function RenewalPanel({ customers, csms }: Props) {
     const counts = new Map<string, number>();
     let nonMonthly = 0;
     for (const c of customers) {
-      const bucket = intervalBucket(c.interval);
+      const bucket = intervalBucket(c);
       if (!bucket) continue;
       counts.set(bucket, (counts.get(bucket) ?? 0) + 1);
       if (bucket !== "monthly") nonMonthly++;
@@ -298,9 +348,9 @@ export function RenewalPanel({ customers, csms }: Props) {
       // isn't "monthly". A row with a missing / unrecognized interval
       // still passes — better to surface it for review than to hide
       // it under the default filter.
-      list = list.filter((c) => intervalBucket(c.interval) !== "monthly");
+      list = list.filter((c) => intervalBucket(c) !== "monthly");
     } else if (intervalFilter) {
-      list = list.filter((c) => intervalBucket(c.interval) === intervalFilter);
+      list = list.filter((c) => intervalBucket(c) === intervalFilter);
     }
     if (search) {
       const q = search.toLowerCase();

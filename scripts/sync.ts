@@ -35,6 +35,21 @@ const PLAINTEXT_PATH = path.join(process.cwd(), "data/snapshot.json");
 const ENCRYPTED_PATH = path.join(process.cwd(), "data/snapshot.enc.json");
 
 /**
+ * "All enterprise multi-month renewals" — Stripe customers whose
+ * billing cadence isn't a vanilla monthly or annual (quarterly,
+ * semi-annual, biennial, etc.). Each row carries the explicit
+ * `interval_count` (months between charges) that lets the Renewals
+ * tab bucket the customer by their actual cadence.
+ *
+ * Source: https://beehiiv.metabaseapp.com/question/23101-all-enterprise-multi-month-renewals
+ *
+ * Joined into the main snapshot at sync time on stripe_customer_id —
+ * we don't write a separate cohort snapshot because the data is
+ * cleanest to consume as a field on the existing Customer row.
+ */
+const MULTI_MONTH_QUESTION_ID = 23101;
+
+/**
  * Additional Metabase saved questions pre-computed by sync so the /am
  * tabs can read from disk instead of waiting 30–90s on a live query.
  * Each entry pairs a saved-question ID with the basename used by the
@@ -244,6 +259,75 @@ async function main() {
     console.error(
       "[sync] HubSpot auth not configured (set HUBSPOT_ACCESS_TOKEN or " +
         "HUBSPOT_CLIENT_ID+HUBSPOT_CLIENT_SECRET) — skipping HubSpot enrichment"
+    );
+  }
+
+  // ─── Multi-month renewal enrichment (q23101) ──────────────────────
+  // Stripe customers on cadences that aren't a vanilla "month" or
+  // "year" (quarterly, semi-annual, biennial, etc.) come back from
+  // q10600 with `interval: "month"` even though their billing trigger
+  // is N months apart. q23101 surfaces the explicit interval_count
+  // for these — join on stripe_customer_id and stamp interval_count
+  // onto the matching customer row so the Renewals tab can bucket
+  // them as Quarterly / Semi-annual / Biennial / etc. instead of
+  // mis-classifying as monthly.
+  //
+  // Soft-fail: if q23101 errors or returns zero rows, the main
+  // snapshot still writes (with interval_count unset on every row,
+  // which falls back to the existing interval-string bucket logic).
+  try {
+    console.error(`[sync] pulling q${MULTI_MONTH_QUESTION_ID} (multi-month renewals)…`);
+    const multiMonthStarted = Date.now();
+    const multiMonthRows = (await runSavedQuestion(
+      MULTI_MONTH_QUESTION_ID
+    )) as Record<string, unknown>[];
+    // Build a stripe_customer_id → interval_count index. q23101 may
+    // return multiple rows per customer (one per active subscription
+    // / line item); we take the FIRST interval_count we see, since
+    // the renewals tab cares about the dominant billing cadence.
+    const intervalCountByStripeId = new Map<string, number>();
+    for (const row of multiMonthRows) {
+      const sid =
+        typeof row.stripe_customer_id === "string" && row.stripe_customer_id
+          ? row.stripe_customer_id
+          : null;
+      const count =
+        typeof row.interval_count === "number"
+          ? row.interval_count
+          : typeof row.interval_count === "string"
+            ? Number(row.interval_count)
+            : null;
+      if (!sid || count == null || !Number.isFinite(count) || count <= 0) {
+        continue;
+      }
+      if (!intervalCountByStripeId.has(sid)) {
+        intervalCountByStripeId.set(sid, count);
+      }
+    }
+    let stamped = 0;
+    for (const r of rows as Record<string, unknown>[]) {
+      const sid =
+        typeof r.stripe_customer_id === "string" && r.stripe_customer_id
+          ? r.stripe_customer_id
+          : null;
+      if (!sid) continue;
+      const count = intervalCountByStripeId.get(sid);
+      if (count != null) {
+        r.interval_count = count;
+        stamped++;
+      }
+    }
+    const multiMonthElapsed = (
+      (Date.now() - multiMonthStarted) /
+      1000
+    ).toFixed(1);
+    console.error(
+      `[sync] multi-month renewals: ${multiMonthRows.length} rows from q${MULTI_MONTH_QUESTION_ID}, ${stamped} stamped onto customers in ${multiMonthElapsed}s`
+    );
+  } catch (e) {
+    console.error(
+      `[sync] q${MULTI_MONTH_QUESTION_ID} multi-month renewals enrichment failed (continuing):`,
+      e instanceof Error ? e.message : e
     );
   }
 
