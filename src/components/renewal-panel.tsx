@@ -123,7 +123,12 @@ function bucketLabel(bucket: string): string {
 export function RenewalPanel({ customers, csms }: Props) {
   const [selected, setSelected] = useState<Customer | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  const [intervalFilter, setIntervalFilter] = useState<string>("");
+  // Default to "non-monthly" so the Renewals tab opens scoped to the
+  // cadences a renewals motion actually touches (annual, multi-year,
+  // and any future enterprise cadences). Monthly accounts churn out
+  // organically — they don't need renewal outreach. The user can
+  // still flip back to "All cadences" or pick a specific one.
+  const [intervalFilter, setIntervalFilter] = useState<string>("non_monthly");
   const [search, setSearch] = useUrlSearch("q");
   const { ws2pubs } = usePublicationsIndex();
   // Per-workspace lifecycle overrides + the configured option list,
@@ -259,23 +264,40 @@ export function RenewalPanel({ customers, csms }: Props) {
    */
   const intervalOptions = useMemo(() => {
     const counts = new Map<string, number>();
+    let nonMonthly = 0;
     for (const c of customers) {
       const bucket = intervalBucket(c.interval);
       if (!bucket) continue;
       counts.set(bucket, (counts.get(bucket) ?? 0) + 1);
+      if (bucket !== "monthly") nonMonthly++;
     }
-    return [...counts.entries()]
+    // "Non-monthly" gets pinned to the top of the list as a curated
+    // option so the team can switch back to it after picking a
+    // specific cadence. Its count reflects everything that isn't
+    // monthly — annuals today, plus any future cadences the
+    // intervalBucket() helper learns about.
+    const named = [...counts.entries()]
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([bucket, count]) => ({
         value: bucket,
         label: bucketLabel(bucket),
         count,
       }));
+    return [
+      { value: "non_monthly", label: "Non-monthly", count: nonMonthly },
+      ...named,
+    ];
   }, [customers]);
 
   const filtered = useMemo(() => {
     let list = customers;
-    if (intervalFilter) {
+    if (intervalFilter === "non_monthly") {
+      // Synthetic bucket: everything whose canonical interval bucket
+      // isn't "monthly". A row with a missing / unrecognized interval
+      // still passes — better to surface it for review than to hide
+      // it under the default filter.
+      list = list.filter((c) => intervalBucket(c.interval) !== "monthly");
+    } else if (intervalFilter) {
       list = list.filter((c) => intervalBucket(c.interval) === intervalFilter);
     }
     if (search) {

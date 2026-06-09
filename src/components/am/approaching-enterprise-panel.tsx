@@ -116,6 +116,13 @@ export function ApproachingEnterprisePanel({ rows }: Props) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [settings, setSettings] = useState<SettingsShape | null>(null);
   const [composeOpen, setComposeOpen] = useState(false);
+  // Manual "Mark touched" state — mirrors the Past Due tab's affordance
+  // so an AM who handled an Approaching-Enterprise account outside the
+  // dash (Loops, ad-hoc reply, Slack DM) can still stamp the row as
+  // touched. Hits the same /api/proactive-outreach PUT the auto-stamp
+  // path uses after a bulk-draft action.
+  const [touchBusy, setTouchBusy] = useState(false);
+  const [touchMessage, setTouchMessage] = useState<string | null>(null);
   // Per-row expand state — clicking the row toggles a full
   // CustomerDetailPanel below (notes + status + dates + …),
   // matching /csm CustomerTable.
@@ -387,7 +394,64 @@ export function ApproachingEnterprisePanel({ rows }: Props) {
         >
           📣 Slack the channel
         </button>
+        {/* Manual mark-touched — same lifecycle endpoint the
+         *  draft-creation hook calls, just triggered explicitly so
+         *  rows handled outside the dash (Loops, ad-hoc Slack DM,
+         *  Gmail reply not from a dash draft) can still be marked
+         *  Outreach-logged without forcing a fresh draft. Mirrors
+         *  the Past Due tab's affordance. */}
+        <button
+          onClick={async () => {
+            const ids = visibleRows
+              .filter((r, i) => selected.has(rowKey(r, i)))
+              .map((r) => r.organization_id)
+              .filter((id): id is string => Boolean(id));
+            if (ids.length === 0) {
+              setTouchMessage(
+                "No selected rows have a workspace_id — nothing to stamp."
+              );
+              setTimeout(() => setTouchMessage(null), 4_000);
+              return;
+            }
+            setTouchBusy(true);
+            setTouchMessage(null);
+            try {
+              const r = await fetch("/api/proactive-outreach", {
+                method: "PUT",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ workspace_ids: ids }),
+              });
+              if (!r.ok) {
+                const body = (await r.json().catch(() => ({}))) as {
+                  error?: string;
+                };
+                throw new Error(body.error ?? `HTTP ${r.status}`);
+              }
+              setTouchMessage(
+                `Marked ${ids.length} account${ids.length === 1 ? "" : "s"} as touched. Refresh to see the updated state.`
+              );
+              setSelected(new Set());
+            } catch (e) {
+              setTouchMessage(
+                `Mark touched failed: ${e instanceof Error ? e.message : "unknown error"}`
+              );
+            } finally {
+              setTouchBusy(false);
+              setTimeout(() => setTouchMessage(null), 6_000);
+            }
+          }}
+          disabled={touchBusy || selected.size === 0}
+          className="px-3 py-1.5 border border-border-strong rounded-md text-sm hover:bg-canvas disabled:opacity-50"
+          title="Mark selected as Touched (handled outside the dash — Loops, ad-hoc reply, etc.)"
+        >
+          {touchBusy ? "Marking…" : `✓ Mark touched (${selected.size})`}
+        </button>
       </div>
+      {touchMessage ? (
+        <div className="text-xs text-muted bg-blue-50 dark:bg-blue-500/10 border border-blue-200 dark:border-accent/30 rounded-md px-3 py-2 mb-3">
+          {touchMessage}
+        </div>
+      ) : null}
 
       {buckets.length === 0 ? (
         <div className="bg-green-50 border border-green-200 rounded-lg p-4 text-sm text-green-800">
