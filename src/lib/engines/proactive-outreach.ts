@@ -13,6 +13,11 @@ import {
   type SettingsShape,
 } from "../data/settings-types";
 import { fmtCurrency } from "../../components/format";
+import {
+  buildRollupTokens,
+  DEFAULT_ROLLUP_TEMPLATE,
+  renderRollupTemplate,
+} from "../integrations/slack-rollup";
 
 /**
  * Phase 2b sweep — fires Slack alerts when an Enterprise account
@@ -185,11 +190,22 @@ export async function runProactiveOutreachSweep(
       "Proactive Outreach Slack channel isn't configured. Set it at /settings/slack (channel id `proactive_outreach`)."
     );
   }
-  if (!channelCfg.template) {
-    throw new Error(
-      "Proactive Outreach channel has no template. Set it at /settings/slack."
-    );
-  }
+  // Per-CSM rollup is now the default — the engine groups eligible
+  // accounts by owner and sends ONE message per CSM with the count
+  // + filtered deep link, instead of one message per company. The
+  // legacy per-company `channelCfg.template` is now unused for the
+  // ping path (kept on the channel config since the type still has
+  // it; clearing it no longer breaks the sweep). Nudges (below)
+  // still thread per-account because they're follow-ups on a
+  // specific row's stalled outreach.
+  const rollupTemplate =
+    (channelCfg.rollup_template ?? "").trim() || DEFAULT_ROLLUP_TEMPLATE;
+  // Deep link base for the {{filtered_url}} / {{filtered_link}}
+  // tokens. The DASHBOARD_URL env var carries the prod origin; falls
+  // back to the relative path so dev / preview deploys still get a
+  // useful link inside the dashboard's own origin.
+  const dashboardOrigin = process.env.DASHBOARD_URL ?? "";
+  const proactiveDeepLink = `${dashboardOrigin}/am?tab=proactive`;
 
   // Eligible cohort: Enterprise, ≥75% of cap, with a workspace_id to
   // key dedupe state on. Falls into the same definition the panel uses.
@@ -229,6 +245,15 @@ export async function runProactiveOutreachSweep(
 
   const now = Date.now();
 
+  // ── First-time pings: group by CSM, send one rollup per CSM ──
+  // Build the to-ping cohort first (skip already-pinged / workspace-
+  // less rows so the rollup count matches reality). Then bucket by
+  // CSM handle and emit a single Slack message per bucket using the
+  // configured rollup_template. Every account in a bucket still gets
+  // an individual savePingSent() call so the per-account dedupe +
+  // nudge thread state stays correct — they all share the rollup's
+  // Slack ts so nudges thread under the rollup message later.
+  const toPing: Customer[] = [];
   for (const c of eligible) {
     result.scanned++;
     if (!c.workspace_id) {
@@ -236,28 +261,77 @@ export async function runProactiveOutreachSweep(
       continue;
     }
     const entry: ProactiveOutreachEntry | undefined = state[c.workspace_id];
-
-    // First-time ping?
     if (!entry || !entry.ping_sent_at) {
-      try {
-        let messageTs: string | null = null;
-        if (!opts.dryRun) {
-          const r = await postToSlack({
-            channelId: channelCfg.channel_id,
-            text: renderPing(channelCfg.template ?? "", c, settings),
-          });
-          messageTs = r.ts;
-          await savePingSent(c.workspace_id, { messageTs });
-        }
-        result.pings_sent++;
-      } catch (e) {
-        result.failures.push({
-          workspace: c.workspace_name ?? c.workspace_id,
-          error: e instanceof Error ? e.message : "unknown",
-        });
-      }
-      continue;
+      toPing.push(c);
     }
+  }
+
+  // Group the ping cohort by CSM handle. Unassigned rows bucket into
+  // one "Unassigned" group (key __unassigned__) so they still get a
+  // rollup ping in the channel — there's no Slack ID to @-mention so
+  // the template's {{csm_mention}} falls back to plain "Unassigned".
+  const pingGroups = new Map<string, Customer[]>();
+  for (const c of toPing) {
+    const key = c.customer_success_manager ?? "__unassigned__";
+    const list = pingGroups.get(key) ?? [];
+    list.push(c);
+    pingGroups.set(key, list);
+  }
+  for (const [key, group] of pingGroups.entries()) {
+    const handle = key === "__unassigned__" ? null : key;
+    const slackId = handle ? settings.slack.csm_user_ids[handle] ?? null : null;
+    const tokens = buildRollupTokens({
+      csmHandle: handle,
+      csmSlackId: slackId,
+      count: group.length,
+      rollupNoun: "accounts",
+      rollupContext: "proactive outreach",
+      deepLinkBase: proactiveDeepLink,
+    });
+    const text = renderRollupTemplate(rollupTemplate, tokens);
+    try {
+      let messageTs: string | null = null;
+      if (!opts.dryRun) {
+        const r = await postToSlack({
+          channelId: channelCfg.channel_id,
+          text,
+        });
+        messageTs = r.ts;
+        // Stamp every account in the group as pinged. They share the
+        // rollup's Slack ts so nudges in this same engine run thread
+        // under the rollup message instead of starting a new top-
+        // level conversation.
+        for (const c of group) {
+          if (c.workspace_id) {
+            await savePingSent(c.workspace_id, { messageTs });
+          }
+        }
+      }
+      // Count one "ping" per account so the existing UI counter
+      // ("pinged N") keeps reading correctly. Counting per-group
+      // would be misleading — the CSMs care about how many of their
+      // accounts moved into the pinged state.
+      result.pings_sent += group.length;
+    } catch (e) {
+      // Roll the whole group's failures up — the rollup message
+      // either landed or didn't, so per-account failure attribution
+      // doesn't add information here.
+      result.failures.push({
+        workspace: handle
+          ? `${handle} (${group.length} accounts)`
+          : `Unassigned (${group.length} accounts)`,
+        error: e instanceof Error ? e.message : "unknown",
+      });
+    }
+  }
+
+  // ── Nudges: still per-account, threaded under the original ping ──
+  // Iterate the original eligible list so we evaluate every row that
+  // already has a ping_sent_at against the nudge thresholds.
+  for (const c of eligible) {
+    if (!c.workspace_id) continue;
+    const entry: ProactiveOutreachEntry | undefined = state[c.workspace_id];
+    if (!entry || !entry.ping_sent_at) continue; // not yet pinged
 
     // Outreach already logged — nothing to nudge about.
     if (entry.last_outreach_at) {

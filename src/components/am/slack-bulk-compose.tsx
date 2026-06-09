@@ -1,6 +1,11 @@
 "use client";
 
 import { useState } from "react";
+import {
+  buildRollupTokens,
+  DEFAULT_ROLLUP_TEMPLATE as SHARED_DEFAULT_TEMPLATE,
+  renderRollupTemplate as renderRollupTemplateShared,
+} from "@/lib/integrations/slack-rollup";
 
 /**
  * Shared bulk-Slack compose modal for the AM dashboard. Both Past Due
@@ -104,40 +109,12 @@ interface Props {
 
 type Mode = "combined" | "per-company" | "per-csm";
 
-/** Hard-coded fallback template — used when no
- *  `settings.slack.channels[].rollup_template` is configured. Same
- *  copy the panel emitted in the prior implementation, ported into
- *  the token resolver so editing it later is a one-field settings
- *  change instead of a code change. */
-export const DEFAULT_ROLLUP_TEMPLATE =
-  "Hey {{csm_mention}}, you have *{{count}} {{rollup_noun}}* that need review for {{rollup_context}}.\n\n{{filtered_link}}";
-
-/** Resolve a Slack-mrkdwn rollup template against the per-CSM
- *  context. Unknown tokens are left as `{{token}}` so a typo in the
- *  settings UI shows up in the message rather than being silently
- *  dropped — easier to debug. Tokens are case-sensitive (the
- *  underlying regex matches the lowercase token list documented on
- *  SlackChannel.rollup_template). */
-function renderRollupTemplate(
-  template: string,
-  tokens: {
-    csm_mention: string;
-    csm_name: string;
-    csm_handle: string;
-    count: string;
-    rollup_noun: string;
-    rollup_context: string;
-    filtered_url: string;
-    filtered_link: string;
-  }
-): string {
-  return template.replace(/\{\{\s*([a-z_]+)\s*\}\}/g, (full, raw: string) => {
-    const key = raw as keyof typeof tokens;
-    return Object.prototype.hasOwnProperty.call(tokens, key)
-      ? tokens[key]
-      : full;
-  });
-}
+// Re-export the shared default template so /settings/slack and
+// other client callers can keep importing it from here. The actual
+// constant lives in src/lib/integrations/slack-rollup.ts so server
+// code (engine sweeps, crons) can use it without dragging a
+// "use client" module into the server bundle.
+export const DEFAULT_ROLLUP_TEMPLATE = SHARED_DEFAULT_TEMPLATE;
 
 /** Pre-build the per-CSM rollup messages from the per-row list.
  *  Groups by csmHandle and emits ONE short message per group,
@@ -190,35 +167,19 @@ function buildCsmRollupMessages(
     return a.localeCompare(b);
   });
   return ordered.map(([key, g]) => {
-    const friendlyHandle = g.handle
-      ? g.handle.replace(/_/g, " ")
-      : "Unassigned";
-    const mention = g.slackId ? `<@${g.slackId}>` : friendlyHandle;
-    let link = "";
-    if (deepLinkBase && g.handle) {
-      const sep = deepLinkBase.includes("?") ? "&" : "?";
-      link = `${deepLinkBase}${sep}csm=${encodeURIComponent(g.handle)}`;
-    }
     const count = g.rows.length;
-    const text = renderRollupTemplate(rollupTemplate, {
-      csm_mention: mention,
-      csm_name: friendlyHandle,
-      csm_handle: g.handle ?? "",
-      count: String(count),
-      rollup_noun: rollupNoun,
-      rollup_context: rollupContext,
-      filtered_url: link,
-      // Pre-wrapped link so a template that just wants the standard
-      // CTA can drop {{filtered_link}} instead of authoring the
-      // Slack-mrkdwn `<url|label>` form by hand. Renders empty when
-      // we don't have a link (unassigned rows, no deepLinkBase).
-      filtered_link: link
-        ? `<${link}|Open the filtered list ↗>`
-        : "",
+    const tokens = buildRollupTokens({
+      csmHandle: g.handle,
+      csmSlackId: g.slackId,
+      count,
+      rollupNoun,
+      rollupContext,
+      deepLinkBase,
     });
+    const text = renderRollupTemplateShared(rollupTemplate, tokens);
     return {
       id: `csm:${key}`,
-      label: friendlyHandle,
+      label: tokens.csm_name,
       text,
       csmHandle: g.handle,
       csmSlackId: g.slackId,
