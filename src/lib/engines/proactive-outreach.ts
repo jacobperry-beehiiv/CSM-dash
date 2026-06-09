@@ -201,10 +201,16 @@ export async function runProactiveOutreachSweep(
   const rollupTemplate =
     (channelCfg.rollup_template ?? "").trim() || DEFAULT_ROLLUP_TEMPLATE;
   // Deep link base for the {{filtered_url}} / {{filtered_link}}
-  // tokens. The DASHBOARD_URL env var carries the prod origin; falls
-  // back to the relative path so dev / preview deploys still get a
-  // useful link inside the dashboard's own origin.
-  const dashboardOrigin = process.env.DASHBOARD_URL ?? "";
+  // tokens. Uses NEXT_PUBLIC_DASHBOARD_URL to match the convention
+  // every other server-side Slack writer in this codebase already
+  // follows (team-tasks reminders, personal-todo reminders,
+  // slack-views) — and falls back to the prod origin so a deploy
+  // without the env var still emits clickable links. Without an
+  // absolute URL Slack drops the link entirely (renders the bare
+  // path inside the angle brackets), which was the visible bug.
+  const dashboardOrigin = (
+    process.env.NEXT_PUBLIC_DASHBOARD_URL ?? "https://csm-dash.vercel.app"
+  ).replace(/\/+$/, "");
   const proactiveDeepLink = `${dashboardOrigin}/am?tab=proactive`;
 
   // Eligible cohort: Enterprise, ≥75% of cap, with a workspace_id to
