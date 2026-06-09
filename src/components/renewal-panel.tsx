@@ -123,12 +123,14 @@ function bucketLabel(bucket: string): string {
 export function RenewalPanel({ customers, csms }: Props) {
   const [selected, setSelected] = useState<Customer | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  // Default to "non-monthly" so the Renewals tab opens scoped to the
-  // cadences a renewals motion actually touches (annual, multi-year,
-  // and any future enterprise cadences). Monthly accounts churn out
-  // organically — they don't need renewal outreach. The user can
-  // still flip back to "All cadences" or pick a specific one.
-  const [intervalFilter, setIntervalFilter] = useState<string>("non_monthly");
+  // Default to "annual" — the Renewals motion is fundamentally about
+  // annual contracts (multi-year reads as Annual at the bucket level
+  // too). Monthly accounts churn out organically and don't need
+  // renewal outreach. The Non-monthly synthetic bucket stays in the
+  // dropdown as a future-proof option for when new non-monthly
+  // cadences (semi-annual, biennial) land, but the user-facing
+  // default is the precise label the team actually thinks about.
+  const [intervalFilter, setIntervalFilter] = useState<string>("annual");
   const [search, setSearch] = useUrlSearch("q");
   const { ws2pubs } = usePublicationsIndex();
   // Per-workspace lifecycle overrides + the configured option list,
