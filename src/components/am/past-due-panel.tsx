@@ -2,6 +2,10 @@
 
 import { Fragment, useEffect, useMemo, useState } from "react";
 import type { PastDueRow } from "@/lib/engines/am-cohorts";
+import {
+  pastDueMonth,
+  pastDueReason,
+} from "@/lib/engines/past-due-context";
 import { fmtCurrency, fmtDate } from "../format";
 import {
   findSlackChannel,
@@ -692,6 +696,17 @@ export function PastDuePanel({ rows, csms, totalSourceRows }: Props) {
               return synthesizeCustomerFromPastDueRow(r);
             })
             .filter((c): c is Customer => Boolean(c));
+          // Build a Stripe-customer-id → PastDueRow index so the
+          // BulkEmailLauncher's extraContextFor callback can look up
+          // each row's charge metadata in O(1) at render time. We
+          // use the selected rows (not the full searched list) so a
+          // customer with multiple historical failed-charge entries
+          // resolves to the most-recently-attempted one for the
+          // current selection.
+          const pastDueByStripeId = new Map<string, PastDueRow>();
+          for (const r of selectedRows) {
+            if (r.customer_id) pastDueByStripeId.set(r.customer_id, r);
+          }
           const selectedCustomerIds = selectedCustomers
             .map((c) => c.stripe_customer_id ?? "")
             .filter(Boolean);
@@ -799,6 +814,23 @@ export function PastDuePanel({ rows, csms, totalSourceRows }: Props) {
                     : undefined
                 }
                 trackingIdFor={(c) => c.stripe_customer_id ?? null}
+                extraContextFor={(c) => {
+                  // Past-due-only context for {{MONTH}} / {{REASON}}.
+                  // Look up the customer's failed-charge row from
+                  // the per-render map built above. Customers
+                  // without a Stripe ID (synthesized rows that
+                  // didn't carry one through) get null lookups, and
+                  // both tags fall through to "—" — same fallback as
+                  // every other ctx-driven tag.
+                  const row = c.stripe_customer_id
+                    ? pastDueByStripeId.get(c.stripe_customer_id) ?? null
+                    : null;
+                  if (!row) return {};
+                  return {
+                    past_due_month: pastDueMonth(row),
+                    past_due_reason: pastDueReason(row),
+                  };
+                }}
                 onDraftCreated={async (ids) => {
                   // Auto-stamp "touched" (or "follow_up_sent" on the
                   // Follow-Up sub-tab) for every customer whose draft

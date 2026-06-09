@@ -5,7 +5,10 @@ import {
   BulkDraftsModal,
   type BulkDraft,
 } from "../bulk-drafts-modal";
-import { buildBulkDrafts } from "@/lib/templates/bulk-drafts";
+import {
+  buildBulkDrafts,
+  type BuildBulkDraftsInput,
+} from "@/lib/templates/bulk-drafts";
 import { isVisibleToCsm, type StoredTemplate } from "@/lib/templates/types";
 import { useViewerEmail } from "@/lib/auth-client";
 import { getTierLadder } from "@/lib/tiers/client";
@@ -62,6 +65,11 @@ interface Props {
    *  default to the settings-configured bulk alias. Falls through to
    *  the chosen template's send_as_email when unset. */
   defaultFromAlias?: string;
+  /** Forwarded to buildBulkDrafts so the caller can supply per-row
+   *  merge-tag context (e.g. Past Due passes
+   *  `{ past_due_month, past_due_reason }` per customer so the
+   *  {{MONTH}} and {{REASON}} tags resolve in templates). */
+  extraContextFor?: BuildBulkDraftsInput["extraContextFor"];
 }
 
 export function BulkEmailLauncher({
@@ -74,6 +82,7 @@ export function BulkEmailLauncher({
   trackingIdFor,
   onDraftCreated,
   defaultFromAlias,
+  extraContextFor,
 }: Props) {
   const viewerEmail = useViewerEmail();
   const [open, setOpen] = useState(false);
@@ -145,8 +154,9 @@ export function BulkEmailLauncher({
       ccLookup,
       bccLookup,
       trackingIdFor,
+      extraContextFor,
     });
-  }, [open, templateId, customers, templates, ladder, ccLookup, bccLookup, trackingIdFor]);
+  }, [open, templateId, customers, templates, ladder, ccLookup, bccLookup, trackingIdFor, extraContextFor]);
 
   useEffect(() => {
     setDrafts(builtDrafts);

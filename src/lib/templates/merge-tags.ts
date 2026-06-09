@@ -33,6 +33,17 @@ export interface MergeContext {
    *  no specific recipient is in scope (e.g. single-customer OutreachModal
    *  with multiple checkboxes ticked). */
   recipient_email?: string | null;
+  /** Past-due context — set only when drafting from the Past Due panel.
+   *  `past_due_month` is the full month name of the failed charge
+   *  ("June", "July", …) parsed from PastDueRow.charge_attempted_at.
+   *  `past_due_reason` is a humanized phrase derived from
+   *  PastDueRow.failure_code / failure_message ("due to insufficient
+   *  funds", "due to card decline", "due to a payment issue").
+   *  Both render as "—" when absent, so a template that references
+   *  these tags still works (visibly degraded) outside the Past Due
+   *  flow. */
+  past_due_month?: string | null;
+  past_due_reason?: string | null;
 }
 
 export interface MergeTag {
@@ -466,6 +477,30 @@ export const MERGE_TAGS: MergeTag[] = [
       "Count of publications that are actively sending but have run zero ads in the period.",
     resolve: (_, ctx) =>
       ctx.adGap ? String(ctx.adGap.zero_ad_sending_pubs.length) : "—",
+  },
+  // ─── Past Due — failed-charge context ─────────────────────────────
+  // These two tags only resolve when the draft is being built from
+  // the Past Due panel (which threads charge metadata into ctx via
+  // extraContextFor). Outside that flow they render as "—" so a
+  // template can still be previewed without crashing.
+  //
+  // Token case mirrors what a CSM would type: MONTH / REASON, all
+  // caps, no `customer.` prefix — short enough that pasting them
+  // into a templated body reads naturally ("Your {{MONTH}} charge
+  // failed {{REASON}}").
+  {
+    token: "MONTH",
+    label: "Past Due — month of failed charge",
+    description:
+      "Full month name of the failed charge (e.g. \"June\"). Pulled from PastDueRow.charge_attempted_at. Only resolves when drafting from the Past Due panel.",
+    resolve: (_, ctx) => ctx.past_due_month || "—",
+  },
+  {
+    token: "REASON",
+    label: "Past Due — reason phrase",
+    description:
+      "Humanized phrase for why the charge failed (e.g. \"due to insufficient funds\", \"due to card decline\"). Derived from Stripe's failure_code on PastDueRow. Falls back to \"due to a payment issue\" for codes we haven't mapped.",
+    resolve: (_, ctx) => ctx.past_due_reason || "—",
   },
 ];
 

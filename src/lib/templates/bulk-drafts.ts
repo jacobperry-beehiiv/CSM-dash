@@ -1,4 +1,4 @@
-import { applyMergeTags } from "./merge-tags";
+import { applyMergeTags, type MergeContext } from "./merge-tags";
 import {
   composeUrlForTemplate,
   composeUrlWithAdGap,
@@ -58,6 +58,14 @@ export interface BuildBulkDraftsInput {
    *  got actioned. Past Due wires to stripe_customer_id, Proactive
    *  Outreach to workspace_id. Unset → no lifecycle tracking. */
   trackingIdFor?: (c: Customer) => string | null;
+  /** Optional per-customer extra merge-tag context. Lets callers
+   *  thread row-specific values into the renderer without polluting
+   *  the Customer type. Today: Past Due passes
+   *  `{ past_due_month, past_due_reason }` so {{MONTH}} / {{REASON}}
+   *  tags resolve. The returned object is merged into the per-row
+   *  MergeContext alongside ladder + adGap. Missing entries fall
+   *  through to ctx defaults (which themselves fall through to "—"). */
+  extraContextFor?: (c: Customer) => Partial<MergeContext>;
 }
 
 /**
@@ -84,6 +92,7 @@ export function buildBulkDrafts(input: BuildBulkDraftsInput): BulkDraft[] {
     ccLookup,
     bccLookup,
     trackingIdFor,
+    extraContextFor,
   } = input;
   const usesAdGap =
     /customer\.(ad_revenue_actual|ad_revenue_potential|ad_revenue_gap|ad_zero_pubs)/.test(
@@ -102,7 +111,13 @@ export function buildBulkDrafts(input: BuildBulkDraftsInput): BulkDraft[] {
         ? composeUrlWithAdGap(tpl, c, ladder, adGap, { cc, bcc })
         : composeUrlForTemplate(tpl, c, ladder, { cc, bcc });
     if (!composeUrl) continue;
-    const ctx = { ladder, adGap };
+    // Merge per-row extra context (e.g. Past Due passes
+    // past_due_month / past_due_reason) into the base ctx so MONTH /
+    // REASON tags resolve. Caller-supplied values win — ladder +
+    // adGap are computed locally and shouldn't be overridden, but
+    // the row-specific entries can supply anything else.
+    const extras: Partial<MergeContext> = extraContextFor?.(c) ?? {};
+    const ctx: MergeContext = { ladder, adGap, ...extras };
     const subject = applyMergeTags(tpl.subject, c, ctx);
     const body_html = applyMergeTags(tpl.body_html, c, ctx);
     const body_text = htmlToText(body_html);
