@@ -94,5 +94,33 @@ export function metabaseRowToCustomer(
         | import("../types").HubSpotContactRef[]
         | null
         | undefined) ?? null,
+    // ─── HubSpot link confidence (Stripe-ID resolver) ───────────────
+    // Stamped by scripts/sync.ts (`hubspot_link_source` / `hubspot_link_warning`)
+    // after the Stripe-ID-first HubSpot resolver runs. Pass through
+    // verbatim so the link badge in customer-detail-panel sees the
+    // resolved state — without these lines the mapper silently drops
+    // them and every row renders as "🔴 No HubSpot link" regardless
+    // of what the sync actually resolved.
+    hubspot_link_source:
+      (row.hubspot_link_source as
+        | "stripe_id"
+        | "email_fallback"
+        | "none"
+        | undefined) ?? undefined,
+    hubspot_link_warning:
+      (row.hubspot_link_warning as string | null | undefined) ?? null,
+    // ─── Multi-month renewals (q23101 enrichment) ───────────────────
+    // Months between billing triggers, set by scripts/sync.ts when
+    // q23101 returns a row for this customer. Drives the Renewals
+    // tab's cadence bucketing — without it, quarterly / semi-annual /
+    // biennial customers all mis-bucket as Monthly (their q10600
+    // `interval` reads "month" even though the trigger is N months
+    // apart).
+    interval_count:
+      typeof row.interval_count === "number"
+        ? row.interval_count
+        : typeof row.interval_count === "string"
+          ? Number(row.interval_count) || null
+          : null,
   };
 }
