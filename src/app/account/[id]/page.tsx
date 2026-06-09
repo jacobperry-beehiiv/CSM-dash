@@ -8,6 +8,7 @@ import { RiskLevelChip } from "@/components/risk-level-chip";
 import { AccountOutreach } from "@/components/account-outreach";
 import { HubSpotContactsSection } from "@/components/hubspot-contacts-section";
 import { CustomerSignalsSection } from "@/components/customer-signals-section";
+import { CustomerPublicationsList } from "@/components/customer-publications-list";
 
 export const dynamic = "force-dynamic";
 
@@ -65,6 +66,17 @@ export default async function AccountPage({
         <p className="text-sm text-muted mt-1">
           {c.workspace_name} · {c.stripe_plan ?? "—"} · CSM:{" "}
           {c.customer_success_manager?.replace(/_/g, " ") ?? "unassigned"}
+          {c.owner_email ? (
+            <>
+              {" · "}
+              <a
+                href={`mailto:${c.owner_email}`}
+                className="hover:text-fg underline decoration-dotted"
+              >
+                {c.owner_email}
+              </a>
+            </>
+          ) : null}
         </p>
       </div>
 
@@ -157,6 +169,19 @@ export default async function AccountPage({
       </div>
 
       <HubSpotContactsSection contacts={c.hubspot_contacts} />
+
+      {/* Publications list — every newsletter associated with this
+       *  workspace, with subscriber counts and per-pub metabase deep
+       *  links. The detail panel inside the customer table already
+       *  shows this; surfacing it here too means the standalone
+       *  /account view doesn't omit something a CSM expects to
+       *  find. Renders nothing when the workspace has no
+       *  publications (cancelled workspace, etc.). */}
+      {c.workspace_id ? (
+        <div className="mb-6">
+          <CustomerPublicationsList workspaceId={c.workspace_id} />
+        </div>
+      ) : null}
 
       <AccountOutreach customer={c} />
     </>

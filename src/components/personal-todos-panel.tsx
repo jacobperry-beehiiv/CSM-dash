@@ -9,6 +9,7 @@ import {
   type TodoPriority,
   type TodoSource,
 } from "@/lib/personal-todos/types";
+import { normalizeSlackText } from "@/lib/personal-todos/normalize-text";
 
 /**
  * Personal to-do list — rendered on the home page directly beneath
@@ -242,7 +243,11 @@ export function PersonalTodosPanel() {
   }
 
   function addFromComposer() {
-    const title = draftTitle.trim();
+    // Normalize Slack-pasted text on submit so a copy/pasted message
+    // body lands as readable plain text. "<@U123> ping <https://x|here>"
+    // becomes "ping here (https://x)" without the user having to
+    // hand-edit the line first.
+    const title = normalizeSlackText(draftTitle).trim();
     if (!title) return;
     const now = new Date().toISOString();
     const todo: PersonalTodo = {

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { loadCustomers } from "@/lib/data/load-customers";
 import { loadSettings } from "@/lib/data/settings";
 import { applyTodoOps } from "@/lib/personal-todos/store";
+import { normalizeSlackText } from "@/lib/personal-todos/normalize-text";
 import { resolveUserKeyForSlackId as resolveIdentity } from "@/lib/personal-todos/identity";
 import {
   buildFindResultBlocks,
@@ -587,7 +588,12 @@ async function handleDmMessage(
     return;
   }
   const userKey = resolved.userKey;
-  const text = event.text.trim().slice(0, 500);
+  // Strip Slack's bracket-pipe artifacts (user/group mentions,
+  // <url|label> links, &lt;/&gt; entities) so the todo title reads
+  // as plain text instead of "<@U12345> can you check
+  // <https://foo.com|this>". Normalize BEFORE the 500-char slice so
+  // we don't accidentally truncate inside a token.
+  const text = normalizeSlackText(event.text).trim().slice(0, 500);
 
   // ── Command-style DMs route to the same handlers as @-mentions ──
   // Slack's `app_mention` event doesn't fire in DMs (every message
@@ -780,7 +786,11 @@ async function handleReactionAdded(
   const messageText = await fetchMessageText(event.item.channel, event.item.ts);
   const permalink = await fetchPermalink(event.item.channel, event.item.ts);
 
-  const title = (messageText ?? "(reacted Slack message)").slice(0, 200);
+  // Normalize Slack mrkdwn artifacts before title-slicing so the
+  // resulting todo reads as plain prose. The full raw text still
+  // lives in source_meta.original_text for traceability.
+  const cleanedText = messageText ? normalizeSlackText(messageText) : null;
+  const title = (cleanedText ?? "(reacted Slack message)").slice(0, 200);
   const now = new Date().toISOString();
   const todo: PersonalTodo = {
     id: newTodoId(),

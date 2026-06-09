@@ -69,10 +69,31 @@ export function CustomerDetailPanel({
     <div className="space-y-4">
       {topSlot}
 
-      {c.workspace_id ? (
-        <div className="flex flex-wrap items-center gap-2 text-xs text-muted">
-          <span>Workspace ID:</span>
-          <CopyButton value={c.workspace_id} label="Copy workspace ID" />
+      {/* Top metadata strip — at-a-glance identifiers. Owner email
+       *  is surfaced here (in addition to the Contact section below)
+       *  so a CSM doesn't have to expand a collapsed section just to
+       *  grab the email — it's almost always the first thing they
+       *  want when opening the panel. */}
+      {c.workspace_id || c.owner_email || c.stripe_customer_id ? (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted">
+          {c.owner_email ? (
+            <span className="flex items-center gap-1.5">
+              <span>Owner:</span>
+              <CopyButton
+                value={c.owner_email}
+                label="Copy owner email"
+                href={`mailto:${c.owner_email}`}
+                hrefLabel="Open in mail client"
+              />
+            </span>
+          ) : null}
+          {c.workspace_id ? (
+            <>
+              {c.owner_email ? <span className="text-subtle">·</span> : null}
+              <span>Workspace ID:</span>
+              <CopyButton value={c.workspace_id} label="Copy workspace ID" />
+            </>
+          ) : null}
           {c.stripe_customer_id ? (
             <>
               <span className="text-subtle">·</span>

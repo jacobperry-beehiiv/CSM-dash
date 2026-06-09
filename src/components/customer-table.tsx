@@ -516,9 +516,27 @@ export function CustomerTable({
             <div className="font-medium text-fg break-words">
               {c.company_name || c.workspace_name || "-"}
             </div>
-            <div className="text-xs text-muted truncate">
-              {c.workspace_name || ""}
-            </div>
+            {/* Workspace name as line 2 only when it differs from the
+             *  company name (often it's identical and would just be
+             *  duplicated noise). Owner email follows as a small
+             *  mailto-link so a CSM can copy/open from the table
+             *  without expanding the row. */}
+            {c.workspace_name &&
+            c.workspace_name !== (c.company_name ?? c.workspace_name) ? (
+              <div className="text-xs text-muted truncate">
+                {c.workspace_name}
+              </div>
+            ) : null}
+            {c.owner_email ? (
+              <a
+                href={`mailto:${c.owner_email}`}
+                onClick={(e) => e.stopPropagation()}
+                className="text-xs text-subtle hover:text-accent truncate block"
+                title={c.owner_email}
+              >
+                {c.owner_email}
+              </a>
+            ) : null}
           </div>
         );
       case "arr":
