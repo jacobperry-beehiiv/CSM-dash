@@ -17,7 +17,6 @@ import {
   type BulkSlackMessage,
 } from "./slack-bulk-compose";
 import { BulkEmailLauncher } from "./bulk-email-launcher";
-import { LowTierBulkSend } from "./low-tier-bulk-send";
 import { NotesChip } from "./notes-chip";
 import { ReviewStateCell } from "./review-state-cell";
 import { SendDigestButton } from "./send-digest-button";
@@ -760,40 +759,18 @@ export function PastDuePanel({ rows, csms, totalSourceRows }: Props) {
               setTimeout(() => setTouchReport(null), 6_000);
             }
           };
-          if (subtab === "below") {
-            // Under-$3.5K rows use the BCC-bundled LowTierBulkSend
-            // instead of per-customer Gmail drafts, but the AM still
-            // needs the manual "Mark touched" affordance for rows
-            // they emailed outside the dash (Loops, ad-hoc reply,
-            // etc.). Same handler the higher tiers use — q24620's
-            // customer_id IS the Stripe ID so no book lookup needed.
-            return (
-              <>
-                <LowTierBulkSend
-                  customers={selectedCustomers}
-                  settings={settings}
-                  disabled={selected.size === 0 || selectedCustomers.length === 0}
-                  onSent={() => reloadOutreach()}
-                />
-                <button
-                  onClick={() => void markTouched()}
-                  disabled={selected.size === 0 || touchBusy}
-                  className="px-3 py-1.5 border border-border-strong rounded-md text-sm hover:bg-canvas disabled:opacity-50"
-                  title="Mark selected as Touched (first outreach sent — e.g. handled via Loops or another channel)"
-                >
-                  {touchBusy
-                    ? "Marking…"
-                    : `✓ Mark touched${
-                        markTouchCustomerIds.length > 0
-                          ? ` (${markTouchCustomerIds.length})`
-                          : ""
-                      }`}
-                </button>
-              </>
-            );
-          }
-          // Enterprise + Above + Follow-Up all use BulkEmailLauncher.
-          // Enterprise adds CC-CSM via the ccLookup prop.
+          // All four subtabs route through the unified
+          // BulkEmailLauncher → BulkDraftsModal. Each subtab tweaks
+          // the launcher with conditional props:
+          //   - Enterprise: ccLookup pre-CCs the assigned CSM on
+          //     every draft (legacy past-due behavior).
+          //   - Below $3.5K: defaultFromAlias pre-selects the
+          //     settings-configured bulk alias in the modal's
+          //     "Sending as" dropdown. Replaces the old
+          //     LowTierBulkSend BCC-bundle path with a per-customer
+          //     draft model that's consistent with every other AM
+          //     tab — same modal, same live preview, same recipient
+          //     picker, same alias dropdown.
           return (
             <>
               <BulkEmailLauncher
@@ -804,7 +781,7 @@ export function PastDuePanel({ rows, csms, totalSourceRows }: Props) {
                     : "general-checkin"
                 }
                 disabled={
-                  selected.size === 0 || customerBook.length === 0
+                  selected.size === 0 || selectedCustomers.length === 0
                 }
                 label={
                   subtab === "followup"
@@ -814,6 +791,11 @@ export function PastDuePanel({ rows, csms, totalSourceRows }: Props) {
                 ccLookup={
                   subtab === "enterprise"
                     ? (c) => c.customer_success_manager_email ?? null
+                    : undefined
+                }
+                defaultFromAlias={
+                  subtab === "below"
+                    ? (settings?.am?.bulk_alias_email ?? "").trim() || undefined
                     : undefined
                 }
                 trackingIdFor={(c) => c.stripe_customer_id ?? null}

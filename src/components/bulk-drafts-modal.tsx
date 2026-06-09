@@ -128,6 +128,25 @@ interface Props {
    *  proactive outreach_logged). Drafts whose tracking_id is unset
    *  are silently filtered out. */
   onDraftCreated?: (tracking_ids: string[]) => void;
+  /** Initial value for the From alias dropdown. Takes precedence
+   *  over the chosen template's `send_as_email` if both are present
+   *  — used by Past Due's Below-$3.5K flow to pre-select the
+   *  settings-configured bulk alias. The user can still change it
+   *  in the dropdown before creating drafts. */
+  defaultFromAlias?: string;
+}
+
+interface AliasRow {
+  /** sendAs email address (primary or alias). */
+  sendAsEmail: string;
+  /** Human-readable name shown in Gmail's From dropdown. */
+  displayName?: string;
+  isPrimary?: boolean;
+  isDefault?: boolean;
+  /** Whether Gmail considers this alias verified. Unverified aliases
+   *  silently fall back to the primary at draft-creation time on the
+   *  server, so we mark them in the dropdown to set expectations. */
+  verificationStatus?: string;
 }
 
 /**
@@ -152,12 +171,25 @@ export function BulkDraftsModal({
   error,
   onClose,
   onDraftCreated,
+  defaultFromAlias,
 }: Props) {
   const [openedCount, setOpenedCount] = useState<number | null>(null);
   const [copyHit, setCopyHit] = useState<string | null>(null);
   const [gmail, setGmail] = useState<GmailStatus | null>(null);
   const [gmailBusy, setGmailBusy] = useState(false);
   const [gmailMessage, setGmailMessage] = useState<string | null>(null);
+  // Available send-as aliases on the active Gmail account. Loaded
+  // lazily when the modal opens (one API hit, then we cache for the
+  // lifetime of the modal). The dropdown stays usable while loading
+  // by including just the chosen template's send_as_email until the
+  // verified list arrives.
+  const [aliases, setAliases] = useState<AliasRow[]>([]);
+  const [aliasesLoaded, setAliasesLoaded] = useState(false);
+  // The currently-selected From alias. Initialized from
+  // defaultFromAlias / template's send_as_email / "" (=primary).
+  // Empty string means "let the server fall through to the primary"
+  // — the same behavior as before this picker existed.
+  const [selectedFrom, setSelectedFrom] = useState<string>("");
   // Per-draft recipient selection. Keyed by the draft's compose_url
   // (stable across re-renders for a single open-of-modal). Set of
   // lowercased email addresses.
@@ -309,11 +341,20 @@ export function BulkDraftsModal({
             body_text: live.body_text,
             body_html: live.body_html,
             compose_url: liveComposeUrl(d),
+            // Override the template-supplied `from` with whatever the
+            // user has selected in the modal's From dropdown. Empty
+            // string → strip the field entirely so the server falls
+            // back to the primary account (matches pre-picker
+            // behavior). The Gmail API path validates the alias
+            // against the user's verified list and falls through to
+            // the primary on mismatch, with a count surfaced in the
+            // response so we can warn the user.
+            from: selectedFrom || undefined,
           };
         })
         .filter((d) => d.to.length > 0),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [drafts, recipientSelection]
+    [drafts, recipientSelection, selectedFrom]
   );
 
   // Lazy-load Gmail connection status when the modal mounts
@@ -331,6 +372,44 @@ export function BulkDraftsModal({
       cancelled = true;
     };
   }, []);
+
+  // Lazy-load the user's verified send-as aliases once the modal
+  // mounts. Single request, then we cache for the lifetime of the
+  // modal. Failure is non-fatal — we just keep the dropdown to a
+  // best-guess (template alias or primary) and the server will fall
+  // back to the primary if the chosen alias isn't actually verified.
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/auth/google/aliases")
+      .then(async (r) => {
+        if (!r.ok) return null;
+        return (await r.json()) as { aliases?: AliasRow[] };
+      })
+      .then((j) => {
+        if (cancelled || !j?.aliases) return;
+        setAliases(j.aliases);
+        setAliasesLoaded(true);
+      })
+      .catch(() => {
+        if (!cancelled) setAliasesLoaded(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Resolve the initial From selection. Priority:
+  //   1. Caller-supplied defaultFromAlias (Past Due Below-3.5K
+  //      passes settings.am.bulk_alias_email here).
+  //   2. The chosen template's send_as_email (drafts[0].from).
+  //   3. Empty — server uses the primary Gmail account.
+  // Re-runs whenever the template changes (and therefore drafts[0].from
+  // changes) so flipping the template flips the default From.
+  useEffect(() => {
+    const fallback = drafts[0]?.from ?? "";
+    const next = (defaultFromAlias ?? "").trim() || fallback;
+    setSelectedFrom(next);
+  }, [defaultFromAlias, drafts]);
 
   function openAll() {
     let opened = 0;
@@ -507,19 +586,60 @@ export function BulkDraftsModal({
             <h3 className="font-semibold text-fg">
               Bulk drafts ({drafts.length})
             </h3>
-            {/* All drafts share the template, so the From alias is
-             *  the same across the batch. Surface it so the CSM
-             *  knows what to expect before hitting "Create drafts". */}
-            {drafts[0]?.from ? (
-              <div className="text-[11px] text-muted mt-0.5">
-                Sending as{" "}
-                <span className="font-mono text-fg">{drafts[0].from}</span>
-                {gmail?.email && gmail.email !== drafts[0].from ? (
-                  <>
-                    {" "}
-                    on behalf of{" "}
-                    <span className="font-mono">{gmail.email}</span>
-                  </>
+            {/* From-alias picker. One selection drives every draft in
+             *  the batch — Gmail's API only takes one From header per
+             *  draft and the template-level alias is meant to be the
+             *  same across the batch anyway. The dropdown shows the
+             *  primary + every verified send-as alias the active
+             *  Gmail account has registered. Pre-selected from
+             *  defaultFromAlias (if caller passed one) else the
+             *  template's send_as_email. The server validates against
+             *  the user's verified list and falls back to the primary
+             *  on mismatch, returning a count we surface in the
+             *  result toast. */}
+            {gmail?.connected ? (
+              <div className="flex items-center gap-1.5 text-[11px] text-muted mt-0.5">
+                <label htmlFor="bulk-from-select">Sending as:</label>
+                <select
+                  id="bulk-from-select"
+                  value={selectedFrom}
+                  onChange={(e) => setSelectedFrom(e.target.value)}
+                  className="text-[11px] px-1.5 py-0.5 border border-border-strong rounded bg-surface text-fg font-mono max-w-[280px]"
+                  title="Pick the From address every draft will use. Falls back to your primary if the alias isn't verified on this Gmail account."
+                >
+                  {/* Primary first — Gmail returns it with
+                   *  isPrimary: true. When aliases haven't loaded
+                   *  yet (or fetch failed), the gmail.email is the
+                   *  only thing we know for sure. */}
+                  <option value="">
+                    {gmail.email
+                      ? `${gmail.email} (primary)`
+                      : "Primary account"}
+                  </option>
+                  {/* Surface the template's preferred alias even if
+                   *  it's not in the verified list yet (mid-load) so
+                   *  the picker reflects the actual selection. */}
+                  {drafts[0]?.from &&
+                  !aliases.some((a) => a.sendAsEmail === drafts[0].from) &&
+                  drafts[0].from !== gmail.email ? (
+                    <option value={drafts[0].from}>{drafts[0].from}</option>
+                  ) : null}
+                  {aliases
+                    .filter(
+                      (a) => !a.isPrimary && a.sendAsEmail !== gmail.email
+                    )
+                    .map((a) => (
+                      <option key={a.sendAsEmail} value={a.sendAsEmail}>
+                        {a.sendAsEmail}
+                        {a.verificationStatus &&
+                        a.verificationStatus !== "accepted"
+                          ? ` (unverified — will fall back)`
+                          : ""}
+                      </option>
+                    ))}
+                </select>
+                {!aliasesLoaded ? (
+                  <span className="text-subtle">loading…</span>
                 ) : null}
               </div>
             ) : null}

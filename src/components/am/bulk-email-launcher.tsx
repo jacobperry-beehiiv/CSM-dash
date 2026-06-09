@@ -57,6 +57,11 @@ interface Props {
    *  drafts. Receives the tracking_ids of every draft that got
    *  handled. */
   onDraftCreated?: (tracking_ids: string[]) => void;
+  /** Pre-select this email as the From alias in the modal's
+   *  "Sending as" dropdown. Used by Past Due's Below-$3.5K flow to
+   *  default to the settings-configured bulk alias. Falls through to
+   *  the chosen template's send_as_email when unset. */
+  defaultFromAlias?: string;
 }
 
 export function BulkEmailLauncher({
@@ -68,6 +73,7 @@ export function BulkEmailLauncher({
   bccLookup,
   trackingIdFor,
   onDraftCreated,
+  defaultFromAlias,
 }: Props) {
   const viewerEmail = useViewerEmail();
   const [open, setOpen] = useState(false);
@@ -173,6 +179,7 @@ export function BulkEmailLauncher({
           error={error}
           onClose={() => setOpen(false)}
           onDraftCreated={onDraftCreated}
+          defaultFromAlias={defaultFromAlias}
         />
       ) : null}
     </>
