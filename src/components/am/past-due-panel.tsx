@@ -130,6 +130,51 @@ function classifyPastDue(r: PastDueRow): "enterprise" | "above" | "below" {
   return "below";
 }
 
+/**
+ * Build a minimal Customer record from a PastDueRow when the row's
+ * Stripe customer ID isn't in the loaded customer book. q10600
+ * (which feeds the book) is scoped to CSM-managed accounts, so
+ * Below-3.5K rows and a chunk of Above-3.5K rows that don't have an
+ * assigned CSM never appear in the book — which used to leave the
+ * "Email selected" / LowTierBulkSend button silently disabled on
+ * those tiers because the resolved customers list came back empty.
+ *
+ * The synthesized record carries every field buildBulkDrafts() and
+ * the bulk-send modal actually read: owner_email (critical — drafts
+ * with no owner_email are dropped at the source), arr / plan / CSM,
+ * Stripe ID. Everything else lands as null so the templates render
+ * "—" for those merge tags. That's an acceptable degraded state —
+ * the user can edit before sending.
+ */
+function synthesizeCustomerFromPastDueRow(r: PastDueRow): Customer {
+  return {
+    workspace_id: null,
+    workspace_name: null,
+    company_name: null,
+    owner_email: r.email,
+    mrr: 0,
+    arr: r.arr_dollars,
+    active_subs: null,
+    max_subscriptions: null,
+    renewal_date: null,
+    company_engagement: null,
+    customer_success_manager: r.customer_success_manager,
+    property_company_status: null,
+    property_main_contact: null,
+    stripe_plan: r.price_name,
+    interval: null,
+    last_send: null,
+    last_log_in: null,
+    mon_since_1st_ent: null,
+    percent_of_max_subs: null,
+    direct_sponsorships_enabled: null,
+    ad_placement: null,
+    grew_via_boost: null,
+    monetization_via_boost: null,
+    stripe_customer_id: r.customer_id,
+  };
+}
+
 /** Past Due is now organized into four sub-tabs per the AM Hackathon
  *  brief: three by tier + a Follow-Up tracker. Tab id is URL-synced
  *  so deep-links land on the right view. */
@@ -622,10 +667,31 @@ export function PastDuePanel({ rows, csms, totalSourceRows }: Props) {
           const selectedRows = searched.filter((r, i) =>
             selected.has(rowKey(r, i))
           );
+          // Resolve each selected past-due row to a Customer:
+          //   1. Prefer the full record from the loaded book (richer
+          //      merge-tag data: company_name, workspace_id,
+          //      hubspot_contacts, etc.).
+          //   2. Fall back to a synthesized Customer built straight
+          //      from the PastDueRow when the book doesn't have the
+          //      Stripe ID. This is the common case for Below-3.5K
+          //      and unassigned Above-3.5K rows — q10600 (which feeds
+          //      the book) only includes CSM-managed accounts, so a
+          //      large fraction of past-due rows aren't in it. Before
+          //      this fallback the "Email selected" / LowTierBulkSend
+          //      button silently stayed disabled on those tiers
+          //      because customers.length came back 0.
+          //   3. Drop rows with no email — buildBulkDrafts would drop
+          //      them anyway, and the synthesized fallback can't
+          //      produce a sendable draft without one.
           const selectedCustomers = selectedRows
-            .map((r) =>
-              r.customer_id ? customerByStripeId.get(r.customer_id) : null
-            )
+            .map((r) => {
+              if (r.customer_id) {
+                const fromBook = customerByStripeId.get(r.customer_id);
+                if (fromBook) return fromBook;
+              }
+              if (!r.email) return null;
+              return synthesizeCustomerFromPastDueRow(r);
+            })
             .filter((c): c is Customer => Boolean(c));
           const selectedCustomerIds = selectedCustomers
             .map((c) => c.stripe_customer_id ?? "")
@@ -706,9 +772,7 @@ export function PastDuePanel({ rows, csms, totalSourceRows }: Props) {
                 <LowTierBulkSend
                   customers={selectedCustomers}
                   settings={settings}
-                  disabled={
-                    selected.size === 0 || customerBook.length === 0
-                  }
+                  disabled={selected.size === 0 || selectedCustomers.length === 0}
                   onSent={() => reloadOutreach()}
                 />
                 <button
