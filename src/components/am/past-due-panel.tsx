@@ -1348,7 +1348,11 @@ export function PastDuePanel({ rows, csms, totalSourceRows }: Props) {
             defaultMode="per-csm"
             deepLinkBase={deepLinkBase}
             rollupNoun="accounts"
-            rollupContext="past-due"
+            // Parallel to the proactive surface's "proactive outreach"
+            // suffix so the two pings read identically except for the
+            // motion name. "past-due outreach" reads as a complete
+            // phrase, where the prior "past-due" alone felt clipped.
+            rollupContext="past-due outreach"
             createTodoOnRollup
             onClose={() => setComposeOpen(false)}
           />
