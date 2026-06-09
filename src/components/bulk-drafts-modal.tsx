@@ -136,17 +136,25 @@ interface Props {
   defaultFromAlias?: string;
 }
 
+/**
+ * Shape mirrors the `AliasRow` exposed by
+ * src/lib/integrations/gmail-aliases.ts (the server normalizes
+ * Gmail's verbose camelCase response into this snake_case form
+ * before sending it down). Don't drift these names — getting them
+ * wrong renders every option with `value=""` and the dropdown looks
+ * like it only has the primary entry.
+ */
 interface AliasRow {
   /** sendAs email address (primary or alias). */
-  sendAsEmail: string;
-  /** Human-readable name shown in Gmail's From dropdown. */
-  displayName?: string;
-  isPrimary?: boolean;
-  isDefault?: boolean;
-  /** Whether Gmail considers this alias verified. Unverified aliases
-   *  silently fall back to the primary at draft-creation time on the
-   *  server, so we mark them in the dropdown to set expectations. */
-  verificationStatus?: string;
+  email: string;
+  /** Display name configured for the alias, if any. */
+  name: string | null;
+  is_default: boolean;
+  is_primary: boolean;
+  /** True only when Gmail's verificationStatus is "accepted".
+   *  Unverified aliases fall back to the primary server-side; we
+   *  flag them in the dropdown so the user knows that's coming. */
+  verified: boolean;
 }
 
 /**
@@ -620,21 +628,16 @@ export function BulkDraftsModal({
                    *  it's not in the verified list yet (mid-load) so
                    *  the picker reflects the actual selection. */}
                   {drafts[0]?.from &&
-                  !aliases.some((a) => a.sendAsEmail === drafts[0].from) &&
+                  !aliases.some((a) => a.email === drafts[0].from) &&
                   drafts[0].from !== gmail.email ? (
                     <option value={drafts[0].from}>{drafts[0].from}</option>
                   ) : null}
                   {aliases
-                    .filter(
-                      (a) => !a.isPrimary && a.sendAsEmail !== gmail.email
-                    )
+                    .filter((a) => !a.is_primary && a.email !== gmail.email)
                     .map((a) => (
-                      <option key={a.sendAsEmail} value={a.sendAsEmail}>
-                        {a.sendAsEmail}
-                        {a.verificationStatus &&
-                        a.verificationStatus !== "accepted"
-                          ? ` (unverified — will fall back)`
-                          : ""}
+                      <option key={a.email} value={a.email}>
+                        {a.email}
+                        {a.verified ? "" : " (unverified — will fall back)"}
                       </option>
                     ))}
                 </select>
