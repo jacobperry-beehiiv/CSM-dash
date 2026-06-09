@@ -734,18 +734,60 @@ export function ApproachingEnterprisePanel({ rows }: Props) {
             selectedRows.length === 1 ? "" : "s"
           )
           .replace(/\{\{\s*account_list\s*\}\}/g, accountList);
-        const perCompany: BulkSlackMessage[] = selectedRows.map((r, i) => ({
-          id: rowKey(r, i),
-          label: r.workspace_name ?? r.owner_email ?? `Row ${i + 1}`,
-          text: renderApproachingRow(r, rowTemplate),
-        }));
+        const perCompany: BulkSlackMessage[] = selectedRows.map((r, i) => {
+          // Resolve each row's CSM through the customer book (q13268
+          // doesn't carry CSM directly — same path the digest already
+          // uses for sorting). Slack ID lookup pulls from the
+          // configured csm_user_ids map; rows where neither resolves
+          // bucket into the "Unassigned" group in per-CSM mode.
+          const resolved = r.stripe_customer_id
+            ? customerByStripeId.get(r.stripe_customer_id)
+            : null;
+          const handle = resolved?.customer_success_manager ?? null;
+          const slackId =
+            handle && settings
+              ? (settings.slack.csm_user_ids[handle] ?? null)
+              : null;
+          const companyLabel =
+            r.workspace_name ?? r.owner_email ?? `Row ${i + 1}`;
+          // q13268 emits percent_to as a fraction (0.875 = 87.5%, 1.43 =
+          // over cap). Multiply when present, else fall back to deriving
+          // it from total/max so the rollup line always has a number.
+          const utilPct =
+            r.percent_to != null
+              ? Math.round(r.percent_to * 100)
+              : r.total_subscriptions && r.max_subscriptions
+                ? Math.round(
+                    (r.total_subscriptions / r.max_subscriptions) * 100
+                  )
+                : null;
+          const rollupLine =
+            utilPct != null
+              ? `${companyLabel} — ${utilPct}% of cap`
+              : companyLabel;
+          return {
+            id: rowKey(r, i),
+            label: companyLabel,
+            text: renderApproachingRow(r, rowTemplate),
+            csmHandle: handle,
+            csmSlackId: slackId,
+            csmRollupLine: rollupLine,
+          };
+        });
+        const deepLinkBase =
+          typeof window !== "undefined"
+            ? `${window.location.origin}/am?tab=proactive`
+            : `/am?tab=proactive`;
         return (
           <SlackBulkCompose
             title="Slack the AM channel"
             initialChannel={cfg?.channel_id ?? ""}
             initialCombinedText={combined}
             perCompanyMessages={perCompany}
-            defaultMode="per-company"
+            defaultMode="per-csm"
+            deepLinkBase={deepLinkBase}
+            rollupNoun="approaching-cap accounts"
+            createTodoOnRollup
             onClose={() => setComposeOpen(false)}
           />
         );

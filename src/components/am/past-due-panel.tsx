@@ -1305,24 +1305,50 @@ export function PastDuePanel({ rows, csms, totalSourceRows }: Props) {
         const rowTemplate = (pastDueCfg?.row_template ?? "").trim()
           ? (pastDueCfg!.row_template as string)
           : DEFAULT_PAST_DUE_ROW_TEMPLATE;
-        const perCompany: BulkSlackMessage[] = selectedRows.map((r, i) => ({
-          id: rowKey(r, i),
-          label: r.email ?? r.customer_id ?? `Row ${i + 1}`,
-          text: renderPastDueRow(r, rowTemplate, settings),
-        }));
+        const perCompany: BulkSlackMessage[] = selectedRows.map((r, i) => {
+          const handle = r.customer_success_manager ?? null;
+          const slackId = handle
+            ? (settings.slack.csm_user_ids[handle] ?? null)
+            : null;
+          // Short per-row line used inside the per-CSM rollup bullet
+          // list. Includes the customer email + ARR so the CSM can
+          // triage at a glance without expanding the message.
+          const companyLabel = r.email ?? r.customer_id ?? `Row ${i + 1}`;
+          const arrLabel = r.arr_dollars
+            ? ` — ${fmtCurrency(r.arr_dollars)}/yr`
+            : "";
+          return {
+            id: rowKey(r, i),
+            label: companyLabel,
+            text: renderPastDueRow(r, rowTemplate, settings),
+            csmHandle: handle,
+            csmSlackId: slackId,
+            csmRollupLine: `${companyLabel}${arrLabel}`,
+          };
+        });
         const combined = renderSlackTemplate(
           pastDueCfg?.template ?? "",
           selectedRows,
           settings,
           pastDueCfg?.row_template
         );
+        // Deep link the per-CSM messages back to this Past Due
+        // sub-tab pre-filtered to the recipient CSM's book. The Slack
+        // unfurl renders this as "Open filtered list ↗".
+        const deepLinkBase =
+          typeof window !== "undefined"
+            ? `${window.location.origin}/am?tab=past-due&past_due=${subtab}`
+            : `/am?tab=past-due&past_due=${subtab}`;
         return (
           <SlackBulkCompose
             title="Slack the past-due channel"
             initialChannel={pastDueCfg?.channel_id ?? ""}
             initialCombinedText={combined}
             perCompanyMessages={perCompany}
-            defaultMode="per-company"
+            defaultMode="per-csm"
+            deepLinkBase={deepLinkBase}
+            rollupNoun="past-due accounts"
+            createTodoOnRollup
             onClose={() => setComposeOpen(false)}
           />
         );

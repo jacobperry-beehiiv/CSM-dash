@@ -32,6 +32,20 @@ export interface BulkSlackMessage {
   label: string;
   /** Initial Slack-mrkdwn body for this row's message. */
   text: string;
+  /** Owning CSM's handle (snake_cased — matches
+   *  Customer.customer_success_manager). Used by per-CSM rollup mode
+   *  to group rows. Null for unassigned rows; they get bucketed into
+   *  a single "Unassigned" group at the bottom of the per-CSM list. */
+  csmHandle?: string | null;
+  /** The CSM's Slack user_id (U…). Used to @-mention them in the
+   *  per-CSM rolled-up message and to resolve the recipient when
+   *  auto-creating their personal todo after send. Null → falls back
+   *  to a plain-text "Jacob Perry" name in the message; the todo
+   *  creation step also drops them with a logged warning. */
+  csmSlackId?: string | null;
+  /** Short label for the row inside the per-CSM rollup ("Acme Co —
+   *  90% of cap"). Falls back to `label` if unset. */
+  csmRollupLine?: string;
 }
 
 interface Props {
@@ -44,33 +58,143 @@ interface Props {
   perCompanyMessages: BulkSlackMessage[];
   /** Channel ID prefilled from settings (`/settings/slack`). */
   initialChannel: string;
-  /** What mode to default to when the modal opens. Per-company is
-   *  the better default for threaded triage; pass "combined" for
-   *  digest-style channels. */
-  defaultMode?: "combined" | "per-company";
+  /** What mode to default to when the modal opens. Per-CSM rollup
+   *  is the team default — one message per owner with a count + a
+   *  filtered-AM-tab link, easier to triage than N per-company
+   *  pings. Per-company stays for cases where a CSM wants threaded
+   *  replies against each account; combined for digest channels. */
+  defaultMode?: "combined" | "per-company" | "per-csm";
+  /**
+   * Where the per-CSM rollup messages should deep-link to. The
+   * modal appends `?csm=<handle>` to this href when rendering each
+   * CSM's message so each link lands them on their filtered slice.
+   * Example: "https://csm-dash.vercel.app/am?tab=past-due".
+   */
+  deepLinkBase?: string;
+  /**
+   * Short noun for the rollup intro line, e.g. "past-due accounts"
+   * or "approaching-cap accounts". Drives the auto-generated text
+   * "You have N <noun> to review:".
+   */
+  rollupNoun?: string;
+  /**
+   * When set, the per-CSM rollup also creates a personal todo for
+   * each CSM the message goes to. The todo title is auto-built
+   * from the rollup noun + count + deep link.
+   */
+  createTodoOnRollup?: boolean;
   onClose: () => void;
 }
 
-type Mode = "combined" | "per-company";
+type Mode = "combined" | "per-company" | "per-csm";
+
+/** Pre-build the per-CSM rollup messages from the per-row list.
+ *  Groups by csmHandle, formats one message per CSM with the count,
+ *  optional @mention, optional deep link, and a bullet list of the
+ *  rolled-up rows. Unassigned rows ("csmHandle: null") collapse into
+ *  one "Unassigned" group at the end so they don't get lost.
+ *
+ *  Stable across re-renders for a given input — pure function of
+ *  the per-company list + deep-link base. */
+function buildCsmRollupMessages(
+  perCompany: BulkSlackMessage[],
+  deepLinkBase: string | undefined,
+  rollupNoun: string
+): Array<{
+  id: string;
+  label: string;
+  text: string;
+  csmHandle: string | null;
+  csmSlackId: string | null;
+  count: number;
+}> {
+  const groups = new Map<
+    string,
+    {
+      handle: string | null;
+      slackId: string | null;
+      rows: BulkSlackMessage[];
+    }
+  >();
+  for (const m of perCompany) {
+    const key = m.csmHandle ?? "__unassigned__";
+    const g = groups.get(key) ?? {
+      handle: m.csmHandle ?? null,
+      slackId: m.csmSlackId ?? null,
+      rows: [],
+    };
+    g.rows.push(m);
+    if (!g.slackId && m.csmSlackId) g.slackId = m.csmSlackId;
+    groups.set(key, g);
+  }
+  // Sorted output: named groups first (alpha by handle), unassigned
+  // last. Stable so re-renders don't shuffle.
+  const ordered = [...groups.entries()].sort(([a], [b]) => {
+    if (a === "__unassigned__") return 1;
+    if (b === "__unassigned__") return -1;
+    return a.localeCompare(b);
+  });
+  return ordered.map(([key, g]) => {
+    const friendlyHandle = g.handle
+      ? g.handle.replace(/_/g, " ")
+      : "Unassigned";
+    const mention = g.slackId ? `<@${g.slackId}>` : friendlyHandle;
+    const bullets = g.rows
+      .map((r) => `• ${r.csmRollupLine ?? r.label}`)
+      .join("\n");
+    let link: string | null = null;
+    if (deepLinkBase && g.handle) {
+      const sep = deepLinkBase.includes("?") ? "&" : "?";
+      link = `${deepLinkBase}${sep}csm=${encodeURIComponent(g.handle)}`;
+    }
+    const header = `${mention} — *${g.rows.length}* ${rollupNoun} to review:`;
+    const linkLine = link ? `\n\n<${link}|Open filtered list ↗>` : "";
+    return {
+      id: `csm:${key}`,
+      label: friendlyHandle,
+      text: `${header}\n${bullets}${linkLine}`,
+      csmHandle: g.handle,
+      csmSlackId: g.slackId,
+      count: g.rows.length,
+    };
+  });
+}
 
 export function SlackBulkCompose({
   title,
   initialCombinedText,
   perCompanyMessages,
   initialChannel,
-  defaultMode = "per-company",
+  defaultMode = "per-csm",
+  deepLinkBase,
+  rollupNoun = "accounts",
+  createTodoOnRollup = false,
   onClose,
 }: Props) {
   const [channel, setChannel] = useState(initialChannel);
   const [mode, setMode] = useState<Mode>(defaultMode);
   const [combined, setCombined] = useState(initialCombinedText);
   const [perMessages, setPerMessages] = useState(perCompanyMessages);
+  // Initial per-CSM messages derived from the per-company list. The
+  // textarea owns the live editable copy so the CSM can tweak before
+  // sending; this gets recomputed only if the perCompany list itself
+  // changes (which doesn't happen mid-modal session — selected rows
+  // are locked when the modal opens).
+  const [csmMessages, setCsmMessages] = useState(() =>
+    buildCsmRollupMessages(perCompanyMessages, deepLinkBase, rollupNoun)
+  );
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   function patchMessage(id: string, text: string) {
     setPerMessages((prev) =>
+      prev.map((m) => (m.id === id ? { ...m, text } : m))
+    );
+  }
+
+  function patchCsmMessage(id: string, text: string) {
+    setCsmMessages((prev) =>
       prev.map((m) => (m.id === id ? { ...m, text } : m))
     );
   }
@@ -99,6 +223,80 @@ export function SlackBulkCompose({
       if (mode === "combined") {
         await postOne(combined);
         setResult("Sent combined message ✓");
+      } else if (mode === "per-csm") {
+        // Roll-up mode: one Slack message per CSM (with @mention +
+        // count + filtered AM-tab link). Plus, after every send
+        // completes, optionally create a personal todo for each
+        // pinged CSM so the assignment shows up on their home page.
+        const fails: string[] = [];
+        let succeeded = 0;
+        const sentHandles: string[] = [];
+        for (const m of csmMessages) {
+          if (!m.text.trim()) continue;
+          try {
+            await postOne(m.text);
+            succeeded++;
+            if (m.csmHandle) sentHandles.push(m.csmHandle);
+          } catch (e) {
+            fails.push(
+              `${m.label} (${e instanceof Error ? e.message : "unknown"})`
+            );
+          }
+        }
+        let todoNote = "";
+        if (createTodoOnRollup && sentHandles.length > 0) {
+          // Auto-create a personal todo per pinged CSM. The endpoint
+          // resolves handles → emails via the customer book, then
+          // appends to each CSM's personal-todos KV row. Failure here
+          // doesn't abort — the Slack messages already landed.
+          try {
+            const todoBody = {
+              todos: csmMessages
+                .filter((m) => m.csmHandle && m.text.trim())
+                .map((m) => {
+                  const sep =
+                    deepLinkBase && deepLinkBase.includes("?") ? "&" : "?";
+                  const link =
+                    deepLinkBase && m.csmHandle
+                      ? `${deepLinkBase}${sep}csm=${encodeURIComponent(m.csmHandle)}`
+                      : null;
+                  return {
+                    csm_handle: m.csmHandle,
+                    title: `Review ${m.count} ${rollupNoun}`,
+                    details: link
+                      ? `Sent via dashboard Slack ping. Open: ${link}`
+                      : `Sent via dashboard Slack ping.`,
+                  };
+                }),
+            };
+            const r = await fetch(
+              "/api/personal-todos/bulk-create-for-csms",
+              {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(todoBody),
+              }
+            );
+            if (r.ok) {
+              const j = (await r.json()) as {
+                created: number;
+                failed: number;
+              };
+              todoNote = ` · created ${j.created} to-do${j.created === 1 ? "" : "s"}${j.failed > 0 ? ` (${j.failed} todo write failures)` : ""}`;
+            } else {
+              todoNote = " · to-do creation failed (Slack pings already sent)";
+            }
+          } catch {
+            todoNote = " · to-do creation failed (Slack pings already sent)";
+          }
+        }
+        const note =
+          fails.length > 0 ? ` · failed: ${fails.join("; ")}` : "";
+        setResult(
+          `Sent ${succeeded}/${csmMessages.length} per-CSM rollup${
+            csmMessages.length === 1 ? "" : "s"
+          } ✓${note}${todoNote}`
+        );
       } else {
         // Fire sequentially so a per-message failure surfaces against
         // the specific row that failed, and we don't slam Slack's
@@ -136,7 +334,9 @@ export function SlackBulkCompose({
     !channel ||
     (mode === "combined"
       ? !combined.trim()
-      : perMessages.every((m) => !m.text.trim()));
+      : mode === "per-csm"
+        ? csmMessages.every((m) => !m.text.trim())
+        : perMessages.every((m) => !m.text.trim()));
 
   return (
     <div
@@ -182,8 +382,18 @@ export function SlackBulkCompose({
             <p className="text-xs text-muted mb-1">Mode</p>
             <div className="inline-flex rounded-md border border-border overflow-hidden text-sm">
               <button
-                onClick={() => setMode("per-company")}
+                onClick={() => setMode("per-csm")}
                 className={`px-3 py-1.5 ${
+                  mode === "per-csm"
+                    ? "bg-accent text-accent-fg font-medium"
+                    : "bg-surface text-muted hover:text-fg"
+                }`}
+              >
+                Per CSM ({csmMessages.length})
+              </button>
+              <button
+                onClick={() => setMode("per-company")}
+                className={`px-3 py-1.5 border-l border-border ${
                   mode === "per-company"
                     ? "bg-accent text-accent-fg font-medium"
                     : "bg-surface text-muted hover:text-fg"
@@ -203,8 +413,13 @@ export function SlackBulkCompose({
               </button>
             </div>
             <p className="text-[11px] text-muted mt-1">
-              Per company sends one Slack message per row so replies thread
-              against the right account. Combined sends a single digest.
+              Per CSM bundles every selected row by owner — one
+              roll-up message per CSM with a link to their filtered
+              list. Per company sends one Slack message per row for
+              threaded triage. Combined sends a single digest.
+              {createTodoOnRollup
+                ? " Per-CSM mode also auto-creates a personal to-do for each pinged CSM."
+                : ""}
             </p>
           </div>
 
@@ -217,6 +432,38 @@ export function SlackBulkCompose({
                 rows={14}
                 className="w-full px-3 py-2 border border-border-strong rounded-md text-sm font-mono"
               />
+            </div>
+          ) : mode === "per-csm" ? (
+            <div className="space-y-3">
+              {csmMessages.map((m) => (
+                <div key={m.id}>
+                  <label className="text-xs text-muted block mb-1 flex items-center gap-2">
+                    <span>{m.label}</span>
+                    <span className="text-subtle font-mono">
+                      ({m.count} account{m.count === 1 ? "" : "s"})
+                    </span>
+                    {!m.csmSlackId && m.csmHandle ? (
+                      <span
+                        className="text-amber-700 dark:text-amber-300"
+                        title="No Slack ID mapped for this CSM — add one at /settings/slack to enable @-mentions and personal to-dos."
+                      >
+                        no Slack ID
+                      </span>
+                    ) : null}
+                  </label>
+                  <textarea
+                    value={m.text}
+                    onChange={(e) => patchCsmMessage(m.id, e.target.value)}
+                    rows={6}
+                    className="w-full px-3 py-2 border border-border-strong rounded-md text-sm font-mono"
+                  />
+                </div>
+              ))}
+              {csmMessages.length === 0 ? (
+                <p className="text-sm text-subtle italic">
+                  No rows selected.
+                </p>
+              ) : null}
             </div>
           ) : (
             <div className="space-y-3">
@@ -269,9 +516,11 @@ export function SlackBulkCompose({
               ? "Sending…"
               : mode === "combined"
                 ? "Send 1 message"
-                : `Send ${perMessages.length} message${
-                    perMessages.length === 1 ? "" : "s"
-                  }`}
+                : mode === "per-csm"
+                  ? `Send ${csmMessages.length} CSM roll-up${csmMessages.length === 1 ? "" : "s"}`
+                  : `Send ${perMessages.length} message${
+                      perMessages.length === 1 ? "" : "s"
+                    }`}
           </button>
         </div>
       </div>
