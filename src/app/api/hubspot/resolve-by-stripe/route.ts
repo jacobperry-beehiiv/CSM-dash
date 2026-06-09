@@ -89,10 +89,23 @@ export async function POST(req: Request) {
   try {
     matches = await searchCompaniesByStripeIds([stripeId]);
   } catch (e) {
+    // Surface the full stack to Vercel logs so we can debug 502s
+    // without round-tripping through the user. Likely causes:
+    //   • HUBSPOT_ACCESS_TOKEN (or CLIENT_ID/CLIENT_SECRET) not set
+    //     on this deployment — getAccessToken() throws synchronously
+    //   • OAuth token mint failed (clientSecret rotated, etc.)
+    //   • Network error reaching HubSpot
+    const message = e instanceof Error ? e.message : "Unknown error";
+    const stack = e instanceof Error ? e.stack : undefined;
+    console.error("[hubspot/resolve-by-stripe] search failed", {
+      workspace_id: workspaceId,
+      stripe_customer_id: stripeId,
+      viewer,
+      message,
+      stack,
+    });
     return NextResponse.json(
-      {
-        error: `HubSpot search failed: ${e instanceof Error ? e.message : "unknown"}`,
-      },
+      { error: `HubSpot search failed: ${message}` },
       { status: 502 }
     );
   }

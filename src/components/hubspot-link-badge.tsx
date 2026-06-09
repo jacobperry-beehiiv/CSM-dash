@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 /**
  * Compact confidence indicator for the HubSpot ↔ dashboard join.
@@ -41,7 +41,20 @@ export function HubSpotLinkBadge({
 }: Props) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
-  const [report, setReport] = useState<string | null>(null);
+  const [report, setReport] = useState<{
+    kind: "ok" | "err";
+    text: string;
+  } | null>(null);
+
+  // Successful reports auto-clear after ~8s so the badge UI doesn't
+  // permanently sport a stale "Linked to …" message. Errors stick
+  // until the user retries or dismisses — the diagnostic info there
+  // is worth keeping visible while they investigate.
+  useEffect(() => {
+    if (report?.kind !== "ok") return;
+    const id = window.setTimeout(() => setReport(null), 8000);
+    return () => window.clearTimeout(id);
+  }, [report]);
 
   const handleReresolve = async () => {
     if (!workspaceId) return;
@@ -62,25 +75,30 @@ export function HubSpotLinkBadge({
       if (!r.ok || !json.ok) {
         throw new Error(json.error ?? `HTTP ${r.status}`);
       }
-      setReport(
-        `Linked to ${
+      setReport({
+        kind: "ok",
+        text: `Linked to ${
           json.hubspot_company_name ?? "HubSpot company"
-        } (${json.hubspot_company_id ?? "—"})`
-      );
+        } (${json.hubspot_company_id ?? "—"})`,
+      });
       // Re-fetch server data so the badge re-renders with the new
       // hubspot_link_source + hubspot_company_id from the override.
       router.refresh();
     } catch (e) {
-      setReport(
-        `Re-resolve failed: ${e instanceof Error ? e.message : "unknown"}`
-      );
+      setReport({
+        kind: "err",
+        text: `Re-resolve failed: ${e instanceof Error ? e.message : "unknown"}`,
+      });
     } finally {
       setBusy(false);
-      // Toast clears on its own — don't leave the user staring at a
-      // stale message after they've moved on.
-      window.setTimeout(() => setReport(null), 8000);
+      // Successful reports clear on their own; errors stick until the
+      // user retries / dismisses so the message stays readable while
+      // they investigate. Two-state behavior is worth the small
+      // complexity vs. silently swallowing diagnostic info.
     }
   };
+
+  const dismissReport = () => setReport(null);
 
   const source = linkSource ?? "none";
   const canReresolve = hasStripeId && workspaceId && source !== "stripe_id";
@@ -142,10 +160,24 @@ export function HubSpotLinkBadge({
       ) : null}
       {report ? (
         <span
-          className="text-[11px] text-muted italic max-w-[280px] truncate"
-          title={report}
+          className={`inline-flex items-center gap-1 text-[11px] ${
+            report.kind === "err"
+              ? "text-red-700 dark:text-red-300"
+              : "text-muted italic"
+          } max-w-[420px]`}
+          title={report.text}
         >
-          {report}
+          <span className="break-words">{report.text}</span>
+          {report.kind === "err" ? (
+            <button
+              type="button"
+              onClick={dismissReport}
+              className="opacity-60 hover:opacity-100"
+              aria-label="Dismiss error"
+            >
+              ×
+            </button>
+          ) : null}
         </span>
       ) : null}
     </span>
