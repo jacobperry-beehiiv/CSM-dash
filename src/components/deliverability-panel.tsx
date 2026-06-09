@@ -219,6 +219,9 @@ export function DeliverabilityPanel({
           const flaggedFiltered = visibleAlerts.filter(
             (a) => a.flags.length > 0 && !a.cleared
           ).length;
+          const carryoverCount = data.alerts.filter(
+            (a) => !a.cleared && a.post.sent_date !== data.target_date
+          ).length;
           if (search) {
             return (
               <>
@@ -234,6 +237,17 @@ export function DeliverabilityPanel({
               {showCleared || clearedCount === 0 ? "sends" : "active sends"}
               {" · "}
               {flaggedAll} active alerts
+              {carryoverCount > 0 ? (
+                <>
+                  {" · "}
+                  <span
+                    className="text-purple-700 dark:text-purple-300"
+                    title="Uncleared critical sends from earlier dates that carry forward across data refreshes until a CSM clears them. Filter or browse the table to see them inline (purple Carryover pill)."
+                  >
+                    {carryoverCount} carried over
+                  </span>
+                </>
+              ) : null}
               {clearedCount > 0 && !showCleared ? (
                 <> · {clearedCount} cleared (hidden)</>
               ) : null}
@@ -327,6 +341,13 @@ export function DeliverabilityPanel({
                 const busy = busyPosts.has(alert.post.post_id);
                 const critical =
                   !cleared && alert.flags.some((f) => f.severity === "critical");
+                // Carryover row: a critical send from an earlier date
+                // that the CSM hasn't cleared yet. The engine carries
+                // these forward across data refreshes so a critical
+                // issue doesn't drop out of view just because today's
+                // data set landed. The badge + sent-date hint signal
+                // "you're seeing this because nobody cleared it yet."
+                const isCarryover = alert.post.sent_date !== data.target_date;
                 const email = ownerEmailByWorkspace.get(alert.post.organization_id);
                 const masqUrl = email ? masqueradeUrl(email) : null;
                 const mbUrl = metabasePubUrl({
@@ -358,27 +379,37 @@ export function DeliverabilityPanel({
                         </span>
                       </td>
                       <td className="px-3 py-3">
-                        {cleared ? (
-                          <span
-                            className="inline-flex items-center px-1.5 py-0.5 rounded-md text-[11px] font-medium bg-slate-200 text-slate-700 dark:bg-slate-500/30 dark:text-slate-200"
-                            title={`Cleared ${
-                              alert.cleared?.cleared_by ?? ""
-                            } ${alert.cleared?.cleared_at ?? ""}`.trim()}
-                          >
-                            Cleared
-                          </span>
-                        ) : flagged ? (
-                          <SeverityBadge
-                            severity={critical ? "critical" : "warning"}
-                          />
-                        ) : (
-                          <span
-                            className="inline-flex items-center px-1.5 py-0.5 rounded-md text-[11px] font-medium bg-green-100 text-green-800 dark:bg-green-500/20 dark:text-green-200"
-                            title="No deliverability thresholds tripped"
-                          >
-                            Clean
-                          </span>
-                        )}
+                        <div className="flex flex-col items-start gap-1">
+                          {cleared ? (
+                            <span
+                              className="inline-flex items-center px-1.5 py-0.5 rounded-md text-[11px] font-medium bg-slate-200 text-slate-700 dark:bg-slate-500/30 dark:text-slate-200"
+                              title={`Cleared ${
+                                alert.cleared?.cleared_by ?? ""
+                              } ${alert.cleared?.cleared_at ?? ""}`.trim()}
+                            >
+                              Cleared
+                            </span>
+                          ) : flagged ? (
+                            <SeverityBadge
+                              severity={critical ? "critical" : "warning"}
+                            />
+                          ) : (
+                            <span
+                              className="inline-flex items-center px-1.5 py-0.5 rounded-md text-[11px] font-medium bg-green-100 text-green-800 dark:bg-green-500/20 dark:text-green-200"
+                              title="No deliverability thresholds tripped"
+                            >
+                              Clean
+                            </span>
+                          )}
+                          {isCarryover && !cleared ? (
+                            <span
+                              className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-purple-100 text-purple-800 dark:bg-purple-500/20 dark:text-purple-200"
+                              title="Critical send from an earlier date — carried forward until you clear it so issues don't disappear on data refresh."
+                            >
+                              Carryover
+                            </span>
+                          ) : null}
+                        </div>
                       </td>
                       <td className="px-3 py-3 break-words">
                         <div className="font-medium text-fg">
@@ -387,6 +418,14 @@ export function DeliverabilityPanel({
                         <div className="text-xs text-muted truncate">
                           {alert.post.newsletter}
                         </div>
+                        {isCarryover ? (
+                          <div
+                            className="text-[10px] text-subtle mt-0.5"
+                            title={`This row's send date is ${alert.post.sent_date} — older than the panel's target date (${data.target_date}). It carried forward because it tripped a critical flag and wasn't cleared.`}
+                          >
+                            Sent {fmtDate(alert.post.sent_date)}
+                          </div>
+                        ) : null}
                       </td>
                       <td className="px-3 py-3 text-muted italic break-words hidden md:table-cell">
                         &ldquo;{alert.post.subject}&rdquo;

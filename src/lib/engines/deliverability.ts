@@ -594,12 +594,40 @@ export async function runDeliverabilityCheck(
   // sends behind a "Show cleared" toggle.
   const clearedByPost = await loadClearedPosts();
   const alerts: DeliverabilityAlert[] = [];
+  const seenPostIds = new Set<string>();
   for (const post of targetPosts) {
     const ownerCsm = csmByOrg.get(post.organization_id) ?? null;
     if (csmName && ownerCsm !== csmName) continue;
     const flags = analyzePost(post);
     const cleared = clearedByPost[post.post_id] ?? null;
     alerts.push({ post, flags, csm: ownerCsm, cleared });
+    seenPostIds.add(post.post_id);
+  }
+
+  // Carryover pass: scan the rest of the lookback window for any
+  // posts with a CRITICAL flag that the CSM hasn't cleared yet, and
+  // surface them alongside the target-date alerts. This stops
+  // critical sends from silently disappearing on the next data
+  // refresh — CSMs explicitly clear-out a critical row when they're
+  // done triaging it (the engine respects that), but as long as it's
+  // uncleared, the row sticks around in the panel.
+  //
+  // Non-critical sends DO NOT carry over — they refresh with the
+  // target date. Same for cleared criticals; once a CSM acks them,
+  // the next render drops them from the active list (still visible
+  // behind "Show cleared" if they need a peek).
+  for (const post of joinedPosts) {
+    if (post.sent_date === targetDate) continue; // already handled
+    if (seenPostIds.has(post.post_id)) continue; // dedupe defensive
+    const ownerCsm = csmByOrg.get(post.organization_id) ?? null;
+    if (csmName && ownerCsm !== csmName) continue;
+    const cleared = clearedByPost[post.post_id] ?? null;
+    if (cleared) continue; // cleared criticals don't follow forward
+    const flags = analyzePost(post);
+    const hasCritical = flags.some((f) => f.severity === "critical");
+    if (!hasCritical) continue;
+    alerts.push({ post, flags, csm: ownerCsm, cleared: null });
+    seenPostIds.add(post.post_id);
   }
 
   // Sort: critical count desc, then warning count desc, then sent desc
