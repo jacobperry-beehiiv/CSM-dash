@@ -1,6 +1,7 @@
 "use client";
 
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import { fmtCurrency, fmtDate, fmtNumber, fmtPct, daysAgo } from "./format";
 import { OutreachModal } from "./outreach-modal";
 import { CustomerDetailPanel } from "./customer-detail-panel";
@@ -149,6 +150,7 @@ export function AtRiskTable({
   csms: string[];
 }) {
   const viewerEmail = useViewerEmail();
+  const router = useRouter();
   const [outreachFor, setOutreachFor] = useState<{
     customer: Customer;
     scenario: TemplateScenario;
@@ -322,29 +324,110 @@ export function AtRiskTable({
     }
     setBulkBusy(true);
     setBulkMessage(null);
-    let n = 0;
+
+    // Build the full list of (workspace_id, flag_code) pairs to mark
+    // resolved upfront so we know the denominator + can fire writes
+    // in parallel. Sequential POSTs took 10–30s on a multi-CSM batch
+    // and the previous "silent catch" treated 5xx responses as
+    // success, which is why this button looked broken: the toast
+    // claimed N flags resolved while none of them actually got
+    // written.
+    const todo: Array<{ workspace_id: string; flag_code: string }> = [];
     for (const a of accounts) {
       const k = a.customer.workspace_id;
       if (!k || !selected.has(k)) continue;
       for (const f of a.flags) {
+        todo.push({ workspace_id: k, flag_code: f.code });
+      }
+    }
+    if (todo.length === 0) {
+      setBulkBusy(false);
+      setBulkMessage(
+        "Nothing to resolve — selected rows have no live flags."
+      );
+      return;
+    }
+
+    // Fire in parallel. The /api/flag-resolutions endpoint
+    // read-modifies-writes the full KV row per POST, so we cap
+    // concurrency to avoid last-write-wins overwriting each other.
+    const CONCURRENCY = 4;
+    const results: Array<{
+      ok: boolean;
+      error?: string;
+      workspace_id: string;
+      flag_code: string;
+    }> = [];
+    let cursor = 0;
+    async function worker() {
+      while (true) {
+        const i = cursor++;
+        if (i >= todo.length) return;
+        const item = todo[i];
         try {
-          await fetch("/api/flag-resolutions", {
+          const r = await fetch("/api/flag-resolutions", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
-              workspace_id: k,
-              flag_code: f.code,
+              workspace_id: item.workspace_id,
+              flag_code: item.flag_code,
               resolved: true,
+              resolved_by: viewerEmail ?? null,
             }),
           });
-          n++;
-        } catch {
-          /* keep going */
+          if (!r.ok) {
+            const body = (await r.json().catch(() => ({}))) as {
+              error?: string;
+            };
+            results.push({
+              ok: false,
+              error: body.error ?? `HTTP ${r.status}`,
+              workspace_id: item.workspace_id,
+              flag_code: item.flag_code,
+            });
+          } else {
+            results.push({ ok: true, ...item });
+          }
+        } catch (e) {
+          results.push({
+            ok: false,
+            error: e instanceof Error ? e.message : "network error",
+            workspace_id: item.workspace_id,
+            flag_code: item.flag_code,
+          });
         }
       }
     }
+    await Promise.all(
+      Array.from({ length: Math.min(CONCURRENCY, todo.length) }, () =>
+        worker()
+      )
+    );
+    const okCount = results.filter((r) => r.ok).length;
+    const failCount = results.length - okCount;
+    if (failCount === 0) {
+      setBulkMessage(
+        `Marked ${okCount} flag${okCount === 1 ? "" : "s"} resolved across ${selected.size} account${selected.size === 1 ? "" : "s"}. Refreshing…`
+      );
+    } else {
+      // Surface the first couple of failures inline so the user
+      // can see WHY some didn't land — most common cause is a
+      // workspace_id that the server rejected (404 / 400).
+      const sample = results
+        .filter((r) => !r.ok)
+        .slice(0, 2)
+        .map((r) => `${r.workspace_id}/${r.flag_code}: ${r.error}`)
+        .join("; ");
+      setBulkMessage(
+        `Marked ${okCount} resolved, ${failCount} failed${sample ? ` (${sample})` : ""}. Refreshing…`
+      );
+    }
+    // Trigger a server-component refresh so the at-risk engine
+    // re-runs against the latest resolutions KV — without this the
+    // user sees no change until they manually reload, which is why
+    // the button felt broken even when the writes succeeded.
+    router.refresh();
     setBulkBusy(false);
-    setBulkMessage(`Marked ${n} flag${n === 1 ? "" : "s"} resolved. Refresh to see updated list.`);
     setSelected(new Set());
   }
 
