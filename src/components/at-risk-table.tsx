@@ -151,6 +151,13 @@ export function AtRiskTable({
 }) {
   const viewerEmail = useViewerEmail();
   const router = useRouter();
+  // Two-step inline confirmation for "Mark all flags resolved". The
+  // previous implementation used window.confirm(), which some browser
+  // setups (popup blockers, certain extensions, sandboxed iframes)
+  // silently return `false` from — making the button appear broken
+  // because the user never sees the dialog. Tracking confirm state in
+  // React keeps the UI under our control.
+  const [resolveConfirm, setResolveConfirm] = useState(false);
   const [outreachFor, setOutreachFor] = useState<{
     customer: Customer;
     scenario: TemplateScenario;
@@ -327,17 +334,20 @@ export function AtRiskTable({
       );
       return;
     }
-    const confirmed = confirm(
-      `Mark every flag on ${selected.size} selected account${
-        selected.size === 1 ? "" : "s"
-      } as "I've reached out"? They'll drop off the next at-risk run.`
-    );
-    console.log("[at-risk] bulkResolve confirm result", { confirmed });
-    if (!confirmed) {
-      setBulkMessage("Cancelled — nothing was changed.");
-      window.setTimeout(() => setBulkMessage(null), 3000);
+    // Inline confirmation: first click flips `resolveConfirm` so the
+    // button morphs into "[ ✓ Confirm ] [ Cancel ]"; the second click
+    // (on Confirm) re-enters this function with resolveConfirm=true
+    // and skips the gate. Replaces the native window.confirm() that
+    // some browsers silently rejected, leaving the button looking
+    // broken with `confirm result { confirmed: false }` in logs.
+    if (!resolveConfirm) {
+      console.log("[at-risk] bulkResolve awaiting inline confirm");
+      setResolveConfirm(true);
+      setBulkMessage(null);
       return;
     }
+    console.log("[at-risk] bulkResolve confirm result", { confirmed: true });
+    setResolveConfirm(false);
     setBulkBusy(true);
     setBulkMessage("Working…");
 
@@ -654,13 +664,44 @@ export function AtRiskTable({
           >
             ✉️ Open Gmail for {selected.size}
           </button>
-          <button
-            onClick={bulkResolve}
-            disabled={bulkBusy || selected.size === 0}
-            className="px-3 py-1 text-xs border border-border-strong rounded-md bg-surface hover:bg-canvas disabled:opacity-50"
-          >
-            ✓ Mark all flags resolved for {selected.size}
-          </button>
+          {/* Inline two-step confirm — replaces window.confirm() so
+           *  the action survives browsers / extensions that suppress
+           *  native dialogs. First click flips to a Confirm/Cancel
+           *  pair right inside the toolbar; second click on Confirm
+           *  actually fires the writes. */}
+          {resolveConfirm ? (
+            <div className="inline-flex items-center gap-1.5 px-2 py-1 border border-amber-300 dark:border-amber-500/40 rounded-md bg-amber-50 dark:bg-amber-500/10">
+              <span className="text-xs text-amber-900 dark:text-amber-200">
+                Mark every flag on {selected.size}{" "}
+                account{selected.size === 1 ? "" : "s"} resolved?
+              </span>
+              <button
+                onClick={bulkResolve}
+                disabled={bulkBusy}
+                className="px-2 py-0.5 text-xs bg-amber-600 text-white rounded hover:bg-amber-700 disabled:opacity-50"
+              >
+                ✓ Confirm
+              </button>
+              <button
+                onClick={() => {
+                  setResolveConfirm(false);
+                  setBulkMessage(null);
+                }}
+                disabled={bulkBusy}
+                className="px-2 py-0.5 text-xs border border-border-strong rounded hover:bg-canvas disabled:opacity-50"
+              >
+                Cancel
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={bulkResolve}
+              disabled={bulkBusy || selected.size === 0}
+              className="px-3 py-1 text-xs border border-border-strong rounded-md bg-surface hover:bg-canvas disabled:opacity-50"
+            >
+              ✓ Mark all flags resolved for {selected.size}
+            </button>
+          )}
         </div>
       ) : null}
 
