@@ -368,10 +368,13 @@ function Section({
 }) {
   return (
     <CollapsibleSection title={title} defaultOpen={defaultOpen}>
-      {/* Bumped from space-y-2 → space-y-3 so dense fact rows breathe
-       *  a bit; the section header is already padded, the body just
-       *  needed inter-row air. */}
-      <dl className="space-y-3">{children}</dl>
+      {/* divide-y instead of space-y-N: each row gets a thin border
+       *  above + py-3 padding inside, so the rows breathe AND read as
+       *  a list. Prior space-y-3 gave gaps with no visual structure
+       *  and the long-form prose blocks (risk/goal detail) ran into
+       *  the next short row. Subtle border color matches the panel's
+       *  existing dividers. */}
+      <dl className="divide-y divide-border/60">{children}</dl>
     </CollapsibleSection>
   );
 }
@@ -389,10 +392,18 @@ function Row({
   value: React.ReactNode;
   block?: boolean;
 }) {
+  // first:pt-0 / last:pb-0 trims the leading + trailing inner
+  // padding so a Section doesn't double up on chrome above/below
+  // the first/last row. Padding inside rows is what gives the
+  // section its rhythm; padding around the section is the
+  // CollapsibleSection's job.
+  const padClass = "py-3 first:pt-0 last:pb-0";
   if (block) {
     return (
-      <div className="text-sm space-y-1">
-        <dt className="text-muted">{label}</dt>
+      <div className={`text-sm space-y-1.5 ${padClass}`}>
+        <dt className="text-muted text-xs uppercase tracking-wide font-medium">
+          {label}
+        </dt>
         <dd className="text-fg break-words whitespace-pre-wrap leading-relaxed">
           {value}
         </dd>
@@ -400,7 +411,7 @@ function Row({
     );
   }
   return (
-    <div className="flex justify-between items-baseline gap-4 text-sm">
+    <div className={`flex justify-between items-baseline gap-4 text-sm ${padClass}`}>
       <dt className="text-muted whitespace-nowrap">{label}</dt>
       <dd className="text-fg text-right break-words min-w-0">{value}</dd>
     </div>

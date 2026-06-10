@@ -1,6 +1,22 @@
 import type { Customer } from "../types";
 
 /**
+ * Coerce a Metabase-typed cell into a clean string|null. Q10600 (and
+ * HubSpot upstream) occasionally returns boolean / numeric values
+ * for properties typed as strings on our side — e.g.
+ * property_customer_goals coming back as `false` when no goal is
+ * set. Without coercion the boolean flows through the `as string`
+ * cast unchanged and the UI renders the literal word "false". Use
+ * this at every string-typed field boundary so the dashboard never
+ * has to defensively re-handle non-strings downstream.
+ */
+function asStringCell(v: unknown): string | null {
+  if (typeof v !== "string") return null;
+  const trimmed = v.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+/**
  * Shapes a raw Metabase q10600 row into the Customer type the dashboard uses.
  * Used by both the live Metabase loader and the snapshot loader (which stores
  * raw rows verbatim).
@@ -31,7 +47,7 @@ export function metabaseRowToCustomer(
       (row.customer_success_manager_email as string | null) ?? null,
     property_company_status:
       (row.property_company_status as string | null) ?? null,
-    property_main_contact: (row.property_main_contact as string | null) ?? null,
+    property_main_contact: asStringCell(row.property_main_contact),
     stripe_plan: (row.stripe_plan as string | null) ?? null,
     interval:
       (row.interval as string | null) ??
@@ -50,15 +66,17 @@ export function metabaseRowToCustomer(
     stripe_customer_id: (row.stripe_customer_id as string | null) ?? null,
     property_timezone: (row.property_timezone as string | null) ?? null,
     property_risk_level:
-      (row.property_risk_level_csm_ as string | null) ??
-      (row.property_risk_level as string | null) ??
-      null,
-    property_risk_level_detail:
-      (row.property_risk_level_detail_csm_ as string | null) ?? null,
-    property_customer_goals:
-      (row.property_customer_goals_csm_ as string | null) ?? null,
-    property_customer_goals_detail:
-      (row.property_customer_goals_detail_csm_ as string | null) ?? null,
+      asStringCell(row.property_risk_level_csm_) ??
+      asStringCell(row.property_risk_level),
+    property_risk_level_detail: asStringCell(
+      row.property_risk_level_detail_csm_
+    ),
+    property_customer_goals: asStringCell(
+      row.property_customer_goals_csm_
+    ),
+    property_customer_goals_detail: asStringCell(
+      row.property_customer_goals_detail_csm_
+    ),
     property_csm_owner_change_date:
       (row.property_csm_owner_change_date as string | null) ?? null,
     property_notes_last_contacted:
