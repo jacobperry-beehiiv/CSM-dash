@@ -1,0 +1,272 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
+import type {
+  FieldMapping,
+  MappableDashboardField,
+} from "@/lib/data/field-mappings-types";
+
+/**
+ * Inline editor for a mapped Customer field on the detail panel.
+ * Renders read-only when the field has no mapping or the mapping
+ * direction is "off" / "pull" — pull-only means HubSpot is canonical
+ * and the dashboard shouldn't let the CSM diverge from it.
+ *
+ * When direction is "push" or "both", renders an edit affordance:
+ *   - enum field → <select> with enum_values
+ *   - rich_text  → <textarea>
+ *   - string     → <input type="text">
+ *
+ * On save: POST /api/customer-fields → writes to the
+ * customer-overrides KV + (if direction permits) PATCHes the mapped
+ * HubSpot property. router.refresh() re-renders the panel against
+ * the new value.
+ *
+ * Mappings are loaded once per mount (single GET to
+ * /api/settings/field-mappings shared across all editors on the
+ * same panel render via React's automatic request dedupe in dev /
+ * the browser's HTTP cache in prod).
+ */
+
+interface Props {
+  fieldDef: MappableDashboardField;
+  /** Current value to display when not in edit mode. Comes from the
+   *  Customer record (already with overrides applied). */
+  currentValue: string | null | undefined;
+  workspaceId: string | null | undefined;
+  /** Optional renderer for the read-only display. Defaults to a
+   *  plain `{value ?? "—"}` span. Lets callers (RiskLevelChip,
+   *  StatusBadge) keep their existing chip styling. */
+  renderReadOnly?: (value: string | null | undefined) => React.ReactNode;
+}
+
+interface MappingsResponse {
+  mappings: Record<string, FieldMapping>;
+}
+
+export function MappedFieldEditor({
+  fieldDef,
+  currentValue,
+  workspaceId,
+  renderReadOnly,
+}: Props) {
+  const router = useRouter();
+  const [mapping, setMapping] = useState<FieldMapping | null>(null);
+  const [mappingsLoaded, setMappingsLoaded] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState<string>(currentValue ?? "");
+  const [saving, setSaving] = useState(false);
+  const [report, setReport] = useState<{
+    kind: "ok" | "err";
+    text: string;
+  } | null>(null);
+
+  // Single fetch per mount. The dashboard renders this editor inline
+  // alongside ~5 other fields on the customer detail panel — each
+  // editor fires its own GET, but the browser dedupes identical
+  // GETs and Next.js's force-dynamic doesn't add cache-busting
+  // params, so in practice this becomes one real network round-trip
+  // per panel open.
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/settings/field-mappings")
+      .then(async (r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return (await r.json()) as MappingsResponse;
+      })
+      .then((j) => {
+        if (cancelled) return;
+        setMapping(j.mappings[fieldDef.id] ?? null);
+        setMappingsLoaded(true);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setMappingsLoaded(true); // fail open — render read-only
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [fieldDef.id]);
+
+  // Reset draft when the read-through value changes (e.g., a sibling
+  // edit triggered router.refresh()).
+  useEffect(() => {
+    if (!editing) setDraft(currentValue ?? "");
+  }, [currentValue, editing]);
+
+  const direction = mapping?.direction ?? "off";
+  const editable =
+    mappingsLoaded &&
+    (direction === "push" || direction === "both") &&
+    Boolean(workspaceId);
+
+  function renderValue() {
+    if (renderReadOnly) return renderReadOnly(currentValue);
+    return (
+      <span className={currentValue ? "text-fg" : "text-subtle italic"}>
+        {currentValue ?? "—"}
+      </span>
+    );
+  }
+
+  async function save() {
+    if (!workspaceId) return;
+    setSaving(true);
+    setReport(null);
+    try {
+      const r = await fetch("/api/customer-fields", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          workspace_id: workspaceId,
+          field_id: fieldDef.id,
+          value: draft.trim() === "" ? null : draft,
+        }),
+      });
+      const json = (await r.json().catch(() => ({}))) as {
+        ok?: boolean;
+        hubspot_pushed?: boolean;
+        hubspot_error?: string;
+        error?: string;
+      };
+      if (!r.ok && !json.ok) {
+        throw new Error(json.error ?? json.hubspot_error ?? `HTTP ${r.status}`);
+      }
+      // Mixed-success: KV landed, HubSpot push didn't. Surface as a
+      // warning rather than success so the CSM knows the change
+      // hasn't fully propagated.
+      if (json.hubspot_error) {
+        setReport({ kind: "err", text: json.hubspot_error });
+      } else {
+        setReport({
+          kind: "ok",
+          text: json.hubspot_pushed
+            ? "Saved — pushed to HubSpot."
+            : "Saved.",
+        });
+        setEditing(false);
+        // Clear the success toast after a beat. Errors stay until
+        // the user retries or dismisses.
+        window.setTimeout(() => setReport(null), 4000);
+      }
+      router.refresh();
+    } catch (e) {
+      setReport({
+        kind: "err",
+        text: e instanceof Error ? e.message : "Save failed",
+      });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (editing) {
+    return (
+      <div className="space-y-1">
+        {fieldDef.type === "enum" && fieldDef.enum_values ? (
+          <select
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            disabled={saving}
+            className="px-2 py-1 text-sm border border-border-strong rounded-md bg-surface text-fg"
+          >
+            <option value="">— None —</option>
+            {fieldDef.enum_values.map((v) => (
+              <option key={v} value={v}>
+                {v}
+              </option>
+            ))}
+          </select>
+        ) : fieldDef.type === "rich_text" ? (
+          <textarea
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            disabled={saving}
+            rows={3}
+            className="w-full px-2 py-1 text-sm border border-border-strong rounded-md bg-surface text-fg"
+          />
+        ) : (
+          <input
+            type="text"
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            disabled={saving}
+            className="w-full px-2 py-1 text-sm border border-border-strong rounded-md bg-surface text-fg"
+          />
+        )}
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => void save()}
+            disabled={saving}
+            className="px-2 py-0.5 text-xs bg-accent text-accent-fg rounded hover:bg-accent-hover disabled:opacity-50"
+          >
+            {saving ? "Saving…" : "Save"}
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setEditing(false);
+              setDraft(currentValue ?? "");
+              setReport(null);
+            }}
+            disabled={saving}
+            className="px-2 py-0.5 text-xs border border-border-strong rounded hover:bg-canvas disabled:opacity-50"
+          >
+            Cancel
+          </button>
+          {direction === "both" || direction === "push" ? (
+            <span
+              className="text-[11px] text-subtle"
+              title={`This field maps to HubSpot property "${mapping?.hubspot_property}" with direction "${direction}". Saving will write to HubSpot too.`}
+            >
+              ↗ Pushes to HubSpot
+            </span>
+          ) : null}
+        </div>
+        {report ? (
+          <p
+            className={`text-[11px] ${
+              report.kind === "err"
+                ? "text-red-700 dark:text-red-300"
+                : "text-emerald-700 dark:text-emerald-300"
+            }`}
+          >
+            {report.text}
+          </p>
+        ) : null}
+      </div>
+    );
+  }
+
+  return (
+    <div className="inline-flex items-center gap-1.5">
+      {renderValue()}
+      {editable ? (
+        <button
+          type="button"
+          onClick={() => setEditing(true)}
+          className="text-[11px] text-accent hover:underline"
+          title={`Edit — bound to HubSpot property "${mapping?.hubspot_property}" with direction "${direction}".`}
+        >
+          ✎ Edit
+        </button>
+      ) : null}
+      {report?.kind === "ok" ? (
+        <span className="text-[11px] text-emerald-700 dark:text-emerald-300">
+          {report.text}
+        </span>
+      ) : null}
+      {report?.kind === "err" ? (
+        <span
+          className="text-[11px] text-red-700 dark:text-red-300"
+          title={report.text}
+        >
+          ⚠ {report.text.slice(0, 60)}
+          {report.text.length > 60 ? "…" : ""}
+        </span>
+      ) : null}
+    </div>
+  );
+}

@@ -5,7 +5,7 @@ import type {
   FieldMapping,
   FieldMappingDirection,
   MappableDashboardField,
-} from "@/lib/data/field-mappings";
+} from "@/lib/data/field-mappings-types";
 
 /**
  * /settings/hubspot-fields — admin UI for mapping dashboard fields to

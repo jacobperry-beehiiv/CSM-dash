@@ -14,6 +14,8 @@ import { CompanyNotes } from "./am/company-notes";
 import { CopyButton } from "./copy-button";
 import { CsmRefreshRow } from "./csm-refresh-row";
 import { HubSpotLinkBadge } from "./hubspot-link-badge";
+import { MappedFieldEditor } from "./mapped-field-editor";
+import { MAPPABLE_DASHBOARD_FIELDS } from "@/lib/data/field-mappings-types";
 import { stripeCustomerUrl } from "@/lib/links";
 
 interface Props {
@@ -143,29 +145,59 @@ export function CustomerDetailPanel({
           <Row
             label="Risk level"
             value={
-              <RiskLevelChip
-                level={c.property_risk_level}
-                detail={c.property_risk_level_detail}
+              <MappedFieldEditor
+                fieldDef={MAPPABLE_DASHBOARD_FIELDS.find(
+                  (f) => f.id === "property_risk_level"
+                )!}
+                currentValue={c.property_risk_level}
+                workspaceId={c.workspace_id}
+                renderReadOnly={(v) => (
+                  <RiskLevelChip
+                    level={v ?? null}
+                    detail={c.property_risk_level_detail}
+                  />
+                )}
               />
             }
           />
-          {c.property_risk_level_detail ? (
-            <Row
-              label="Risk detail"
-              value={c.property_risk_level_detail}
-              block
-            />
-          ) : null}
-          {c.property_customer_goals ? (
-            <Row label="Goal" value={c.property_customer_goals} />
-          ) : null}
-          {c.property_customer_goals_detail ? (
-            <Row
-              label="Goal detail"
-              value={c.property_customer_goals_detail}
-              block
-            />
-          ) : null}
+          <Row
+            label="Risk detail"
+            value={
+              <MappedFieldEditor
+                fieldDef={MAPPABLE_DASHBOARD_FIELDS.find(
+                  (f) => f.id === "property_risk_level_detail"
+                )!}
+                currentValue={c.property_risk_level_detail}
+                workspaceId={c.workspace_id}
+              />
+            }
+            block
+          />
+          <Row
+            label="Goal"
+            value={
+              <MappedFieldEditor
+                fieldDef={MAPPABLE_DASHBOARD_FIELDS.find(
+                  (f) => f.id === "property_customer_goals"
+                )!}
+                currentValue={c.property_customer_goals}
+                workspaceId={c.workspace_id}
+              />
+            }
+          />
+          <Row
+            label="Goal detail"
+            value={
+              <MappedFieldEditor
+                fieldDef={MAPPABLE_DASHBOARD_FIELDS.find(
+                  (f) => f.id === "property_customer_goals_detail"
+                )!}
+                currentValue={c.property_customer_goals_detail}
+                workspaceId={c.workspace_id}
+              />
+            }
+            block
+          />
         </Section>
         <Section title="Dates">
           <Row label="Renewal" value={fmtDate(c.renewal_date)} />
@@ -259,7 +291,18 @@ export function CustomerDetailPanel({
           />
         </Section>
         <Section title="Contact">
-          <Row label="Main contact" value={c.property_main_contact ?? "—"} />
+          <Row
+            label="Main contact"
+            value={
+              <MappedFieldEditor
+                fieldDef={MAPPABLE_DASHBOARD_FIELDS.find(
+                  (f) => f.id === "property_main_contact"
+                )!}
+                currentValue={c.property_main_contact}
+                workspaceId={c.workspace_id}
+              />
+            }
+          />
           <Row label="Owner email" value={c.owner_email ?? "—"} />
           <Row label="Timezone" value={c.property_timezone ?? "—"} />
           {/* CSM gets its own row with a "🔄 HubSpot" refresh chip so a

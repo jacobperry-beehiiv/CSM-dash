@@ -33,6 +33,28 @@ export interface CustomerOverride {
   lifecycle_stage?: string;
   lifecycle_stage_updated_at?: string;
   lifecycle_stage_updated_by?: string;
+  /** Generic per-mapped-field overrides — keyed by the dashboard
+   *  field id from MAPPABLE_DASHBOARD_FIELDS (e.g.,
+   *  "property_risk_level"). Written by the "Edit" affordances on
+   *  the customer detail panel when a field has push/both direction
+   *  configured in /settings/hubspot-fields.
+   *
+   *  Using a generic bag instead of per-field columns means future
+   *  mappable fields don't need a CustomerOverride schema change —
+   *  only an entry in MAPPABLE_DASHBOARD_FIELDS and the UI to render
+   *  the editor.
+   *
+   *  applyOverride() reads from this bag for any Customer field that
+   *  has a matching entry, so the rest of the dashboard sees the
+   *  override transparently. */
+  field_overrides?: Record<
+    string,
+    {
+      value: string | null;
+      updated_at: string;
+      updated_by?: string | null;
+    }
+  >;
   /** Override for `hubspot_company_id` — set by the manual
    *  "Re-resolve via Stripe ID" affordance when the sync snapshot
    *  has the wrong value (or none). Trumps the snapshot column when
@@ -101,6 +123,17 @@ export async function setOverride(
   applyField("hubspot_link_source");
   applyField("hubspot_link_refreshed_at");
   applyField("hubspot_link_refreshed_by");
+  // field_overrides is a bag — patches MERGE with the existing bag
+  // rather than replace it, so a single-field edit doesn't wipe out
+  // every prior mapped-field override.
+  if ("field_overrides" in patch) {
+    const incoming = patch.field_overrides;
+    if (!incoming) {
+      delete current.field_overrides;
+    } else {
+      current.field_overrides = { ...(current.field_overrides ?? {}), ...incoming };
+    }
+  }
 
   if (Object.keys(current).length === 0) {
     delete map[workspaceId];
@@ -119,7 +152,11 @@ export function applyOverride(
   if (!customer.workspace_id) return customer;
   const ov = overrides[customer.workspace_id];
   if (!ov) return customer;
-  return {
+  // Generic mapped-field overrides — apply each entry to the
+  // matching Customer field by name. Skips unknown keys defensively
+  // (a typo in the bag shouldn't break the customer load).
+  const fromBag = ov.field_overrides ?? {};
+  const baseCustomer: Customer = {
     ...customer,
     interval: ov.interval ?? customer.interval,
     customer_success_manager:
@@ -136,6 +173,22 @@ export function applyOverride(
     hubspot_link_source:
       ov.hubspot_link_source ?? customer.hubspot_link_source,
   };
+  // Spread bag values onto the customer. Each entry's `value`
+  // replaces the corresponding Customer field; null clears it. Type
+  // erasure is intentional — Customer has many string-typed fields
+  // and we trust the writer (the edit endpoint) to validate.
+  const withBag = baseCustomer as Customer & Record<string, unknown>;
+  for (const [key, entry] of Object.entries(fromBag)) {
+    if (entry && Object.prototype.hasOwnProperty.call(baseCustomer, key)) {
+      withBag[key] = entry.value;
+    } else if (entry) {
+      // Field isn't on Customer (unknown / renamed). Stash on the
+      // record anyway so a UI that reads it via index still sees the
+      // value — better than silent loss.
+      withBag[key] = entry.value;
+    }
+  }
+  return withBag as Customer;
 }
 
 /** Returns the raw override entry for a workspace, if any. Lets the
