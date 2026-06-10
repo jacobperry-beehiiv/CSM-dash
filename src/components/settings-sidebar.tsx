@@ -30,6 +30,12 @@ const SECTIONS: Array<{ href: string; label: string; description: string }> = [
     description: "Past-due channel, message template, CSM @-mentions.",
   },
   {
+    href: "/settings/hubspot-fields",
+    label: "HubSpot fields",
+    description:
+      "Map dashboard fields to HubSpot company properties + sync direction.",
+  },
+  {
     href: "/settings/gmail",
     label: "Gmail",
     description: "Connect Gmail to create bulk drafts without opening tabs.",
