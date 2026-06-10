@@ -69,10 +69,17 @@ export const MAPPABLE_DASHBOARD_FIELDS: MappableDashboardField[] = [
     id: "property_risk_level",
     label: "Risk level",
     description:
-      "Customer health flag — Green / Yellow / Red. Today pulled from HubSpot via q10600; making this push-enabled lets a CSM downgrade an account to Red from the dashboard and have HubSpot pick it up.",
+      "Customer health flag — Green / Light Green / Yellow / Red, matching HubSpot's risk-level options. Pulled from HubSpot via q10600 today; making this push-enabled lets a CSM downgrade an account from the dashboard and have HubSpot pick it up.",
     type: "enum",
     edited_in: "Customer detail panel → Status section",
-    enum_values: ["Green", "Yellow", "Red"],
+    // Order matches the chip color order (worst → best) so the
+    // dropdown reads top-down as severity descending. Strings are
+    // case-sensitive on the API side but RiskLevelChip normalizes
+    // to lowercase before lookup, so casing only matters for what
+    // HubSpot expects on the property — confirm against the
+    // HubSpot property's allowed-values list if you see API
+    // rejections on push.
+    enum_values: ["Red", "Yellow", "Light Green", "Green"],
   },
   {
     id: "property_risk_level_detail",
