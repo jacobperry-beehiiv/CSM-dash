@@ -1,7 +1,7 @@
 import { loadCustomers } from "../data/load-customers";
 import { loadResolutions } from "../data/flag-resolutions";
 import { loadSettings, reRaisePeriodMs } from "../data/settings";
-import { lastContacted } from "../customer-helpers";
+import { lastContacted, subUtilFraction } from "../customer-helpers";
 import type {
   AtRiskAccount,
   Customer,
@@ -75,8 +75,15 @@ export function flagB(c: Customer): RiskFlag | null {
 
 // ─── Flag C: 25%+ below subscriber tier ─────────────────────────────
 export function flagC(c: Customer): RiskFlag | null {
-  if (c.percent_of_max_subs == null) return null;
-  const pct = c.percent_of_max_subs > 1 ? c.percent_of_max_subs / 100 : c.percent_of_max_subs;
+  // Use the shared subUtilFraction helper so the math agrees with
+  // every other surface (review-digest, proactive-outreach,
+  // at-risk-table). The old `> 1 ? /100` heuristic mis-divided
+  // legitimate over-cap customers (e.g., 438K/250K = 1.75 stored
+  // as a fraction → mistakenly treated as 175% → divided by 100 →
+  // displayed as 2%, mis-firing the under-cap flag on a customer
+  // who was actually 175% OVER cap).
+  const pct = subUtilFraction(c);
+  if (pct == null) return null;
   if (pct >= PCT_UNDER_TIER) return null;
   const pctStr = (pct * 100).toFixed(0);
   return {

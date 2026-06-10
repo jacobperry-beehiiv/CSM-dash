@@ -1,5 +1,6 @@
 import type { Customer } from "../types";
 import { isEnterprise, loadCustomers } from "../data/load-customers";
+import { subUtilFraction } from "../customer-helpers";
 import {
   loadProactiveOutreach,
   savePingSent,
@@ -44,17 +45,9 @@ interface SweepResult {
   failures: { workspace: string; error: string }[];
 }
 
-function utilPct(c: Customer): number | null {
-  if (c.percent_of_max_subs != null) {
-    return c.percent_of_max_subs > 1
-      ? c.percent_of_max_subs / 100
-      : c.percent_of_max_subs;
-  }
-  if (c.active_subs != null && c.max_subscriptions) {
-    return c.active_subs / c.max_subscriptions;
-  }
-  return null;
-}
+// Thin wrapper around the shared subUtilFraction helper. Kept so
+// the rest of this file can keep saying utilPct() without churn.
+const utilPct = subUtilFraction;
 
 function billLabel(c: Customer): string {
   const interval = (c.interval ?? "").toLowerCase();

@@ -101,3 +101,51 @@ function parseMs(iso: string | null): number | null {
   const ms = new Date(iso).getTime();
   return Number.isFinite(ms) ? ms : null;
 }
+
+/**
+ * Subscriber utilization as a fraction of plan cap.
+ *   0.50 → 50% of cap
+ *   1.00 → at cap
+ *   1.75 → 175% of cap (over)
+ *
+ * Returns null when neither active_subs/max_subscriptions nor
+ * percent_of_max_subs is usable.
+ *
+ * Why this exists: the q10600 `percent_of_max_subs` column has
+ * historical ambiguity — sometimes the warehouse stores it as a
+ * fraction (0.75), sometimes as a percentage (75). Callers used a
+ * `> 1 ? /100 : x` heuristic to disambiguate, which broke for any
+ * customer over 100% of cap: a legitimate 1.75 fraction would be
+ * treated as a 175% percentage and divided by 100 to 0.0175,
+ * displaying as "2%". The bug fired the under-cap at-risk flag on
+ * customers who were actually *over* cap (most-egregious symptom:
+ * a Yellow-flagged 438K-subs customer with 250K cap showing as
+ * "2% of max subs").
+ *
+ * Fix: prefer the direct `active_subs / max_subscriptions` ratio
+ * when both fields are present (the typical case). Only fall back
+ * to percent_of_max_subs when one of those is null, and treat
+ * values > 2 as percentages (heuristic only reliable when the
+ * fraction can't be derived directly).
+ */
+export function subUtilFraction(c: {
+  active_subs: number | null;
+  max_subscriptions: number | null;
+  percent_of_max_subs: number | null;
+}): number | null {
+  if (
+    c.active_subs != null &&
+    c.max_subscriptions != null &&
+    c.max_subscriptions > 0
+  ) {
+    return c.active_subs / c.max_subscriptions;
+  }
+  if (c.percent_of_max_subs == null) return null;
+  // No active_subs / max_subscriptions to cross-check against —
+  // fall back to the legacy heuristic. > 2 strongly implies the
+  // value is a percentage (200%+); 0–2 is ambiguous but assumed
+  // fraction (the historical default).
+  return c.percent_of_max_subs > 2
+    ? c.percent_of_max_subs / 100
+    : c.percent_of_max_subs;
+}

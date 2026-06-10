@@ -11,7 +11,7 @@ import {
   type ColumnDef,
 } from "@/lib/hooks/use-column-visibility";
 import { ColumnPicker } from "./column-picker";
-import { lastContacted } from "@/lib/customer-helpers";
+import { lastContacted, subUtilFraction } from "@/lib/customer-helpers";
 import { RowActions } from "./row-actions";
 import { BulkEmailLauncher } from "./am/bulk-email-launcher";
 import { RiskLevelChip } from "./risk-level-chip";
@@ -115,10 +115,14 @@ function suggestedTemplate(flags: RiskFlag[]): TemplateScenario {
 }
 
 function pctVal(c: Customer): number | null {
-  if (c.percent_of_max_subs == null) return null;
-  return c.percent_of_max_subs > 1
-    ? c.percent_of_max_subs
-    : c.percent_of_max_subs * 100;
+  // Returns subscriber utilization as a *percentage* (75, 175, etc.)
+  // for display. Routes through subUtilFraction so over-cap rows
+  // render correctly (legacy `> 1` heuristic mis-handled 1.75
+  // fractions as 175% percentages, dividing them to 0.0175 →
+  // displaying "2%"). Multiply by 100 once here because the column
+  // formatter expects an already-percentage value.
+  const frac = subUtilFraction(c);
+  return frac == null ? null : frac * 100;
 }
 
 /**

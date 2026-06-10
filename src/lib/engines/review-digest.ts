@@ -1,4 +1,5 @@
 import { isEnterprise, loadCustomers } from "../data/load-customers";
+import { subUtilFraction } from "../customer-helpers";
 import { loadPastDue, type PastDueRow } from "./am-cohorts";
 import { loadSettings } from "../data/settings";
 import {
@@ -178,17 +179,9 @@ export function buildDigest(args: BuildArgs): DigestPerCsm[] {
   }));
 }
 
-function utilFraction(c: Customer): number | null {
-  if (c.percent_of_max_subs != null) {
-    return c.percent_of_max_subs > 1
-      ? c.percent_of_max_subs / 100
-      : c.percent_of_max_subs;
-  }
-  if (c.active_subs != null && c.max_subscriptions) {
-    return c.active_subs / c.max_subscriptions;
-  }
-  return null;
-}
+// Thin alias around the shared subUtilFraction helper — see
+// src/lib/customer-helpers.ts for the heuristic + the bug it fixes.
+const utilFraction = subUtilFraction;
 
 function csmMention(csm: string, settings: SettingsShape): string {
   const slackId = settings.slack.csm_user_ids?.[csm];
