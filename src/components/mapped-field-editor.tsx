@@ -101,11 +101,30 @@ export function MappedFieldEditor({
     (direction === "push" || direction === "both") &&
     Boolean(workspaceId);
 
+  /**
+   * Normalize the raw value for display. HubSpot occasionally
+   * returns booleans (false) or empty strings on text-typed
+   * properties — without coercion those render literally as "false"
+   * or as an invisible empty span, both of which look like a bug
+   * to the user.
+   *
+   * Rule: any non-string value, or an empty/whitespace-only string,
+   * resolves to null and the read-only view shows "—". Falls
+   * through to the caller-supplied renderReadOnly() (e.g.
+   * RiskLevelChip) when present, so chip styles aren't lost.
+   */
+  function normalizeForDisplay(v: unknown): string | null {
+    if (typeof v !== "string") return null;
+    const trimmed = v.trim();
+    return trimmed.length > 0 ? trimmed : null;
+  }
+
   function renderValue() {
-    if (renderReadOnly) return renderReadOnly(currentValue);
+    const display = normalizeForDisplay(currentValue);
+    if (renderReadOnly) return renderReadOnly(display);
     return (
-      <span className={currentValue ? "text-fg" : "text-subtle italic"}>
-        {currentValue ?? "—"}
+      <span className={display ? "text-fg" : "text-subtle italic"}>
+        {display ?? "—"}
       </span>
     );
   }
@@ -240,33 +259,57 @@ export function MappedFieldEditor({
     );
   }
 
+  // Rich-text fields render the value in a block — Edit goes on
+  // its own line below so it doesn't trail off the end of a
+  // wrapped paragraph (where it gets lost in long copy). Short
+  // fields (string + enum) keep the inline-flex layout so Edit
+  // sits next to the value chip.
+  const isBlockField = fieldDef.type === "rich_text";
+  const editButton = editable ? (
+    <button
+      type="button"
+      onClick={() => setEditing(true)}
+      className="text-[11px] text-accent hover:underline"
+      title={`Edit — bound to HubSpot property "${mapping?.hubspot_property}" with direction "${direction}".`}
+    >
+      ✎ Edit
+    </button>
+  ) : null;
+  const reportNode =
+    report?.kind === "ok" ? (
+      <span className="text-[11px] text-emerald-700 dark:text-emerald-300">
+        {report.text}
+      </span>
+    ) : report?.kind === "err" ? (
+      <span
+        className="text-[11px] text-red-700 dark:text-red-300"
+        title={report.text}
+      >
+        ⚠ {report.text.slice(0, 60)}
+        {report.text.length > 60 ? "…" : ""}
+      </span>
+    ) : null;
+
+  if (isBlockField) {
+    return (
+      <div className="space-y-1">
+        <div className="text-fg break-words whitespace-pre-wrap leading-relaxed">
+          {renderValue()}
+        </div>
+        {editButton || reportNode ? (
+          <div className="flex items-center gap-2">
+            {editButton}
+            {reportNode}
+          </div>
+        ) : null}
+      </div>
+    );
+  }
   return (
     <div className="inline-flex items-center gap-1.5">
       {renderValue()}
-      {editable ? (
-        <button
-          type="button"
-          onClick={() => setEditing(true)}
-          className="text-[11px] text-accent hover:underline"
-          title={`Edit — bound to HubSpot property "${mapping?.hubspot_property}" with direction "${direction}".`}
-        >
-          ✎ Edit
-        </button>
-      ) : null}
-      {report?.kind === "ok" ? (
-        <span className="text-[11px] text-emerald-700 dark:text-emerald-300">
-          {report.text}
-        </span>
-      ) : null}
-      {report?.kind === "err" ? (
-        <span
-          className="text-[11px] text-red-700 dark:text-red-300"
-          title={report.text}
-        >
-          ⚠ {report.text.slice(0, 60)}
-          {report.text.length > 60 ? "…" : ""}
-        </span>
-      ) : null}
+      {editButton}
+      {reportNode}
     </div>
   );
 }
