@@ -312,18 +312,34 @@ export function AtRiskTable({
   }
 
   async function bulkResolve() {
-    if (selected.size === 0) return;
-    if (
-      !confirm(
-        `Mark every flag on ${selected.size} selected account${
-          selected.size === 1 ? "" : "s"
-        } as "I've reached out"? They'll drop off the next at-risk run.`
-      )
-    ) {
+    // Aggressive console + on-screen tracing because this button has
+    // a history of feeling broken to users while silently failing.
+    // Every branch logs so the next "doesn't work" report can be
+    // diagnosed from browser DevTools without code changes.
+    console.log("[at-risk] bulkResolve clicked", {
+      selected_count: selected.size,
+      accounts_in_view: accounts.length,
+    });
+    if (selected.size === 0) {
+      console.warn("[at-risk] bulkResolve aborted — no rows selected");
+      setBulkMessage(
+        "Select at least one row before clicking Mark all flags resolved."
+      );
+      return;
+    }
+    const confirmed = confirm(
+      `Mark every flag on ${selected.size} selected account${
+        selected.size === 1 ? "" : "s"
+      } as "I've reached out"? They'll drop off the next at-risk run.`
+    );
+    console.log("[at-risk] bulkResolve confirm result", { confirmed });
+    if (!confirmed) {
+      setBulkMessage("Cancelled — nothing was changed.");
+      window.setTimeout(() => setBulkMessage(null), 3000);
       return;
     }
     setBulkBusy(true);
-    setBulkMessage(null);
+    setBulkMessage("Working…");
 
     // Build the full list of (workspace_id, flag_code) pairs to mark
     // resolved upfront so we know the denominator + can fire writes
@@ -333,17 +349,36 @@ export function AtRiskTable({
     // claimed N flags resolved while none of them actually got
     // written.
     const todo: Array<{ workspace_id: string; flag_code: string }> = [];
+    const selectedMissingWs: string[] = [];
     for (const a of accounts) {
       const k = a.customer.workspace_id;
-      if (!k || !selected.has(k)) continue;
+      if (!k) {
+        // Selected key for this row was the array index (see allKeys
+        // earlier in the file). The /api/flag-resolutions endpoint
+        // requires workspace_id, so these rows can't be resolved
+        // through the bulk path. Surface them so the user knows why.
+        if (selected.has(String(accounts.indexOf(a)))) {
+          selectedMissingWs.push(
+            a.customer.workspace_name ?? a.customer.company_name ?? "(unknown)"
+          );
+        }
+        continue;
+      }
+      if (!selected.has(k)) continue;
       for (const f of a.flags) {
         todo.push({ workspace_id: k, flag_code: f.code });
       }
     }
+    console.log("[at-risk] bulkResolve plan", {
+      todo_count: todo.length,
+      selected_missing_workspace_id: selectedMissingWs.length,
+    });
     if (todo.length === 0) {
       setBulkBusy(false);
       setBulkMessage(
-        "Nothing to resolve — selected rows have no live flags."
+        selectedMissingWs.length > 0
+          ? `${selectedMissingWs.length} selected row(s) have no workspace_id and can't be resolved in bulk: ${selectedMissingWs.slice(0, 3).join(", ")}`
+          : "Nothing to resolve — selected rows have no live flags."
       );
       return;
     }
@@ -398,6 +433,10 @@ export function AtRiskTable({
         }
       }
     }
+    console.log("[at-risk] firing parallel POSTs", {
+      total: todo.length,
+      concurrency: CONCURRENCY,
+    });
     await Promise.all(
       Array.from({ length: Math.min(CONCURRENCY, todo.length) }, () =>
         worker()
@@ -405,6 +444,18 @@ export function AtRiskTable({
     );
     const okCount = results.filter((r) => r.ok).length;
     const failCount = results.length - okCount;
+    console.log("[at-risk] bulkResolve complete", {
+      ok: okCount,
+      fail: failCount,
+      first_failures: results
+        .filter((r) => !r.ok)
+        .slice(0, 3)
+        .map((r) => ({
+          workspace_id: r.workspace_id,
+          flag_code: r.flag_code,
+          error: r.error,
+        })),
+    });
     if (failCount === 0) {
       setBulkMessage(
         `Marked ${okCount} flag${okCount === 1 ? "" : "s"} resolved across ${selected.size} account${selected.size === 1 ? "" : "s"}. Refreshing…`
