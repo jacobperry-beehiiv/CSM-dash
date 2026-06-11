@@ -23,9 +23,16 @@ const KEY = "csm:feature-requests:v1";
 
 export async function loadFeatureRequests(): Promise<FeatureRequestList> {
   const stored = await kvGet<FeatureRequestList>(KEY);
-  return {
-    requests: Array.isArray(stored?.requests) ? stored!.requests : [],
-  };
+  const raw = Array.isArray(stored?.requests) ? stored!.requests : [];
+  // Backfill `team` for rows that predate the field. The original
+  // ~21 backfilled requests came from the CSM hackathon doc, so
+  // defaulting to "csm" matches the historical reality and keeps
+  // them visible under the CSM filter tab on first load.
+  const requests = raw.map((r) => ({
+    ...r,
+    team: r.team ?? "csm",
+  })) as FeatureRequest[];
+  return { requests };
 }
 
 export async function saveFeatureRequests(
@@ -161,7 +168,10 @@ export async function applyFeatureRequestOps(
 /** Convenience for the route to mint a new request from a partial
  *  body, supplying defaults for the server-controlled fields. */
 export function buildNewRequest(
-  partial: Pick<FeatureRequest, "description" | "submitter" | "submitter_email" | "priority">
+  partial: Pick<
+    FeatureRequest,
+    "description" | "submitter" | "submitter_email" | "priority" | "team"
+  >
 ): FeatureRequest {
   const now = new Date().toISOString();
   return {
@@ -169,6 +179,7 @@ export function buildNewRequest(
     description: partial.description.trim(),
     submitter: partial.submitter.trim(),
     submitter_email: partial.submitter_email.trim().toLowerCase(),
+    team: partial.team,
     priority: partial.priority,
     status: "open",
     votes: [],
