@@ -145,6 +145,8 @@ export function EnterpriseOnlyPanel({ rows, csms }: Props) {
   };
   const [sweepBusy, setSweepBusy] = useState(false);
   const [sweepReport, setSweepReport] = useState<string | null>(null);
+  const [clearPingConfirm, setClearPingConfirm] = useState(false);
+  const [clearPingBusy, setClearPingBusy] = useState(false);
   // Statuses available in the Status column dropdown — sourced from
   // /settings/slack so admins can rename / add / remove without
   // shipping code. Defaults restored when settings is empty / not
@@ -301,6 +303,51 @@ export function EnterpriseOnlyPanel({ rows, csms }: Props) {
     [visibleRows, selected]
   );
 
+  const selectedWorkspaceIds = useMemo(
+    () =>
+      selectedCustomers
+        .map((c) => c.workspace_id)
+        .filter((id): id is string => Boolean(id)),
+    [selectedCustomers]
+  );
+
+  async function bulkClearPing() {
+    if (selectedWorkspaceIds.length === 0) {
+      setSweepReport("Select at least one row with a workspace_id first.");
+      setTimeout(() => setSweepReport(null), 5000);
+      return;
+    }
+    // Inline confirm — window.confirm() is silently blocked in some
+    // embedded browsers, which made this button look broken.
+    if (!clearPingConfirm) {
+      setClearPingConfirm(true);
+      setSweepReport(null);
+      return;
+    }
+    setClearPingConfirm(false);
+    setClearPingBusy(true);
+    setSweepReport("Clearing ping status…");
+    try {
+      const cleared = (await clearProactive(selectedWorkspaceIds)) ?? 0;
+      if (cleared === selectedWorkspaceIds.length) {
+        setSweepReport(
+          `Cleared ping status for ${cleared} account${cleared === 1 ? "" : "s"}.`
+        );
+      } else if (cleared > 0) {
+        setSweepReport(
+          `Cleared ${cleared} of ${selectedWorkspaceIds.length} — some deletes may have failed.`
+        );
+      } else {
+        setSweepReport(
+          "Nothing cleared — check you're signed in and try again."
+        );
+      }
+    } finally {
+      setClearPingBusy(false);
+      setTimeout(() => setSweepReport(null), 8000);
+    }
+  }
+
   return (
     <>
       <div className="flex items-center gap-3 mb-4 text-sm">
@@ -371,29 +418,42 @@ export function EnterpriseOnlyPanel({ rows, csms }: Props) {
         >
           ✓ Mark outreach logged
         </button>
-        <button
-          onClick={async () => {
-            const ids = selectedCustomers
-              .map((c) => c.workspace_id)
-              .filter((id): id is string => Boolean(id));
-            if (ids.length === 0) return;
-            if (
-              !confirm(
-                `Clear the proactive-outreach state (pinged / nudged / outreach-logged) for ${ids.length} account${
-                  ids.length === 1 ? "" : "s"
-                }? This re-enables ping eligibility immediately, ignoring the 5-day dedupe.`
-              )
-            ) {
-              return;
-            }
-            await clearProactive(ids);
-          }}
-          disabled={selected.size === 0}
-          className="px-2 py-1 text-xs border border-border-strong rounded-md bg-surface hover:bg-canvas disabled:opacity-50"
-          title="Wipe the ping / nudge / outreach-logged state for the selected rows so a fresh ping can fire before the 5-day dedupe expires. Useful when an account needs a re-ping after a no-response window."
-        >
-          ↻ Clear ping status
-        </button>
+        {clearPingConfirm ? (
+          <>
+            <span className="text-xs text-amber-700 dark:text-amber-300">
+              Clear ping status for {selectedWorkspaceIds.length}?
+            </span>
+            <button
+              type="button"
+              onClick={() => void bulkClearPing()}
+              disabled={clearPingBusy}
+              className="px-2 py-1 text-xs bg-amber-600 text-white rounded-md hover:bg-amber-700 disabled:opacity-50"
+            >
+              ✓ Confirm
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setClearPingConfirm(false);
+                setSweepReport(null);
+              }}
+              disabled={clearPingBusy}
+              className="px-2 py-1 text-xs border border-border-strong rounded-md bg-surface hover:bg-canvas disabled:opacity-50"
+            >
+              Cancel
+            </button>
+          </>
+        ) : (
+          <button
+            type="button"
+            onClick={() => void bulkClearPing()}
+            disabled={selected.size === 0 || clearPingBusy}
+            className="px-2 py-1 text-xs border border-border-strong rounded-md bg-surface hover:bg-canvas disabled:opacity-50"
+            title="Wipe the ping / nudge / outreach-logged state for the selected rows so a fresh ping can fire before the 5-day dedupe expires. Useful when an account needs a re-ping after a no-response window."
+          >
+            {clearPingBusy ? "Clearing…" : "↻ Clear ping status"}
+          </button>
+        )}
         <button
           onClick={async () => {
             // Pull workspace_ids straight off the selected customers
@@ -769,13 +829,7 @@ function ProactiveStatusBadge({
       type="button"
       onClick={(e) => {
         e.stopPropagation();
-        if (
-          confirm(
-            "Clear the proactive-outreach state for this account? This re-enables a fresh ping immediately, ignoring the 5-day dedupe."
-          )
-        ) {
-          onClear();
-        }
+        onClear();
       }}
       title="Clear pinged / nudged / outreach-logged status so a fresh ping can fire."
       className="ml-1 text-[10px] text-muted hover:text-red-600 hover:underline cursor-pointer"

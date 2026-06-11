@@ -4,6 +4,7 @@ import {
   applyFeatureRequestOps,
   loadFeatureRequests,
 } from "@/lib/feature-requests/store";
+import { notifySubmitterOfComment } from "@/lib/feature-requests/notify";
 import type { FeatureRequestOp } from "@/lib/feature-requests/types";
 
 export const dynamic = "force-dynamic";
@@ -43,6 +44,33 @@ interface PatchBody {
   ops?: FeatureRequestOp[];
 }
 
+function humanizeViewer(email: string): string {
+  const prefix = email.split("@")[0] ?? "";
+  return prefix
+    .split(/[._-]/)
+    .filter(Boolean)
+    .map((p) => p.charAt(0).toUpperCase() + p.slice(1))
+    .join(" ");
+}
+
+/** Client sends `{ type: "comment", requestId, body }` — the route
+ *  stamps author fields from the session so callers can't impersonate. */
+function normalizeOps(
+  raw: FeatureRequestOp[],
+  viewerEmail: string
+): FeatureRequestOp[] {
+  const authorEmail = viewerEmail.trim().toLowerCase();
+  const authorName = humanizeViewer(viewerEmail);
+  return raw.map((op) => {
+    if (op.type !== "comment") return op;
+    return {
+      ...op,
+      author_email: authorEmail,
+      author_name: authorName,
+    };
+  });
+}
+
 export async function PATCH(req: Request) {
   const session = await auth();
   if (!session?.user?.email) {
@@ -75,8 +103,26 @@ export async function PATCH(req: Request) {
       );
     }
   }
+  const viewerEmail = session.user.email;
+  const normalized = normalizeOps(ops, viewerEmail);
+
   try {
-    const list = await applyFeatureRequestOps(ops);
+    const list = await applyFeatureRequestOps(normalized);
+
+    for (const op of normalized) {
+      if (op.type !== "comment") continue;
+      const request = list.requests.find((r) => r.id === op.requestId);
+      const comment = request?.comments?.at(-1);
+      if (!request || !comment) continue;
+      const notify = await notifySubmitterOfComment({ request, comment });
+      if (!notify.sent && notify.reason) {
+        console.warn("[feature-requests] comment saved, DM skipped", {
+          requestId: op.requestId,
+          reason: notify.reason,
+        });
+      }
+    }
+
     return NextResponse.json(list);
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Unknown error";

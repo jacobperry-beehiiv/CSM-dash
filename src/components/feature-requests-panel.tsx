@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { fmtDate } from "./format";
 import { useViewerEmail } from "@/lib/auth-client";
 import {
   newRequestId,
@@ -76,6 +77,14 @@ export function FeatureRequestsPanel() {
   const [editing, setEditing] = useState<
     Record<string, { description: string }>
   >({});
+  // Inline delete confirm — window.confirm() is silently blocked in
+  // some embedded browsers, which made Delete look broken.
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+  // Per-request comment composer — keyed by request id when open.
+  const [commentDrafts, setCommentDrafts] = useState<Record<string, string>>(
+    {}
+  );
+  const [commentBusyId, setCommentBusyId] = useState<string | null>(null);
 
   // ── Load + poll ──
   const refresh = useCallback(async () => {
@@ -250,8 +259,55 @@ export function FeatureRequestsPanel() {
     await sendOps([{ type: "patch", requestId: id, patch }]);
   }
 
+  async function postComment(requestId: string) {
+    const body = (commentDrafts[requestId] ?? "").trim();
+    if (!body || !viewerEmail) return;
+    setCommentBusyId(requestId);
+    const me = viewerEmail.toLowerCase();
+    const authorName =
+      viewerEmail
+        .split("@")[0]
+        ?.split(/[._-]/)
+        .filter(Boolean)
+        .map((p) => p.charAt(0).toUpperCase() + p.slice(1))
+        .join(" ") || "Anonymous";
+    const optimistic = {
+      id: `tmp_${Date.now()}`,
+      body,
+      author_email: me,
+      author_name: authorName,
+      created_at: new Date().toISOString(),
+    };
+    setRequests((prev) =>
+      prev
+        ? prev.map((r) =>
+            r.id !== requestId
+              ? r
+              : {
+                  ...r,
+                  comments: [...(r.comments ?? []), optimistic],
+                  updated_at: new Date().toISOString(),
+                }
+          )
+        : prev
+    );
+    const ok = await sendOps([{ type: "comment", requestId, body }]);
+    if (ok) {
+      setCommentDrafts((prev) => {
+        const next = { ...prev };
+        delete next[requestId];
+        return next;
+      });
+    }
+    setCommentBusyId(null);
+  }
+
   async function deleteRequest(id: string) {
-    if (!confirm("Delete this feature request? This can't be undone.")) return;
+    if (deleteConfirmId !== id) {
+      setDeleteConfirmId(id);
+      return;
+    }
+    setDeleteConfirmId(null);
     setRequests((prev) => (prev ? prev.filter((r) => r.id !== id) : prev));
     await sendOps([{ type: "delete", requestId: id }]);
   }
@@ -291,8 +347,8 @@ export function FeatureRequestsPanel() {
             Feature requests
           </h2>
           <p className="text-xs text-muted mt-0.5">
-            Submit a request, vote on others, drag-rank the queue. The
-            board is shared across the CSM team.
+            Submit a request, vote on others, drag-rank the queue.
+            Comment on a row to DM the requester in Slack.
           </p>
         </div>
         <div className="ml-auto text-[12px] text-muted">
@@ -602,14 +658,130 @@ export function FeatureRequestsPanel() {
                     >
                       Edit
                     </button>
+                    {deleteConfirmId === req.id ? (
+                      <>
+                        <span className="text-red-700 dark:text-red-300">
+                          Delete?
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => void deleteRequest(req.id)}
+                          className="text-red-600 dark:text-red-300 font-medium hover:underline"
+                        >
+                          Confirm
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setDeleteConfirmId(null)}
+                          className="text-muted hover:underline"
+                        >
+                          Cancel
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => void deleteRequest(req.id)}
+                        className="text-red-600 dark:text-red-300 hover:underline"
+                      >
+                        Delete
+                      </button>
+                    )}
+                    <span className="text-subtle">·</span>
                     <button
                       type="button"
-                      onClick={() => void deleteRequest(req.id)}
-                      className="text-red-600 dark:text-red-300 hover:underline"
+                      onClick={() =>
+                        setCommentDrafts((prev) => ({
+                          ...prev,
+                          [req.id]: prev[req.id] ?? "",
+                        }))
+                      }
+                      disabled={!viewerEmail}
+                      className="text-accent hover:underline disabled:opacity-50"
+                      title={
+                        viewerEmail
+                          ? "Leave a comment — pings the requester in Slack"
+                          : "Sign in to comment"
+                      }
                     >
-                      Delete
+                      Comment
+                      {(req.comments ?? []).length > 0
+                        ? ` (${req.comments!.length})`
+                        : ""}
                     </button>
                   </div>
+
+                  {(req.comments ?? []).length > 0 ? (
+                    <ul className="mt-2 space-y-2">
+                      {(req.comments ?? []).map((c) => (
+                        <li
+                          key={c.id}
+                          className="pl-2 border-l-2 border-border text-xs"
+                        >
+                          <span className="font-medium text-fg">
+                            {c.author_name}
+                          </span>
+                          <span className="text-subtle ml-1.5">
+                            {fmtDate(c.created_at)}
+                          </span>
+                          <p className="text-muted whitespace-pre-wrap break-words mt-0.5 leading-relaxed">
+                            {c.body}
+                          </p>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : null}
+
+                  {commentDrafts[req.id] !== undefined ? (
+                    <div className="mt-2 space-y-1.5">
+                      <textarea
+                        value={commentDrafts[req.id]}
+                        onChange={(e) =>
+                          setCommentDrafts((prev) => ({
+                            ...prev,
+                            [req.id]: e.target.value,
+                          }))
+                        }
+                        rows={2}
+                        placeholder="Reply to the requester…"
+                        className="w-full px-2 py-1.5 text-xs border border-border-strong rounded-md bg-surface text-fg resize-y"
+                        autoFocus
+                      />
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => void postComment(req.id)}
+                          disabled={
+                            !commentDrafts[req.id]?.trim() ||
+                            commentBusyId === req.id
+                          }
+                          className="px-2 py-1 text-xs bg-accent text-accent-fg rounded-md hover:bg-accent-hover disabled:opacity-50"
+                        >
+                          {commentBusyId === req.id
+                            ? "Posting…"
+                            : "Post & ping in Slack"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setCommentDrafts((prev) => {
+                              const next = { ...prev };
+                              delete next[req.id];
+                              return next;
+                            })
+                          }
+                          disabled={commentBusyId === req.id}
+                          className="px-2 py-1 text-xs border border-border-strong rounded-md hover:bg-canvas disabled:opacity-50"
+                        >
+                          Cancel
+                        </button>
+                        <span className="text-[10px] text-subtle">
+                          DMs {req.submitter || "the requester"} when
+                          they&apos;re not you
+                        </span>
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
               </li>
             );

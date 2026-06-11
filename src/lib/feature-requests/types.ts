@@ -26,6 +26,14 @@ export type FeatureRequestStatus =
  */
 export type FeatureRequestTeam = "csm" | "am";
 
+export interface FeatureRequestComment {
+  id: string;
+  body: string;
+  author_email: string;
+  author_name: string;
+  created_at: string;
+}
+
 export interface FeatureRequest {
   id: string;
   description: string;
@@ -50,6 +58,8 @@ export interface FeatureRequest {
    *  an integer at create time and the reorder op moves it. Ties
    *  fall back to (votes desc, created_at desc). */
   rank: number;
+  /** Threaded replies on the request. Newest last. */
+  comments?: FeatureRequestComment[];
   created_at: string;
   updated_at: string;
 }
@@ -79,6 +89,15 @@ export type FeatureRequestOp =
        *  Anything missing keeps its current rank but gets bumped to
        *  the end so partial reorders don't lose rows. */
       orderedIds: string[];
+    }
+  | {
+      type: "comment";
+      requestId: string;
+      body: string;
+      /** Injected server-side from the session — ignored if sent by
+       *  the client. */
+      author_email?: string;
+      author_name?: string;
     };
 
 /** Stable 12-char id. Same shape as newTodoId / newTaskId so it
@@ -87,6 +106,12 @@ export function newRequestId(): string {
   const rand = Math.random().toString(36).slice(2, 10);
   const stamp = (Date.now() % 1_000_000).toString(36);
   return `fr_${stamp}${rand}`;
+}
+
+export function newCommentId(): string {
+  const rand = Math.random().toString(36).slice(2, 10);
+  const stamp = (Date.now() % 1_000_000).toString(36);
+  return `frc_${stamp}${rand}`;
 }
 
 /** Sort helper used by both the engine and the panel — manual rank

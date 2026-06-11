@@ -1,5 +1,6 @@
 import { kvGet, kvSet } from "../storage/kv";
 import {
+  newCommentId,
   newRequestId,
   type FeatureRequest,
   type FeatureRequestList,
@@ -31,6 +32,7 @@ export async function loadFeatureRequests(): Promise<FeatureRequestList> {
   const requests = raw.map((r) => ({
     ...r,
     team: r.team ?? "csm",
+    comments: Array.isArray(r.comments) ? r.comments : [],
   })) as FeatureRequest[];
   return { requests };
 }
@@ -124,6 +126,29 @@ export function applyFeatureRequestOp(
     case "delete": {
       return {
         requests: list.requests.filter((r) => r.id !== op.requestId),
+      };
+    }
+    case "comment": {
+      const body = op.body.trim();
+      const authorEmail = op.author_email?.trim().toLowerCase() ?? "";
+      if (!body || !authorEmail) return list;
+      const comment = {
+        id: newCommentId(),
+        body,
+        author_email: authorEmail,
+        author_name: op.author_name?.trim() || authorEmail,
+        created_at: now,
+      };
+      return {
+        requests: list.requests.map((r) =>
+          r.id !== op.requestId
+            ? r
+            : {
+                ...r,
+                comments: [...(r.comments ?? []), comment],
+                updated_at: now,
+              }
+        ),
       };
     }
     case "reorder": {

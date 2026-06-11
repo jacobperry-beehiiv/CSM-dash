@@ -21,6 +21,8 @@ import type {
   ReviewStatesMap,
 } from "@/lib/data/review-states-types";
 import { needsReview } from "@/lib/data/review-states-types";
+import { BulkEmailLauncher } from "./am/bulk-email-launcher";
+import { CopyPubIdsButton } from "./am/copy-pub-ids-button";
 import { ReviewStateCell } from "./am/review-state-cell";
 import { SendDigestButton } from "./am/send-digest-button";
 import {
@@ -104,15 +106,14 @@ const BUCKETS: Bucket[] = [
 ];
 
 export function RenewalPanel({ customers, csms }: Props) {
-  const [selected, setSelected] = useState<Customer | null>(null);
+  const [outreachFor, setOutreachFor] = useState<Customer | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  // Bulk-select — keyed on rowKey() so select-all survives re-renders.
+  const [selected, setSelected] = useState<Set<string>>(new Set());
   // Default to "annual" — the Renewals motion is fundamentally about
   // annual contracts (multi-year reads as Annual at the bucket level
-  // too). Monthly accounts churn out organically and don't need
-  // renewal outreach. The Non-monthly synthetic bucket stays in the
-  // dropdown as a future-proof option for when new non-monthly
-  // cadences (semi-annual, biennial) land, but the user-facing
-  // default is the precise label the team actually thinks about.
+  // too). Monthly accounts are hard-excluded below; "All cadences"
+  // shows every non-monthly bucket (quarterly, semi-annual, …).
   const [intervalFilter, setIntervalFilter] = useState<string>("annual");
   const [search, setSearch] = useUrlSearch("q");
   const { ws2pubs } = usePublicationsIndex();
@@ -131,6 +132,7 @@ export function RenewalPanel({ customers, csms }: Props) {
   // pending action (reach_out / no decision).
   const [reviewStates, setReviewStates] = useState<ReviewStatesMap>({});
   const [needsReviewFilter, setNeedsReviewFilter] = useUrlSearch("needs_review");
+  const [lifecycleFilter, setLifecycleFilter] = useUrlSearch("lifecycle");
   useEffect(() => {
     fetch("/api/customer-overrides")
       .then((r) => (r.ok ? r.json() : null))
@@ -227,9 +229,23 @@ export function RenewalPanel({ customers, csms }: Props) {
   );
   useEffect(() => {
     setExpanded(new Set());
+    setSelected(new Set());
     setIntervalFilter("");
     setSearch("");
   }, [customerSignature]);
+
+  function rowKey(c: Customer, bucketIdx: number, idx: number): string {
+    return c.workspace_id ?? c.stripe_customer_id ?? `${bucketIdx}-${idx}`;
+  }
+
+  function toggleSelected(k: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(k)) next.delete(k);
+      else next.add(k);
+      return next;
+    });
+  }
 
   function toggleExpanded(key: string) {
     setExpanded((prev) => {
@@ -249,40 +265,75 @@ export function RenewalPanel({ customers, csms }: Props) {
    */
   const intervalOptions = useMemo(() => {
     const counts = new Map<string, number>();
-    let nonMonthly = 0;
     for (const c of customers) {
       const bucket = intervalBucket(c);
-      if (!bucket) continue;
+      // Renewals is a non-monthly motion — monthly plans never belong
+      // in the cohort or the cadence dropdown counts.
+      if (!bucket || bucket === "monthly") continue;
       counts.set(bucket, (counts.get(bucket) ?? 0) + 1);
-      if (bucket !== "monthly") nonMonthly++;
     }
-    // "Non-monthly" gets pinned to the top of the list as a curated
-    // option so the team can switch back to it after picking a
-    // specific cadence. Its count reflects everything that isn't
-    // monthly — annuals today, plus any future cadences the
-    // intervalBucket() helper learns about.
-    const named = [...counts.entries()]
+    return [...counts.entries()]
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([bucket, count]) => ({
         value: bucket,
         label: bucketLabel(bucket),
         count,
       }));
-    return [
-      { value: "non_monthly", label: "Non-monthly", count: nonMonthly },
-      ...named,
-    ];
   }, [customers]);
 
+  const nonMonthlyCount = useMemo(
+    () =>
+      customers.filter((c) => {
+        const bucket = intervalBucket(c);
+        return bucket && bucket !== "monthly";
+      }).length,
+    [customers]
+  );
+
+  function lifecycleStage(c: Customer): string {
+    if (!c.workspace_id) return "";
+    return overrides[c.workspace_id]?.lifecycle_stage?.trim() ?? "";
+  }
+
+  const lifecycleFilterOptions = useMemo(() => {
+    const counts = new Map<string, number>();
+    let unset = 0;
+    for (const c of customers) {
+      if (intervalBucket(c) === "monthly") continue;
+      const stage = lifecycleStage(c);
+      if (!stage) {
+        unset++;
+        continue;
+      }
+      counts.set(stage, (counts.get(stage) ?? 0) + 1);
+    }
+    const named = lifecycleOptions.map((stage) => ({
+      value: stage,
+      label: stage,
+      count: counts.get(stage) ?? 0,
+    }));
+    const legacy = [...counts.entries()]
+      .filter(([stage]) => !lifecycleOptions.includes(stage))
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([stage, count]) => ({
+        value: stage,
+        label: `${stage} (legacy)`,
+        count,
+      }));
+    return [
+      { value: "__unset__", label: "Unset", count: unset },
+      ...named,
+      ...legacy,
+    ];
+  }, [customers, overrides, lifecycleOptions]);
+
   const filtered = useMemo(() => {
-    let list = customers;
-    if (intervalFilter === "non_monthly") {
-      // Synthetic bucket: everything whose canonical interval bucket
-      // isn't "monthly". A row with a missing / unrecognized interval
-      // still passes — better to surface it for review than to hide
-      // it under the default filter.
-      list = list.filter((c) => intervalBucket(c) !== "monthly");
-    } else if (intervalFilter) {
+    // Hard exclude monthly plans — they churn organically and don't
+    // need renewal outreach regardless of which cadence filter is
+    // active. Uses intervalBucket() so interval_count wins over a
+    // misleading raw Stripe interval string.
+    let list = customers.filter((c) => intervalBucket(c) !== "monthly");
+    if (intervalFilter) {
       list = list.filter((c) => intervalBucket(c) === intervalFilter);
     }
     if (search) {
@@ -316,8 +367,24 @@ export function RenewalPanel({ customers, csms }: Props) {
           : true
       );
     }
+    if (lifecycleFilter) {
+      if (lifecycleFilter === "__unset__") {
+        list = list.filter((c) => !lifecycleStage(c));
+      } else {
+        list = list.filter((c) => lifecycleStage(c) === lifecycleFilter);
+      }
+    }
     return list;
-  }, [customers, intervalFilter, search, ws2pubs, needsReviewFilter, reviewStates]);
+  }, [
+    customers,
+    intervalFilter,
+    search,
+    ws2pubs,
+    needsReviewFilter,
+    reviewStates,
+    lifecycleFilter,
+    overrides,
+  ]);
 
   const buckets = useMemo(() => {
     return BUCKETS.map((b) => {
@@ -334,6 +401,32 @@ export function RenewalPanel({ customers, csms }: Props) {
 
   const totalInWindow = buckets.reduce((s, x) => s + x.list.length, 0);
 
+  const visibleRows = useMemo(
+    () =>
+      buckets.flatMap(({ list }, bucketIdx) =>
+        list.map((entry, idx) => ({
+          ...entry,
+          bucketIdx,
+          idx,
+          key: rowKey(entry.c, bucketIdx, idx),
+        }))
+      ),
+    [buckets]
+  );
+
+  const selectedCustomers = useMemo(
+    () => visibleRows.filter((r) => selected.has(r.key)).map((r) => r.c),
+    [visibleRows, selected]
+  );
+
+  const selectedWorkspaceIds = useMemo(
+    () =>
+      selectedCustomers
+        .map((c) => c.workspace_id)
+        .filter((id): id is string => Boolean(id)),
+    [selectedCustomers]
+  );
+
   const cadencePicker = (
     <FilterBar>
       <SearchInput
@@ -347,8 +440,15 @@ export function RenewalPanel({ customers, csms }: Props) {
         value={intervalFilter}
         onChange={(v) => setIntervalFilter(v)}
         emptyLabel="All cadences"
-        emptyCount={customers.filter((c) => c.interval).length}
+        emptyCount={nonMonthlyCount}
         options={intervalOptions}
+      />
+      <SelectFilter
+        label="Lifecycle"
+        value={lifecycleFilter}
+        onChange={setLifecycleFilter}
+        emptyLabel="Any lifecycle"
+        options={lifecycleFilterOptions}
       />
       <SendDigestButton workflows={["renewals"]} />
     </FilterBar>
@@ -360,7 +460,13 @@ export function RenewalPanel({ customers, csms }: Props) {
         {cadencePicker}
         <div className="bg-green-50 border border-green-200 rounded-lg p-4 text-sm text-green-800">
           No renewals in the next 90 days
-          {intervalFilter ? ` for ${bucketLabel(intervalFilter)} customers` : ""}.
+          {intervalFilter ? ` for ${bucketLabel(intervalFilter)} customers` : ""}
+          {lifecycleFilter
+            ? lifecycleFilter === "__unset__"
+              ? " with unset lifecycle"
+              : ` at lifecycle "${lifecycleFilter}"`
+            : ""}
+          .
         </div>
       </>
     );
@@ -369,6 +475,38 @@ export function RenewalPanel({ customers, csms }: Props) {
   return (
     <div className="space-y-6">
       {cadencePicker}
+
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-xs text-muted">
+          <strong>{selected.size}</strong> selected
+        </span>
+        <button
+          onClick={() =>
+            setSelected(new Set(visibleRows.map((r) => r.key)))
+          }
+          className="px-2 py-1 text-xs border border-border-strong rounded-md bg-surface hover:bg-canvas"
+          title="Select every visible row (after filters)"
+        >
+          Select all
+        </button>
+        <button
+          onClick={() => setSelected(new Set())}
+          className="px-2 py-1 text-xs border border-border-strong rounded-md bg-surface hover:bg-canvas"
+        >
+          Clear
+        </button>
+        <CopyPubIdsButton workspaceIds={selectedWorkspaceIds} />
+        <div className="flex-1" />
+        <BulkEmailLauncher
+          customers={selectedCustomers}
+          defaultTemplateId="renewal-30d"
+          disabled={selected.size === 0}
+          label="✉️ Email selected (CCs CSM)"
+          ccLookup={(c) => c.customer_success_manager_email ?? null}
+          trackingIdFor={(c) => c.workspace_id ?? null}
+        />
+      </div>
+
       {buckets.map(({ bucket, list }, bucketIdx) =>
         list.length === 0 ? null : (
           <div
@@ -384,6 +522,7 @@ export function RenewalPanel({ customers, csms }: Props) {
             <table className="w-full text-sm bg-surface table-fixed">
               <colgroup>
                 <col className="w-8" />
+                <col className="w-6" />
                 <col className="w-[20%]" />
                 <col className="w-[9%]" />
                 <col className="w-[8%]" />
@@ -397,6 +536,7 @@ export function RenewalPanel({ customers, csms }: Props) {
               </colgroup>
               <thead>
                 <tr className="text-left border-y border-border text-xs text-muted">
+                  <th className="px-3 py-2"></th>
                   <th className="px-3 py-2"></th>
                   <th className="px-3 py-2 font-medium">Account</th>
                   <th className="px-3 py-2 font-medium text-right">
@@ -413,7 +553,7 @@ export function RenewalPanel({ customers, csms }: Props) {
               </thead>
               <tbody>
                 {list.map(({ c, date, days }, idx) => {
-                  const k = `${bucketIdx}-${c.workspace_id ?? idx}`;
+                  const k = rowKey(c, bucketIdx, idx);
                   const isOpen = expanded.has(k);
                   const cadenceLabel = cadenceRowLabel(c);
                   const arrBillingSuffix = billingPeriodSuffix(c);
@@ -425,6 +565,18 @@ export function RenewalPanel({ customers, csms }: Props) {
                           isOpen ? "bg-blue-50 dark:bg-blue-500/40" : "hover:bg-blue-50 dark:bg-blue-500/40"
                         }`}
                       >
+                        <td
+                          className="px-3 py-2"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={selected.has(k)}
+                            onChange={() => toggleSelected(k)}
+                            className="h-4 w-4 rounded border-border-strong cursor-pointer"
+                            aria-label={`Select ${c.company_name ?? c.workspace_name ?? "row"}`}
+                          />
+                        </td>
                         <td className="px-3 py-2 text-subtle select-none">
                           <span
                             className={`inline-block transition-transform ${
@@ -518,14 +670,14 @@ export function RenewalPanel({ customers, csms }: Props) {
                         <td className="px-3 py-2">
                           <RowActions
                             customer={c}
-                            onDraft={setSelected}
+                            onDraft={setOutreachFor}
                             primaryAction="stripe"
                           />
                         </td>
                       </tr>
                       {isOpen && (
                         <tr className="bg-blue-50 dark:bg-blue-500/20 border-b border-border">
-                          <td colSpan={10} className="px-6 py-4">
+                          <td colSpan={11} className="px-6 py-4">
                             <CustomerDetailPanel customer={c} />
                           </td>
                         </tr>
@@ -539,13 +691,13 @@ export function RenewalPanel({ customers, csms }: Props) {
         )
       )}
 
-      {selected && (
+      {outreachFor ? (
         <OutreachModal
-          customer={selected}
-          onClose={() => setSelected(null)}
+          customer={outreachFor}
+          onClose={() => setOutreachFor(null)}
           initialScenario="renewal-30d"
         />
-      )}
+      ) : null}
     </div>
   );
 }

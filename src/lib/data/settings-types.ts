@@ -212,12 +212,14 @@ export const DEFAULT_PROACTIVE_OUTREACH_STATUSES: string[] = [
  *  on /am Renewals. Pure workflow labels; nothing in the engine
  *  auto-applies these. Admins manage the list at /settings/slack. */
 export const DEFAULT_LIFECYCLE_STAGES: string[] = [
-  "Prospect",
-  "Onboarding",
-  "Active",
-  "At risk",
-  "Renewal conversation",
-  "Churned",
+  'CSM Aligned',
+  'First Outreach Sent',
+  'Follow Up Sent',
+  'Call Scheduled',
+  'Pricing Negotiation',
+  'Renewal Confirmed',
+  'Renewal Lost',
+  'Mid-Year'
 ];
 
 export const DEFAULTS: SettingsShape = {
