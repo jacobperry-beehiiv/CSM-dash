@@ -17,6 +17,15 @@ export type FeatureRequestStatus =
   | "shipped"
   | "declined";
 
+/**
+ * Which team the request originates from. CSM and AM use the dashboard
+ * for different workflows, so the board lets each filter to "my team's
+ * asks" without losing the shared backlog view. Defaulted to "csm" on
+ * read for any pre-existing rows that predate this field (see
+ * loadFeatureRequests in ./store.ts).
+ */
+export type FeatureRequestTeam = "csm" | "am";
+
 export interface FeatureRequest {
   id: string;
   description: string;
@@ -28,6 +37,10 @@ export interface FeatureRequest {
    *  the create op. Used for "edit/delete your own" gating, NOT
    *  shown unless you hover the row's metadata. */
   submitter_email: string;
+  /** Which team this request comes from. Drives the team badge + the
+   *  CSM/AM filter tabs above the list. Existing rows that predate
+   *  this field default to "csm" on read. */
+  team: FeatureRequestTeam;
   priority: FeatureRequestPriority;
   status: FeatureRequestStatus;
   /** One vote per voter (keyed by @beehiiv.com email). The count
@@ -51,7 +64,10 @@ export type FeatureRequestOp =
       type: "patch";
       requestId: string;
       patch: Partial<
-        Pick<FeatureRequest, "description" | "priority" | "status" | "submitter">
+        Pick<
+          FeatureRequest,
+          "description" | "priority" | "status" | "submitter" | "team"
+        >
       >;
     }
   | { type: "vote"; requestId: string; voterEmail: string }
@@ -96,4 +112,9 @@ export const STATUS_LABEL: Record<FeatureRequestStatus, string> = {
   in_progress: "In progress",
   shipped: "Shipped",
   declined: "Declined",
+};
+
+export const TEAM_LABEL: Record<FeatureRequestTeam, string> = {
+  csm: "CSM",
+  am: "AM",
 };
