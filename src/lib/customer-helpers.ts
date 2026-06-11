@@ -149,3 +149,112 @@ export function subUtilFraction(c: {
     ? c.percent_of_max_subs / 100
     : c.percent_of_max_subs;
 }
+
+/** Minimal shape for cadence derivation — Customer satisfies this. */
+export type CadenceInput = {
+  interval: string | null;
+  interval_count?: number | null;
+};
+
+/**
+ * Collapse a customer's billing cadence to a canonical bucket.
+ * Honors `interval_count` (from Metabase q23101) over the raw
+ * Stripe `interval` string — a quarterly customer often carries
+ * `interval: "month"` or `"year"` and would mis-bucket otherwise.
+ */
+export function intervalBucket(c: CadenceInput): string {
+  const count = c.interval_count;
+  if (typeof count === "number" && count > 0) {
+    if (count === 1) return "monthly";
+    if (count === 3) return "quarterly";
+    if (count === 4) return "every_4_months";
+    if (count === 6) return "semi_annual";
+    if (count === 12) return "annual";
+    if (count === 24) return "biennial";
+    if (count === 36) return "triennial";
+    return `every_${count}_months`;
+  }
+  if (!c.interval) return "";
+  const t = c.interval.trim().toLowerCase();
+  if (t === "month" || t === "monthly") return "monthly";
+  if (t === "year" || t === "annual" || t === "yearly") return "annual";
+  return t;
+}
+
+/** Title-case label for a canonical cadence bucket. */
+export function bucketLabel(bucket: string): string {
+  switch (bucket) {
+    case "monthly":
+      return "Monthly";
+    case "quarterly":
+      return "Quarterly";
+    case "every_4_months":
+      return "Every 4 months";
+    case "semi_annual":
+      return "Semi-annual";
+    case "annual":
+      return "Annual";
+    case "biennial":
+      return "Biennial";
+    case "triennial":
+      return "Triennial";
+    default: {
+      const m = bucket.match(/^every_(\d+)_months$/);
+      if (m) return `Every ${m[1]} months`;
+      return bucket.charAt(0).toUpperCase() + bucket.slice(1);
+    }
+  }
+}
+
+/** Lowercase cadence label for per-row metadata (renewal date, badges). */
+export function cadenceRowLabel(c: CadenceInput): string | null {
+  const bucket = intervalBucket(c);
+  return bucket ? bucketLabel(bucket).toLowerCase() : null;
+}
+
+/** ARR column billing-period hint — must agree with intervalBucket(). */
+export function billingPeriodSuffix(c: CadenceInput): string | null {
+  const bucket = intervalBucket(c);
+  if (!bucket) return null;
+  switch (bucket) {
+    case "monthly":
+      return "/mo billing";
+    case "quarterly":
+      return "/qtr billing";
+    case "every_4_months":
+      return "/4mo billing";
+    case "semi_annual":
+      return "/6mo billing";
+    case "annual":
+      return "/yr billing";
+    case "biennial":
+      return "/2yr billing";
+    case "triennial":
+      return "/3yr billing";
+    default: {
+      const m = bucket.match(/^every_(\d+)_months$/);
+      return m ? `/${m[1]}mo billing` : null;
+    }
+  }
+}
+
+/** Tailwind classes for the Next charge cadence badge in customer tables. */
+export function cadenceBadgeClass(bucket: string): string {
+  switch (bucket) {
+    case "monthly":
+      return "bg-sky-100 text-sky-800 border-sky-200";
+    case "quarterly":
+      return "bg-teal-100 text-teal-800 border-teal-200";
+    case "every_4_months":
+      return "bg-cyan-100 text-cyan-800 border-cyan-200";
+    case "semi_annual":
+      return "bg-amber-100 text-amber-800 border-amber-200";
+    case "annual":
+      return "bg-purple-100 text-purple-800 border-purple-200";
+    case "biennial":
+    case "triennial":
+      return "bg-violet-100 text-violet-800 border-violet-200";
+    default:
+      return "bg-surface-2 text-muted border-border";
+  }
+}
