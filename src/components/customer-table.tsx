@@ -16,7 +16,12 @@ import { RowActions } from "./row-actions";
 import { FeatureUtilizationFilter } from "./feature-utilization-filter";
 import { fmtCurrency, fmtDate, fmtNumber, daysUntil } from "./format";
 import { featureCounts } from "@/lib/features";
-import { lastContacted } from "@/lib/customer-helpers";
+import {
+  cadenceBadgeClass,
+  cadenceRowLabel,
+  intervalBucket,
+  lastContacted,
+} from "@/lib/customer-helpers";
 import { useGmailLastContact } from "@/lib/hooks/use-gmail-last-contact";
 import {
   useColumnVisibility,
@@ -601,18 +606,11 @@ export function CustomerTable({
             : days != null && days <= 30
               ? "text-amber-600"
               : "";
-        const cadence = (c.interval ?? "").toLowerCase();
-        const cadenceLabel = cadence === "annual"
-          ? "annual"
-          : cadence === "month" || cadence === "monthly"
-            ? "monthly"
-            : cadence || null;
-        const cadenceClass =
-          cadenceLabel === "annual"
-            ? "bg-purple-100 text-purple-800 border-purple-200"
-            : cadenceLabel === "monthly"
-              ? "bg-sky-100 text-sky-800 border-sky-200"
-              : "bg-surface-2 text-muted border-border";
+        const cadenceBucket = intervalBucket(c);
+        const cadenceLabel = cadenceRowLabel(c);
+        const cadenceClass = cadenceBucket
+          ? cadenceBadgeClass(cadenceBucket)
+          : "bg-surface-2 text-muted border-border";
         return (
           <div className="flex flex-col gap-0.5">
             <span className={color}>{fmtDate(date)}</span>

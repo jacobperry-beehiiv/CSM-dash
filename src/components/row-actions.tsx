@@ -1,11 +1,18 @@
 "use client";
 
 import type { Customer } from "@/lib/types";
-import { hubspotCompanyUrl, masqueradeUrl } from "@/lib/links";
+import {
+  hubspotCompanyUrl,
+  masqueradeUrl,
+  stripeCustomerUrl,
+} from "@/lib/links";
 
 interface Props {
   customer: Customer;
   onDraft: (c: Customer) => void;
+  /** First action slot. Renewals uses Stripe; other tables default
+   *  to masquerade. */
+  primaryAction?: "masquerade" | "stripe";
 }
 
 /**
@@ -23,9 +30,30 @@ interface Props {
  * for data columns; the cell's `align-top` row alignment keeps neighbour
  * cells anchored to the top so the stacked actions read cleanly.
  */
-export function RowActions({ customer, onDraft }: Props) {
+export function RowActions({
+  customer,
+  onDraft,
+  primaryAction = "masquerade",
+}: Props) {
   const masquerade = masqueradeUrl(customer.owner_email);
+  const stripe = stripeCustomerUrl(customer.stripe_customer_id);
   const hubspot = hubspotCompanyUrl(customer.hubspot_company_id);
+  const primary =
+    primaryAction === "stripe"
+      ? stripe
+        ? {
+            href: stripe,
+            label: "Stripe",
+            title: "Open in Stripe Dashboard",
+          }
+        : null
+      : masquerade
+        ? {
+            href: masquerade,
+            label: "Masq",
+            title: "Masquerade into workspace",
+          }
+        : null;
 
   function stop(e: React.MouseEvent) {
     e.stopPropagation();
@@ -42,15 +70,15 @@ export function RowActions({ customer, onDraft }: Props) {
       className="flex flex-col items-stretch gap-1 max-w-[110px] ml-auto"
       onClick={stop}
     >
-      {masquerade ? (
+      {primary ? (
         <a
-          href={masquerade}
+          href={primary.href}
           target="_blank"
           rel="noopener noreferrer"
-          title="Masquerade into workspace"
+          title={primary.title}
           className={btn}
         >
-          Masq
+          {primary.label}
         </a>
       ) : null}
       {hubspot ? (
