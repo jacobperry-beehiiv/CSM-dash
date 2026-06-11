@@ -58,6 +58,7 @@ const SOURCE_LABEL: Record<TodoSource, { icon: string; label: string }> = {
   slack_slash: { icon: "⚡", label: "Slack: /todo" },
   slack_dm: { icon: "💬", label: "Slack DM" },
   slack_reaction: { icon: "👍", label: "Slack reaction" },
+  feature_request: { icon: "💡", label: "Feature request" },
 };
 
 /** Replace bare URLs with anchors so links pasted into details are
