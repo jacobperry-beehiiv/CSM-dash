@@ -7,10 +7,12 @@ import {
   sortRequests,
   PRIORITY_LABEL,
   STATUS_LABEL,
+  TEAM_LABEL,
   type FeatureRequest,
   type FeatureRequestOp,
   type FeatureRequestPriority,
   type FeatureRequestStatus,
+  type FeatureRequestTeam,
 } from "@/lib/feature-requests/types";
 
 /**
@@ -56,9 +58,17 @@ export function FeatureRequestsPanel() {
   // Composer state.
   const [draftDescription, setDraftDescription] = useState("");
   const [draftSubmitter, setDraftSubmitter] = useState("");
+  const [draftTeam, setDraftTeam] = useState<FeatureRequestTeam>("csm");
   const [draftPriority, setDraftPriority] =
     useState<FeatureRequestPriority>("medium");
   const [submitting, setSubmitting] = useState(false);
+
+  // Filter tabs above the list. "all" is the default so the board
+  // still reads as a single shared backlog at a glance; the CSM/AM
+  // tabs are for when you want to focus on your team's asks.
+  const [teamFilter, setTeamFilter] = useState<FeatureRequestTeam | "all">(
+    "all"
+  );
 
   // Per-request inline-edit state. Keyed by request id; absence means
   // not-editing. Stores draft text so a typo doesn't fire a network
@@ -142,6 +152,7 @@ export function FeatureRequestsPanel() {
       description,
       submitter,
       submitter_email: viewerEmail,
+      team: draftTeam,
       priority: draftPriority,
       status: "open",
       votes: [],
@@ -223,7 +234,10 @@ export function FeatureRequestsPanel() {
   async function patchRequest(
     id: string,
     patch: Partial<
-      Pick<FeatureRequest, "description" | "priority" | "status" | "submitter">
+      Pick<
+        FeatureRequest,
+        "description" | "priority" | "status" | "submitter" | "team"
+      >
     >
   ) {
     setRequests((prev) =>
@@ -243,9 +257,19 @@ export function FeatureRequestsPanel() {
   }
 
   // ── Sorted view + counters ──
-  const sortedRequests = useMemo(
+  // Sort the full list first so the manual rank is computed against
+  // all rows (not just the filtered view) — this keeps a CSM-tab
+  // reorder from silently shuffling the AM-tab order.
+  const allSorted = useMemo(
     () => (requests ? sortRequests(requests) : []),
     [requests]
+  );
+  const sortedRequests = useMemo(
+    () =>
+      teamFilter === "all"
+        ? allSorted
+        : allSorted.filter((r) => (r.team ?? "csm") === teamFilter),
+    [allSorted, teamFilter]
   );
   const openCount = sortedRequests.filter((r) => r.status === "open").length;
   const inProgressCount = sortedRequests.filter(
@@ -254,6 +278,10 @@ export function FeatureRequestsPanel() {
   const shippedCount = sortedRequests.filter(
     (r) => r.status === "shipped"
   ).length;
+  // Filter-tab counts: total per team across statuses so the tab
+  // labels read as a meaningful "how big is each backlog" cue.
+  const csmTotal = allSorted.filter((r) => (r.team ?? "csm") === "csm").length;
+  const amTotal = allSorted.filter((r) => (r.team ?? "csm") === "am").length;
 
   return (
     <div className="bg-surface border border-border rounded-xl shadow-card overflow-hidden">
@@ -283,8 +311,33 @@ export function FeatureRequestsPanel() {
           className="w-full px-3 py-2 text-sm border border-border-strong rounded-md bg-surface text-fg resize-y"
         />
         <div className="flex flex-wrap items-center gap-2">
+          {/* Team toggle — drives the team badge on the row + which
+              filter tab the request lands in. Buttons (not a select)
+              so both options are visible at a glance. */}
+          <div
+            className="inline-flex rounded-md border border-border-strong overflow-hidden"
+            role="group"
+            aria-label="Submitter team"
+          >
+            {(["csm", "am"] as FeatureRequestTeam[]).map((t) => (
+              <button
+                key={t}
+                type="button"
+                onClick={() => setDraftTeam(t)}
+                className={`px-2 py-1 text-xs font-medium transition-colors ${
+                  draftTeam === t
+                    ? t === "csm"
+                      ? "bg-indigo-600 text-white"
+                      : "bg-purple-600 text-white"
+                    : "bg-surface text-muted hover:bg-canvas"
+                }`}
+              >
+                {TEAM_LABEL[t]}
+              </button>
+            ))}
+          </div>
           <label className="text-xs text-muted flex items-center gap-1.5">
-            CSM/AM
+            Name
             <input
               type="text"
               value={draftSubmitter}
@@ -343,6 +396,55 @@ export function FeatureRequestsPanel() {
           Last save failed: {writeError}
         </div>
       ) : null}
+
+      {/* Team filter tabs. Counts read against the full list (not
+          the current filter) so each tab advertises its own size.
+          "all" is the default — the board still works as one shared
+          backlog at a glance. */}
+      <div className="px-5 py-2 bg-canvas/20 border-b border-border flex items-center gap-1">
+        {(
+          [
+            { key: "all", label: "All", count: allSorted.length },
+            { key: "csm", label: "CSM", count: csmTotal },
+            { key: "am", label: "AM", count: amTotal },
+          ] as Array<{
+            key: FeatureRequestTeam | "all";
+            label: string;
+            count: number;
+          }>
+        ).map((tab) => {
+          const active = teamFilter === tab.key;
+          // Match the row-badge palette so the active tab visually
+          // ties to the rows it surfaces.
+          const activeBg =
+            tab.key === "csm"
+              ? "bg-indigo-600 text-white"
+              : tab.key === "am"
+                ? "bg-purple-600 text-white"
+                : "bg-accent text-accent-fg";
+          return (
+            <button
+              key={tab.key}
+              type="button"
+              onClick={() => setTeamFilter(tab.key)}
+              className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors ${
+                active
+                  ? activeBg
+                  : "text-muted hover:text-fg hover:bg-canvas"
+              }`}
+            >
+              {tab.label}{" "}
+              <span
+                className={`ml-1 font-mono ${
+                  active ? "opacity-80" : "text-subtle"
+                }`}
+              >
+                {tab.count}
+              </span>
+            </button>
+          );
+        })}
+      </div>
 
       {/* List */}
       {requests === null ? (
@@ -466,6 +568,10 @@ export function FeatureRequestsPanel() {
                   )}
 
                   <div className="mt-1.5 flex flex-wrap items-center gap-2 text-[11px]">
+                    <TeamSelect
+                      value={req.team ?? "csm"}
+                      onChange={(v) => void patchRequest(req.id, { team: v })}
+                    />
                     <span
                       className="text-muted"
                       title={`Submitted by ${req.submitter_email}`}
@@ -570,6 +676,38 @@ function StatusSelect({
       {(Object.keys(STATUS_LABEL) as FeatureRequestStatus[]).map((s) => (
         <option key={s} value={s}>
           {STATUS_LABEL[s]}
+        </option>
+      ))}
+    </select>
+  );
+}
+
+/** Inline team chip that doubles as a dropdown — single-click change
+ *  with strong color coding so CSM rows and AM rows read visibly
+ *  different in a long list. Palette matches the composer toggle +
+ *  the filter tabs so the visual language stays consistent
+ *  end-to-end. */
+function TeamSelect({
+  value,
+  onChange,
+}: {
+  value: FeatureRequestTeam;
+  onChange: (v: FeatureRequestTeam) => void;
+}) {
+  const color =
+    value === "am"
+      ? "bg-purple-100 dark:bg-purple-500/20 text-purple-800 dark:text-purple-200 border-purple-300 dark:border-purple-500/40"
+      : "bg-indigo-100 dark:bg-indigo-500/20 text-indigo-800 dark:text-indigo-200 border-indigo-300 dark:border-indigo-500/40";
+  return (
+    <select
+      value={value}
+      onChange={(e) => onChange(e.target.value as FeatureRequestTeam)}
+      className={`px-1.5 py-0.5 text-[11px] rounded border font-semibold ${color}`}
+      title="Team — which queue this request belongs to"
+    >
+      {(Object.keys(TEAM_LABEL) as FeatureRequestTeam[]).map((t) => (
+        <option key={t} value={t}>
+          {TEAM_LABEL[t]}
         </option>
       ))}
     </select>

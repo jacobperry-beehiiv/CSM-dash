@@ -367,14 +367,15 @@ function Section({
   defaultOpen?: boolean;
 }) {
   return (
-    <CollapsibleSection title={title} defaultOpen={defaultOpen}>
+    <CollapsibleSection title={title} defaultOpen={defaultOpen} bodyClassName="">
       {/* divide-y instead of space-y-N: each row gets a thin border
-       *  above + py-3 padding inside, so the rows breathe AND read as
+       *  above + py-2 padding inside, so the rows breathe AND read as
        *  a list. Prior space-y-3 gave gaps with no visual structure
        *  and the long-form prose blocks (risk/goal detail) ran into
        *  the next short row. Subtle border color matches the panel's
-       *  existing dividers. */}
-      <dl className="divide-y divide-border/60">{children}</dl>
+       *  existing dividers. px-3 on the <dl> matches the section
+       *  header's horizontal inset so labels don't hug the card edge. */}
+      <dl className="divide-y divide-border/60 px-4 p-2">{children}</dl>
     </CollapsibleSection>
   );
 }
@@ -397,7 +398,7 @@ function Row({
   // the first/last row. Padding inside rows is what gives the
   // section its rhythm; padding around the section is the
   // CollapsibleSection's job.
-  const padClass = "py-3 first:pt-0 last:pb-0";
+  const padClass = "py-2 first:pt-0 last:pb-0";
   if (block) {
     return (
       <div className={`text-sm space-y-1.5 ${padClass}`}>
