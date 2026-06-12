@@ -19,7 +19,8 @@ export type TodoSource =
   | "slack_slash"
   | "slack_dm"
   | "slack_reaction"
-  | "scheduled";
+  | "scheduled"
+  | "feature_request";
 
 /** Slack-side provenance carried on rows created from Slack. Filled in
  *  by the inbound webhook so the UI can render a "↗ View in Slack"

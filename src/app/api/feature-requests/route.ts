@@ -4,7 +4,7 @@ import {
   applyFeatureRequestOps,
   loadFeatureRequests,
 } from "@/lib/feature-requests/store";
-import { notifySubmitterOfComment } from "@/lib/feature-requests/notify";
+import { followUpSubmitterOnComment } from "@/lib/feature-requests/notify";
 import type { FeatureRequestOp } from "@/lib/feature-requests/types";
 
 export const dynamic = "force-dynamic";
@@ -108,22 +108,32 @@ export async function PATCH(req: Request) {
 
   try {
     const list = await applyFeatureRequestOps(normalized);
+    let commentFollowUp: Awaited<
+      ReturnType<typeof followUpSubmitterOnComment>
+    > | null = null;
 
     for (const op of normalized) {
       if (op.type !== "comment") continue;
       const request = list.requests.find((r) => r.id === op.requestId);
       const comment = request?.comments?.at(-1);
       if (!request || !comment) continue;
-      const notify = await notifySubmitterOfComment({ request, comment });
-      if (!notify.sent && notify.reason) {
+      const followUp = await followUpSubmitterOnComment({ request, comment });
+      commentFollowUp = followUp;
+      if (!followUp.slack.sent && followUp.slack.reason) {
         console.warn("[feature-requests] comment saved, DM skipped", {
           requestId: op.requestId,
-          reason: notify.reason,
+          reason: followUp.slack.reason,
+        });
+      }
+      if (!followUp.todo.added && followUp.todo.reason) {
+        console.warn("[feature-requests] comment saved, todo skipped", {
+          requestId: op.requestId,
+          reason: followUp.todo.reason,
         });
       }
     }
 
-    return NextResponse.json(list);
+    return NextResponse.json({ ...list, comment_follow_up: commentFollowUp });
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Unknown error";
     console.error("[feature-requests PATCH]", { msg, ops_count: ops.length });

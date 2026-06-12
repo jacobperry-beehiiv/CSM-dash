@@ -14,8 +14,13 @@ import { applyMergeTags } from "./merge-tags";
 // The StoredTemplate type and isVisibleToCsm helper live in ./types.ts
 // (client-safe, no KV imports). Re-exported here so existing imports
 // from "@/lib/templates/store" keep working server-side.
-export { isVisibleToCsm, type StoredTemplate } from "./types";
-import type { StoredTemplate } from "./types";
+export {
+  isVisibleToCsm,
+  templateTeam,
+  type StoredTemplate,
+  type TemplateTeam,
+} from "./types";
+import { templateTeam, type StoredTemplate, type TemplateTeam } from "./types";
 
 const KEY = "templates";
 
@@ -29,7 +34,8 @@ const STARTER_TEMPLATES: StoredTemplate[] = [
     label: "Renewal — 30 days out",
     blurb:
       "Annual renewal inside the 30-day window. Confirms champion is in seat and surfaces wins.",
-    tags: ["renewal", "annual"],
+    team: "csm",
+    tags: [],
     subject: "{{customer.name}} renewal — quick sync this week?",
     body_html: `<p>Hi {{customer.contact_first_name}},</p>
 <p>Your {{customer.name}} renewal is coming up on {{customer.next_charge}} — wanted to get something on the calendar before then to walk through what's working and what we should adjust for the next term.</p>
@@ -47,7 +53,8 @@ const STARTER_TEMPLATES: StoredTemplate[] = [
     id: "dormant-no-send",
     label: "Dormant — no recent send",
     blurb: "Customer has gone 10+ days without sending. Asks the question directly.",
-    tags: ["dormant", "engagement"],
+    team: "csm",
+    tags: [],
     subject: "Quick check-in on {{customer.name}}",
     body_html: `<p>Hi {{customer.contact_first_name}},</p>
 <p>Noticed {{customer.name}} hasn't sent a newsletter since {{customer.last_send}} — wanted to make sure nothing's blocked on our end.</p>
@@ -60,7 +67,8 @@ const STARTER_TEMPLATES: StoredTemplate[] = [
     id: "growth-push-under-tier",
     label: "Growth push — under tier",
     blurb: "Customer is below 75% of their subscriber tier. Shares the playbook.",
-    tags: ["growth", "subscribers"],
+    team: "csm",
+    tags: [],
     subject: "Growing {{customer.name}}'s list",
     body_html: `<p>Hi {{customer.contact_first_name}},</p>
 <p>You're at {{customer.tier_pct}} of the {{customer.tier}} tier — there's real room to grow without bumping plan, and I'd like to put a 60-day push together with you.</p>
@@ -79,7 +87,8 @@ const STARTER_TEMPLATES: StoredTemplate[] = [
     id: "escalation-yellow-red",
     label: "Risk escalation — Yellow / Red",
     blurb: "Account is internally flagged. Names the issue directly + proposes a recovery touchpoint.",
-    tags: ["risk", "escalation"],
+    team: "csm",
+    tags: [],
     subject: "Following up on {{customer.name}}",
     body_html: `<p>Hi {{customer.contact_first_name}},</p>
 <p>Wanted to reach out directly — I have {{customer.name}} flagged internally for the following reason: <em>{{customer.risk_detail}}</em>.</p>
@@ -92,7 +101,8 @@ const STARTER_TEMPLATES: StoredTemplate[] = [
     id: "approaching-ent",
     label: "Approaching Enterprise (AM)",
     blurb: "Growth account approaching 100K subs. Hand-off-ready intro.",
-    tags: ["am", "upsell", "enterprise"],
+    team: "am",
+    tags: [],
     subject: "{{customer.name}} → Enterprise conversation",
     body_html: `<p>Hi {{customer.contact_first_name}},</p>
 <p>{{customer.name}} has scaled to a place where Enterprise is the cleaner fit — you're at {{customer.subs}} subscribers (~{{customer.tier_pct}} of your current tier) and {{customer.arr}} ARR.</p>
@@ -111,7 +121,8 @@ const STARTER_TEMPLATES: StoredTemplate[] = [
     id: "general-checkin",
     label: "General check-in",
     blurb: "Light-touch fallback when no specific risk pattern fired.",
-    tags: ["check-in"],
+    team: "csm",
+    tags: [],
     subject: "Quick {{customer.name}} check-in",
     body_html: `<p>Hi {{customer.contact_first_name}},</p>
 <p>Wanted to drop a quick note and see how things are going on your end. Last we connected was around {{customer.last_contacted}}, and I want to make sure we're aligned on what's next.</p>
@@ -125,7 +136,8 @@ const STARTER_TEMPLATES: StoredTemplate[] = [
     label: "Feature underutilization (bulk-friendly)",
     blurb:
       "Default template the Product Utilization tab picks when a feature filter is active. Generic enough to send to many accounts in one batch.",
-    tags: ["feature", "underutilization", "bulk"],
+    team: "csm",
+    tags: [],
     subject: "{{customer.name}} — quick wins we're seeing on our side",
     body_html: `<p>Hi {{customer.contact_first_name}},</p>
 <p>I was scanning {{customer.name}}'s usage and noticed a couple of features that look like easy wins given where you're at — {{customer.subs}} subscribers, {{customer.tier_pct}} of your current tier, last send {{customer.last_send}}.</p>
@@ -145,7 +157,8 @@ const STARTER_TEMPLATES: StoredTemplate[] = [
     label: "Ad revenue opportunity (uses ad-gap merge tags)",
     blurb:
       "Default template the Product Utilization tab picks when an ad-network filter is active. Pulls in actual + potential earnings via merge tags.",
-    tags: ["ads", "monetization", "bulk", "revenue"],
+    team: "csm",
+    tags: [],
     subject: "{{customer.name}} — ~{{customer.ad_revenue_gap}} on the table",
     body_html: `<p>Hi {{customer.contact_first_name}},</p>
 <p>Pulled the last 90 days of ad-network data for {{customer.name}} this morning and wanted to flag what jumped out:</p>
@@ -169,6 +182,14 @@ async function persist(list: StoredTemplate[]) {
   cache = list;
 }
 
+function normalizeTemplate(t: StoredTemplate): StoredTemplate {
+  return {
+    ...t,
+    team: templateTeam(t),
+    tags: Array.isArray(t.tags) ? t.tags : [],
+  };
+}
+
 export async function listTemplates(): Promise<StoredTemplate[]> {
   if (cache) return cache;
   const stored = await kvGet<StoredTemplate[]>(KEY);
@@ -178,10 +199,11 @@ export async function listTemplates(): Promise<StoredTemplate[]> {
     // overwriting user edits to the templates that DO exist.
     const present = new Set(stored.map((t) => t.id));
     const missing = STARTER_TEMPLATES.filter((t) => !present.has(t.id));
+    const merged = [...stored, ...missing].map(normalizeTemplate);
     if (missing.length > 0) {
-      await persist([...stored, ...missing]);
+      await persist(merged);
     } else {
-      cache = stored;
+      cache = merged;
     }
   } else {
     await persist(STARTER_TEMPLATES);
@@ -198,6 +220,8 @@ export interface UpsertInput {
   id?: string;
   label: string;
   blurb?: string;
+  team?: TemplateTeam;
+  /** @deprecated Ignored on write — use `team` instead. */
   tags?: string[];
   /** Lowercased CSM emails this template is visible to. Empty = universal. */
   csm_tags?: string[];
@@ -240,11 +264,15 @@ export async function upsertTemplate(
       ? undefined
       : input.send_as_email.trim().toLowerCase();
 
+  const team: TemplateTeam =
+    input.team ?? (existing ? templateTeam(existing) : "csm");
+
   if (existing) {
     Object.assign(existing, {
       label: input.label,
       blurb: input.blurb ?? existing.blurb,
-      tags: input.tags ?? existing.tags,
+      team,
+      tags: [],
       csm_tags: normalizedCsmTags ?? existing.csm_tags ?? [],
       subject: input.subject,
       body_html: input.body_html,
@@ -264,7 +292,8 @@ export async function upsertTemplate(
     id,
     label: input.label,
     blurb: input.blurb ?? "",
-    tags: input.tags ?? [],
+    team,
+    tags: [],
     csm_tags: normalizedCsmTags ?? [],
     subject: input.subject,
     body_html: input.body_html,

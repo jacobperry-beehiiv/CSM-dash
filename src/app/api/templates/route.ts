@@ -23,6 +23,8 @@ interface UpsertBody {
   id?: string;
   label: string;
   blurb?: string;
+  team?: "csm" | "am";
+  /** @deprecated Ignored — use `team` instead. */
   tags?: string[];
   /** Lowercased CSM emails the template should be visible to.
    *  Universal when empty / undefined. */

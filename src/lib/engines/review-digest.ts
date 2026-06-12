@@ -10,7 +10,10 @@ import {
 import { needsReview } from "../data/review-states-types";
 import { postSlackMessage } from "../integrations/slack";
 import type { Customer } from "../types";
-import type { SettingsShape } from "../data/settings-types";
+import {
+  resolveSlackNotificationPref,
+  type SettingsShape,
+} from "../data/settings-types";
 
 /**
  * Aggregate per-CSM digest engine — Phase B of the review workflow.
@@ -249,8 +252,9 @@ export async function runReviewDigestSweep(
   const now = new Date();
   const generated_at = now.toISOString();
 
-  const channelId = settings.am?.daily_digest_channel_id?.trim() ?? "";
-  if (!channelId && !dryRun) {
+  const digestPref = resolveSlackNotificationPref(settings, "review_digest");
+  const channelId = digestPref.destination.trim();
+  if ((!digestPref.enabled || !channelId) && !dryRun) {
     return {
       generated_at,
       per_csm: [],

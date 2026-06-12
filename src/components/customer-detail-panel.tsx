@@ -6,7 +6,7 @@ import { RiskLevelChip } from "./risk-level-chip";
 import { FeatureUtilizationPanel } from "./feature-utilization-panel";
 import { AdGapSummary } from "./ad-gap-summary";
 import { CadenceToggle } from "./cadence-toggle";
-import { HubSpotContactsSection } from "./hubspot-contacts-section";
+import { HubSpotContactsList } from "./hubspot-contacts-section";
 import { CustomerPublicationsList } from "./customer-publications-list";
 import { CustomerPaidSubsList } from "./customer-paid-subs-list";
 import { CollapsibleSection } from "./collapsible-section";
@@ -15,6 +15,7 @@ import { CopyButton } from "./copy-button";
 import { CsmRefreshRow } from "./csm-refresh-row";
 import { HubSpotLinkBadge } from "./hubspot-link-badge";
 import { MappedFieldEditor } from "./mapped-field-editor";
+import { StatusBadge } from "./status-badge";
 import { MAPPABLE_DASHBOARD_FIELDS } from "@/lib/data/field-mappings-types";
 import { stripeCustomerUrl } from "@/lib/links";
 
@@ -135,12 +136,26 @@ export function CustomerDetailPanel({
 
       {/* Status / Dates / Contact each render as full-width
        *  CollapsibleSection blocks matching the rest of the panel
-       *  (HubSpot Contacts, Notes, Publications, …). Status defaults
-       *  open because it carries the at-a-glance plan / risk /
-       *  engagement signal; the others stay collapsed until needed. */}
+       *  (Notes, Publications, …). Status defaults open because it
+       *  carries the at-a-glance plan / risk / engagement signal; the
+       *  others stay collapsed until needed. HubSpot company contacts
+       *  live inside Contact rather than as a sibling section. */}
       <div className="space-y-4">
         <Section title="Status" defaultOpen>
           <Row label="Plan" value={c.stripe_plan ?? "—"} />
+          <Row
+            label="Status"
+            value={
+              <MappedFieldEditor
+                fieldDef={MAPPABLE_DASHBOARD_FIELDS.find(
+                  (f) => f.id === "property_company_status"
+                )!}
+                currentValue={c.property_company_status}
+                workspaceId={c.workspace_id}
+                renderReadOnly={(v) => <StatusBadge value={v ?? null} />}
+              />
+            }
+          />
           <Row label="Engagement" value={c.company_engagement ?? "—"} />
           <Row
             label="Risk level"
@@ -290,7 +305,16 @@ export function CustomerDetailPanel({
             }
           />
         </Section>
-        <Section title="Contact">
+        <Section
+          title="Contact"
+          trailing={
+            c.hubspot_contacts?.length ? (
+              <span className="text-[11px] text-subtle tabular-nums">
+                {c.hubspot_contacts.length} HubSpot
+              </span>
+            ) : undefined
+          }
+        >
           <Row
             label="Main contact"
             value={
@@ -310,10 +334,9 @@ export function CustomerDetailPanel({
            *  snapshot. The component is a "use client" island; the
            *  rest of the panel can stay server-rendered. */}
           <Row label="CSM" value={<CsmRefreshRow customer={c} />} />
+          <HubSpotContactsList contacts={c.hubspot_contacts} />
         </Section>
       </div>
-
-      <HubSpotContactsSection contacts={c.hubspot_contacts} />
 
       {/* Manual notes — same KV the CSM profile-page renders from, but
        *  scoped to kind:note so the inline editor stays a free-text
@@ -361,21 +384,25 @@ function Section({
   title,
   children,
   defaultOpen = false,
+  trailing,
 }: {
   title: string;
   children: React.ReactNode;
   defaultOpen?: boolean;
+  trailing?: React.ReactNode;
 }) {
   return (
-    <CollapsibleSection title={title} defaultOpen={defaultOpen} bodyClassName="">
+    <CollapsibleSection
+      title={title}
+      defaultOpen={defaultOpen}
+      trailing={trailing}
+      bodyClassName=""
+    >
       {/* divide-y instead of space-y-N: each row gets a thin border
        *  above + py-2 padding inside, so the rows breathe AND read as
-       *  a list. Prior space-y-3 gave gaps with no visual structure
-       *  and the long-form prose blocks (risk/goal detail) ran into
-       *  the next short row. Subtle border color matches the panel's
-       *  existing dividers. px-3 on the <dl> matches the section
-       *  header's horizontal inset so labels don't hug the card edge. */}
-      <dl className="divide-y divide-border/60 px-4 p-2">{children}</dl>
+       *  a list. Wrapper is a div (not dl) so mixed content like the
+       *  HubSpot contacts block can sit alongside Row items. */}
+      <div className="divide-y divide-border/60 px-4 p-2">{children}</div>
     </CollapsibleSection>
   );
 }

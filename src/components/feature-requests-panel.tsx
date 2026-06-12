@@ -2,7 +2,9 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { fmtDate } from "./format";
+import { SelectFilter } from "./filters";
 import { useViewerEmail } from "@/lib/auth-client";
+import { useUrlSearch } from "@/lib/hooks/use-url-search";
 import {
   newRequestId,
   sortRequests,
@@ -70,6 +72,7 @@ export function FeatureRequestsPanel() {
   const [teamFilter, setTeamFilter] = useState<FeatureRequestTeam | "all">(
     "all"
   );
+  const [statusFilter, setStatusFilter] = useUrlSearch("status");
 
   // Per-request inline-edit state. Keyed by request id; absence means
   // not-editing. Stores draft text so a typo doesn't fire a network
@@ -85,6 +88,7 @@ export function FeatureRequestsPanel() {
     {}
   );
   const [commentBusyId, setCommentBusyId] = useState<string | null>(null);
+  const [commentFeedback, setCommentFeedback] = useState<string | null>(null);
 
   // ── Load + poll ──
   const refresh = useCallback(async () => {
@@ -121,7 +125,15 @@ export function FeatureRequestsPanel() {
 
   // ── Server-talking helper ──
   const sendOps = useCallback(
-    async (ops: FeatureRequestOp[]): Promise<boolean> => {
+    async (
+      ops: FeatureRequestOp[]
+    ): Promise<{
+      ok: boolean;
+      commentFollowUp?: {
+        slack: { sent: boolean; reason?: string };
+        todo: { added: boolean; reason?: string };
+      } | null;
+    }> => {
       try {
         const r = await fetch("/api/feature-requests", {
           method: "PATCH",
@@ -132,16 +144,25 @@ export function FeatureRequestsPanel() {
           const body = (await r.json().catch(() => ({}))) as { error?: string };
           throw new Error(body.error ?? `HTTP ${r.status}`);
         }
-        const json = (await r.json()) as { requests: FeatureRequest[] };
+        const json = (await r.json()) as {
+          requests: FeatureRequest[];
+          comment_follow_up?: {
+            slack: { sent: boolean; reason?: string };
+            todo: { added: boolean; reason?: string };
+          } | null;
+        };
         setRequests(json.requests);
         setWriteError(null);
-        return true;
+        return {
+          ok: true,
+          commentFollowUp: json.comment_follow_up ?? null,
+        };
       } catch (e) {
         setWriteError(e instanceof Error ? e.message : "Save failed");
         // Bring local state back into sync with the server so a
         // failed optimistic update doesn't linger as a phantom row.
         void refresh();
-        return false;
+        return { ok: false };
       }
     },
     [refresh]
@@ -173,7 +194,7 @@ export function FeatureRequestsPanel() {
     // immediately. Server response replaces this with the canonical
     // list (with the real rank applied).
     setRequests((prev) => (prev ? [...prev, request] : [request]));
-    const ok = await sendOps([{ type: "add", request }]);
+    const { ok } = await sendOps([{ type: "add", request }]);
     if (ok) {
       setDraftDescription("");
       setDraftPriority("medium");
@@ -203,7 +224,7 @@ export function FeatureRequestsPanel() {
           )
         : prev
     );
-    await sendOps([
+    void sendOps([
       {
         type: hasVoted ? "unvote" : "vote",
         requestId: req.id,
@@ -236,7 +257,7 @@ export function FeatureRequestsPanel() {
           })
         : prev
     );
-    await sendOps([{ type: "reorder", orderedIds }]);
+    void sendOps([{ type: "reorder", orderedIds }]);
   }
 
   // ── Per-row patches (priority, status, description) ──
@@ -256,7 +277,7 @@ export function FeatureRequestsPanel() {
           )
         : prev
     );
-    await sendOps([{ type: "patch", requestId: id, patch }]);
+    void sendOps([{ type: "patch", requestId: id, patch }]);
   }
 
   async function postComment(requestId: string) {
@@ -291,13 +312,48 @@ export function FeatureRequestsPanel() {
           )
         : prev
     );
-    const ok = await sendOps([{ type: "comment", requestId, body }]);
+    const request = requests?.find((r) => r.id === requestId);
+    const { ok, commentFollowUp } = await sendOps([
+      { type: "comment", requestId, body },
+    ]);
     if (ok) {
       setCommentDrafts((prev) => {
         const next = { ...prev };
         delete next[requestId];
         return next;
       });
+      if (commentFollowUp) {
+        const bits: string[] = ["Comment posted"];
+        if (commentFollowUp.slack.sent) {
+          bits.push(
+            `${request?.submitter ?? "requester"} pinged in Slack`
+          );
+        }
+        if (commentFollowUp.todo.added) {
+          bits.push("added to their to-do list");
+        }
+        if (
+          commentFollowUp.slack.reason === "commenter is the submitter" ||
+          commentFollowUp.todo.reason === "commenter is the submitter"
+        ) {
+          setCommentFeedback(
+            "Comment posted on your own request (no Slack ping or to-do)."
+          );
+        } else if (bits.length > 1) {
+          setCommentFeedback(bits.join(" · ") + ".");
+        } else {
+          const reasons = [
+            !commentFollowUp.slack.sent && commentFollowUp.slack.reason,
+            !commentFollowUp.todo.added && commentFollowUp.todo.reason,
+          ].filter((r): r is string => Boolean(r));
+          setCommentFeedback(
+            reasons.length > 0
+              ? `Comment saved, but follow-up failed: ${reasons.join("; ")}`
+              : "Comment saved."
+          );
+        }
+        setTimeout(() => setCommentFeedback(null), 8_000);
+      }
     }
     setCommentBusyId(null);
   }
@@ -320,13 +376,35 @@ export function FeatureRequestsPanel() {
     () => (requests ? sortRequests(requests) : []),
     [requests]
   );
-  const sortedRequests = useMemo(
+  const teamScoped = useMemo(
     () =>
       teamFilter === "all"
         ? allSorted
         : allSorted.filter((r) => (r.team ?? "csm") === teamFilter),
     [allSorted, teamFilter]
   );
+
+  const statusFilterOptions = useMemo(() => {
+    const counts = new Map<FeatureRequestStatus, number>();
+    for (const r of teamScoped) {
+      counts.set(r.status, (counts.get(r.status) ?? 0) + 1);
+    }
+    return (Object.keys(STATUS_LABEL) as FeatureRequestStatus[]).map(
+      (status) => ({
+        value: status,
+        label: STATUS_LABEL[status],
+        count: counts.get(status) ?? 0,
+      })
+    );
+  }, [teamScoped]);
+
+  const sortedRequests = useMemo(() => {
+    if (!statusFilter) return teamScoped;
+    return teamScoped.filter((r) => r.status === statusFilter);
+  }, [teamScoped, statusFilter]);
+
+  const listFiltered =
+    teamFilter !== "all" || Boolean(statusFilter);
   const openCount = sortedRequests.filter((r) => r.status === "open").length;
   const inProgressCount = sortedRequests.filter(
     (r) => r.status === "in_progress"
@@ -422,6 +500,17 @@ export function FeatureRequestsPanel() {
               <option value="low">Low</option>
             </select>
           </label>
+          <span className="text-subtle text-xs px-0.5" aria-hidden>
+            |
+          </span>
+          <SelectFilter
+            label="Status"
+            value={statusFilter}
+            onChange={setStatusFilter}
+            emptyLabel="Any status"
+            emptyCount={teamScoped.length}
+            options={statusFilterOptions}
+          />
           <div className="flex-1" />
           <button
             type="button"
@@ -450,6 +539,11 @@ export function FeatureRequestsPanel() {
       {writeError ? (
         <div className="px-5 py-2 text-xs text-red-600 dark:text-red-300 bg-red-50 dark:bg-red-500/10 border-b border-red-200 dark:border-red-500/30">
           Last save failed: {writeError}
+        </div>
+      ) : null}
+      {commentFeedback ? (
+        <div className="px-5 py-2 text-xs text-muted bg-blue-50 dark:bg-blue-500/10 border-b border-blue-200 dark:border-accent/30">
+          {commentFeedback}
         </div>
       ) : null}
 
@@ -507,7 +601,13 @@ export function FeatureRequestsPanel() {
         <div className="px-5 py-6 text-sm text-muted">Loading…</div>
       ) : sortedRequests.length === 0 ? (
         <div className="px-5 py-6 text-sm text-muted">
-          No requests yet. Be the first to submit one above.
+          {listFiltered
+            ? `No requests match the current filter${
+                statusFilter
+                  ? ` (${STATUS_LABEL[statusFilter as FeatureRequestStatus]})`
+                  : ""
+              }.`
+            : "No requests yet. Be the first to submit one above."}
         </div>
       ) : (
         <ul className="divide-y divide-border">
@@ -776,8 +876,8 @@ export function FeatureRequestsPanel() {
                           Cancel
                         </button>
                         <span className="text-[10px] text-subtle">
-                          DMs {req.submitter || "the requester"} when
-                          they&apos;re not you
+                          Pings {req.submitter || "the requester"} in Slack
+                          and adds a to-do when they&apos;re not you
                         </span>
                       </div>
                     </div>

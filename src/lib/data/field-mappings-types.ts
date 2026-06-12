@@ -66,6 +66,15 @@ export const MAPPABLE_DASHBOARD_FIELDS: MappableDashboardField[] = [
     edited_in: "Customer detail panel → Notes section",
   },
   {
+    id: "property_company_status",
+    label: "Company status",
+    description:
+      "Onboarding vs Live — drives the Status filter on the CSM book table. Pulled from Metabase q10600 today; push-enabling lets a CSM flip an account to Live from the dashboard.",
+    type: "enum",
+    edited_in: "Customer detail panel → Status section",
+    enum_values: ["Onboarding", "Live"],
+  },
+  {
     id: "property_risk_level",
     label: "Risk level",
     description:
@@ -120,6 +129,7 @@ export const DASHBOARD_FIELD_TO_CUSTOMER_KEY: Record<string, string> = {
   interval: "interval",
   lifecycle_stage: "lifecycle_stage",
   notes: "notes",
+  property_company_status: "property_company_status",
   property_risk_level: "property_risk_level",
   property_risk_level_detail: "property_risk_level_detail",
   property_customer_goals: "property_customer_goals",

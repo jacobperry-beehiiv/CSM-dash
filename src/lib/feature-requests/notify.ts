@@ -1,6 +1,9 @@
 import { loadCustomers } from "../data/load-customers";
 import { loadSettings } from "../data/settings";
+import { resolveSlackNotificationPref } from "../data/settings-types";
 import { userKeyFromEmail } from "../personal-todos/identity";
+import { applyTodoOps } from "../personal-todos/store";
+import { newTodoId, type PersonalTodo } from "../personal-todos/types";
 import type { FeatureRequest, FeatureRequestComment } from "./types";
 
 /**
@@ -12,6 +15,16 @@ import type { FeatureRequest, FeatureRequestComment } from "./types";
 export interface CommentNotifyResult {
   sent: boolean;
   reason?: string;
+}
+
+export interface CommentTodoResult {
+  added: boolean;
+  reason?: string;
+}
+
+export interface CommentFollowUpResult {
+  slack: CommentNotifyResult;
+  todo: CommentTodoResult;
 }
 
 function humanizeEmail(email: string): string {
@@ -54,13 +67,58 @@ async function lookupSlackUserByEmail(email: string): Promise<string | null> {
   }
 }
 
-async function resolveSlackIdForEmail(
+function handleGuessesForSubmitter(
   email: string,
+  submitterName: string
+): string[] {
+  const guesses = new Set<string>();
+  const name = submitterName.trim();
+  if (name) {
+    guesses.add(name.replace(/\s+/g, "_"));
+    guesses.add(name.replace(/\s+/g, ""));
+  }
+  const prefix = email.split("@")[0] ?? "";
+  if (prefix) {
+    const titled = prefix
+      .split(/[._-]/)
+      .filter(Boolean)
+      .map((p) => p.charAt(0).toUpperCase() + p.slice(1))
+      .join("_");
+    if (titled) guesses.add(titled);
+  }
+  return [...guesses];
+}
+
+function slackIdFromHandleGuesses(
+  guesses: Iterable<string>,
+  csmUserIds: Record<string, string>
+): string | null {
+  const entries = Object.entries(csmUserIds);
+  for (const guess of guesses) {
+    const exact = csmUserIds[guess];
+    if (exact) return exact.trim();
+    const lc = guess.toLowerCase();
+    for (const [handle, id] of entries) {
+      if (handle.toLowerCase() === lc && id) return id.trim();
+    }
+  }
+  return null;
+}
+
+async function resolveSlackIdForSubmitter(
+  email: string,
+  submitterName: string,
   csmUserIds: Record<string, string>
 ): Promise<string | null> {
   const key = userKeyFromEmail(email);
   const fromSlack = await lookupSlackUserByEmail(key);
   if (fromSlack) return fromSlack;
+
+  const fromHandle = slackIdFromHandleGuesses(
+    handleGuessesForSubmitter(email, submitterName),
+    csmUserIds
+  );
+  if (fromHandle) return fromHandle;
 
   const customers = await loadCustomers();
   for (const c of customers) {
@@ -105,6 +163,64 @@ function excerpt(text: string, max = 240): string {
   return `${oneLine.slice(0, max - 1)}…`;
 }
 
+export async function addSubmitterTodoForComment(args: {
+  request: FeatureRequest;
+  comment: FeatureRequestComment;
+}): Promise<CommentTodoResult> {
+  const submitterEmail = args.request.submitter_email?.trim().toLowerCase();
+  if (!submitterEmail) {
+    return { added: false, reason: "request has no submitter_email" };
+  }
+  if (args.comment.author_email === submitterEmail) {
+    return { added: false, reason: "commenter is the submitter" };
+  }
+
+  const dashUrl =
+    process.env.NEXT_PUBLIC_DASHBOARD_URL ?? "https://csm-dash.vercel.app/";
+  const boardUrl = `${dashUrl.replace(/\/$/, "")}/feature-requests`;
+  const author =
+    args.comment.author_name?.trim() ||
+    humanizeEmail(args.comment.author_email);
+  const now = new Date().toISOString();
+  const todo: PersonalTodo = {
+    id: newTodoId(),
+    title: `Feature request comment from ${author}`,
+    details: [
+      args.request.description.trim(),
+      "",
+      `${author} replied:`,
+      args.comment.body.trim(),
+      "",
+      boardUrl,
+    ].join("\n"),
+    due_date: null,
+    surface_at: null,
+    priority: null,
+    source: "feature_request",
+    source_meta: null,
+    completed_at: null,
+    // Submitter already gets a Slack DM for the comment — skip the
+    // due-date reminder ladder on this tracker row.
+    remind_via_slack: false,
+    created_at: now,
+    updated_at: now,
+  };
+
+  try {
+    await applyTodoOps(userKeyFromEmail(submitterEmail), [
+      { type: "add", todo },
+    ]);
+    return { added: true };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "unknown error";
+    console.error("[feature-requests] comment todo failed", {
+      submitterEmail,
+      error: msg,
+    });
+    return { added: false, reason: msg };
+  }
+}
+
 export async function notifySubmitterOfComment(args: {
   request: FeatureRequest;
   comment: FeatureRequestComment;
@@ -121,8 +237,19 @@ export async function notifySubmitterOfComment(args: {
   }
 
   const settings = await loadSettings();
-  const slackId = await resolveSlackIdForEmail(
+  const notifyPref = resolveSlackNotificationPref(
+    settings,
+    "feature_request_comment"
+  );
+  if (!notifyPref.enabled) {
+    return {
+      sent: false,
+      reason: "feature_request_comment notifications disabled in settings",
+    };
+  }
+  const slackId = await resolveSlackIdForSubmitter(
     submitterEmail,
+    args.request.submitter ?? "",
     settings.slack.csm_user_ids
   );
   if (!slackId) {
@@ -139,7 +266,7 @@ export async function notifySubmitterOfComment(args: {
     args.comment.author_name?.trim() ||
     humanizeEmail(args.comment.author_email);
   const lines = [
-    ":speech_balloon: *New comment on your feature request*",
+    `<@${slackId}> :speech_balloon: *New comment on your feature request*`,
     "",
     `*Request:* ${excerpt(args.request.description)}`,
     "",
@@ -161,4 +288,18 @@ export async function notifySubmitterOfComment(args: {
     });
     return { sent: false, reason: msg };
   }
+}
+
+/** Slack DM + personal todo for the requester when someone else
+ *  comments. Each step is best-effort — a Slack failure doesn't
+ *  block the todo, and vice versa. */
+export async function followUpSubmitterOnComment(args: {
+  request: FeatureRequest;
+  comment: FeatureRequestComment;
+}): Promise<CommentFollowUpResult> {
+  const [slack, todo] = await Promise.all([
+    notifySubmitterOfComment(args),
+    addSubmitterTodoForComment(args),
+  ]);
+  return { slack, todo };
 }

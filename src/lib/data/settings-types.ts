@@ -90,6 +90,70 @@ export const PROACTIVE_OUTREACH_CHANNEL_ID = "proactive_outreach";
  *  (e.g. "U02ABC123") so {{customer.csm_slack}} renders an actual @mention. */
 export type CsmSlackIdMap = Record<string, string>;
 
+/** Stable kinds for automated Slack pings. Each row in
+ *  SLACK_NOTIFICATION_DEFINITIONS maps to one of these. */
+export type SlackNotificationKind =
+  | "deliverability_critical"
+  | "review_digest"
+  | "proactive_outreach"
+  | "feature_request_comment";
+
+/** Per-notification preference stored in KV. Destination is a Slack
+ *  channel ID (C…) or user ID (U…) for a DM. */
+export interface SlackNotificationPref {
+  enabled: boolean;
+  destination: string;
+  /** When false, the daily cron skips even if `enabled` is true.
+   *  Manual "sweep now" actions still fire. Default: true. */
+  cron_enabled?: boolean;
+}
+
+/** Metadata for the /settings/slack notifications panel — safe to
+ *  import from client components. */
+export interface SlackNotificationDefinition {
+  kind: SlackNotificationKind;
+  label: string;
+  description: string;
+  /** Human-readable cron cadence shown in settings. */
+  schedule?: string;
+  /** When false, hide the destination field (DMs are resolved per-user). */
+  has_destination?: boolean;
+}
+
+export const SLACK_NOTIFICATION_DEFINITIONS: SlackNotificationDefinition[] = [
+  {
+    kind: "deliverability_critical",
+    label: "Critical deliverability",
+    description:
+      "Ping when an Enterprise publication trips a critical deliverability flag. Uncleared critical sends carry over in the panel until a CSM clears them — each post is notified once.",
+    schedule: "Weekdays ~9:15am UTC (after morning data sync)",
+    has_destination: true,
+  },
+  {
+    kind: "review_digest",
+    label: "Per-CSM review digest",
+    description:
+      "One Slack message per CSM each morning with counts of past-due, approaching-cap, and renewal accounts still needing review.",
+    schedule: "Daily ~8:30am CT",
+    has_destination: true,
+  },
+  {
+    kind: "proactive_outreach",
+    label: "Proactive outreach (Enterprise approaching cap)",
+    description:
+      "Slack ping when an Enterprise account first crosses the sub-cap threshold, plus nudges after 5 days of no logged outreach.",
+    schedule: "Daily ~10am CT",
+    has_destination: true,
+  },
+  {
+    kind: "feature_request_comment",
+    label: "Feature request comment",
+    description:
+      "DM the submitter when someone else comments on their feature request. Also adds a personal to-do for the submitter.",
+    has_destination: false,
+  },
+];
+
 export interface SlackSettings {
   /** All configured channel destinations. Code looks up an entry by `id`
    *  (e.g. PAST_DUE_CHANNEL_ID) to find the channel + template for a
@@ -97,6 +161,10 @@ export interface SlackSettings {
    *  from /settings/slack without a code change. */
   channels: SlackChannel[];
   csm_user_ids: CsmSlackIdMap;
+  /** Automated notification preferences keyed by kind. Legacy settings
+   *  (e.g. am.daily_digest_channel_id) are bridged on read — see
+   *  resolveSlackNotificationPref(). */
+  notifications?: Partial<Record<SlackNotificationKind, SlackNotificationPref>>;
 
   // ─── Deprecated single-channel fields ──────────────────────────────
   // Kept on the type so old stored values still parse; the load path
@@ -242,6 +310,18 @@ export const DEFAULTS: SettingsShape = {
     ad_default_rate_per_k_subs_usd: 5,
   },
   slack: {
+    notifications: {
+      deliverability_critical: {
+        enabled: false,
+        destination: "",
+        cron_enabled: true,
+      },
+      feature_request_comment: {
+        enabled: true,
+        destination: "",
+        cron_enabled: true,
+      },
+    },
     channels: [
       {
         id: PAST_DUE_CHANNEL_ID,
@@ -312,4 +392,58 @@ export function findSlackChannel(
   id: string
 ): SlackChannel | null {
   return slack.channels.find((c) => c.id === id) ?? null;
+}
+
+/** Resolve the effective notification preference, bridging legacy
+ *  settings fields where the notification predates `notifications[]`. */
+export function resolveSlackNotificationPref(
+  settings: SettingsShape,
+  kind: SlackNotificationKind
+): SlackNotificationPref {
+  const stored = settings.slack.notifications?.[kind];
+  switch (kind) {
+    case "review_digest": {
+      const destination = (
+        stored?.destination?.trim() ||
+        settings.am?.daily_digest_channel_id?.trim() ||
+        ""
+      );
+      return {
+        enabled: stored?.enabled ?? destination.length > 0,
+        destination,
+        cron_enabled: stored?.cron_enabled ?? true,
+      };
+    }
+    case "proactive_outreach": {
+      const channelCfg = findSlackChannel(
+        settings.slack,
+        PROACTIVE_OUTREACH_CHANNEL_ID
+      );
+      const destination = (
+        stored?.destination?.trim() ||
+        channelCfg?.channel_id?.trim() ||
+        ""
+      );
+      return {
+        enabled: stored?.enabled ?? destination.length > 0,
+        destination,
+        cron_enabled:
+          stored?.cron_enabled ??
+          settings.am?.proactive_outreach_sweep_enabled !== false,
+      };
+    }
+    case "feature_request_comment":
+      return {
+        enabled: stored?.enabled ?? true,
+        destination: "",
+        cron_enabled: stored?.cron_enabled ?? true,
+      };
+    case "deliverability_critical":
+    default:
+      return {
+        enabled: stored?.enabled ?? false,
+        destination: stored?.destination?.trim() ?? "",
+        cron_enabled: stored?.cron_enabled ?? true,
+      };
+  }
 }

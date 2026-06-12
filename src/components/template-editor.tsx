@@ -1,7 +1,11 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { StoredTemplate } from "@/lib/templates/types";
+import {
+  templateTeam,
+  type StoredTemplate,
+  type TemplateTeam,
+} from "@/lib/templates/types";
 import { MERGE_TAGS, applyMergeTags } from "@/lib/templates/merge-tags";
 import type { Customer } from "@/lib/types";
 import { RichTextEditor } from "./rich-text-editor";
@@ -55,7 +59,9 @@ export function TemplateEditor({
 }: Props) {
   const [label, setLabel] = useState(initial?.label ?? "");
   const [blurb, setBlurb] = useState(initial?.blurb ?? "");
-  const [tagsInput, setTagsInput] = useState(initial?.tags?.join(", ") ?? "");
+  const [team, setTeam] = useState<TemplateTeam>(
+    initial ? templateTeam(initial) : "csm"
+  );
   const [csmTagsInput, setCsmTagsInput] = useState(
     initial?.csm_tags?.join(", ") ?? ""
   );
@@ -127,7 +133,7 @@ export function TemplateEditor({
   useEffect(() => {
     setLabel(initial?.label ?? "");
     setBlurb(initial?.blurb ?? "");
-    setTagsInput(initial?.tags?.join(", ") ?? "");
+    setTeam(initial ? templateTeam(initial) : "csm");
     setCsmTagsInput(initial?.csm_tags?.join(", ") ?? "");
     setSubject(initial?.subject ?? "");
     setBodyHtml(initial?.body_html ?? "");
@@ -169,10 +175,6 @@ export function TemplateEditor({
     setBusy(true);
     setError(null);
     try {
-      const tags = tagsInput
-        .split(",")
-        .map((s) => s.trim())
-        .filter(Boolean);
       const csm_tags = csmTagsInput
         .split(",")
         .map((s) => s.trim().toLowerCase())
@@ -184,7 +186,7 @@ export function TemplateEditor({
           id: initial?.id,
           label,
           blurb,
-          tags,
+          team,
           csm_tags,
           subject,
           body_html: bodyHtml,
@@ -248,16 +250,33 @@ export function TemplateEditor({
           />
         </div>
         <div>
-          <label className="text-xs text-muted block mb-1">
-            Tags (comma-separated)
-          </label>
-          <input
-            type="text"
-            value={tagsInput}
-            onChange={(e) => setTagsInput(e.target.value)}
-            placeholder="renewal, annual, escalation"
-            className="w-full px-3 py-2 border border-border-strong rounded-md text-sm"
-          />
+          <label className="text-xs text-muted block mb-1.5">Team</label>
+          <div
+            className="inline-flex rounded-md border border-border-strong overflow-hidden"
+            role="group"
+            aria-label="Template team"
+          >
+            {(["csm", "am"] as TemplateTeam[]).map((t) => (
+              <button
+                key={t}
+                type="button"
+                onClick={() => setTeam(t)}
+                className={`px-3 py-1.5 text-xs font-medium transition-colors ${
+                  team === t
+                    ? t === "csm"
+                      ? "bg-indigo-600 text-white"
+                      : "bg-purple-600 text-white"
+                    : "bg-surface text-muted hover:bg-canvas"
+                }`}
+              >
+                {t === "csm" ? "CSM" : "AM"}
+              </button>
+            ))}
+          </div>
+          <p className="text-[11px] text-subtle mt-1">
+            Controls which tab this template appears under in the
+            library.
+          </p>
         </div>
         <div>
           <label className="text-xs text-muted block mb-1">
