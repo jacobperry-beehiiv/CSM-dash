@@ -779,13 +779,10 @@ export function PastDuePanel({ rows, csms, totalSourceRows }: Props) {
           // the launcher with conditional props:
           //   - Enterprise: ccLookup pre-CCs the assigned CSM on
           //     every draft (legacy past-due behavior).
-          //   - Below $3.5K: defaultFromAlias pre-selects the
-          //     settings-configured bulk alias in the modal's
-          //     "Sending as" dropdown. Replaces the old
-          //     LowTierBulkSend BCC-bundle path with a per-customer
-          //     draft model that's consistent with every other AM
-          //     tab — same modal, same live preview, same recipient
-          //     picker, same alias dropdown.
+          //   - Below $3.5K: BCC batches of 40 (settings-tunable) with
+          //     owner emails in BCC and the bulk alias in To — same
+          //     BulkDraftsModal UX as other tabs, but N drafts for N
+          //     batches instead of one per customer.
           return (
             <>
               <BulkEmailLauncher
@@ -809,6 +806,22 @@ export function PastDuePanel({ rows, csms, totalSourceRows }: Props) {
                     : undefined
                 }
                 defaultFromAlias={
+                  subtab === "below"
+                    ? (settings?.am?.bulk_alias_email ?? "").trim() || undefined
+                    : undefined
+                }
+                bccBatchSize={
+                  subtab === "below"
+                    ? Math.max(
+                        1,
+                        Math.min(
+                          99,
+                          settings?.am?.bulk_bcc_batch_size ?? 40
+                        )
+                      )
+                    : undefined
+                }
+                bccBatchTo={
                   subtab === "below"
                     ? (settings?.am?.bulk_alias_email ?? "").trim() || undefined
                     : undefined

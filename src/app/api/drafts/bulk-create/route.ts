@@ -27,6 +27,9 @@ interface PostBody {
      *  whether their draft succeeded — overstamping in the partial-
      *  failure case. */
     tracking_id?: string;
+    /** BCC-batch drafts — every customer id in the batch. When set,
+     *  all ids are echoed on success instead of `tracking_id`. */
+    tracking_ids?: string[];
   }>;
 }
 
@@ -107,7 +110,11 @@ export async function POST(req: Request) {
         });
         ids.push(r.id);
         created++;
-        if (d.tracking_id) succeeded_tracking_ids.push(d.tracking_id);
+        if (d.tracking_ids?.length) {
+          succeeded_tracking_ids.push(...d.tracking_ids);
+        } else if (d.tracking_id) {
+          succeeded_tracking_ids.push(d.tracking_id);
+        }
         console.log("[drafts/bulk-create] Draft created", {
           requestId,
           n: `${i}/${body.drafts.length}`,
@@ -146,7 +153,11 @@ export async function POST(req: Request) {
             ids.push(r.id);
             created++;
             alias_fallbacks++;
-            if (d.tracking_id) succeeded_tracking_ids.push(d.tracking_id);
+            if (d.tracking_ids?.length) {
+              succeeded_tracking_ids.push(...d.tracking_ids);
+            } else if (d.tracking_id) {
+              succeeded_tracking_ids.push(d.tracking_id);
+            }
             console.log(
               "[drafts/bulk-create] Draft created (alias fallback)",
               {
@@ -166,7 +177,11 @@ export async function POST(req: Request) {
               tracking_id: d.tracking_id,
               error: msg2,
             });
-            if (d.tracking_id) failed_tracking_ids.push(d.tracking_id);
+            if (d.tracking_ids?.length) {
+              failed_tracking_ids.push(...d.tracking_ids);
+            } else if (d.tracking_id) {
+              failed_tracking_ids.push(d.tracking_id);
+            }
             console.error(
               "[drafts/bulk-create] Draft failed (alias fallback also failed)",
               {
@@ -182,7 +197,11 @@ export async function POST(req: Request) {
         }
         failed++;
         errors.push({ to: d.to, tracking_id: d.tracking_id, error: msg });
-        if (d.tracking_id) failed_tracking_ids.push(d.tracking_id);
+        if (d.tracking_ids?.length) {
+          failed_tracking_ids.push(...d.tracking_ids);
+        } else if (d.tracking_id) {
+          failed_tracking_ids.push(d.tracking_id);
+        }
         console.error("[drafts/bulk-create] Draft failed", {
           requestId,
           n: `${i}/${body.drafts.length}`,

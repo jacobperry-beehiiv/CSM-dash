@@ -31,6 +31,9 @@ export interface BulkDraft {
    *  Stays optional so callers that don't care about the lifecycle
    *  hook keep working unchanged. */
   tracking_id?: string;
+  /** BCC-batch drafts carry every customer id in the batch so
+   *  lifecycle stamping covers the full cohort when one draft lands. */
+  tracking_ids?: string[];
   /** Default recipient list (the customer's owner_email when present),
    *  used as the initial selection when the modal first renders.
    *  Comma-separated to match how a Gmail compose `to=` field is built. */
@@ -69,6 +72,8 @@ export interface BulkDraft {
    *  subject/body (current behaviour for callers that haven't
    *  migrated yet). */
   rerender?: (ctx: RerenderContext) => RerenderResult;
+  /** True for Below-$3.5K BCC batches — recipients stay in BCC, not To. */
+  bcc_batch?: boolean;
 }
 
 function buildGmailComposeUrl(
@@ -252,6 +257,7 @@ export function BulkDraftsModal({
    *  on current selection state. Falls back to the draft's stored `to`
    *  when no selection has been initialised yet. */
   function liveTo(d: BulkDraft): string {
+    if (d.bcc_batch) return d.to;
     const sel = recipientSelection[d.compose_url];
     if (!sel) return d.to;
     const emails = d.recipients
@@ -360,7 +366,10 @@ export function BulkDraftsModal({
             from: selectedFrom || undefined,
           };
         })
-        .filter((d) => d.to.length > 0),
+        .filter(
+          (d) =>
+            d.to.length > 0 || (d.bcc_batch && Boolean(d.bcc?.trim()))
+        ),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [drafts, recipientSelection, selectedFrom]
   );
@@ -426,7 +435,8 @@ export function BulkDraftsModal({
       const w = window.open(d.compose_url, "_blank", "noopener,noreferrer");
       if (w) {
         opened++;
-        if (d.tracking_id) handed.push(d.tracking_id);
+        if (d.tracking_ids?.length) handed.push(...d.tracking_ids);
+        else if (d.tracking_id) handed.push(d.tracking_id);
       }
     }
     setOpenedCount(opened);
@@ -484,6 +494,7 @@ export function BulkDraftsModal({
             // stamp those as "touched" / "outreach logged"). Without
             // this we'd over-stamp partial failures.
             tracking_id: d.tracking_id,
+            tracking_ids: d.tracking_ids,
           })),
         }),
       });
@@ -550,9 +561,13 @@ export function BulkDraftsModal({
       if (Array.isArray(j.succeeded_tracking_ids)) {
         handed = j.succeeded_tracking_ids;
       } else {
-        handed = actionableDrafts
-          .map((d) => d.tracking_id)
-          .filter((id): id is string => Boolean(id));
+        handed = actionableDrafts.flatMap((d) =>
+          d.tracking_ids?.length
+            ? d.tracking_ids
+            : d.tracking_id
+              ? [d.tracking_id]
+              : []
+        );
         console.warn(
           "[bulk-drafts] Response missing succeeded_tracking_ids — falling back to client-side list",
           { handed_count: handed.length }
@@ -764,8 +779,10 @@ export function BulkDraftsModal({
                       {d.customer_label}
                     </div>
                     <div className="text-xs text-muted truncate flex items-center gap-1.5">
-                      <span className="truncate">To: {liveToStr || "(none)"}</span>
-                      {d.recipients.length > 0 ? (
+                      <span className="truncate">
+                        {d.bcc_batch ? "From" : "To"}: {liveToStr || "(none)"}
+                      </span>
+                      {d.recipients.length > 0 && !d.bcc_batch ? (
                         <button
                           type="button"
                           onClick={() => toggleExpand(draftKey)}

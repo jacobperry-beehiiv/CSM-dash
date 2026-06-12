@@ -70,6 +70,12 @@ interface Props {
    *  `{ past_due_month, past_due_reason }` per customer so the
    *  {{MONTH}} and {{REASON}} tags resolve in templates). */
   extraContextFor?: BuildBulkDraftsInput["extraContextFor"];
+  /** When set (with `bccBatchTo`), builds BCC batches of N customers
+   *  per draft instead of one draft per account. Used by Past Due's
+   *  Below $3.5K tab. */
+  bccBatchSize?: number;
+  /** To: address for BCC-batch drafts — typically `am.bulk_alias_email`. */
+  bccBatchTo?: string;
 }
 
 export function BulkEmailLauncher({
@@ -83,6 +89,8 @@ export function BulkEmailLauncher({
   onDraftCreated,
   defaultFromAlias,
   extraContextFor,
+  bccBatchSize,
+  bccBatchTo,
 }: Props) {
   const viewerEmail = useViewerEmail();
   const [open, setOpen] = useState(false);
@@ -155,8 +163,10 @@ export function BulkEmailLauncher({
       bccLookup,
       trackingIdFor,
       extraContextFor,
+      bccBatchSize,
+      bccBatchTo,
     });
-  }, [open, templateId, customers, templates, ladder, ccLookup, bccLookup, trackingIdFor, extraContextFor]);
+  }, [open, templateId, customers, templates, ladder, ccLookup, bccLookup, trackingIdFor, extraContextFor, bccBatchSize, bccBatchTo]);
 
   useEffect(() => {
     setDrafts(builtDrafts);
