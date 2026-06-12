@@ -2,6 +2,7 @@ import { applyMergeTags, type MergeContext } from "./merge-tags";
 import {
   composeUrlForTemplate,
   composeUrlWithAdGap,
+  gmailComposeUrl,
 } from "../links";
 import type { AdGapReport, Customer } from "../types";
 import type { EnterpriseTier } from "../tiers/store";
@@ -66,6 +67,14 @@ export interface BuildBulkDraftsInput {
    *  MergeContext alongside ladder + adGap. Missing entries fall
    *  through to ctx defaults (which themselves fall through to "—"). */
   extraContextFor?: (c: Customer) => Partial<MergeContext>;
+  /** When set, group customers into BCC batches instead of one draft
+   *  per customer. Each batch becomes one draft with `to` =
+   *  `bccBatchTo` and owner emails in BCC (Below $3.5K past-due). */
+  bccBatchSize?: number;
+  /** To: address for BCC-batch drafts — typically the configured
+   *  bulk outreach alias. May be empty; Gmail compose still works with
+   *  BCC-only. */
+  bccBatchTo?: string;
 }
 
 /**
@@ -93,7 +102,22 @@ export function buildBulkDrafts(input: BuildBulkDraftsInput): BulkDraft[] {
     bccLookup,
     trackingIdFor,
     extraContextFor,
+    bccBatchSize,
+    bccBatchTo,
   } = input;
+
+  if (bccBatchSize && bccBatchSize > 0) {
+    return buildBccBatchDrafts({
+      targets,
+      template: tpl,
+      ladder,
+      adGapByOrg,
+      trackingIdFor,
+      extraContextFor,
+      batchSize: bccBatchSize,
+      toEmail: (bccBatchTo ?? "").trim(),
+    });
+  }
   const usesAdGap =
     /customer\.(ad_revenue_actual|ad_revenue_potential|ad_revenue_gap|ad_zero_pubs)/.test(
       tpl.subject + tpl.body_html
@@ -185,5 +209,98 @@ export function buildBulkDrafts(input: BuildBulkDraftsInput): BulkDraft[] {
       rerender,
     });
   }
+  return drafts;
+}
+
+/** Below-$3.5K past-due flow — one draft per batch of N customers,
+ *  recipients in BCC so they never see each other. Merge tags render
+ *  against the first customer in each batch (templates should be
+ *  generic). */
+function buildBccBatchDrafts(args: {
+  targets: Customer[];
+  template: StoredTemplate;
+  ladder?: EnterpriseTier[];
+  adGapByOrg?: Record<string, AdGapReport | null>;
+  trackingIdFor?: (c: Customer) => string | null;
+  extraContextFor?: (c: Customer) => Partial<MergeContext>;
+  batchSize: number;
+  toEmail: string;
+}): BulkDraft[] {
+  const {
+    targets,
+    template: tpl,
+    ladder,
+    adGapByOrg,
+    trackingIdFor,
+    extraContextFor,
+    batchSize,
+    toEmail,
+  } = args;
+
+  const eligible = targets.filter((c) => Boolean(c.owner_email));
+  const batches: Customer[][] = [];
+  for (let i = 0; i < eligible.length; i += batchSize) {
+    batches.push(eligible.slice(i, i + batchSize));
+  }
+
+  const usesAdGap =
+    /customer\.(ad_revenue_actual|ad_revenue_potential|ad_revenue_gap|ad_zero_pubs)/.test(
+      tpl.subject + tpl.body_html
+    );
+
+  const drafts: BulkDraft[] = [];
+  for (let i = 0; i < batches.length; i++) {
+    const batch = batches[i];
+    const anchor = batch[0];
+    if (!anchor?.owner_email) continue;
+
+    const adGap =
+      usesAdGap && anchor.workspace_id
+        ? adGapByOrg?.[anchor.workspace_id] ?? null
+        : null;
+    const extras: Partial<MergeContext> = extraContextFor?.(anchor) ?? {};
+    const ctx: MergeContext = { ladder, adGap, ...extras };
+    const subject = applyMergeTags(tpl.subject, anchor, ctx);
+    const body_html = applyMergeTags(tpl.body_html, anchor, ctx);
+    const body_text = htmlToText(body_html);
+
+    const bcc = batch
+      .map((c) => c.owner_email)
+      .filter((e): e is string => Boolean(e))
+      .join(", ");
+
+    const tracking_ids = batch
+      .map((c) => trackingIdFor?.(c) ?? null)
+      .filter((id): id is string => Boolean(id));
+
+    const compose_url = gmailComposeUrl({
+      to: toEmail,
+      bcc,
+      subject,
+      body: body_text,
+      authuser: tpl.send_as_email || undefined,
+    });
+
+    drafts.push({
+      customer_label: `Batch ${i + 1} of ${batches.length} — ${batch.length} recipient${
+        batch.length === 1 ? "" : "s"
+      }`,
+      tracking_ids,
+      to: toEmail,
+      bcc,
+      from: tpl.send_as_email || undefined,
+      subject,
+      body_text,
+      body_html,
+      compose_url,
+      bcc_batch: true,
+      recipients: batch.map((c) => ({
+        email: c.owner_email as string,
+        name: c.property_main_contact ?? c.company_name ?? null,
+        default: true,
+      })),
+    });
+  }
+
   return drafts;
 }
