@@ -41,6 +41,10 @@ function migrateSlack(stored: Partial<SlackSettings> | undefined): SlackSettings
       ...DEFAULTS.slack.csm_user_ids,
       ...(stored?.csm_user_ids ?? {}),
     },
+    notifications: {
+      ...DEFAULTS.slack.notifications,
+      ...(stored?.notifications ?? {}),
+    },
   };
 
   // Backfill the past-due channel from the deprecated single-channel

@@ -8,11 +8,26 @@
  * lives in ./store.ts and re-exports these for back-compat.
  */
 
+/** Which team owns this template in the library — drives the CSM/AM
+ *  tabs on /settings/templates. Legacy rows without `team` infer from
+ *  the old `am` tag on read (see templateTeam()). */
+export type TemplateTeam = "csm" | "am";
+
+export function templateTeam(
+  t: Pick<StoredTemplate, "team" | "tags">
+): TemplateTeam {
+  if (t.team === "am" || t.team === "csm") return t.team;
+  return t.tags?.some((tag) => tag.toLowerCase() === "am") ? "am" : "csm";
+}
+
 export interface StoredTemplate {
   id: string;
   label: string;
   blurb: string;
-  /** Free-form descriptive tags (e.g. "renewal", "growth"). UI only. */
+  /** CSM vs AM ownership — replaces the old free-form tags field. */
+  team?: TemplateTeam;
+  /** @deprecated Legacy descriptive tags — cleared on save. Kept on
+   *  read only for backfilling `team` on older rows. */
   tags: string[];
   /**
    * Lowercased CSM email addresses this template is scoped to. When

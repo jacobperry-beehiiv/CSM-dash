@@ -7,7 +7,11 @@ import {
   type TemplateScenario,
 } from "@/lib/templates/templates";
 import { applyMergeTags } from "@/lib/templates/merge-tags";
-import { isVisibleToCsm, type StoredTemplate } from "@/lib/templates/types";
+import {
+  isVisibleToCsm,
+  templateTeam,
+  type StoredTemplate,
+} from "@/lib/templates/types";
 import { useViewerEmail } from "@/lib/auth-client";
 import { getTierLadder } from "@/lib/tiers/client";
 import type { EnterpriseTier } from "@/lib/tiers/store";
@@ -17,6 +21,11 @@ interface Props {
   customer: Customer;
   onClose: () => void;
   initialScenario?: TemplateScenario | string;
+}
+
+interface GmailStatus {
+  connected: boolean;
+  email: string | null;
 }
 
 function htmlToText(html: string): string {
@@ -45,6 +54,9 @@ export function OutreachModal({ customer, onClose, initialScenario }: Props) {
   );
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [gmail, setGmail] = useState<GmailStatus | null>(null);
+  const [gmailBusy, setGmailBusy] = useState(false);
+  const [gmailMessage, setGmailMessage] = useState<string | null>(null);
 
   const suggested = useMemo(
     () => new Set(suggestTemplates(customer) as string[]),
@@ -93,6 +105,21 @@ export function OutreachModal({ customer, onClose, initialScenario }: Props) {
     .filter((r) => selectedRecipients.has(r.email.toLowerCase()))
     .map((r) => r.email);
   const toLine = recipientEmails.join(", ");
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/auth/google/status")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((s) => {
+        if (!cancelled) setGmail(s as GmailStatus);
+      })
+      .catch(() => {
+        if (!cancelled) setGmail({ connected: false, email: null });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -159,16 +186,53 @@ export function OutreachModal({ customer, onClose, initialScenario }: Props) {
     : "";
   const body_text = body_html ? htmlToText(body_html) : "";
 
-  const mailto =
-    template && toLine
-      ? `https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(
-          toLine
-        )}&su=${encodeURIComponent(subject)}&body=${encodeURIComponent(body_text)}`
-      : "";
-
   async function copy() {
     if (!template) return;
     await navigator.clipboard.writeText(`Subject: ${subject}\n\n${body_text}`);
+  }
+
+  async function createGmailDraft() {
+    if (!template || !toLine) return;
+    setGmailBusy(true);
+    setGmailMessage(null);
+    try {
+      const r = await fetch("/api/drafts/bulk-create", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          drafts: [
+            {
+              to: toLine,
+              subject,
+              body_html,
+              from: template.send_as_email || undefined,
+            },
+          ],
+        }),
+      });
+      const j = (await r.json()) as {
+        created?: number;
+        failed?: number;
+        created_in?: string;
+        alias_fallbacks?: number;
+        errors?: Array<{ error: string }>;
+        error?: string;
+      };
+      if (!r.ok) throw new Error(j.error ?? `HTTP ${r.status}`);
+      if ((j.failed ?? 0) > 0 || (j.created ?? 0) === 0) {
+        throw new Error(j.errors?.[0]?.error ?? "Draft creation failed");
+      }
+      const where = j.created_in ?? gmail?.email ?? "your Gmail";
+      const fallbackNote =
+        (j.alias_fallbacks ?? 0) > 0
+          ? " (sent from your primary address — alias not verified)"
+          : "";
+      setGmailMessage(`Draft created in ${where}'s Drafts folder${fallbackNote}.`);
+    } catch (e) {
+      setGmailMessage(e instanceof Error ? e.message : "Draft creation failed");
+    } finally {
+      setGmailBusy(false);
+    }
   }
 
   return (
@@ -260,16 +324,17 @@ export function OutreachModal({ customer, onClose, initialScenario }: Props) {
               {template?.blurb ? (
                 <p className="text-xs text-muted mt-2">{template.blurb}</p>
               ) : null}
-              {template && template.tags.length > 0 ? (
-                <div className="flex flex-wrap gap-1 mt-2">
-                  {template.tags.map((tag) => (
-                    <span
-                      key={tag}
-                      className="text-[10px] px-1.5 py-0.5 rounded-full bg-surface-2 text-muted border border-border"
-                    >
-                      {tag}
-                    </span>
-                  ))}
+              {template ? (
+                <div className="mt-2">
+                  <span
+                    className={`text-[10px] px-1.5 py-0.5 rounded font-semibold border ${
+                      templateTeam(template) === "am"
+                        ? "bg-purple-100 dark:bg-purple-500/20 text-purple-800 dark:text-purple-200 border-purple-300 dark:border-purple-500/40"
+                        : "bg-indigo-100 dark:bg-indigo-500/20 text-indigo-800 dark:text-indigo-200 border-indigo-300 dark:border-indigo-500/40"
+                    }`}
+                  >
+                    {templateTeam(template) === "am" ? "AM" : "CSM"}
+                  </span>
                 </div>
               ) : null}
             </>
@@ -294,24 +359,44 @@ export function OutreachModal({ customer, onClose, initialScenario }: Props) {
           </div>
         ) : null}
 
-        <div className="p-4 border-t border-border flex items-center gap-2 justify-end">
-          <button
-            onClick={copy}
-            disabled={!template}
-            className="px-3 py-1.5 border border-border-strong rounded-md text-sm hover:bg-canvas disabled:opacity-50"
-          >
-            Copy
-          </button>
-          {mailto ? (
-            <a
-              href={mailto}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="px-3 py-1.5 bg-accent text-accent-fg rounded-md text-sm font-medium hover:bg-accent-hover"
+        <div className="p-4 border-t border-border space-y-2">
+          {gmailMessage ? (
+            <p
+              className={`text-xs ${
+                gmailMessage.startsWith("Draft created")
+                  ? "text-emerald-700 dark:text-emerald-300"
+                  : "text-red-700 dark:text-red-300"
+              }`}
             >
-              Open in Gmail
-            </a>
+              {gmailMessage}
+            </p>
           ) : null}
+          <div className="flex items-center gap-2 justify-end">
+            <button
+              onClick={copy}
+              disabled={!template}
+              className="px-3 py-1.5 border border-border-strong rounded-md text-sm hover:bg-canvas disabled:opacity-50"
+            >
+              Copy
+            </button>
+            {gmail?.connected ? (
+              <button
+                onClick={createGmailDraft}
+                disabled={!template || !toLine || gmailBusy}
+                className="px-3 py-1.5 bg-accent text-accent-fg rounded-md text-sm font-medium hover:bg-accent-hover disabled:opacity-50"
+              >
+                {gmailBusy ? "Creating draft…" : "Create draft in Gmail"}
+              </button>
+            ) : (
+              <a
+                href="/api/auth/google/start"
+                className="px-3 py-1.5 bg-accent text-accent-fg rounded-md text-sm font-medium hover:bg-accent-hover"
+                title="Connect Gmail to create drafts directly in your Drafts folder"
+              >
+                Connect Gmail to create draft
+              </a>
+            )}
+          </div>
         </div>
       </div>
     </div>

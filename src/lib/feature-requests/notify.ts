@@ -1,5 +1,6 @@
 import { loadCustomers } from "../data/load-customers";
 import { loadSettings } from "../data/settings";
+import { resolveSlackNotificationPref } from "../data/settings-types";
 import { userKeyFromEmail } from "../personal-todos/identity";
 import { applyTodoOps } from "../personal-todos/store";
 import { newTodoId, type PersonalTodo } from "../personal-todos/types";
@@ -236,6 +237,16 @@ export async function notifySubmitterOfComment(args: {
   }
 
   const settings = await loadSettings();
+  const notifyPref = resolveSlackNotificationPref(
+    settings,
+    "feature_request_comment"
+  );
+  if (!notifyPref.enabled) {
+    return {
+      sent: false,
+      reason: "feature_request_comment notifications disabled in settings",
+    };
+  }
   const slackId = await resolveSlackIdForSubmitter(
     submitterEmail,
     args.request.submitter ?? "",

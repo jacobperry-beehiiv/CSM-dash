@@ -11,6 +11,7 @@ import { loadSettings } from "../data/settings";
 import {
   findSlackChannel,
   PROACTIVE_OUTREACH_CHANNEL_ID,
+  resolveSlackNotificationPref,
   type SettingsShape,
 } from "../data/settings-types";
 import { fmtCurrency } from "../../components/format";
@@ -162,15 +163,19 @@ export async function runProactiveOutreachSweep(
   // schedule is paused (the original intent of the toggle is "stop
   // the daily auto-pings without nuking the engine entirely").
   const triggeredBy = opts.triggeredBy ?? "cron";
+  const outreachPref = resolveSlackNotificationPref(
+    settings,
+    "proactive_outreach"
+  );
   if (
     triggeredBy === "cron" &&
-    settings.am?.proactive_outreach_sweep_enabled === false
+    (outreachPref.cron_enabled === false || !outreachPref.enabled)
   ) {
     return {
       ...result,
       disabled: true,
       reason:
-        "Scheduled sweep is disabled in settings (am.proactive_outreach_sweep_enabled = false). Flip the toggle on /settings/slack to resume.",
+        "Scheduled proactive outreach sweep is disabled in settings. Flip it on at /settings/slack → Automated Slack notifications.",
     };
   }
 
@@ -178,9 +183,11 @@ export async function runProactiveOutreachSweep(
     settings.slack,
     PROACTIVE_OUTREACH_CHANNEL_ID
   );
-  if (!channelCfg?.channel_id) {
+  const channelId =
+    outreachPref.destination.trim() || channelCfg?.channel_id?.trim() || "";
+  if (!channelId) {
     throw new Error(
-      "Proactive Outreach Slack channel isn't configured. Set it at /settings/slack (channel id `proactive_outreach`)."
+      "Proactive Outreach Slack channel isn't configured. Set it at /settings/slack → Automated Slack notifications."
     );
   }
   // Per-CSM rollup is now the default — the engine groups eligible
@@ -192,7 +199,7 @@ export async function runProactiveOutreachSweep(
   // still thread per-account because they're follow-ups on a
   // specific row's stalled outreach.
   const rollupTemplate =
-    (channelCfg.rollup_template ?? "").trim() || DEFAULT_ROLLUP_TEMPLATE;
+    (channelCfg?.rollup_template ?? "").trim() || DEFAULT_ROLLUP_TEMPLATE;
   // Deep link base for the {{filtered_url}} / {{filtered_link}}
   // tokens. Uses NEXT_PUBLIC_DASHBOARD_URL to match the convention
   // every other server-side Slack writer in this codebase already
@@ -292,7 +299,7 @@ export async function runProactiveOutreachSweep(
       let messageTs: string | null = null;
       if (!opts.dryRun) {
         const r = await postToSlack({
-          channelId: channelCfg.channel_id,
+          channelId,
           text,
         });
         messageTs = r.ts;
@@ -363,7 +370,7 @@ export async function runProactiveOutreachSweep(
       }* after ${Math.round(daysSincePing)} days. Worth a follow-up.`;
       if (!opts.dryRun) {
         await postToSlack({
-          channelId: channelCfg.channel_id,
+          channelId,
           text: nudgeText,
           threadTs: entry.ping_message_ts ?? undefined,
         });

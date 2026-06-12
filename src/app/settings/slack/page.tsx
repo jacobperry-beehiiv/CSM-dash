@@ -9,8 +9,12 @@ import {
   newChannelId,
   PAST_DUE_CHANNEL_ID,
   PROACTIVE_OUTREACH_CHANNEL_ID,
+  resolveSlackNotificationPref,
+  SLACK_NOTIFICATION_DEFINITIONS,
   type SettingsShape,
   type SlackChannel,
+  type SlackNotificationKind,
+  type SlackNotificationPref,
 } from "@/lib/data/settings-types";
 import { DEFAULT_ROLLUP_TEMPLATE } from "@/components/am/slack-bulk-compose";
 
@@ -113,6 +117,53 @@ export default function SlackSettingsPage() {
     }));
   }
 
+  function patchNotification(
+    kind: SlackNotificationKind,
+    patch: Partial<SlackNotificationPref>
+  ) {
+    setSettings((prev) => {
+      const current = resolveSlackNotificationPref(prev, kind);
+      const next: SlackNotificationPref = { ...current, ...patch };
+      let updated: SettingsShape = {
+        ...prev,
+        slack: {
+          ...prev.slack,
+          notifications: {
+            ...prev.slack.notifications,
+            [kind]: next,
+          },
+        },
+      };
+      if (kind === "review_digest") {
+        updated = {
+          ...updated,
+          am: {
+            ...updated.am,
+            daily_digest_channel_id: next.enabled ? next.destination : "",
+          },
+        };
+      }
+      if (kind === "proactive_outreach") {
+        updated = {
+          ...updated,
+          am: {
+            ...updated.am,
+            proactive_outreach_sweep_enabled: next.cron_enabled !== false,
+          },
+          slack: {
+            ...updated.slack,
+            channels: updated.slack.channels.map((c) =>
+              c.id === PROACTIVE_OUTREACH_CHANNEL_ID
+                ? { ...c, channel_id: next.destination }
+                : c
+            ),
+          },
+        };
+      }
+      return updated;
+    });
+  }
+
   function removeChannel(id: string) {
     if (id === PAST_DUE_CHANNEL_ID) {
       // Past-due is the one channel code paths still hardcode against —
@@ -204,6 +255,112 @@ export default function SlackSettingsPage() {
           {message}
         </div>
       ) : null}
+
+      <section className="bg-surface rounded-xl border border-border shadow-card p-4 space-y-4">
+        <div>
+          <h2 className="text-sm font-semibold text-fg">
+            Automated Slack notifications
+          </h2>
+          <p className="text-xs text-muted mt-1">
+            Turn individual pings on or off and choose where each one
+            lands — a channel ID, or a user ID for a DM. Scheduled
+            crons respect the <em>Schedule enabled</em> toggle; manual
+            actions from the dashboard still work when the schedule is
+            paused.
+          </p>
+        </div>
+        <div className="divide-y divide-border/60">
+          {SLACK_NOTIFICATION_DEFINITIONS.map((def) => {
+            const pref = resolveSlackNotificationPref(settings, def.kind);
+            const showSchedule =
+              def.kind !== "feature_request_comment" && def.schedule;
+            return (
+              <div
+                key={def.kind}
+                className="py-3 first:pt-0 last:pb-0 space-y-2"
+              >
+                <div className="flex flex-wrap items-start justify-between gap-2">
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-medium text-fg">{def.label}</p>
+                    <p className="text-xs text-muted mt-0.5">
+                      {def.description}
+                    </p>
+                    {def.schedule ? (
+                      <p className="text-[11px] text-subtle mt-1">
+                        Schedule: {def.schedule}
+                      </p>
+                    ) : null}
+                  </div>
+                  <label className="flex items-center gap-2 text-xs shrink-0 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={pref.enabled}
+                      onChange={(e) =>
+                        patchNotification(def.kind, {
+                          enabled: e.target.checked,
+                        })
+                      }
+                      className="h-4 w-4 rounded border-border-strong cursor-pointer"
+                    />
+                    <span className="text-muted">Enabled</span>
+                  </label>
+                </div>
+                {def.has_destination !== false ? (
+                  <label className="flex items-center gap-2 text-sm">
+                    <span className="text-xs text-muted whitespace-nowrap min-w-[140px]">
+                      Destination
+                    </span>
+                    <div className="flex-1 min-w-0">
+                      <input
+                        type="text"
+                        value={pref.destination}
+                        onChange={(e) =>
+                          patchNotification(def.kind, {
+                            destination: e.target.value,
+                            enabled:
+                              e.target.value.trim().length > 0
+                                ? true
+                                : pref.enabled,
+                          })
+                        }
+                        placeholder="C0XXXXXXXXX or U02ABC123"
+                        className="w-full px-3 py-2 border border-border-strong rounded-md text-sm font-mono"
+                      />
+                      <ChannelIdHint value={pref.destination} />
+                    </div>
+                  </label>
+                ) : null}
+                {showSchedule ? (
+                  <label className="flex items-start gap-3 text-sm cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={pref.cron_enabled !== false}
+                      onChange={(e) =>
+                        patchNotification(def.kind, {
+                          cron_enabled: e.target.checked,
+                        })
+                      }
+                      className="mt-0.5 h-4 w-4 rounded border-border-strong cursor-pointer"
+                    />
+                    <span>
+                      <span className="font-medium text-fg">
+                        Schedule enabled
+                      </span>
+                      <span className="block text-xs text-muted">
+                        When off, the daily cron skips this ping. Manual
+                        sweeps from the dashboard still work.
+                      </span>
+                    </span>
+                  </label>
+                ) : null}
+                {def.kind === "deliverability_critical" ? (
+                  <DeliverabilitySweepActions />
+                ) : null}
+              </div>
+            );
+          })}
+        </div>
+      </section>
 
       <section className="bg-surface rounded-xl border border-border shadow-card p-4 space-y-4">
         <div>
@@ -458,52 +615,6 @@ export default function SlackSettingsPage() {
         </div>
       </section>
 
-      <section className="bg-surface rounded-xl border border-border shadow-card p-4 space-y-3">
-        <h2 className="text-sm font-semibold text-fg">
-          Proactive outreach schedule
-        </h2>
-        <p className="text-xs text-muted">
-          The daily GitHub Actions cron sweeps the Enterprise cohort
-          at <code className="font-mono bg-surface-2 px-1 rounded">≥75%</code>
-          {" "}of cap, posts a Slack ping for newly-crossing accounts,
-          and nudges AM after 5 days of no logged outreach. Pause the
-          schedule here when you want to mute auto-pings without
-          disabling the engine — the manual{" "}
-          <em>📣 Ping N selected on Slack</em> button on the AM
-          Proactive Outreach tab still works either way.
-        </p>
-        <label className="flex items-start gap-3 text-sm cursor-pointer">
-          <input
-            type="checkbox"
-            checked={settings.am?.proactive_outreach_sweep_enabled !== false}
-            onChange={(e) =>
-              setSettings((prev) => ({
-                ...prev,
-                am: {
-                  ...(prev.am ?? {}),
-                  proactive_outreach_sweep_enabled: e.target.checked,
-                },
-              }))
-            }
-            className="mt-0.5 h-4 w-4 rounded border-border-strong cursor-pointer"
-          />
-          <span>
-            <span className="font-medium text-fg">
-              Scheduled sweep enabled
-            </span>
-            <span className="block text-xs text-muted">
-              When off, the daily cron call to{" "}
-              <code className="font-mono bg-surface-2 px-1 rounded">
-                /api/proactive-outreach/sweep
-              </code>{" "}
-              short-circuits with{" "}
-              <code className="font-mono">{"{ disabled: true }"}</code>{" "}
-              — no Slack messages fire, no nudges go out. Default: on.
-            </span>
-          </span>
-        </label>
-      </section>
-
       <ProactiveOutreachStatusesSection
         statuses={settings.am?.proactive_outreach_statuses ?? []}
         onChange={(next) =>
@@ -529,60 +640,6 @@ export default function SlackSettingsPage() {
           }))
         }
       />
-
-      <section className="bg-surface rounded-xl border border-border shadow-card p-4 space-y-3">
-        <h2 className="text-sm font-semibold text-fg">
-          Per-CSM review digest
-        </h2>
-        <p className="text-xs text-muted">
-          One Slack message per CSM each morning summarizing how many
-          accounts need their attention — past-due / approaching cap /
-          upcoming renewal. The message links each count to the
-          dashboard filtered to that CSM&rsquo;s book + the workflow,
-          showing only rows still pending action. CSMs mark each one
-          <code className="font-mono bg-surface-2 px-1 rounded">Reach
-            out</code>{" "}
-          /{" "}
-          <code className="font-mono bg-surface-2 px-1 rounded">Skip</code>{" "}
-          /{" "}
-          <code className="font-mono bg-surface-2 px-1 rounded">Done</code>{" "}
-          on the row, and the next digest only resurfaces what&rsquo;s
-          still pending.
-        </p>
-        <label className="flex items-center gap-2 text-sm">
-          <span className="text-xs text-muted whitespace-nowrap min-w-[140px]">
-            Slack channel ID
-          </span>
-          <div className="flex-1 min-w-0">
-            <input
-              type="text"
-              value={settings.am?.daily_digest_channel_id ?? ""}
-              onChange={(e) =>
-                setSettings((prev) => ({
-                  ...prev,
-                  am: {
-                    ...(prev.am ?? {}),
-                    daily_digest_channel_id: e.target.value,
-                  },
-                }))
-              }
-              placeholder="C0XXXXXXXXX"
-              className="w-full px-3 py-2 border border-border-strong rounded-md text-sm font-mono"
-            />
-            <ChannelIdHint
-              value={settings.am?.daily_digest_channel_id ?? ""}
-            />
-          </div>
-        </label>
-        <p className="text-[11px] text-muted">
-          Channel ID (e.g.{" "}
-          <code className="font-mono">C0XXXXXXXXX</code>) — must
-          include the bot user. Leave blank to disable the digest:
-          the cron will return{" "}
-          <code className="font-mono">no_channel_configured: true</code>{" "}
-          rather than silently dropping messages.
-        </p>
-      </section>
 
       <section className="bg-surface rounded-xl border border-border shadow-card p-4 space-y-3">
         <h2 className="text-sm font-semibold text-fg">CSM Slack IDs</h2>
@@ -1118,5 +1175,69 @@ function LifecycleStagesSection({
       restoreTitle="Reset to the built-in list — Prospect, Onboarding, Active, At risk, Renewal conversation, Churned."
       onChange={onChange}
     />
+  );
+}
+
+function DeliverabilitySweepActions() {
+  const [running, setRunning] = useState(false);
+  const [result, setResult] = useState<string | null>(null);
+
+  async function run(dryRun: boolean) {
+    setRunning(true);
+    setResult(null);
+    try {
+      const r = await fetch(
+        `/api/deliverability/sweep${dryRun ? "?dryRun=1" : ""}`,
+        { method: "POST" }
+      );
+      const j = (await r.json()) as Record<string, unknown>;
+      if (!r.ok) {
+        throw new Error(String(j.error ?? `HTTP ${r.status}`));
+      }
+      if (j.disabled) {
+        setResult(`Skipped: ${String(j.reason ?? "disabled")}`);
+        return;
+      }
+      const sent = Number(j.messages_sent ?? 0);
+      const seen = Number(j.critical_seen ?? 0);
+      const newCount = Array.isArray(j.notified_post_ids)
+        ? j.notified_post_ids.length
+        : 0;
+      setResult(
+        dryRun
+          ? `Dry run: ${seen} critical uncleared, ${newCount} would notify.`
+          : sent > 0
+            ? `Sent — ${newCount} new critical post${newCount === 1 ? "" : "s"}.`
+            : `No new critical posts to notify (${seen} already tracked).`
+      );
+    } catch (e) {
+      setResult(e instanceof Error ? e.message : "Sweep failed");
+    } finally {
+      setRunning(false);
+    }
+  }
+
+  return (
+    <div className="flex flex-wrap items-center gap-2 pt-1">
+      <button
+        type="button"
+        onClick={() => run(false)}
+        disabled={running}
+        className="px-3 py-1.5 bg-accent text-accent-fg rounded-md text-xs font-medium hover:bg-accent-hover disabled:opacity-50"
+      >
+        {running ? "Running…" : "Run sweep now"}
+      </button>
+      <button
+        type="button"
+        onClick={() => run(true)}
+        disabled={running}
+        className="px-3 py-1.5 border border-border-strong rounded-md text-xs hover:bg-canvas disabled:opacity-50"
+      >
+        Dry run
+      </button>
+      {result ? (
+        <span className="text-xs text-muted">{result}</span>
+      ) : null}
+    </div>
   );
 }

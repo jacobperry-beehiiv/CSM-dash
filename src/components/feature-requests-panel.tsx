@@ -2,7 +2,9 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { fmtDate } from "./format";
+import { SelectFilter } from "./filters";
 import { useViewerEmail } from "@/lib/auth-client";
+import { useUrlSearch } from "@/lib/hooks/use-url-search";
 import {
   newRequestId,
   sortRequests,
@@ -70,6 +72,7 @@ export function FeatureRequestsPanel() {
   const [teamFilter, setTeamFilter] = useState<FeatureRequestTeam | "all">(
     "all"
   );
+  const [statusFilter, setStatusFilter] = useUrlSearch("status");
 
   // Per-request inline-edit state. Keyed by request id; absence means
   // not-editing. Stores draft text so a typo doesn't fire a network
@@ -373,13 +376,35 @@ export function FeatureRequestsPanel() {
     () => (requests ? sortRequests(requests) : []),
     [requests]
   );
-  const sortedRequests = useMemo(
+  const teamScoped = useMemo(
     () =>
       teamFilter === "all"
         ? allSorted
         : allSorted.filter((r) => (r.team ?? "csm") === teamFilter),
     [allSorted, teamFilter]
   );
+
+  const statusFilterOptions = useMemo(() => {
+    const counts = new Map<FeatureRequestStatus, number>();
+    for (const r of teamScoped) {
+      counts.set(r.status, (counts.get(r.status) ?? 0) + 1);
+    }
+    return (Object.keys(STATUS_LABEL) as FeatureRequestStatus[]).map(
+      (status) => ({
+        value: status,
+        label: STATUS_LABEL[status],
+        count: counts.get(status) ?? 0,
+      })
+    );
+  }, [teamScoped]);
+
+  const sortedRequests = useMemo(() => {
+    if (!statusFilter) return teamScoped;
+    return teamScoped.filter((r) => r.status === statusFilter);
+  }, [teamScoped, statusFilter]);
+
+  const listFiltered =
+    teamFilter !== "all" || Boolean(statusFilter);
   const openCount = sortedRequests.filter((r) => r.status === "open").length;
   const inProgressCount = sortedRequests.filter(
     (r) => r.status === "in_progress"
@@ -475,6 +500,17 @@ export function FeatureRequestsPanel() {
               <option value="low">Low</option>
             </select>
           </label>
+          <span className="text-subtle text-xs px-0.5" aria-hidden>
+            |
+          </span>
+          <SelectFilter
+            label="Status"
+            value={statusFilter}
+            onChange={setStatusFilter}
+            emptyLabel="Any status"
+            emptyCount={teamScoped.length}
+            options={statusFilterOptions}
+          />
           <div className="flex-1" />
           <button
             type="button"
@@ -565,7 +601,13 @@ export function FeatureRequestsPanel() {
         <div className="px-5 py-6 text-sm text-muted">Loading…</div>
       ) : sortedRequests.length === 0 ? (
         <div className="px-5 py-6 text-sm text-muted">
-          No requests yet. Be the first to submit one above.
+          {listFiltered
+            ? `No requests match the current filter${
+                statusFilter
+                  ? ` (${STATUS_LABEL[statusFilter as FeatureRequestStatus]})`
+                  : ""
+              }.`
+            : "No requests yet. Be the first to submit one above."}
         </div>
       ) : (
         <ul className="divide-y divide-border">
