@@ -61,7 +61,35 @@ interface Q4Row {
   spam_reports: number;
 }
 
-async function fetchPosts(lookbackDays: number): Promise<Q1Row[]> {
+/**
+ * Q1 — fetch posts sent in the last N days for the orgs in our CSM
+ * book. The `plan_id = 8` filter alone returns ~100k posts/15d, well
+ * past anything we'd want to truck through Q2-Q4 enrichment, so we
+ * scope to organization_ids that q10600 already considers active
+ * (~560 workspaces today). Without this scope we'd previously have
+ * to LIMIT 2000 to keep query times sane, but then ClickHouse picked
+ * an arbitrary 2000 rows without an ORDER BY and customer-book posts
+ * fell off the cliff — a Branded Hospitality Media weekend send with
+ * a 63% delivery rate vanished that way.
+ *
+ * Org-scoped row counts are bounded (~5–10k for 15d), so we can drop
+ * the LIMIT entirely and ORDER BY scheduled_at DESC for stability.
+ * Empty orgIds → return empty array; safer than running the unfiltered
+ * query and re-introducing the truncation.
+ */
+async function fetchPosts(
+  lookbackDays: number,
+  orgIds: string[]
+): Promise<Q1Row[]> {
+  if (orgIds.length === 0) {
+    console.error(
+      "[deliverability] fetchPosts called with empty orgIds — skipping Q1 (no customer-book workspaces to filter to)"
+    );
+    return [];
+  }
+  const orgInClause = orgIds
+    .map((id) => `'${id.replace(/'/g, "''")}'`)
+    .join(",");
   const sql = `
     SELECT DISTINCT
       toString(p.id) AS post_id,
@@ -81,11 +109,11 @@ async function fetchPosts(lookbackDays: number): Promise<Q1Row[]> {
     FROM swarm_clickpipes.organizations o
     JOIN swarm_clickpipes.publications pub ON o.id = pub.organization_id
     JOIN swarm_clickpipes.posts p ON pub.id = p.publication_id
-    WHERE o.plan_id = 8
+    WHERE o.id IN (${orgInClause})
       AND p.send_status = 2
       AND p.scheduled_at >= now() - INTERVAL ${lookbackDays} DAY
       AND p.scheduled_at < toDate(now())
-    LIMIT 2000
+    ORDER BY p.scheduled_at DESC
   `;
   const rows = (await runNativeQuery(DB.CLICKHOUSE_ADHOC, sql)) as unknown as Q1Row[];
   return rows;
@@ -300,7 +328,23 @@ export async function fetchDeliverabilityPosts(
   lookbackDays: number = LOOKBACK_DAYS,
   spamRecentDays: number = SPAM_PRECOMPUTE_RECENT_DAYS
 ): Promise<{ posts: PostMetricsRow[]; spam_dates: string[] }> {
-  const posts = await fetchPosts(lookbackDays);
+  // Source of truth for "which orgs do we surface" — q10600 (the CSM
+  // book of business). Filtering Q1 here aligns the deliverability
+  // snapshot with whatever the rest of the dashboard considers an
+  // active customer, and keeps Q1's row count bounded so we don't
+  // need an arbitrary LIMIT to keep sync times sane.
+  const customers = await loadCustomers();
+  const orgIds = Array.from(
+    new Set(
+      customers
+        .map((c) => c.workspace_id)
+        .filter((id): id is string => typeof id === "string" && id.length > 0)
+    )
+  );
+  console.error(
+    `[deliverability] scoping Q1 to ${orgIds.length} customer-book workspaces`
+  );
+  const posts = await fetchPosts(lookbackDays, orgIds);
   const postIds = posts.map((p) => p.post_id);
 
   const safe = async <T>(p: Promise<T[]>, label: string): Promise<T[]> => {
