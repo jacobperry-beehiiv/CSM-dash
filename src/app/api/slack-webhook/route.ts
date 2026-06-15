@@ -19,6 +19,11 @@ import {
   type ViewSubmissionPayload,
 } from "@/lib/integrations/slack-views";
 import {
+  ASSIGN_OPEN_BUTTON_ACTION_ID,
+  buildAssignButtonBlocks,
+  openAssignModal,
+} from "@/lib/integrations/slack-assign";
+import {
   newTodoId,
   type PersonalTodo,
   type TodoSource,
@@ -441,6 +446,10 @@ interface BlockActionsPayload {
   type: "block_actions";
   user?: { id?: string };
   response_url?: string;
+  /** Required for views.open — Slack only mints a trigger_id on
+   *  user-initiated interactions. We forward it straight through to
+   *  the assign-modal opener. */
+  trigger_id?: string;
   actions?: Array<{
     action_id?: string;
     value?: string;
@@ -467,6 +476,47 @@ async function handleBlockActions(
     action_id: action.action_id,
     user_id: typed.user?.id,
   });
+
+  if (action.action_id === ASSIGN_OPEN_BUTTON_ACTION_ID) {
+    if (!typed.trigger_id) {
+      console.warn("[slack-webhook] assign_open_modal click missing trigger_id");
+      return NextResponse.json({ ok: true });
+    }
+    // Decode the thread context that buildAssignButtonBlocks stamped
+    // into the button's `value`. Fall back to empty fields so the
+    // modal still opens — the handler will degrade gracefully (no
+    // thread reply, no Drive folder).
+    let threadContext = {
+      channel: "",
+      thread_ts: "",
+      requester_user: "",
+    };
+    try {
+      threadContext = JSON.parse(action.value ?? "{}");
+    } catch {
+      console.warn(
+        "[slack-webhook] assign_open_modal: couldn't parse button value",
+        { raw: action.value }
+      );
+    }
+    const result = await openAssignModal({
+      triggerId: typed.trigger_id,
+      threadContext,
+    });
+    if (!result.ok) {
+      // Surface the failure in-thread so the user knows the button
+      // didn't disappear into the void.
+      if (threadContext.channel && threadContext.thread_ts) {
+        await postThreadReply(threadContext.channel, threadContext.thread_ts, {
+          text: `:warning: Couldn't open the Assign form: ${result.error ?? "unknown error"}.`,
+        });
+      }
+      console.warn("[slack-webhook] openAssignModal failed", {
+        error: result.error,
+      });
+    }
+    return NextResponse.json({ ok: true });
+  }
 
   if (action.action_id === FIND_SHARE_ACTION_ID) {
     if (!typed.response_url) {
@@ -881,6 +931,7 @@ async function handleAppMention(
         "Hi! I respond to these @-mention commands:\n" +
         "• `@bot find <query>` — search customers + publications, post results in this thread\n" +
         "• `@bot stripe <query>` — return a Stripe-dashboard link for the matching workspace(s)\n" +
+        "• `@bot assign` — open the new-account form (HubSpot owner + to-do + Drive folder)\n" +
         "• `@bot help` — show this list",
     });
     return;
@@ -941,11 +992,48 @@ async function handleAppMention(
     return;
   }
 
+  // ── Assign (new-account onboarding) ──────────────────────────────
+  // @bot assign in any thread → post a button reply that opens the
+  // assign modal. We can't open the modal directly from app_mention
+  // because Slack only hands out trigger_ids on user-initiated
+  // interactions (slash commands or block actions) — the button click
+  // gives us one.
+  if (parsed.command === "assign") {
+    const resolved = await resolveUserKeyForSlackId(event.user);
+    // userKey isn't strictly required to surface the button, but the
+    // requester's email DOES need to make it into the modal so we can
+    // (a) find their Google tokens for Drive folder creation and (b)
+    // stamp it on the customer-overrides write. Encode it now while
+    // we have it; the button's `value` field round-trips it back on
+    // click.
+    const requesterEmail = resolved.userKey
+      ? userKeyFromEmailToEmail(resolved.userKey)
+      : "";
+    await postThreadReply(channel, threadTs, {
+      text: "Open the Assign form to onboard a new account.",
+      blocks: buildAssignButtonBlocks({
+        channel,
+        thread_ts: threadTs,
+        requester_user: requesterEmail,
+      }),
+    });
+    return;
+  }
+
   // Unknown command — friendly hint.
   await postThreadReply(channel, threadTs, {
     text:
       `I don't recognize \`${parsed.command}\`. Try \`@bot help\` for the list of commands I support.`,
   });
+}
+
+/** userKey shape used by personal-todos is `email:<lowercased>`; the
+ *  Slack-assign flow wants the raw email back out to look up Google
+ *  tokens. Strip the prefix if present; pass through otherwise so
+ *  shape changes in identity.ts don't silently break this path. */
+function userKeyFromEmailToEmail(userKey: string): string {
+  if (userKey.startsWith("email:")) return userKey.slice("email:".length);
+  return userKey;
 }
 
 /** Post a public reply into a thread. Used by handleAppMention so the

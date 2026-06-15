@@ -116,7 +116,10 @@ export function DeliverabilityPanel({
   // through a full reload.
   const [busyPosts, setBusyPosts] = useState<Set<string>>(new Set());
   const [showCleared, setShowCleared] = useState(false);
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [expandedWorkspaces, setExpandedWorkspaces] = useState<Set<string>>(
+    new Set()
+  );
+  const [expandedPosts, setExpandedPosts] = useState<Set<string>>(new Set());
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [outreachFor, setOutreachFor] = useState<{
     customer: Customer;
@@ -186,11 +189,20 @@ export function DeliverabilityPanel({
     }
   }
 
-  function toggle(k: string) {
-    setExpanded((prev) => {
+  function toggleWorkspace(key: string) {
+    setExpandedWorkspaces((prev) => {
       const next = new Set(prev);
-      if (next.has(k)) next.delete(k);
-      else next.add(k);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
+
+  function togglePost(postId: string) {
+    setExpandedPosts((prev) => {
+      const next = new Set(prev);
+      if (next.has(postId)) next.delete(postId);
+      else next.add(postId);
       return next;
     });
   }
@@ -236,6 +248,11 @@ export function DeliverabilityPanel({
     [alerts, showCleared]
   );
 
+  const workspaceGroups = useMemo(
+    () => groupAlertsByWorkspace(visibleAlerts),
+    [visibleAlerts]
+  );
+
   const allPostIds = useMemo(
     () => visibleAlerts.map((a) => a.post.post_id),
     [visibleAlerts]
@@ -254,6 +271,19 @@ export function DeliverabilityPanel({
     }
     return out;
   }, [visibleAlerts, selected, customerByWorkspace]);
+
+  function toggleWorkspaceSelected(postIds: string[]) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      const allSelected = postIds.every((id) => next.has(id));
+      if (allSelected) {
+        for (const id of postIds) next.delete(id);
+      } else {
+        for (const id of postIds) next.add(id);
+      }
+      return next;
+    });
+  }
 
   function toggleSelected(postId: string) {
     setSelected((prev) => {
@@ -317,6 +347,9 @@ export function DeliverabilityPanel({
             <>
               <strong className="text-fg">{visibleAlerts.length}</strong>{" "}
               {showCleared || clearedCount === 0 ? "sends" : "active sends"}
+              {" · "}
+              <strong className="text-fg">{workspaceGroups.length}</strong>{" "}
+              workspace{workspaceGroups.length === 1 ? "" : "s"}
               {" · "}
               {flaggedAll} active alerts
               {carryoverCount > 0 ? (
@@ -466,40 +499,37 @@ export function DeliverabilityPanel({
               </tr>
             </thead>
             <tbody>
-              {visibleAlerts.map((alert, i) => {
-                const k = `${alert.post.post_id}-${i}`;
-                const isOpen = expanded.has(k);
-                const flagged = alert.flags.length > 0;
-                const cleared = Boolean(alert.cleared);
-                const busy = busyPosts.has(alert.post.post_id);
-                const critical =
-                  !cleared && alert.flags.some((f) => f.severity === "critical");
-                // Carryover row: a critical send from an earlier date
-                // that the CSM hasn't cleared yet. The engine carries
-                // these forward across data refreshes so a critical
-                // issue doesn't drop out of view just because today's
-                // data set landed. The badge + sent-date hint signal
-                // "you're seeing this because nobody cleared it yet."
-                const isCarryover = alert.post.sent_date !== data.target_date;
-                const customer = customerByWorkspace.get(
-                  alert.post.organization_id
+              {workspaceGroups.map((group) => {
+                const postIds = group.alerts.map((a) => a.post.post_id);
+                const selectedInGroup = postIds.filter((id) =>
+                  selected.has(id)
+                ).length;
+                const allInGroupSelected =
+                  postIds.length > 0 && selectedInGroup === postIds.length;
+                const someInGroupSelected =
+                  selectedInGroup > 0 && !allInGroupSelected;
+                const isWorkspaceOpen = expandedWorkspaces.has(
+                  group.workspaceId
                 );
+                const status = summarizeWorkspaceAlerts(group.alerts);
+                const metrics = aggregateWorkspaceMetrics(group.alerts);
+                const customer = customerByWorkspace.get(group.workspaceId);
                 const masqUrl = customer?.owner_email
                   ? masqueradeUrl(customer.owner_email)
                   : null;
-                const mbUrl = metabasePubUrl({
-                  workspace_id: alert.post.organization_id,
-                  workspace_name: alert.post.workspace_name,
-                  publication_id: alert.post.publication_id,
-                });
+                const carryoverCount = group.alerts.filter(
+                  (a) =>
+                    !a.cleared && a.post.sent_date !== data.target_date
+                ).length;
+
                 return (
-                  <Fragment key={k}>
+                  <Fragment key={group.workspaceId}>
                     <tr
-                      onClick={() => toggle(k)}
+                      onClick={() => toggleWorkspace(group.workspaceId)}
                       className={`border-b border-border align-top cursor-pointer transition-colors ${
-                        isOpen
-                          ? flagged
-                            ? critical
+                        isWorkspaceOpen
+                          ? status.flagged
+                            ? status.critical
                               ? "bg-red-50 dark:bg-red-500/60"
                               : "bg-amber-50 dark:bg-amber-500/60"
                             : "bg-blue-50 dark:bg-blue-500/30"
@@ -512,16 +542,19 @@ export function DeliverabilityPanel({
                       >
                         <input
                           type="checkbox"
-                          checked={selected.has(alert.post.post_id)}
-                          onChange={() => toggleSelected(alert.post.post_id)}
-                          aria-label={`Select ${alert.post.workspace_name}`}
+                          checked={allInGroupSelected}
+                          ref={(el) => {
+                            if (el) el.indeterminate = someInGroupSelected;
+                          }}
+                          onChange={() => toggleWorkspaceSelected(postIds)}
+                          aria-label={`Select all sends for ${group.workspaceName}`}
                           className="h-3.5 w-3.5 rounded border-border-strong cursor-pointer"
                         />
                       </td>
                       <td className="px-3 py-3 text-subtle select-none">
                         <span
                           className={`inline-block transition-transform ${
-                            isOpen ? "rotate-90" : ""
+                            isWorkspaceOpen ? "rotate-90" : ""
                           }`}
                         >
                           ▸
@@ -529,18 +562,16 @@ export function DeliverabilityPanel({
                       </td>
                       <td className="px-3 py-3">
                         <div className="flex flex-col items-start gap-1">
-                          {cleared ? (
+                          {status.clearedOnly ? (
                             <span
                               className="inline-flex items-center px-1.5 py-0.5 rounded-md text-[11px] font-medium bg-slate-200 text-slate-700 dark:bg-slate-500/30 dark:text-slate-200"
-                              title={`Cleared ${
-                                alert.cleared?.cleared_by ?? ""
-                              } ${alert.cleared?.cleared_at ?? ""}`.trim()}
+                              title="Every send in this workspace has been cleared"
                             >
                               Cleared
                             </span>
-                          ) : flagged ? (
+                          ) : status.flagged ? (
                             <SeverityBadge
-                              severity={critical ? "critical" : "warning"}
+                              severity={status.critical ? "critical" : "warning"}
                             />
                           ) : (
                             <span
@@ -550,52 +581,59 @@ export function DeliverabilityPanel({
                               Clean
                             </span>
                           )}
-                          {isCarryover && !cleared ? (
+                          {status.activeAlertCount > 1 ? (
+                            <span className="text-[10px] text-muted">
+                              {status.activeAlertCount} flagged
+                            </span>
+                          ) : null}
+                          {carryoverCount > 0 ? (
                             <span
                               className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-purple-100 text-purple-800 dark:bg-purple-500/20 dark:text-purple-200"
-                              title="Critical send from an earlier date — carried forward until you clear it so issues don't disappear on data refresh."
+                              title="One or more critical sends from earlier dates carried forward until cleared."
                             >
-                              Carryover
+                              {carryoverCount} carryover
                             </span>
                           ) : null}
                         </div>
                       </td>
                       <td className="px-3 py-3 break-words">
                         <div className="font-medium text-fg">
-                          {alert.post.workspace_name}
+                          {group.workspaceName}
                         </div>
-                        <div className="text-xs text-muted truncate">
-                          {alert.post.newsletter}
+                        <div className="text-xs text-muted">
+                          {group.alerts.length} publication
+                          {group.alerts.length === 1 ? "" : "s"}
                         </div>
-                        {isCarryover ? (
-                          <div
-                            className="text-[10px] text-subtle mt-0.5"
-                            title={`This row's send date is ${alert.post.sent_date} — older than the panel's target date (${data.target_date}). It carried forward because it tripped a critical flag and wasn't cleared.`}
-                          >
-                            Sent {fmtDate(alert.post.sent_date)}
-                          </div>
-                        ) : null}
                       </td>
-                      <td className="px-3 py-3 text-muted italic break-words hidden md:table-cell">
-                        &ldquo;{alert.post.subject}&rdquo;
-                      </td>
-                      <td className="px-3 py-3 text-right tabular-nums">
-                        {fmtNumber(alert.post.sent)}
+                      <td className="px-3 py-3 text-muted hidden md:table-cell break-words">
+                        {status.activeAlertCount > 0 ? (
+                          <span>
+                            {status.activeAlertCount} active alert
+                            {status.activeAlertCount === 1 ? "" : "s"}
+                          </span>
+                        ) : (
+                          <span className="text-subtle italic">
+                            Expand for publication details
+                          </span>
+                        )}
                       </td>
                       <td className="px-3 py-3 text-right tabular-nums">
-                        {fmtPct(alert.post.delivery_rate * 100, 1)}
+                        {fmtNumber(metrics.totalSent)}
                       </td>
                       <td className="px-3 py-3 text-right tabular-nums">
-                        {fmtPct(alert.post.open_rate * 100, 1)}
+                        {fmtPct(metrics.minDelivery * 100, 1)}
+                      </td>
+                      <td className="px-3 py-3 text-right tabular-nums">
+                        {fmtPct(metrics.minOpen * 100, 1)}
                       </td>
                       <td className="px-3 py-3 text-right tabular-nums hidden xl:table-cell">
-                        {fmtPct(alert.post.ctr * 100, 1)}
+                        {fmtPct(metrics.maxCtr * 100, 1)}
                       </td>
                       <td className="px-3 py-3 text-right tabular-nums hidden xl:table-cell">
-                        {fmtRate(alert.post.spam_rate * 100, 3)}%
+                        {fmtRate(metrics.maxSpam * 100, 3)}%
                       </td>
                       <td className="px-3 py-3 text-muted hidden lg:table-cell break-words">
-                        {alert.csm?.replace(/_/g, " ") ?? (
+                        {group.csm?.replace(/_/g, " ") ?? (
                           <span className="text-subtle italic">unassigned</span>
                         )}
                       </td>
@@ -615,18 +653,6 @@ export function DeliverabilityPanel({
                               Masq
                             </a>
                           ) : null}
-                          {mbUrl ? (
-                            <a
-                              href={mbUrl}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              title="Open Metabase dashboard for this publication"
-                              aria-label="Open Metabase"
-                              className="px-2 py-1 text-xs border border-border-strong rounded-md hover:bg-canvas"
-                            >
-                              📊
-                            </a>
-                          ) : null}
                           {customer ? (
                             <button
                               type="button"
@@ -642,64 +668,43 @@ export function DeliverabilityPanel({
                               Draft
                             </button>
                           ) : null}
-                          {flagged ? (
-                            cleared ? (
-                              <button
-                                type="button"
-                                disabled={busy}
-                                onClick={() =>
-                                  void setClearedOptimistic(
-                                    alert.post.post_id,
-                                    false
-                                  )
-                                }
-                                title="Restore this send to the active alerts list."
-                                aria-label="Undo clear"
-                                className="px-2 py-1 text-xs border border-border-strong rounded-md hover:bg-canvas disabled:opacity-50"
-                              >
-                                {busy ? "…" : "Undo"}
-                              </button>
-                            ) : (
-                              <button
-                                type="button"
-                                disabled={busy}
-                                onClick={() => {
-                                  const reason =
-                                    window.prompt(
-                                      "Optional reason for clearing this send (visible to the team). Leave blank to skip."
-                                    ) ?? "";
-                                  void setClearedOptimistic(
-                                    alert.post.post_id,
-                                    true,
-                                    reason || undefined
-                                  );
-                                }}
-                                title="Acknowledge this flagged send and hide it from the active alerts list. Undo from the Show-cleared view."
-                                aria-label="Clear flagged send"
-                                className="px-2 py-1 text-xs border border-border-strong rounded-md hover:bg-canvas disabled:opacity-50"
-                              >
-                                {busy ? "…" : "Clear"}
-                              </button>
-                            )
-                          ) : null}
                         </div>
                       </td>
                     </tr>
-                    {isOpen && (
-                      <tr
-                        className={`border-b border-border ${
-                          flagged
-                            ? critical
-                              ? "bg-red-50 dark:bg-red-500/30"
-                              : "bg-amber-50 dark:bg-amber-500/30"
-                            : "bg-blue-50 dark:bg-blue-500/15"
-                        }`}
-                      >
-                        <td colSpan={12} className="px-6 py-4">
-                          <DeliverabilityDetail alert={alert} />
-                        </td>
-                      </tr>
-                    )}
+                    {isWorkspaceOpen
+                      ? group.alerts.map((alert) => (
+                          <PublicationAlertRows
+                            key={alert.post.post_id}
+                            alert={alert}
+                            targetDate={data.target_date}
+                            selected={selected.has(alert.post.post_id)}
+                            expanded={expandedPosts.has(alert.post.post_id)}
+                            busy={busyPosts.has(alert.post.post_id)}
+                            onToggleSelected={() =>
+                              toggleSelected(alert.post.post_id)
+                            }
+                            onToggleExpanded={() =>
+                              togglePost(alert.post.post_id)
+                            }
+                            onClear={(cleared, reason) =>
+                              void setClearedOptimistic(
+                                alert.post.post_id,
+                                cleared,
+                                reason
+                              )
+                            }
+                            onDraft={
+                              customer
+                                ? () =>
+                                    setOutreachFor({
+                                      customer,
+                                      scenario: "general-checkin",
+                                    })
+                                : undefined
+                            }
+                          />
+                        ))
+                      : null}
                   </Fragment>
                 );
               })}
@@ -709,9 +714,9 @@ export function DeliverabilityPanel({
       )}
 
       <p className="text-xs text-subtle">
-        Every send in scope is listed — flagged rows are sorted to the top.
-        Click any row for a full metric breakdown and flag details. Select
-        rows to bulk-draft, or use <strong>Draft</strong> on a single send.
+        Sends are grouped by workspace — expand a row to see individual
+        publications. Select a workspace checkbox to bulk-select all its
+        sends, or use <strong>Draft</strong> on the workspace row.
       </p>
 
       {outreachFor ? (
@@ -722,6 +727,266 @@ export function DeliverabilityPanel({
         />
       ) : null}
     </div>
+  );
+}
+
+interface WorkspaceGroup {
+  workspaceId: string;
+  workspaceName: string;
+  alerts: DeliverabilityAlert[];
+  csm: string | null;
+}
+
+function workspaceKey(alert: DeliverabilityAlert): string {
+  return (
+    alert.post.organization_id ||
+    alert.post.workspace_name ||
+    alert.post.post_id
+  );
+}
+
+function groupAlertsByWorkspace(alerts: DeliverabilityAlert[]): WorkspaceGroup[] {
+  const map = new Map<string, DeliverabilityAlert[]>();
+  const order: string[] = [];
+  for (const alert of alerts) {
+    const key = workspaceKey(alert);
+    if (!map.has(key)) order.push(key);
+    const list = map.get(key) ?? [];
+    list.push(alert);
+    map.set(key, list);
+  }
+  return order.map((workspaceId) => {
+    const groupAlerts = map.get(workspaceId)!;
+    return {
+      workspaceId,
+      workspaceName: groupAlerts[0].post.workspace_name,
+      alerts: groupAlerts,
+      csm: groupAlerts[0].csm,
+    };
+  });
+}
+
+function summarizeWorkspaceAlerts(alerts: DeliverabilityAlert[]) {
+  const active = alerts.filter((a) => !a.cleared);
+  const flagged = active.filter((a) => a.flags.length > 0);
+  const critical = flagged.some((a) =>
+    a.flags.some((f) => f.severity === "critical")
+  );
+  return {
+    clearedOnly: active.length === 0 && alerts.length > 0,
+    flagged: flagged.length > 0,
+    critical,
+    activeAlertCount: flagged.length,
+  };
+}
+
+function aggregateWorkspaceMetrics(alerts: DeliverabilityAlert[]) {
+  if (alerts.length === 0) {
+    return {
+      totalSent: 0,
+      minDelivery: 0,
+      minOpen: 0,
+      maxCtr: 0,
+      maxSpam: 0,
+    };
+  }
+  return {
+    totalSent: alerts.reduce((sum, a) => sum + a.post.sent, 0),
+    minDelivery: Math.min(...alerts.map((a) => a.post.delivery_rate)),
+    minOpen: Math.min(...alerts.map((a) => a.post.open_rate)),
+    maxCtr: Math.max(...alerts.map((a) => a.post.ctr)),
+    maxSpam: Math.max(...alerts.map((a) => a.post.spam_rate)),
+  };
+}
+
+function PublicationAlertRows({
+  alert,
+  targetDate,
+  selected,
+  expanded,
+  busy,
+  onToggleSelected,
+  onToggleExpanded,
+  onClear,
+  onDraft,
+}: {
+  alert: DeliverabilityAlert;
+  targetDate: string;
+  selected: boolean;
+  expanded: boolean;
+  busy: boolean;
+  onToggleSelected: () => void;
+  onToggleExpanded: () => void;
+  onClear: (cleared: boolean, reason?: string) => void;
+  onDraft?: () => void;
+}) {
+  const flagged = alert.flags.length > 0;
+  const cleared = Boolean(alert.cleared);
+  const critical =
+    !cleared && alert.flags.some((f) => f.severity === "critical");
+  const isCarryover = alert.post.sent_date !== targetDate;
+  const mbUrl = metabasePubUrl({
+    workspace_id: alert.post.organization_id,
+    workspace_name: alert.post.workspace_name,
+    publication_id: alert.post.publication_id,
+  });
+
+  return (
+    <Fragment>
+      <tr
+        onClick={onToggleExpanded}
+        className={`border-b border-border/60 align-top cursor-pointer transition-colors bg-canvas/20 ${
+          expanded
+            ? flagged
+              ? critical
+                ? "bg-red-50/80 dark:bg-red-500/40"
+                : "bg-amber-50/80 dark:bg-amber-500/40"
+              : "bg-blue-50/60 dark:bg-blue-500/20"
+            : "hover:bg-canvas/50"
+        }`}
+      >
+        <td
+          className="px-3 py-2 text-subtle select-none"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <input
+            type="checkbox"
+            checked={selected}
+            onChange={onToggleSelected}
+            aria-label={`Select ${alert.post.newsletter}`}
+            className="h-3.5 w-3.5 rounded border-border-strong cursor-pointer"
+          />
+        </td>
+        <td className="px-3 py-2 text-subtle select-none pl-5">
+          <span
+            className={`inline-block transition-transform ${
+              expanded ? "rotate-90" : ""
+            }`}
+          >
+            ▸
+          </span>
+        </td>
+        <td className="px-3 py-2">
+          <div className="flex flex-col items-start gap-1">
+            {cleared ? (
+              <span className="inline-flex items-center px-1.5 py-0.5 rounded-md text-[11px] font-medium bg-slate-200 text-slate-700 dark:bg-slate-500/30 dark:text-slate-200">
+                Cleared
+              </span>
+            ) : flagged ? (
+              <SeverityBadge severity={critical ? "critical" : "warning"} />
+            ) : (
+              <span className="inline-flex items-center px-1.5 py-0.5 rounded-md text-[11px] font-medium bg-green-100 text-green-800 dark:bg-green-500/20 dark:text-green-200">
+                Clean
+              </span>
+            )}
+            {isCarryover && !cleared ? (
+              <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-purple-100 text-purple-800 dark:bg-purple-500/20 dark:text-purple-200">
+                Carryover
+              </span>
+            ) : null}
+          </div>
+        </td>
+        <td className="px-3 py-2 break-words pl-5">
+          <div className="font-medium text-fg">{alert.post.newsletter}</div>
+          {isCarryover ? (
+            <div className="text-[10px] text-subtle mt-0.5">
+              Sent {fmtDate(alert.post.sent_date)}
+            </div>
+          ) : null}
+        </td>
+        <td className="px-3 py-2 text-muted italic break-words hidden md:table-cell">
+          &ldquo;{alert.post.subject}&rdquo;
+        </td>
+        <td className="px-3 py-2 text-right tabular-nums">
+          {fmtNumber(alert.post.sent)}
+        </td>
+        <td className="px-3 py-2 text-right tabular-nums">
+          {fmtPct(alert.post.delivery_rate * 100, 1)}
+        </td>
+        <td className="px-3 py-2 text-right tabular-nums">
+          {fmtPct(alert.post.open_rate * 100, 1)}
+        </td>
+        <td className="px-3 py-2 text-right tabular-nums hidden xl:table-cell">
+          {fmtPct(alert.post.ctr * 100, 1)}
+        </td>
+        <td className="px-3 py-2 text-right tabular-nums hidden xl:table-cell">
+          {fmtRate(alert.post.spam_rate * 100, 3)}%
+        </td>
+        <td className="px-3 py-2 hidden lg:table-cell" />
+        <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
+          <div className="flex items-center gap-1 justify-end">
+            {mbUrl ? (
+              <a
+                href={mbUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                title="Open Metabase dashboard for this publication"
+                aria-label="Open Metabase"
+                className="px-2 py-1 text-xs border border-border-strong rounded-md hover:bg-canvas"
+              >
+                📊
+              </a>
+            ) : null}
+            {onDraft ? (
+              <button
+                type="button"
+                onClick={onDraft}
+                title="Draft outreach email"
+                className="px-2 py-1 text-xs border border-border-strong rounded-md hover:bg-canvas"
+              >
+                Draft
+              </button>
+            ) : null}
+            {flagged ? (
+              cleared ? (
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => onClear(false)}
+                  title="Restore this send to the active alerts list."
+                  aria-label="Undo clear"
+                  className="px-2 py-1 text-xs border border-border-strong rounded-md hover:bg-canvas disabled:opacity-50"
+                >
+                  {busy ? "…" : "Undo"}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => {
+                    const reason =
+                      window.prompt(
+                        "Optional reason for clearing this send (visible to the team). Leave blank to skip."
+                      ) ?? "";
+                    onClear(true, reason || undefined);
+                  }}
+                  title="Acknowledge this flagged send and hide it from the active alerts list."
+                  aria-label="Clear flagged send"
+                  className="px-2 py-1 text-xs border border-border-strong rounded-md hover:bg-canvas disabled:opacity-50"
+                >
+                  {busy ? "…" : "Clear"}
+                </button>
+              )
+            ) : null}
+          </div>
+        </td>
+      </tr>
+      {expanded ? (
+        <tr
+          className={`border-b border-border/60 ${
+            flagged
+              ? critical
+                ? "bg-red-50/60 dark:bg-red-500/25"
+                : "bg-amber-50/60 dark:bg-amber-500/25"
+              : "bg-blue-50/40 dark:bg-blue-500/10"
+          }`}
+        >
+          <td colSpan={12} className="px-6 py-3 bg-canvas/20">
+            <DeliverabilityDetail alert={alert} />
+          </td>
+        </tr>
+      ) : null}
+    </Fragment>
   );
 }
 

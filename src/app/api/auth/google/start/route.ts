@@ -18,6 +18,12 @@ const CORE_SCOPES = [
   // Until a CSM reconsents with this scope, the dashboard falls back
   // to the HubSpot-derived last-contacted value with no broken state.
   "https://www.googleapis.com/auth/gmail.readonly",
+  // drive.file lets the @bot assign flow create + read the per-
+  // assignment folder under the shared parent without granting
+  // access to the rest of the user's Drive. Until a CSM reconsents,
+  // the Slack flow falls back to skipping the folder step with a
+  // clear "reconnect Google" link in the modal's response.
+  "https://www.googleapis.com/auth/drive.file",
 ];
 
 /** Optional scope added later for alias auto-discovery. Has to be
