@@ -32,6 +32,10 @@ import { loadCustomers } from "../data/load-customers";
 import { masqueradeUrl, stripeCustomerUrl } from "../links";
 import { DB, runNativeQuery } from "../metabase";
 import type { Customer } from "../types";
+import {
+  ASSIGN_MODAL_CALLBACK_ID,
+  assignModalHandler,
+} from "./slack-assign";
 
 // ─── Generic view-submission contract ─────────────────────────────────
 
@@ -372,6 +376,7 @@ export async function dispatchViewSubmission(
     [TODO_CREATE_CALLBACK_ID]: todoCreateHandler,
     [HUBSPOT_UPDATE_CSM_CALLBACK_ID]: hubspotUpdateCsmHandler,
     [FIND_CUSTOMER_VIEW_CALLBACK_ID]: findCustomerSubmitHandler,
+    [ASSIGN_MODAL_CALLBACK_ID]: assignModalHandler,
   };
   const handler = handlers[payload.view.callback_id];
   if (!handler) {
