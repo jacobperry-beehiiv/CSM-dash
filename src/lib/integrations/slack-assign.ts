@@ -28,7 +28,7 @@
  */
 
 import { loadCustomers } from "../data/load-customers";
-import { applyTodoOps } from "../personal-todos/store";
+import { applyTodoOps, getTodosForUser } from "../personal-todos/store";
 import { userKeyFromEmail } from "../personal-todos/identity";
 import { newTodoId, type PersonalTodo } from "../personal-todos/types";
 import {
@@ -496,21 +496,46 @@ export const assignModalHandler: ViewSubmitHandler = async ({ payload }) => {
   // ── Personal to-do sequence for the assigned CSM (gated on HubSpot).
   const todoErrors: string[] = [];
   let todoCount = 0;
+  // True when we found an existing batch for this CSM + company; the
+  // re-run becomes a no-op for to-dos and the response says so.
+  let todoSkippedAsDuplicate = false;
   if (hubspotOk) {
     try {
       const targetUserKey = userKeyFromEmail(v.ownerEmail);
-      const todos = buildAssignTodoSequence({
-        companyName,
-        hubspotCompanyId: company.id,
-        requesterEmail: requesterEmail || "a teammate",
-        flow: v.status,
-        slackUserId: payload.user.id,
-      });
-      await applyTodoOps(
-        targetUserKey,
-        todos.map((todo) => ({ type: "add" as const, todo }))
+      // Idempotency check: scan the target user's open to-dos for an
+      // existing assign-playbook batch for this same HubSpot company.
+      // If we find one, skip the whole batch — the CSM doesn't want
+      // 32 to-dos for the same onboarding. Completed to-dos don't
+      // block (re-onboarding a previously-completed account gets a
+      // fresh batch).
+      const existing = await getTodosForUser(targetUserKey);
+      const openMatches = existing.filter(
+        (t) =>
+          t.source === "slack_assign" &&
+          t.source_meta?.hubspot_company_id === company.id &&
+          t.completed_at === null
       );
-      todoCount = todos.length;
+      if (openMatches.length > 0) {
+        todoSkippedAsDuplicate = true;
+        console.log("[slack-assign] dedupe hit — skipping to-do batch", {
+          targetUserKey,
+          hubspot_company_id: company.id,
+          existingOpen: openMatches.length,
+        });
+      } else {
+        const todos = buildAssignTodoSequence({
+          companyName,
+          hubspotCompanyId: company.id,
+          requesterEmail: requesterEmail || "a teammate",
+          flow: v.status,
+          slackUserId: payload.user.id,
+        });
+        await applyTodoOps(
+          targetUserKey,
+          todos.map((todo) => ({ type: "add" as const, todo }))
+        );
+        todoCount = todos.length;
+      }
     } catch (e) {
       todoErrors.push(e instanceof Error ? e.message : String(e));
     }
@@ -569,6 +594,7 @@ export const assignModalHandler: ViewSubmitHandler = async ({ payload }) => {
       assignedCsmEmail: v.ownerEmail,
       status: v.status,
       todoCount,
+      todoSkippedAsDuplicate,
       hubspotErrors,
       todoErrors,
       driveResult,
@@ -601,6 +627,10 @@ export const assignModalHandler: ViewSubmitHandler = async ({ payload }) => {
   if (hubspotErrors.length) ackParts.push(`⚠ HubSpot PATCH: ${hubspotErrors.join(" · ")}`);
   if (todoErrors.length) {
     ackParts.push(`⚠ To-dos: ${todoErrors.join(" · ")}`);
+  } else if (todoSkippedAsDuplicate) {
+    ackParts.push(
+      "• To-do batch already on their list for this company — left as-is to avoid duplicates."
+    );
   } else {
     ackParts.push(`• ${todoCount} to-do${todoCount === 1 ? "" : "s"} scheduled on their list.`);
   }
@@ -815,8 +845,14 @@ function buildAssignTodoSequence(args: {
       // Non-zero → hide until that date.
       surface_at: tpl.surface_offset_days > 0 ? surfaceAt : null,
       priority: null,
-      source: "slack_slash",
-      source_meta: { slack_user_id: args.slackUserId },
+      source: "slack_assign",
+      source_meta: {
+        slack_user_id: args.slackUserId,
+        // Idempotency key — a re-run of `@bot assign` for the same
+        // company on the same CSM detects this and skips rather than
+        // duplicating the whole batch.
+        hubspot_company_id: args.hubspotCompanyId,
+      },
       completed_at: null,
       remind_via_slack: true,
       created_at: nowIso,
@@ -841,6 +877,9 @@ async function postAssignmentSummary(args: {
   assignedCsmEmail: string;
   status: AccountStatus;
   todoCount: number;
+  /** True when the dedupe check found an existing open assign batch
+   *  for this company on the target user and we left it alone. */
+  todoSkippedAsDuplicate: boolean;
   hubspotErrors: string[];
   todoErrors: string[];
   driveResult:
@@ -885,9 +924,15 @@ async function postAssignmentSummary(args: {
     lines.push(`• ⚠ HubSpot: ${args.hubspotErrors.join(" · ")}`);
   }
   if (args.todoErrors.length === 0) {
-    lines.push(
-      `• ${args.todoCount} to-do${args.todoCount === 1 ? "" : "s"} scheduled on their list (surface dates staggered).`
-    );
+    if (args.todoSkippedAsDuplicate) {
+      lines.push(
+        "• To-do batch already on their list for this company — left as-is to avoid duplicates."
+      );
+    } else {
+      lines.push(
+        `• ${args.todoCount} to-do${args.todoCount === 1 ? "" : "s"} scheduled on their list (surface dates staggered).`
+      );
+    }
   } else {
     lines.push(`• ⚠ To-dos: ${args.todoErrors.join(" · ")}`);
   }

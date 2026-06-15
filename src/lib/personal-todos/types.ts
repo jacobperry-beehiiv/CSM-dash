@@ -20,7 +20,12 @@ export type TodoSource =
   | "slack_dm"
   | "slack_reaction"
   | "scheduled"
-  | "feature_request";
+  | "feature_request"
+  /** Auto-scheduled batch from the @bot assign onboarding playbook.
+   *  Used as a dedupe key: a re-run of `@bot assign` for the same
+   *  HubSpot company on the same CSM is detected by looking up todos
+   *  with this source + matching source_meta.hubspot_company_id. */
+  | "slack_assign";
 
 /** Slack-side provenance carried on rows created from Slack. Filled in
  *  by the inbound webhook so the UI can render a "↗ View in Slack"
@@ -34,6 +39,11 @@ export interface SlackSourceMeta {
    *  the title from. Persisted so the UI can show "via DM: …" without
    *  hitting Slack again. */
   original_text?: string;
+  /** For source === "slack_assign": stable HubSpot company id this
+   *  to-do belongs to. The @bot assign flow checks this before
+   *  scheduling its 16-step onboarding playbook so a re-run for the
+   *  same company doesn't duplicate every to-do. */
+  hubspot_company_id?: string;
 }
 
 export interface PersonalTodo {
