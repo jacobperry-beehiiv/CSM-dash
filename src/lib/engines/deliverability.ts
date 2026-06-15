@@ -398,7 +398,14 @@ export interface DeliverabilityRunResult {
   total_posts_yesterday: number;
   total_enterprise_posts: number;
   alerts: DeliverabilityAlert[];
+  /** When this engine run was computed (current request time). */
   generated_at: string;
+  /** When the underlying snapshot was last written by sync.ts. Null
+   *  when running off a live fetch (local dev pre-sync). Powers the
+   *  freshness indicator in the panel header so a stale snapshot
+   *  isn't silently misleading — see the daily 08/16 UTC cron in
+   *  .github/workflows/sync-data.yml. */
+  snapshot_generated_at: string | null;
 }
 
 // In-process cache so repeat hits within the same isolate are
@@ -413,6 +420,9 @@ interface CacheEntry {
      *  snapshot. The engine uses this to decide whether to skip
      *  the runtime overlay for a given target date. */
     spamDates: Set<string>;
+    /** Snapshot mtime as recorded by sync.ts. Null when the engine
+     *  falls back to a live fetch (no snapshot on disk). */
+    snapshotGeneratedAt: string | null;
   }>;
 }
 const runCache = new Map<string, CacheEntry>();
@@ -503,7 +513,11 @@ function spamForDate(
  */
 async function getJoinedPosts(
   lookback: number
-): Promise<{ posts: PostMetricsRow[]; spamDates: Set<string> }> {
+): Promise<{
+  posts: PostMetricsRow[];
+  spamDates: Set<string>;
+  snapshotGeneratedAt: string | null;
+}> {
   const snap = await readDeliverabilitySnapshot();
   if (snap && Array.isArray(snap.posts)) {
     return {
@@ -512,12 +526,17 @@ async function getJoinedPosts(
       // change. Treat missing as "no pre-computed coverage" so the
       // runtime overlay kicks in everywhere — safe default.
       spamDates: new Set(snap.spam_dates ?? []),
+      snapshotGeneratedAt: snap.generated_at ?? null,
     };
   }
   // No snapshot — fall back to a live fetch. Slow path, but keeps
   // local dev working before `npm run sync` has been run.
   const result = await fetchDeliverabilityPosts(lookback);
-  return { posts: result.posts, spamDates: new Set(result.spam_dates) };
+  return {
+    posts: result.posts,
+    spamDates: new Set(result.spam_dates),
+    snapshotGeneratedAt: null,
+  };
 }
 
 export async function runDeliverabilityCheck(
@@ -543,13 +562,15 @@ export async function runDeliverabilityCheck(
           joinedPosts: snap.posts,
           csmByOrg,
           spamDates: snap.spamDates,
+          snapshotGeneratedAt: snap.snapshotGeneratedAt,
         };
       })(),
     };
     runCache.set(cacheKey, entry);
   }
 
-  const { joinedPosts, csmByOrg, spamDates } = await entry.pending;
+  const { joinedPosts, csmByOrg, spamDates, snapshotGeneratedAt } =
+    await entry.pending;
 
   let targetPosts = joinedPosts.filter((p) => p.sent_date === targetDate);
 
@@ -605,27 +626,27 @@ export async function runDeliverabilityCheck(
   }
 
   // Carryover pass: scan the rest of the lookback window for any
-  // posts with a CRITICAL flag that the CSM hasn't cleared yet, and
-  // surface them alongside the target-date alerts. This stops
-  // critical sends from silently disappearing on the next data
-  // refresh — CSMs explicitly clear-out a critical row when they're
-  // done triaging it (the engine respects that), but as long as it's
-  // uncleared, the row sticks around in the panel.
+  // FLAGGED post (critical OR warning) that the CSM hasn't cleared
+  // yet, and surface it alongside the target-date alerts. Anything
+  // that tripped a threshold sticks around until a CSM explicitly
+  // clears it — that includes warning-band sends (e.g. delivery
+  // between 0.95 and 0.97) which used to silently drop off because
+  // the gate was critical-only. The user-reported "low delivery
+  // rate but not flagged here" Hospitality Headline incident traced
+  // back to exactly that gap.
   //
-  // Non-critical sends DO NOT carry over — they refresh with the
-  // target date. Same for cleared criticals; once a CSM acks them,
-  // the next render drops them from the active list (still visible
-  // behind "Show cleared" if they need a peek).
+  // Clean sends (no flags) still DO NOT carry over — they refresh
+  // with the target date. Cleared flagged sends also drop out of the
+  // active list (still visible behind "Show cleared").
   for (const post of joinedPosts) {
     if (post.sent_date === targetDate) continue; // already handled
     if (seenPostIds.has(post.post_id)) continue; // dedupe defensive
     const ownerCsm = csmByOrg.get(post.organization_id) ?? null;
     if (csmName && ownerCsm !== csmName) continue;
     const cleared = clearedByPost[post.post_id] ?? null;
-    if (cleared) continue; // cleared criticals don't follow forward
+    if (cleared) continue; // cleared sends don't follow forward
     const flags = analyzePost(post);
-    const hasCritical = flags.some((f) => f.severity === "critical");
-    if (!hasCritical) continue;
+    if (flags.length === 0) continue; // clean send — refreshes with target_date
     alerts.push({ post, flags, csm: ownerCsm, cleared: null });
     seenPostIds.add(post.post_id);
   }
@@ -646,5 +667,6 @@ export async function runDeliverabilityCheck(
     total_enterprise_posts: joinedPosts.length,
     alerts,
     generated_at: new Date().toISOString(),
+    snapshot_generated_at: snapshotGeneratedAt,
   };
 }

@@ -6,8 +6,13 @@ name: sync-data
 # with the fresh data.
 #
 # Trigger:
-#   • automatically twice daily (08:00 and 16:00 UTC, weekdays)
+#   • automatically twice daily (08:00 and 16:00 UTC, every day of the week)
 #   • manually via the "Run workflow" button on this workflow's page
+#
+# Weekends matter: Enterprise customers send on Saturday and Sunday
+# too, and the Deliverability tab reads exclusively from the committed
+# snapshot. A weekday-only cadence made weekend sends invisible until
+# Monday morning, which masked real low-deliverability incidents.
 #
 # Required repo secrets:
 #   • METABASE_API_KEY
@@ -20,8 +25,9 @@ name: sync-data
 on:
   workflow_dispatch:
   schedule:
-    # Twice daily on weekdays — morning + early afternoon ET-ish.
-    - cron: "0 8,16 * * 1-5"
+    # Twice daily, every day of the week — morning + early afternoon
+    # ET-ish. Weekend coverage is intentional; see header comment.
+    - cron: "0 8,16 * * *"
 
 permissions:
   # We need write access to push the encrypted snapshot back to the repo.
