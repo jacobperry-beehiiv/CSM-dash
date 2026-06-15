@@ -28,7 +28,7 @@
  */
 
 import { loadCustomers } from "../data/load-customers";
-import { applyTodoOps } from "../personal-todos/store";
+import { applyTodoOps, getTodosForUser } from "../personal-todos/store";
 import { userKeyFromEmail } from "../personal-todos/identity";
 import { newTodoId, type PersonalTodo } from "../personal-todos/types";
 import {
@@ -51,8 +51,17 @@ import { getTextValue, getSelectValue } from "./slack-views";
 export const ASSIGN_OPEN_BUTTON_ACTION_ID = "assign_open_modal";
 export const ASSIGN_MODAL_CALLBACK_ID = "assign_modal";
 
-const HUBSPOT_RISK_LEVEL_PROPERTY = "property_risk_level_csm_";
-const HUBSPOT_STATUS_PROPERTY = "property_company_status";
+/** HubSpot's internal property names — NOT the q10600 column names.
+ *  q10600 (via Metabase's data model) surfaces these with a
+ *  `property_` prefix and single underscores; the actual HubSpot
+ *  REST API uses the raw HubSpot internal names (verified via the
+ *  HubSpot properties endpoint).
+ *
+ *  Risk level: enum (Red / Yellow / Light Green / Green).
+ *  Company status: enum (Onboarding / Live / Churned (off beehiiv) /
+ *    Downgraded (on beehiiv) / Do Not Use (Awaiting Onboarding)). */
+const HUBSPOT_RISK_LEVEL_PROPERTY = "risk_level__csm_";
+const HUBSPOT_STATUS_PROPERTY = "company_status";
 const DEFAULT_RISK_LEVEL = "Light Green";
 
 const STATUS_VALUES = ["Live", "Onboarding"] as const;
@@ -466,7 +475,12 @@ export const assignModalHandler: ViewSubmitHandler = async ({ payload }) => {
   }
   const requesterEmail = threadContext?.requester_user || "";
 
-  // ── HubSpot PATCH — owner + status + risk in one call.
+  // ── HubSpot PATCH — owner + status + risk in one call. This is the
+  // gate for everything downstream: if the assignment didn't land in
+  // HubSpot, there's nothing real to schedule to-dos or build a Drive
+  // folder for. The to-do batch + Drive folder steps are skipped in
+  // that case so we don't strand 17 to-dos against a customer whose
+  // owner reassignment never took.
   const hubspotErrors: string[] = [];
   try {
     await patchHubspotCompanyProperties(company.id, {
@@ -477,34 +491,69 @@ export const assignModalHandler: ViewSubmitHandler = async ({ payload }) => {
   } catch (e) {
     hubspotErrors.push(e instanceof Error ? e.message : String(e));
   }
+  const hubspotOk = hubspotErrors.length === 0;
 
-  // ── Personal to-do sequence for the assigned CSM.
+  // ── Personal to-do sequence for the assigned CSM (gated on HubSpot).
   const todoErrors: string[] = [];
   let todoCount = 0;
-  try {
-    const targetUserKey = userKeyFromEmail(v.ownerEmail);
-    const todos = buildAssignTodoSequence({
-      companyName,
-      hubspotCompanyId: company.id,
-      requesterEmail: requesterEmail || "a teammate",
-      flow: v.status,
-      slackUserId: payload.user.id,
-    });
-    await applyTodoOps(
-      targetUserKey,
-      todos.map((todo) => ({ type: "add" as const, todo }))
-    );
-    todoCount = todos.length;
-  } catch (e) {
-    todoErrors.push(e instanceof Error ? e.message : String(e));
+  // True when we found an existing batch for this CSM + company; the
+  // re-run becomes a no-op for to-dos and the response says so.
+  let todoSkippedAsDuplicate = false;
+  if (hubspotOk) {
+    try {
+      const targetUserKey = userKeyFromEmail(v.ownerEmail);
+      // Idempotency check: scan the target user's open to-dos for an
+      // existing assign-playbook batch for this same HubSpot company.
+      // If we find one, skip the whole batch — the CSM doesn't want
+      // 32 to-dos for the same onboarding. Completed to-dos don't
+      // block (re-onboarding a previously-completed account gets a
+      // fresh batch).
+      const existing = await getTodosForUser(targetUserKey);
+      const openMatches = existing.filter(
+        (t) =>
+          t.source === "slack_assign" &&
+          t.source_meta?.hubspot_company_id === company.id &&
+          t.completed_at === null
+      );
+      if (openMatches.length > 0) {
+        todoSkippedAsDuplicate = true;
+        console.log("[slack-assign] dedupe hit — skipping to-do batch", {
+          targetUserKey,
+          hubspot_company_id: company.id,
+          existingOpen: openMatches.length,
+        });
+      } else {
+        const todos = buildAssignTodoSequence({
+          companyName,
+          hubspotCompanyId: company.id,
+          requesterEmail: requesterEmail || "a teammate",
+          flow: v.status,
+          slackUserId: payload.user.id,
+        });
+        await applyTodoOps(
+          targetUserKey,
+          todos.map((todo) => ({ type: "add" as const, todo }))
+        );
+        todoCount = todos.length;
+      }
+    } catch (e) {
+      todoErrors.push(e instanceof Error ? e.message : String(e));
+    }
+  } else {
+    todoErrors.push("skipped — HubSpot PATCH failed");
   }
 
-  // ── Drive folder.
+  // ── Drive folder (gated on HubSpot).
   let driveResult:
     | { ok: true; id: string; webViewLink: string; name: string }
     | { ok: false; error: string } = { ok: false, error: "skipped" };
 
-  if (requesterEmail) {
+  if (!hubspotOk) {
+    driveResult = {
+      ok: false,
+      error: "skipped — HubSpot PATCH failed",
+    };
+  } else if (requesterEmail) {
     try {
       if (!(await hasDriveAccess(requesterEmail))) {
         driveResult = {
@@ -545,6 +594,7 @@ export const assignModalHandler: ViewSubmitHandler = async ({ payload }) => {
       assignedCsmEmail: v.ownerEmail,
       status: v.status,
       todoCount,
+      todoSkippedAsDuplicate,
       hubspotErrors,
       todoErrors,
       driveResult,
@@ -552,11 +602,19 @@ export const assignModalHandler: ViewSubmitHandler = async ({ payload }) => {
     });
   }
 
-  // ── DM ack.
-  const ackParts: string[] = [
-    `:white_check_mark: Assigned *${companyName}* to *${v.ownerEmail}* (${v.status}).`,
-    `• HubSpot: <https://app.hubspot.com/contacts/0/record/0-2/${company.id}|company record> — owner + status + risk (Light Green) set.`,
-  ];
+  // ── DM ack. Headline reflects whether HubSpot landed — when it
+  // failed, the assignment never actually took, so leading with a
+  // green check would lie about what happened.
+  const ackParts: string[] = hubspotOk
+    ? [
+        `:white_check_mark: Assigned *${companyName}* to *${v.ownerEmail}* (${v.status}).`,
+        `• HubSpot: <https://app.hubspot.com/contacts/0/record/0-2/${company.id}|company record> — owner + status + risk (Light Green) set.`,
+      ]
+    : [
+        `:x: Assignment did NOT land — HubSpot PATCH failed for *${companyName}*.`,
+        `• Nothing else was applied (no to-dos, no Drive folder) since the HubSpot reassignment didn't take.`,
+        `• HubSpot record: <https://app.hubspot.com/contacts/0/record/0-2/${company.id}|company record>`,
+      ];
   if (dealResolution) {
     const extras = dealResolution.otherCompanyCount;
     ackParts.push(
@@ -569,6 +627,10 @@ export const assignModalHandler: ViewSubmitHandler = async ({ payload }) => {
   if (hubspotErrors.length) ackParts.push(`⚠ HubSpot PATCH: ${hubspotErrors.join(" · ")}`);
   if (todoErrors.length) {
     ackParts.push(`⚠ To-dos: ${todoErrors.join(" · ")}`);
+  } else if (todoSkippedAsDuplicate) {
+    ackParts.push(
+      "• To-do batch already on their list for this company — left as-is to avoid duplicates."
+    );
   } else {
     ackParts.push(`• ${todoCount} to-do${todoCount === 1 ? "" : "s"} scheduled on their list.`);
   }
@@ -783,8 +845,14 @@ function buildAssignTodoSequence(args: {
       // Non-zero → hide until that date.
       surface_at: tpl.surface_offset_days > 0 ? surfaceAt : null,
       priority: null,
-      source: "slack_slash",
-      source_meta: { slack_user_id: args.slackUserId },
+      source: "slack_assign",
+      source_meta: {
+        slack_user_id: args.slackUserId,
+        // Idempotency key — a re-run of `@bot assign` for the same
+        // company on the same CSM detects this and skips rather than
+        // duplicating the whole batch.
+        hubspot_company_id: args.hubspotCompanyId,
+      },
       completed_at: null,
       remind_via_slack: true,
       created_at: nowIso,
@@ -809,6 +877,9 @@ async function postAssignmentSummary(args: {
   assignedCsmEmail: string;
   status: AccountStatus;
   todoCount: number;
+  /** True when the dedupe check found an existing open assign batch
+   *  for this company on the target user and we left it alone. */
+  todoSkippedAsDuplicate: boolean;
   hubspotErrors: string[];
   todoErrors: string[];
   driveResult:
@@ -822,10 +893,22 @@ async function postAssignmentSummary(args: {
 }): Promise<void> {
   const token = process.env.SLACK_BOT_TOKEN;
   if (!token) return;
+  const hubspotOk = args.hubspotErrors.length === 0;
   const lines: string[] = [];
-  lines.push(
-    `:white_check_mark: *<https://app.hubspot.com/contacts/0/record/0-2/${args.hubspotCompanyId}|${args.companyName}>* assigned to *${args.assignedCsmEmail}* (${args.status}).`
-  );
+  // When HubSpot fails the assignment never actually landed — the
+  // headline reflects that so the thread doesn't read as a success.
+  if (hubspotOk) {
+    lines.push(
+      `:white_check_mark: *<https://app.hubspot.com/contacts/0/record/0-2/${args.hubspotCompanyId}|${args.companyName}>* assigned to *${args.assignedCsmEmail}* (${args.status}).`
+    );
+  } else {
+    lines.push(
+      `:x: Assignment did NOT land — HubSpot PATCH failed for *<https://app.hubspot.com/contacts/0/record/0-2/${args.hubspotCompanyId}|${args.companyName}>*.`
+    );
+    lines.push(
+      "• To-dos + Drive folder were skipped (no point scheduling them when the HubSpot reassignment didn't take)."
+    );
+  }
   if (args.dealResolution) {
     const extras = args.dealResolution.otherCompanyCount;
     lines.push(
@@ -841,9 +924,15 @@ async function postAssignmentSummary(args: {
     lines.push(`• ⚠ HubSpot: ${args.hubspotErrors.join(" · ")}`);
   }
   if (args.todoErrors.length === 0) {
-    lines.push(
-      `• ${args.todoCount} to-do${args.todoCount === 1 ? "" : "s"} scheduled on their list (surface dates staggered).`
-    );
+    if (args.todoSkippedAsDuplicate) {
+      lines.push(
+        "• To-do batch already on their list for this company — left as-is to avoid duplicates."
+      );
+    } else {
+      lines.push(
+        `• ${args.todoCount} to-do${args.todoCount === 1 ? "" : "s"} scheduled on their list (surface dates staggered).`
+      );
+    }
   } else {
     lines.push(`• ⚠ To-dos: ${args.todoErrors.join(" · ")}`);
   }
