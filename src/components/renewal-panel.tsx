@@ -13,6 +13,7 @@ import { useUrlSearch } from "@/lib/hooks/use-url-search";
 import { usePublicationsIndex } from "@/lib/hooks/use-publications-index";
 import {
   DEFAULT_LIFECYCLE_STAGES,
+  resolveLifecycleStages,
   type SettingsShape,
 } from "@/lib/data/settings-types";
 import type { OverrideMap } from "@/lib/data/customer-overrides";
@@ -138,11 +139,11 @@ export function RenewalPanel({ customers, csms }: Props) {
       .then((r) => (r.ok ? r.json() : null))
       .then((j) => j && setOverrides(j as OverrideMap))
       .catch(() => {});
-    fetch("/api/settings")
+    fetch("/api/settings", { cache: "no-store" })
       .then((r) => (r.ok ? r.json() : null))
       .then((j) => {
         const s = (j as SettingsShape | null)?.am?.lifecycle_stages;
-        if (Array.isArray(s) && s.length > 0) setLifecycleOptions(s);
+        setLifecycleOptions(resolveLifecycleStages(s));
       })
       .catch(() => {});
     fetch("/api/review-states")
