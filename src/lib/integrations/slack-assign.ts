@@ -62,6 +62,18 @@ export const ASSIGN_MODAL_CALLBACK_ID = "assign_modal";
  *    Downgraded (on beehiiv) / Do Not Use (Awaiting Onboarding)). */
 const HUBSPOT_RISK_LEVEL_PROPERTY = "risk_level__csm_";
 const HUBSPOT_STATUS_PROPERTY = "company_status";
+/** beehiiv's CSM-team custom property — enumeration keyed by the
+ *  same HubSpot owner_id values as `hubspot_owner_id`, but they're
+ *  separate fields. The dashboard's CSM column (via q10600) reads
+ *  from THIS property, not from `hubspot_owner_id`, so setting only
+ *  the standard owner would leave the CSM column unchanged after
+ *  the next sync. */
+const HUBSPOT_CSM_PROPERTY = "customer_success_manager";
+/** Matching string property for the CSM's email. The dashboard reads
+ *  this as `customer_success_manager_email` (Metabase aliases it),
+ *  and the userKey resolution + Slack mention rendering both depend
+ *  on it being populated. */
+const HUBSPOT_CSM_EMAIL_PROPERTY = "owner_email__csm_";
 const DEFAULT_RISK_LEVEL = "Light Green";
 
 const STATUS_VALUES = ["Live", "Onboarding"] as const;
@@ -484,7 +496,14 @@ export const assignModalHandler: ViewSubmitHandler = async ({ payload }) => {
   const hubspotErrors: string[] = [];
   try {
     await patchHubspotCompanyProperties(company.id, {
+      // Standard HubSpot owner — drives task assignment + workflows.
       hubspot_owner_id: v.ownerId,
+      // beehiiv CSM custom property (same enum as hubspot_owner_id;
+      // the dashboard's CSM column reads from THIS one).
+      [HUBSPOT_CSM_PROPERTY]: v.ownerId,
+      // Matching email custom property — keeps the dashboard's
+      // customer_success_manager_email column populated.
+      [HUBSPOT_CSM_EMAIL_PROPERTY]: v.ownerEmail,
       [HUBSPOT_STATUS_PROPERTY]: v.status,
       [HUBSPOT_RISK_LEVEL_PROPERTY]: DEFAULT_RISK_LEVEL,
     });
