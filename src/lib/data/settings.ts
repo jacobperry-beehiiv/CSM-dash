@@ -2,6 +2,8 @@ import type { RiskFlagCode } from "../types";
 import { kvGet, kvSet } from "../storage/kv";
 import {
   DEFAULTS,
+  DEFAULT_LIFECYCLE_STAGES,
+  LEGACY_LIFECYCLE_STAGES,
   PAST_DUE_CHANNEL_ID,
   PROACTIVE_OUTREACH_CHANNEL_ID,
   type SettingsShape,
@@ -83,6 +85,31 @@ function migrateSlack(stored: Partial<SlackSettings> | undefined): SlackSettings
   return merged;
 }
 
+function sameStringList(a: string[] | undefined, b: string[]): boolean {
+  if (!a || a.length !== b.length) return false;
+  return a.every((v, i) => v === b[i]);
+}
+
+/** Upgrade AM settings — replace the pre-renewals lifecycle list when
+ *  KV still carries the old built-in defaults (or nothing at all). */
+function migrateAm(
+  stored: Partial<SettingsShape["am"]> | undefined
+): NonNullable<SettingsShape["am"]> {
+  const merged: NonNullable<SettingsShape["am"]> = {
+    ...DEFAULTS.am,
+    ...(stored ?? {}),
+  };
+  const stages = merged.lifecycle_stages;
+  if (
+    !Array.isArray(stages) ||
+    stages.length === 0 ||
+    sameStringList(stages, LEGACY_LIFECYCLE_STAGES)
+  ) {
+    merged.lifecycle_stages = [...DEFAULT_LIFECYCLE_STAGES];
+  }
+  return merged;
+}
+
 function merge(partial: Partial<SettingsShape>): SettingsShape {
   return {
     flags: { ...DEFAULTS.flags, ...(partial.flags ?? {}) } as SettingsShape["flags"],
@@ -91,7 +118,7 @@ function merge(partial: Partial<SettingsShape>): SettingsShape {
       ...(partial.thresholds ?? {}),
     } as SettingsShape["thresholds"],
     slack: migrateSlack(partial.slack),
-    am: { ...DEFAULTS.am, ...(partial.am ?? {}) },
+    am: migrateAm(partial.am),
     // personal_todos was added later than the merge() function — any
     // field not listed here gets dropped on every loadSettings() call,
     // which is why the trigger_emoji UI saves successfully but the

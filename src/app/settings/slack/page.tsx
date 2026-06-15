@@ -1162,9 +1162,8 @@ function LifecycleStagesSection({
       description={
         <>
           Drives the <strong>Lifecycle</strong> column dropdown on the
-          /am Renewals tab. Pure workflow labels — pick whatever
-          terminology fits how the team tracks accounts from
-          prospect to churn.
+          /am Renewals tab. Pure workflow labels — rename or extend
+          to match how the team tracks renewal conversations.
         </>
       }
       values={stages}
@@ -1172,7 +1171,7 @@ function LifecycleStagesSection({
       inputPlaceholder="New stage (e.g. Renewal at risk)"
       addLabel="+ Add stage"
       emptyHint="No stages configured — dropdown will fall back to the built-in defaults."
-      restoreTitle="Reset to the built-in list — Prospect, Onboarding, Active, At risk, Renewal conversation, Churned."
+      restoreTitle="Reset to the built-in list — Mid-Year, CSM Aligned, First Outreach Sent, Follow Up Sent, Call Scheduled, Pricing Negotiation, Renewal Confirmed, Renewal Lost."
       onChange={onChange}
     />
   );
