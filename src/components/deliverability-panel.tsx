@@ -6,7 +6,10 @@ import { fmtDate, fmtNumber, fmtPct, fmtRate } from "./format";
 import { masqueradeUrl, metabasePubUrl } from "@/lib/links";
 import { FilterBar, SearchInput } from "./filters";
 import { CsmSelector } from "./csm-selector";
+import { BulkEmailLauncher } from "./am/bulk-email-launcher";
+import { OutreachModal } from "./outreach-modal";
 import { useUrlSearch } from "@/lib/hooks/use-url-search";
+import type { TemplateScenario } from "@/lib/templates/templates";
 import type { Customer, DeliverabilityAlert } from "@/lib/types";
 
 interface RunResult {
@@ -16,15 +19,59 @@ interface RunResult {
   total_enterprise_posts: number;
   alerts: DeliverabilityAlert[];
   generated_at: string;
+  /** ISO timestamp from the underlying deliverability snapshot
+   *  (data/deliverability.enc.json). Null when the engine ran off a
+   *  live fetch — usually only in local dev pre-sync. Drives the
+   *  freshness pill in the header. */
+  snapshot_generated_at: string | null;
 }
 
-/**
- * Looks up `owner_email` for the workspaces in the alert list so per-row
- * masquerade links work. Fetches the customer book via /api/customers
- * once, indexed by workspace_id.
- */
-function useOwnerEmailMap(alerts: DeliverabilityAlert[]): Map<string, string> {
-  const [map, setMap] = useState<Map<string, string>>(new Map());
+/** Format a snapshot timestamp as a relative-time string + bucket the
+ *  severity for the freshness pill. The cron runs at 08/16 UTC daily,
+ *  so >24h means a tick was missed; >48h means two ticks were missed
+ *  (genuine staleness). */
+function snapshotFreshness(iso: string | null): {
+  label: string;
+  tone: "fresh" | "ok" | "stale" | "very_stale" | "live";
+  tooltip: string;
+} {
+  if (!iso) {
+    return {
+      label: "live data",
+      tone: "live",
+      tooltip:
+        "No committed snapshot found — engine is running against a live ClickHouse fetch. Typically only happens locally before the first npm run sync.",
+    };
+  }
+  const ts = Date.parse(iso);
+  if (Number.isNaN(ts)) {
+    return {
+      label: "unknown",
+      tone: "stale",
+      tooltip: `Unparseable snapshot timestamp: ${iso}`,
+    };
+  }
+  const ageMs = Date.now() - ts;
+  const ageH = ageMs / (60 * 60 * 1000);
+  let label: string;
+  if (ageH < 1) {
+    const mins = Math.max(1, Math.round(ageMs / 60_000));
+    label = `${mins}m ago`;
+  } else if (ageH < 24) {
+    label = `${Math.round(ageH)}h ago`;
+  } else {
+    label = `${Math.floor(ageH / 24)}d ago`;
+  }
+  const tone: "fresh" | "ok" | "stale" | "very_stale" =
+    ageH < 12 ? "fresh" : ageH < 24 ? "ok" : ageH < 48 ? "stale" : "very_stale";
+  const tooltip = `Snapshot generated at ${iso}. The sync workflow runs twice daily (08:00 and 16:00 UTC, every day) — if the freshness is amber or red, the most recent run hasn't landed yet or failed.`;
+  return { label, tone, tooltip };
+}
+
+/** Customer book indexed by workspace_id — powers masquerade links and
+ *  the draft-email flow without a second fetch. */
+function useCustomerByWorkspace(): Map<string, Customer> {
+  const [map, setMap] = useState<Map<string, Customer>>(new Map());
 
   useEffect(() => {
     let cancelled = false;
@@ -35,22 +82,18 @@ function useOwnerEmailMap(alerts: DeliverabilityAlert[]): Map<string, string> {
       })
       .then((list) => {
         if (cancelled) return;
-        const m = new Map<string, string>();
+        const m = new Map<string, Customer>();
         for (const c of list) {
-          if (c.workspace_id && c.owner_email) {
-            m.set(c.workspace_id, c.owner_email);
-          }
+          if (c.workspace_id) m.set(c.workspace_id, c);
         }
         setMap(m);
       })
       .catch(() => {
-        // Silent — masquerade links just won't render.
+        // Silent — masquerade / draft actions degrade gracefully.
       });
     return () => {
       cancelled = true;
     };
-    // alerts intentionally not in deps — fetch once.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   return map;
@@ -74,8 +117,13 @@ export function DeliverabilityPanel({
   const [busyPosts, setBusyPosts] = useState<Set<string>>(new Set());
   const [showCleared, setShowCleared] = useState(false);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [outreachFor, setOutreachFor] = useState<{
+    customer: Customer;
+    scenario: TemplateScenario;
+  } | null>(null);
   const [search, setSearch] = useUrlSearch("q");
-  const ownerEmailByWorkspace = useOwnerEmailMap(data.alerts);
+  const customerByWorkspace = useCustomerByWorkspace();
 
   async function setClearedOptimistic(
     postId: string,
@@ -188,6 +236,40 @@ export function DeliverabilityPanel({
     [alerts, showCleared]
   );
 
+  const allPostIds = useMemo(
+    () => visibleAlerts.map((a) => a.post.post_id),
+    [visibleAlerts]
+  );
+
+  const selectedCustomers = useMemo(() => {
+    const seen = new Set<string>();
+    const out: Customer[] = [];
+    for (const a of visibleAlerts) {
+      if (!selected.has(a.post.post_id)) continue;
+      const ws = a.post.organization_id;
+      if (!ws || seen.has(ws)) continue;
+      seen.add(ws);
+      const c = customerByWorkspace.get(ws);
+      if (c) out.push(c);
+    }
+    return out;
+  }, [visibleAlerts, selected, customerByWorkspace]);
+
+  function toggleSelected(postId: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(postId)) next.delete(postId);
+      else next.add(postId);
+      return next;
+    });
+  }
+
+  function selectAllVisible() {
+    setSelected((prev) =>
+      prev.size === allPostIds.length ? new Set() : new Set(allPostIds)
+    );
+  }
+
   return (
     <div className="space-y-4">
       <FilterBar>
@@ -256,7 +338,56 @@ export function DeliverabilityPanel({
         })()}
         {" · "}
         {data.target_date} · generated {fmtDate(data.generated_at)}
+        {" · "}
+        {(() => {
+          const f = snapshotFreshness(data.snapshot_generated_at);
+          const cls =
+            f.tone === "fresh"
+              ? "text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-500/40 bg-emerald-50 dark:bg-emerald-500/10"
+              : f.tone === "ok"
+                ? "text-muted border-border bg-canvas/40"
+                : f.tone === "stale"
+                  ? "text-amber-800 dark:text-amber-200 border-amber-300 dark:border-amber-500/40 bg-amber-50 dark:bg-amber-500/10"
+                  : f.tone === "very_stale"
+                    ? "text-red-800 dark:text-red-200 border-red-300 dark:border-red-500/40 bg-red-50 dark:bg-red-500/10"
+                    : "text-muted border-border bg-canvas/40";
+          return (
+            <span
+              className={`inline-flex items-center gap-1 px-1.5 py-0.5 text-[11px] font-medium rounded border ${cls}`}
+              title={f.tooltip}
+            >
+              snapshot {f.label}
+            </span>
+          );
+        })()}
       </div>
+
+      {visibleAlerts.length > 0 ? (
+        <div className="flex flex-wrap items-center gap-2 px-3 py-2 bg-canvas border border-border rounded-md">
+          <span className="text-xs text-muted">
+            <strong>{selected.size}</strong> selected of {allPostIds.length}
+          </span>
+          <button
+            type="button"
+            onClick={selectAllVisible}
+            className="px-2 py-1 text-xs border border-border-strong rounded-md bg-surface hover:bg-canvas"
+          >
+            {selected.size === allPostIds.length ? "Deselect all" : "Select all"}
+          </button>
+          <div className="flex-1" />
+          <BulkEmailLauncher
+            customers={selectedCustomers}
+            defaultTemplateId="general-checkin"
+            disabled={selected.size === 0 || selectedCustomers.length === 0}
+            label={
+              selectedCustomers.length > 0
+                ? `📥 Draft for ${selectedCustomers.length}`
+                : "📥 Draft selected"
+            }
+            trackingIdFor={(c) => c.workspace_id ?? null}
+          />
+        </div>
+      ) : null}
 
       {visibleAlerts.length === 0 ? (
         <div className="bg-green-50 dark:bg-green-500/10 border border-green-200 dark:border-green-500/30 rounded-lg p-4 text-sm text-green-800 dark:text-green-200">
@@ -280,6 +411,7 @@ export function DeliverabilityPanel({
           <table className="w-full text-sm">
             <colgroup>
               <col className="w-8" />
+              <col className="w-8" />
               <col className="w-[8%]" />
               <col className="w-[18%]" />
               <col className="w-[22%] hidden md:table-cell" />
@@ -293,6 +425,7 @@ export function DeliverabilityPanel({
             </colgroup>
             <thead className="bg-canvas">
               <tr className="text-left border-b border-border">
+                <th className="px-3 py-3"></th>
                 <th className="px-3 py-3"></th>
                 <th className="px-3 py-3 font-medium text-muted">Status</th>
                 <th className="px-3 py-3 font-medium text-muted">Workspace</th>
@@ -348,8 +481,12 @@ export function DeliverabilityPanel({
                 // data set landed. The badge + sent-date hint signal
                 // "you're seeing this because nobody cleared it yet."
                 const isCarryover = alert.post.sent_date !== data.target_date;
-                const email = ownerEmailByWorkspace.get(alert.post.organization_id);
-                const masqUrl = email ? masqueradeUrl(email) : null;
+                const customer = customerByWorkspace.get(
+                  alert.post.organization_id
+                );
+                const masqUrl = customer?.owner_email
+                  ? masqueradeUrl(customer.owner_email)
+                  : null;
                 const mbUrl = metabasePubUrl({
                   workspace_id: alert.post.organization_id,
                   workspace_name: alert.post.workspace_name,
@@ -369,6 +506,18 @@ export function DeliverabilityPanel({
                           : "hover:bg-blue-50 dark:hover:bg-blue-500/15"
                       }`}
                     >
+                      <td
+                        className="px-3 py-3 text-subtle select-none"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={selected.has(alert.post.post_id)}
+                          onChange={() => toggleSelected(alert.post.post_id)}
+                          aria-label={`Select ${alert.post.workspace_name}`}
+                          className="h-3.5 w-3.5 rounded border-border-strong cursor-pointer"
+                        />
+                      </td>
                       <td className="px-3 py-3 text-subtle select-none">
                         <span
                           className={`inline-block transition-transform ${
@@ -478,6 +627,21 @@ export function DeliverabilityPanel({
                               📊
                             </a>
                           ) : null}
+                          {customer ? (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setOutreachFor({
+                                  customer,
+                                  scenario: "general-checkin",
+                                })
+                              }
+                              title="Draft outreach email (template picker + Gmail draft)"
+                              className="px-2 py-1 text-xs border border-border-strong rounded-md hover:bg-canvas"
+                            >
+                              Draft
+                            </button>
+                          ) : null}
                           {flagged ? (
                             cleared ? (
                               <button
@@ -531,7 +695,7 @@ export function DeliverabilityPanel({
                             : "bg-blue-50 dark:bg-blue-500/15"
                         }`}
                       >
-                        <td colSpan={11} className="px-6 py-4">
+                        <td colSpan={12} className="px-6 py-4">
                           <DeliverabilityDetail alert={alert} />
                         </td>
                       </tr>
@@ -546,8 +710,17 @@ export function DeliverabilityPanel({
 
       <p className="text-xs text-subtle">
         Every send in scope is listed — flagged rows are sorted to the top.
-        Click any row for a full metric breakdown and flag details.
+        Click any row for a full metric breakdown and flag details. Select
+        rows to bulk-draft, or use <strong>Draft</strong> on a single send.
       </p>
+
+      {outreachFor ? (
+        <OutreachModal
+          customer={outreachFor.customer}
+          initialScenario={outreachFor.scenario}
+          onClose={() => setOutreachFor(null)}
+        />
+      ) : null}
     </div>
   );
 }
