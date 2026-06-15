@@ -301,6 +301,25 @@ export const LEGACY_LIFECYCLE_STAGES: string[] = [
   "Churned",
 ];
 
+/** True when `stages` is the old Prospect→Churned built-in list (any order). */
+export function isLegacyLifecycleList(stages: string[] | undefined): boolean {
+  if (!Array.isArray(stages) || stages.length === 0) return false;
+  if (stages.length !== LEGACY_LIFECYCLE_STAGES.length) return false;
+  const legacy = new Set(LEGACY_LIFECYCLE_STAGES);
+  return stages.every((s) => legacy.has(s));
+}
+
+/** Hydrate lifecycle stages for dropdowns — migrates legacy KV values. */
+export function resolveLifecycleStages(stages: string[] | undefined): string[] {
+  if (!Array.isArray(stages) || stages.length === 0) {
+    return [...DEFAULT_LIFECYCLE_STAGES];
+  }
+  if (isLegacyLifecycleList(stages)) {
+    return [...DEFAULT_LIFECYCLE_STAGES];
+  }
+  return stages;
+}
+
 export const DEFAULTS: SettingsShape = {
   flags: {
     A: { re_raise_days: 14 },

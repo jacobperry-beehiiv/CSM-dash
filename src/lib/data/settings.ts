@@ -2,8 +2,8 @@ import type { RiskFlagCode } from "../types";
 import { kvGet, kvSet } from "../storage/kv";
 import {
   DEFAULTS,
-  DEFAULT_LIFECYCLE_STAGES,
-  LEGACY_LIFECYCLE_STAGES,
+  isLegacyLifecycleList,
+  resolveLifecycleStages,
   PAST_DUE_CHANNEL_ID,
   PROACTIVE_OUTREACH_CHANNEL_ID,
   type SettingsShape,
@@ -85,13 +85,6 @@ function migrateSlack(stored: Partial<SlackSettings> | undefined): SlackSettings
   return merged;
 }
 
-function sameStringList(a: string[] | undefined, b: string[]): boolean {
-  if (!a || a.length !== b.length) return false;
-  return a.every((v, i) => v === b[i]);
-}
-
-/** Upgrade AM settings — replace the pre-renewals lifecycle list when
- *  KV still carries the old built-in defaults (or nothing at all). */
 function migrateAm(
   stored: Partial<SettingsShape["am"]> | undefined
 ): NonNullable<SettingsShape["am"]> {
@@ -99,14 +92,7 @@ function migrateAm(
     ...DEFAULTS.am,
     ...(stored ?? {}),
   };
-  const stages = merged.lifecycle_stages;
-  if (
-    !Array.isArray(stages) ||
-    stages.length === 0 ||
-    sameStringList(stages, LEGACY_LIFECYCLE_STAGES)
-  ) {
-    merged.lifecycle_stages = [...DEFAULT_LIFECYCLE_STAGES];
-  }
+  merged.lifecycle_stages = resolveLifecycleStages(merged.lifecycle_stages);
   return merged;
 }
 
@@ -133,14 +119,23 @@ function merge(partial: Partial<SettingsShape>): SettingsShape {
 
 export async function loadSettings(): Promise<SettingsShape> {
   const stored = await kvGet<Partial<SettingsShape>>(KEY);
-  return stored ? merge(stored) : DEFAULTS;
+  if (!stored) return DEFAULTS;
+  const merged = merge(stored);
+  // One-time KV repair: read-time migration alone wasn't enough because
+  // saveSettings() used to persist the raw client payload (often still
+  // carrying the old Prospect→Churned list from a stale /settings tab).
+  if (isLegacyLifecycleList(stored.am?.lifecycle_stages)) {
+    await kvSet(KEY, merged);
+  }
+  return merged;
 }
 
 export async function saveSettings(
   next: SettingsShape
 ): Promise<SettingsShape> {
-  await kvSet(KEY, next);
-  return next;
+  const merged = merge(next);
+  await kvSet(KEY, merged);
+  return merged;
 }
 
 export function reRaisePeriodMs(
