@@ -1,38 +1,39 @@
 /**
  * Slack @bot assign — onboard a newly-handed-off customer in one
- * modal. Triggered by an @-mention of the bot with the word `assign`;
- * the bot posts a button-bearing reply in-thread, the user clicks it
- * to open the modal, and on submit we:
+ * modal, HubSpot-first.
  *
- *   1. PATCH HubSpot — sets hubspot_owner_id so the new CSM owns the
- *      company in CRM.
- *   2. Write to customer-overrides KV — sets CSM, lifecycle stage,
- *      and risk level so the dashboard reflects the new state
- *      immediately (without waiting for the next sync to pull
- *      HubSpot back through q10600).
- *   3. Create a personal to-do on the assigned CSM's list — gives
- *      them a "you've been handed Acme — go say hi" reminder in
- *      their home-page checklist.
- *   4. Create a Drive folder named after the company under the
- *      shared parent folder — gives the CSM a working space for
- *      onboarding docs without the manual "make folder, set
- *      sharing" dance.
+ * Triggered by an @-mention of the bot with the word `assign`; the
+ * bot posts a button-bearing reply in-thread, the user clicks the
+ * button to open the modal, and on submit we:
+ *
+ *   1. PATCH HubSpot — sets hubspot_owner_id (new CSM) and
+ *      property_risk_level_csm_ (risk).
+ *   2. Add a personal to-do to the assigned CSM's list — gives
+ *      them a "you've been handed X — go say hi" reminder in their
+ *      home-page checklist.
+ *   3. Create a Drive folder named after the company under the
+ *      shared parent folder so the CSM has a working space for
+ *      onboarding docs.
+ *
+ * Crucially, HubSpot is canonical here. The dashboard's customer
+ * book is NOT consulted for the resolution (the input is a HubSpot
+ * URL or ID directly), and we DON'T write to the customer-overrides
+ * KV — the next twice-daily sync will pull the new owner/risk back
+ * down from HubSpot via q10600 + the Stripe-ID resolver. That keeps
+ * a single source of truth and lets `@bot assign` work for accounts
+ * not yet in the dashboard's book.
  *
  * The Slack-side dispatch uses the same registries as the existing
  * /update-csm + /find flows (block_actions → action_id, modal
  * submit → callback_id). See src/app/api/slack-webhook/route.ts for
- * the actual routing; this file defines the modal + handler bodies
- * and the helpers that wire @-mention text → button → modal context.
+ * the actual routing; this file defines the modal + handler bodies.
  */
 
-import { loadCustomers } from "../data/load-customers";
-import { setOverride } from "../data/customer-overrides";
-import { loadSettings } from "../data/settings";
-import { resolveLifecycleStages } from "../data/settings-types";
 import { applyTodoOps } from "../personal-todos/store";
 import { userKeyFromEmail } from "../personal-todos/identity";
 import { newTodoId, type PersonalTodo } from "../personal-todos/types";
 import {
+  fetchHubspotCompany,
   listHubspotOwners,
   patchHubspotCompanyProperties,
   type HubspotOwner,
@@ -57,15 +58,18 @@ export const ASSIGN_MODAL_CALLBACK_ID = "assign_modal";
 const RISK_LEVELS = ["Red", "Yellow", "Light Green", "Green"] as const;
 type RiskLevel = (typeof RISK_LEVELS)[number];
 
+/** HubSpot internal name for the CSM team's risk-level property.
+ *  Same property the customer detail panel reads from (q10600
+ *  surfaces it as `property_risk_level_csm_`). */
+const HUBSPOT_RISK_LEVEL_PROPERTY = "property_risk_level_csm_";
+
 /** Parent folder under which all assignment folders are created.
  *  Configurable via env so we can point at a staging folder in dev. */
 const DRIVE_PARENT_FOLDER_ID =
   process.env.DRIVE_ASSIGN_PARENT_FOLDER_ID ??
   "1_8XXke1lzPqnw_qC0uzGp5hdDMbxJAHc";
 
-/** Days from today the default to-do due date lands on. CSMs usually
- *  want to reach out in the first few days; 3 days gives a buffer
- *  for the new CSM to read up + check the calendar. */
+/** Days from today the default to-do due date lands on. */
 const DEFAULT_TODO_DUE_OFFSET_DAYS = 3;
 
 // ─── In-thread button (posted by app_mention handler) ─────────────────
@@ -73,13 +77,13 @@ const DEFAULT_TODO_DUE_OFFSET_DAYS = 3;
 interface ThreadContext {
   channel: string;
   thread_ts: string;
+  /** The @-mentioner's email, resolved at mention time via the
+   *  customer book + slack-id mapping. Round-tripped through the
+   *  button's value field so the modal handler knows whose Google
+   *  tokens to use for the Drive folder. */
   requester_user: string;
 }
 
-/** Build the chat.postMessage blocks the bot posts in-thread after
- *  an "@bot assign" mention. Single button whose `value` encodes the
- *  thread context (channel + thread_ts + requester) so the modal can
- *  reply in the right place on submit. */
 export function buildAssignButtonBlocks(
   ctx: ThreadContext
 ): Array<Record<string, unknown>> {
@@ -90,7 +94,7 @@ export function buildAssignButtonBlocks(
       text: {
         type: "mrkdwn",
         text:
-          "*Assign a new account?* I'll update HubSpot (owner/lifecycle/risk), add a to-do to the new CSM's list, and create a Drive folder under the shared parent — all from one form.",
+          "*Assign a new account?* I'll update HubSpot (owner + risk), add a to-do to the new CSM's list, and create a Drive folder under the shared parent — all from one form.",
       },
     },
     {
@@ -111,31 +115,47 @@ export function buildAssignButtonBlocks(
         {
           type: "mrkdwn",
           text:
-            "Tip: copy the *Workspace ID* from the dashboard's company panel before opening the form — Slack modals don't let me autocomplete the customer list yet.",
+            "Tip: open the company record in HubSpot first — you'll paste its URL or company ID into the form.",
         },
       ],
     },
   ];
 }
 
-// ─── Modal (opened on button click) ───────────────────────────────────
+// ─── HubSpot company-id parsing ───────────────────────────────────────
 
 /**
- * Build the assign modal's Block Kit JSON. Owners + lifecycle stages
- * are passed in (pre-loaded by the caller before `views.open` so the
- * dropdowns are populated immediately — Slack rejects empty
- * static_selects).
+ * Accepts any of:
+ *   • Bare HubSpot company ID:           `22204103285`
+ *   • Old-style URL:                     `https://app.hubspot.com/contacts/<portalId>/company/22204103285`
+ *   • New-style v3 URL:                  `https://app.hubspot.com/contacts/<portalId>/record/0-2/22204103285`
+ *   • Either URL with trailing `/...`, query string, etc.
  *
- * `threadContext` is JSON-stringified into `private_metadata` so the
- * submit handler can post the confirmation back into the original
- * thread without re-deriving the channel.
+ * Returns the company ID string, or null if the input doesn't match
+ * any of the above. The handler surfaces the null as a modal-level
+ * error so the CSM sees the failure inline instead of a silent skip.
  */
+export function parseHubspotCompanyInput(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  // Bare numeric ID — HubSpot company IDs are 10+ digit integers.
+  if (/^\d+$/.test(trimmed)) return trimmed;
+  // New-style: .../record/0-2/<id>
+  const recordMatch = trimmed.match(/\/record\/0-2\/(\d+)/);
+  if (recordMatch) return recordMatch[1];
+  // Old-style: .../company/<id>
+  const companyMatch = trimmed.match(/\/company\/(\d+)/);
+  if (companyMatch) return companyMatch[1];
+  return null;
+}
+
+// ─── Modal (opened on button click) ───────────────────────────────────
+
 export function buildAssignView(
   owners: HubspotOwner[],
-  lifecycleStages: string[],
   threadContext: ThreadContext
 ): Record<string, unknown> {
-  // Same 100-cap as /update-csm; we have ~50 owners so this is
+  // Slack static_select cap is 100. ~50 owners in the org today,
   // headroom not a real limit.
   const ownerOptions = owners.slice(0, 100).map((o) => ({
     text: {
@@ -148,17 +168,11 @@ export function buildAssignView(
     value: `${o.owner_id}::${o.owner_email}`,
   }));
 
-  const lifecycleOptions = lifecycleStages.slice(0, 100).map((stage) => ({
-    text: { type: "plain_text", text: stage.slice(0, 75) },
-    value: stage,
-  }));
-
   const riskOptions = RISK_LEVELS.map((r) => ({
     text: { type: "plain_text", text: r },
     value: r,
   }));
 
-  // Default due date = today + 3 days, ISO YYYY-MM-DD.
   const today = new Date();
   const due = new Date(today);
   due.setDate(due.getDate() + DEFAULT_TODO_DUE_OFFSET_DAYS);
@@ -177,25 +191,25 @@ export function buildAssignView(
         elements: [
           {
             type: "mrkdwn",
-            text: "Updates HubSpot · creates a to-do for the new CSM · drops a Drive folder under the shared parent.",
+            text: "HubSpot is the source of truth. Dashboard catches up on the next sync (within ~12h, sooner if you hit Refresh).",
           },
         ],
       },
       {
         type: "input",
-        block_id: "workspace_id",
-        label: { type: "plain_text", text: "Workspace ID" },
+        block_id: "hubspot_company",
+        label: { type: "plain_text", text: "HubSpot company URL or ID" },
         element: {
           type: "plain_text_input",
           action_id: "value",
           placeholder: {
             type: "plain_text",
-            text: "Paste from the dashboard — Copy workspace ID button",
+            text: "Paste from HubSpot's URL bar, or the bare company ID",
           },
         },
         hint: {
           type: "plain_text",
-          text: "UUID. Resolves to the company via the customer book.",
+          text: "e.g. https://app.hubspot.com/contacts/123/record/0-2/22204103285 — or just 22204103285",
         },
       },
       {
@@ -207,18 +221,6 @@ export function buildAssignView(
           action_id: "value",
           placeholder: { type: "plain_text", text: "Pick a CSM" },
           options: ownerOptions,
-        },
-      },
-      {
-        type: "input",
-        block_id: "lifecycle_stage",
-        optional: true,
-        label: { type: "plain_text", text: "Lifecycle stage" },
-        element: {
-          type: "static_select",
-          action_id: "value",
-          placeholder: { type: "plain_text", text: "Pick a lifecycle stage" },
-          options: lifecycleOptions,
         },
       },
       {
@@ -246,6 +248,10 @@ export function buildAssignView(
             text: "Title for the to-do that lands on their list",
           },
         },
+        hint: {
+          type: "plain_text",
+          text: "Use {company} as a placeholder for the HubSpot company name.",
+        },
       },
       {
         type: "input",
@@ -264,10 +270,7 @@ export function buildAssignView(
 
 /**
  * Open the assign modal via Slack's views.open API. Called from the
- * block_actions handler when the user clicks the "Open Assign form"
- * button in-thread. Loads HubSpot owners + lifecycle stages up-front
- * so the dropdowns aren't empty (Slack rejects views.open with an
- * empty static_select options array).
+ * block_actions handler when the user clicks the button in-thread.
  */
 export async function openAssignModal(args: {
   triggerId: string;
@@ -278,24 +281,21 @@ export async function openAssignModal(args: {
     return { ok: false, error: "SLACK_BOT_TOKEN not set" };
   }
 
-  // Pre-load: owners + lifecycle stages.
   let owners: HubspotOwner[] = [];
   try {
     owners = await listHubspotOwners();
   } catch (e) {
     console.error("[slack-assign] listHubspotOwners failed", e);
-    return { ok: false, error: "Couldn't load HubSpot owners — check the bot's HubSpot scope." };
+    return {
+      ok: false,
+      error: "Couldn't load HubSpot owners — check the bot's HubSpot scope.",
+    };
   }
   if (owners.length === 0) {
     return { ok: false, error: "No HubSpot owners returned." };
   }
 
-  const settings = await loadSettings();
-  const lifecycleStages = resolveLifecycleStages(
-    settings.am?.lifecycle_stages
-  );
-
-  const view = buildAssignView(owners, lifecycleStages, args.threadContext);
+  const view = buildAssignView(owners, args.threadContext);
 
   const res = await fetch("https://slack.com/api/views.open", {
     method: "POST",
@@ -316,10 +316,9 @@ export async function openAssignModal(args: {
 // ─── Modal submission ────────────────────────────────────────────────
 
 interface AssignFormValues {
-  workspaceId: string;
+  hubspotCompanyInput: string;
   ownerId: string;
   ownerEmail: string;
-  lifecycleStage: string | null;
   riskLevel: RiskLevel | null;
   todoTitle: string;
   todoDueDate: string | null;
@@ -328,21 +327,20 @@ interface AssignFormValues {
 function readAssignForm(
   payload: ViewSubmissionPayload
 ): { ok: true; values: AssignFormValues } | { ok: false; errors: Record<string, string> } {
-  const workspaceIdRaw = getTextValue(payload, "workspace_id");
+  const hubspotCompanyRaw = getTextValue(payload, "hubspot_company");
   const ownerRaw = getSelectValue(payload, "owner");
-  const lifecycleStage = getSelectValue(payload, "lifecycle_stage");
   const riskRaw = getSelectValue(payload, "risk_level");
   const todoTitle = getTextValue(payload, "todo_title");
   const todoDueDate = getDateValue(payload, "todo_due_date");
 
   const errors: Record<string, string> = {};
-  if (!workspaceIdRaw) errors.workspace_id = "Workspace ID is required.";
+  if (!hubspotCompanyRaw) errors.hubspot_company = "HubSpot company URL or ID is required.";
   if (!ownerRaw) errors.owner = "Pick a CSM.";
   if (!todoTitle) errors.todo_title = "Add a to-do title.";
   if (Object.keys(errors).length > 0) return { ok: false, errors };
 
   // owner option value is "<id>::<email>"; split on the first "::"
-  // sentinel so unusual emails (no "+" or "=") still parse.
+  // sentinel so unusual emails still parse.
   const sepIdx = (ownerRaw ?? "").indexOf("::");
   const ownerId = sepIdx > 0 ? ownerRaw!.slice(0, sepIdx) : ownerRaw!;
   const ownerEmail = sepIdx > 0 ? ownerRaw!.slice(sepIdx + 2) : "";
@@ -355,10 +353,9 @@ function readAssignForm(
   return {
     ok: true,
     values: {
-      workspaceId: workspaceIdRaw!.trim(),
+      hubspotCompanyInput: hubspotCompanyRaw!,
       ownerId,
       ownerEmail: ownerEmail.toLowerCase(),
-      lifecycleStage,
       riskLevel: risk,
       todoTitle: todoTitle!,
       todoDueDate,
@@ -366,10 +363,8 @@ function readAssignForm(
   };
 }
 
-/** Submission handler — registered in slack-views.ts's dispatch table. */
 export const assignModalHandler: ViewSubmitHandler = async ({
   payload,
-  userKey: requesterUserKey,
 }) => {
   const form = readAssignForm(payload);
   if (!form.ok) {
@@ -377,100 +372,79 @@ export const assignModalHandler: ViewSubmitHandler = async ({
   }
   const v = form.values;
 
-  // Resolve workspace_id → customer (needed for company_name, the
-  // canonical hubspot_company_id, and the Drive folder name).
-  const customers = await loadCustomers();
-  const customer = customers.find(
-    (c) => c.workspace_id?.toLowerCase() === v.workspaceId.toLowerCase()
-  );
-  if (!customer) {
+  // Parse the pasted input → HubSpot company ID.
+  const companyId = parseHubspotCompanyInput(v.hubspotCompanyInput);
+  if (!companyId) {
     return {
       response_action: "errors",
       errors: {
-        workspace_id: `No customer found for workspace_id "${v.workspaceId}". Use the Copy workspace ID button on the dashboard.`,
-      },
-    } as ViewSubmitResponse;
-  }
-  if (!customer.hubspot_company_id) {
-    return {
-      response_action: "errors",
-      errors: {
-        workspace_id: `${customer.company_name ?? customer.workspace_name ?? v.workspaceId} has no hubspot_company_id on file — can't reach HubSpot for it.`,
+        hubspot_company:
+          "Couldn't read a HubSpot company ID from that. Paste either the bare ID (e.g. 22204103285) or a HubSpot URL containing it.",
       },
     } as ViewSubmitResponse;
   }
 
-  // Parse private_metadata to find where to post the confirmation.
+  // Verify the company exists + grab its name (for the Drive folder
+  // + confirmation message). 404 = bad ID; surface inline.
+  let company: { id: string; name: string | null } | null = null;
+  try {
+    company = await fetchHubspotCompany(companyId);
+  } catch (e) {
+    return {
+      response_action: "errors",
+      errors: {
+        hubspot_company: `HubSpot lookup failed: ${
+          (e instanceof Error ? e.message : String(e)).slice(0, 180)
+        }`,
+      },
+    } as ViewSubmitResponse;
+  }
+  if (!company) {
+    return {
+      response_action: "errors",
+      errors: {
+        hubspot_company: `No HubSpot company with ID ${companyId} — double-check the URL or ID you pasted.`,
+      },
+    } as ViewSubmitResponse;
+  }
+
+  const companyName = company.name?.trim() || `company ${company.id}`;
+
+  // Parse private_metadata for thread context + requester email.
   let threadContext: ThreadContext | null = null;
   try {
     threadContext = JSON.parse(payload.view.private_metadata ?? "{}");
   } catch {
     threadContext = null;
   }
+  const requesterEmail = threadContext?.requester_user || "";
 
-  const companyName =
-    customer.company_name ?? customer.workspace_name ?? "the company";
-  const requesterEmailFromMeta = threadContext?.requester_user ?? null;
-
-  // ── HubSpot PATCH (owner only — the rest go via customer-overrides
-  // so the dashboard reflects them immediately). Worth the direct
-  // hit on owner because hubspot_owner_id is HubSpot's canonical
-  // assignment field and the dashboard's CSM column reads from it.
+  // ── HubSpot PATCH — owner + risk in one call.
+  const hubspotProps: Record<string, string> = {
+    hubspot_owner_id: v.ownerId,
+  };
+  if (v.riskLevel) {
+    hubspotProps[HUBSPOT_RISK_LEVEL_PROPERTY] = v.riskLevel;
+  }
   const hubspotErrors: string[] = [];
   try {
-    await patchHubspotCompanyProperties(customer.hubspot_company_id, {
-      hubspot_owner_id: v.ownerId,
-    });
+    await patchHubspotCompanyProperties(company.id, hubspotProps);
   } catch (e) {
-    hubspotErrors.push(
-      `HubSpot owner: ${e instanceof Error ? e.message : String(e)}`
-    );
-  }
-
-  // ── Customer overrides — CSM + lifecycle + risk. Writes immediately
-  // visible in the dashboard. Risk lives in the field_overrides bag
-  // since it's a mappable field (per src/lib/data/field-mappings-types.ts).
-  const now = new Date().toISOString();
-  const fieldOverrides: Record<string, { value: string | null; updated_at: string; updated_by: string }> = {};
-  if (v.riskLevel) {
-    fieldOverrides.property_risk_level = {
-      value: v.riskLevel,
-      updated_at: now,
-      updated_by: requesterEmailFromMeta ?? requesterUserKey,
-    };
-  }
-  try {
-    await setOverride(customer.workspace_id!, {
-      customer_success_manager: ownerNameFromEmail(v.ownerEmail),
-      customer_success_manager_email: v.ownerEmail,
-      csm_refreshed_at: now,
-      csm_refreshed_by: requesterEmailFromMeta ?? requesterUserKey,
-      lifecycle_stage: v.lifecycleStage ?? undefined,
-      lifecycle_stage_updated_at: v.lifecycleStage ? now : undefined,
-      lifecycle_stage_updated_by: v.lifecycleStage
-        ? requesterEmailFromMeta ?? requesterUserKey
-        : undefined,
-      ...(Object.keys(fieldOverrides).length > 0
-        ? { field_overrides: fieldOverrides }
-        : {}),
-    });
-  } catch (e) {
-    hubspotErrors.push(
-      `Override write: ${e instanceof Error ? e.message : String(e)}`
-    );
+    hubspotErrors.push(e instanceof Error ? e.message : String(e));
   }
 
   // ── Personal to-do for the assigned CSM.
   const todoErrors: string[] = [];
+  const now = new Date().toISOString();
   try {
     const targetUserKey = userKeyFromEmail(v.ownerEmail);
     const todo: PersonalTodo = {
       id: newTodoId(),
       title: substituteCompanyToken(v.todoTitle, companyName),
       details:
-        `Account auto-assigned via @bot assign by ${
-          requesterEmailFromMeta ?? "a teammate"
-        }.\nWorkspace: ${customer.workspace_id}`,
+        `Auto-assigned via @bot assign by ${
+          requesterEmail || "a teammate"
+        }.\nHubSpot company: https://app.hubspot.com/contacts/0/record/0-2/${company.id}`,
       due_date: v.todoDueDate,
       surface_at: null,
       priority: null,
@@ -486,16 +460,14 @@ export const assignModalHandler: ViewSubmitHandler = async ({
     todoErrors.push(e instanceof Error ? e.message : String(e));
   }
 
-  // ── Drive folder (under the shared parent). Skipped with a clear
-  // hint when the requester hasn't reconsented with the drive.file
-  // scope yet — the rest of the assignment still lands.
+  // ── Drive folder (under shared parent).
   let driveResult:
     | { ok: true; id: string; webViewLink: string; name: string }
     | { ok: false; error: string } = { ok: false, error: "skipped" };
 
-  if (requesterEmailFromMeta) {
+  if (requesterEmail) {
     try {
-      if (!(await hasDriveAccess(requesterEmailFromMeta))) {
+      if (!(await hasDriveAccess(requesterEmail))) {
         driveResult = {
           ok: false,
           error:
@@ -503,7 +475,7 @@ export const assignModalHandler: ViewSubmitHandler = async ({
         };
       } else {
         const folder = await createDriveFolder(
-          requesterEmailFromMeta,
+          requesterEmail,
           DRIVE_PARENT_FOLDER_ID,
           companyName
         );
@@ -533,6 +505,7 @@ export const assignModalHandler: ViewSubmitHandler = async ({
       channel: threadContext.channel,
       threadTs: threadContext.thread_ts,
       companyName,
+      hubspotCompanyId: company.id,
       assignedCsmEmail: v.ownerEmail,
       hubspotErrors,
       todoErrors,
@@ -540,39 +513,31 @@ export const assignModalHandler: ViewSubmitHandler = async ({
     });
   }
 
-  // ── Ack DM to the requester (Slack closes the modal silently
-  // otherwise; the DM is permanent confirmation in their DM history).
+  // ── Ack DM to the requester.
   const ackParts: string[] = [
     `:white_check_mark: Assigned *${companyName}* to *${v.ownerEmail}*.`,
+    `• HubSpot: <https://app.hubspot.com/contacts/0/record/0-2/${company.id}|company record>`,
   ];
-  if (hubspotErrors.length) ackParts.push(`⚠ HubSpot: ${hubspotErrors.join(" · ")}`);
-  if (todoErrors.length) ackParts.push(`⚠ To-do: ${todoErrors.join(" · ")}`);
+  if (hubspotErrors.length) {
+    ackParts.push(`⚠ HubSpot PATCH: ${hubspotErrors.join(" · ")}`);
+  }
+  if (todoErrors.length) {
+    ackParts.push(`⚠ To-do: ${todoErrors.join(" · ")}`);
+  }
   if (driveResult.ok) {
-    ackParts.push(`📂 Drive folder: ${driveResult.webViewLink}`);
+    ackParts.push(`• 📂 Drive folder: ${driveResult.webViewLink}`);
   } else {
     ackParts.push(`⚠ Drive: ${driveResult.error}`);
   }
+  ackParts.push(
+    "• Dashboard catches up on the next sync (or click Refresh in the dashboard header for sooner)."
+  );
 
   return { _ack_message: ackParts.join("\n") };
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────────
 
-/** Synthesize a CSM handle ("Jacob_Perry") from an owner email.
- *  Matches the convention used in q10600 / the rest of the app for
- *  customer_success_manager. Falls back to the email prefix when
- *  parsing fails — never returns empty. */
-function ownerNameFromEmail(email: string): string {
-  const prefix = email.split("@")[0] ?? email;
-  return prefix
-    .split(".")
-    .map((p) => (p.length > 0 ? p[0].toUpperCase() + p.slice(1) : p))
-    .join("_");
-}
-
-/** Substitute `{company}` placeholder in to-do titles with the
- *  resolved company name. Empty when neither is set; safe pass-
- *  through when no placeholder is present. */
 function substituteCompanyToken(template: string, companyName: string): string {
   if (!template.includes("{company}")) return template;
   return template.replace(/\{company\}/g, companyName);
@@ -582,6 +547,7 @@ async function postAssignmentSummary(args: {
   channel: string;
   threadTs: string;
   companyName: string;
+  hubspotCompanyId: string;
   assignedCsmEmail: string;
   hubspotErrors: string[];
   todoErrors: string[];
@@ -593,10 +559,10 @@ async function postAssignmentSummary(args: {
   if (!token) return;
   const lines: string[] = [];
   lines.push(
-    `:white_check_mark: *${args.companyName}* assigned to *${args.assignedCsmEmail}*.`
+    `:white_check_mark: *<https://app.hubspot.com/contacts/0/record/0-2/${args.hubspotCompanyId}|${args.companyName}>* assigned to *${args.assignedCsmEmail}*.`
   );
   if (args.hubspotErrors.length === 0) {
-    lines.push("• HubSpot owner updated.");
+    lines.push("• HubSpot updated (owner + risk).");
   } else {
     lines.push(`• ⚠ HubSpot: ${args.hubspotErrors.join(" · ")}`);
   }

@@ -1074,6 +1074,46 @@ export async function listHubspotOwners(): Promise<HubspotOwner[]> {
  * message back to Slack (response_action="errors" lights up the
  * field-level error inline in the modal).
  */
+/**
+ * Lightweight company GET — returns `{ id, name }` + any extra
+ * properties the caller passes in `properties[]`. Used by the
+ * Slack @bot assign flow to confirm a pasted company URL/ID before
+ * issuing the PATCH (and to grab the company name for the Drive
+ * folder + confirmation message). Returns null on 404 so the caller
+ * can surface a "no such company" error inline rather than a stack
+ * trace.
+ */
+export async function fetchHubspotCompany(
+  companyId: string,
+  properties: string[] = ["name"]
+): Promise<{ id: string; name: string | null; properties: Record<string, string | null> } | null> {
+  const token = await getAccessToken();
+  const url = new URL(
+    `https://api.hubapi.com/crm/v3/objects/companies/${encodeURIComponent(companyId)}`
+  );
+  url.searchParams.set("properties", properties.join(","));
+  const res = await fetch(url.toString(), {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (res.status === 404) return null;
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(
+      `HubSpot company ${companyId} fetch failed (${res.status}): ${body.slice(0, 200)}`
+    );
+  }
+  const json = (await res.json()) as {
+    id: string;
+    properties?: Record<string, string | null>;
+  };
+  const props = json.properties ?? {};
+  return {
+    id: json.id,
+    name: props.name ?? null,
+    properties: props,
+  };
+}
+
 export async function patchHubspotCompanyProperties(
   companyId: string,
   properties: Record<string, string | number | boolean | null>
