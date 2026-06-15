@@ -110,6 +110,7 @@ async function fetchPosts(
     JOIN swarm_clickpipes.publications pub ON o.id = pub.organization_id
     JOIN swarm_clickpipes.posts p ON pub.id = p.publication_id
     WHERE o.id IN (${orgInClause})
+      AND o.plan_id = 8
       AND p.send_status = 2
       AND p.scheduled_at >= now() - INTERVAL ${lookbackDays} DAY
       AND p.scheduled_at < toDate(now())
@@ -333,16 +334,26 @@ export async function fetchDeliverabilityPosts(
   // snapshot with whatever the rest of the dashboard considers an
   // active customer, and keeps Q1's row count bounded so we don't
   // need an arbitrary LIMIT to keep sync times sane.
+  //
+  // UUID filter is required: loadCustomers() appends a synthetic
+  // TEST_CUSTOMER row whose workspace_id is the literal string
+  // "test-workspace" (not a UUID). The `o.id` column in ClickHouse
+  // is typed UUID and the database refuses the whole IN clause when
+  // any value can't parse, so a single bad ID kills the entire Q1
+  // query and the snapshot ships empty.
+  const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   const customers = await loadCustomers();
+  const allWorkspaceIds = customers
+    .map((c) => c.workspace_id)
+    .filter((id): id is string => typeof id === "string" && id.length > 0);
   const orgIds = Array.from(
-    new Set(
-      customers
-        .map((c) => c.workspace_id)
-        .filter((id): id is string => typeof id === "string" && id.length > 0)
-    )
+    new Set(allWorkspaceIds.filter((id) => UUID_RE.test(id)))
   );
+  const dropped = allWorkspaceIds.length - orgIds.length;
   console.error(
-    `[deliverability] scoping Q1 to ${orgIds.length} customer-book workspaces`
+    `[deliverability] scoping Q1 to ${orgIds.length} customer-book workspaces${
+      dropped > 0 ? ` (dropped ${dropped} non-UUID workspace_ids)` : ""
+    }`
   );
   const posts = await fetchPosts(lookbackDays, orgIds);
   const postIds = posts.map((p) => p.post_id);
