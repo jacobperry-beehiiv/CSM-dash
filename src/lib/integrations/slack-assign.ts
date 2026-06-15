@@ -51,8 +51,17 @@ import { getTextValue, getSelectValue } from "./slack-views";
 export const ASSIGN_OPEN_BUTTON_ACTION_ID = "assign_open_modal";
 export const ASSIGN_MODAL_CALLBACK_ID = "assign_modal";
 
-const HUBSPOT_RISK_LEVEL_PROPERTY = "property_risk_level_csm_";
-const HUBSPOT_STATUS_PROPERTY = "property_company_status";
+/** HubSpot's internal property names — NOT the q10600 column names.
+ *  q10600 (via Metabase's data model) surfaces these with a
+ *  `property_` prefix and single underscores; the actual HubSpot
+ *  REST API uses the raw HubSpot internal names (verified via the
+ *  HubSpot properties endpoint).
+ *
+ *  Risk level: enum (Red / Yellow / Light Green / Green).
+ *  Company status: enum (Onboarding / Live / Churned (off beehiiv) /
+ *    Downgraded (on beehiiv) / Do Not Use (Awaiting Onboarding)). */
+const HUBSPOT_RISK_LEVEL_PROPERTY = "risk_level__csm_";
+const HUBSPOT_STATUS_PROPERTY = "company_status";
 const DEFAULT_RISK_LEVEL = "Light Green";
 
 const STATUS_VALUES = ["Live", "Onboarding"] as const;
