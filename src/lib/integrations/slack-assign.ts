@@ -32,6 +32,7 @@ import { applyTodoOps } from "../personal-todos/store";
 import { userKeyFromEmail } from "../personal-todos/identity";
 import { newTodoId, type PersonalTodo } from "../personal-todos/types";
 import {
+  fetchDealAssociatedCompanyIds,
   fetchHubspotCompany,
   listHubspotOwners,
   patchHubspotCompanyProperties,
@@ -108,14 +109,44 @@ export function buildAssignButtonBlocks(
 
 // ─── HubSpot company-id parsing ───────────────────────────────────────
 
-export function parseHubspotCompanyInput(raw: string): string | null {
+/** Parsed result of a HubSpot URL/ID input. */
+export type ParsedHubspotRef =
+  | { kind: "company"; id: string }
+  | { kind: "deal"; id: string };
+
+/**
+ * Recognize either a HubSpot company or deal from the user's paste.
+ * URL shapes:
+ *   • company old:  .../company/<id>
+ *   • company new:  .../record/0-2/<id>           (object type 0-2)
+ *   • deal old:     .../deal/<id>
+ *   • deal new:     .../record/0-3/<id>           (object type 0-3)
+ * Bare numeric IDs default to "company" since we can't disambiguate
+ * a deal ID from a company ID without context. CSMs who want to use
+ * a deal ID directly should paste the URL.
+ *
+ * Deal inputs get resolved to a company via the associations endpoint
+ * in the submit handler — see fetchDealAssociatedCompanyIds().
+ */
+export function parseHubspotCompanyInput(raw: string): ParsedHubspotRef | null {
   const trimmed = raw.trim();
   if (!trimmed) return null;
-  if (/^\d+$/.test(trimmed)) return trimmed;
-  const recordMatch = trimmed.match(/\/record\/0-2\/(\d+)/);
-  if (recordMatch) return recordMatch[1];
+
+  // Deal URLs first — the more specific match wins.
+  const dealRecordMatch = trimmed.match(/\/record\/0-3\/(\d+)/);
+  if (dealRecordMatch) return { kind: "deal", id: dealRecordMatch[1] };
+  const dealMatch = trimmed.match(/\/deal\/(\d+)/);
+  if (dealMatch) return { kind: "deal", id: dealMatch[1] };
+
+  // Company URLs.
+  const companyRecordMatch = trimmed.match(/\/record\/0-2\/(\d+)/);
+  if (companyRecordMatch) return { kind: "company", id: companyRecordMatch[1] };
   const companyMatch = trimmed.match(/\/company\/(\d+)/);
-  if (companyMatch) return companyMatch[1];
+  if (companyMatch) return { kind: "company", id: companyMatch[1] };
+
+  // Bare numeric → company (can't disambiguate; matches v1 behavior).
+  if (/^\d+$/.test(trimmed)) return { kind: "company", id: trimmed };
+
   return null;
 }
 
@@ -337,15 +368,66 @@ export const assignModalHandler: ViewSubmitHandler = async ({ payload }) => {
   }
   const v = form.values;
 
-  const companyId = parseHubspotCompanyInput(v.hubspotCompanyInput);
-  if (!companyId) {
+  const parsed = parseHubspotCompanyInput(v.hubspotCompanyInput);
+  if (!parsed) {
     return {
       response_action: "errors",
       errors: {
         hubspot_company:
-          "Couldn't read a HubSpot company ID. Paste the bare ID (e.g. 22204103285) or a HubSpot URL containing it.",
+          "Couldn't read a HubSpot company or deal ID. Paste a HubSpot company URL, a deal URL, or a bare company ID.",
       },
     } as ViewSubmitResponse;
+  }
+
+  // Deal → resolve to associated company first. Surface a clear error
+  // if the deal has no associated company yet (CSM should add one in
+  // HubSpot before assigning) or multiple (we pick the first and note
+  // it in the confirmation, so the CSM can correct if it's the wrong
+  // one).
+  let companyId = parsed.id;
+  let dealResolution:
+    | { dealId: string; companyId: string; otherCompanyCount: number }
+    | null = null;
+  if (parsed.kind === "deal") {
+    let associated: string[] | null = null;
+    try {
+      associated = await fetchDealAssociatedCompanyIds(parsed.id);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      // Missing-scope path: surface a clear hint so the user can fix
+      // it in the HubSpot Private App config instead of staring at a
+      // raw 403 + correlation ID. Same pattern as the rest of the
+      // hubspot integration when a scope is missing.
+      const friendly = /403/.test(msg)
+        ? "HubSpot deal lookup needs the `crm.objects.deals.read` scope on the Private App. Add it in HubSpot → Settings → Integrations → Private Apps → Scopes, then retry. (Or paste the company URL/ID directly.)"
+        : `HubSpot deal lookup failed: ${msg.slice(0, 180)}`;
+      return {
+        response_action: "errors",
+        errors: { hubspot_company: friendly },
+      } as ViewSubmitResponse;
+    }
+    if (associated === null) {
+      return {
+        response_action: "errors",
+        errors: {
+          hubspot_company: `No HubSpot deal with ID ${parsed.id}.`,
+        },
+      } as ViewSubmitResponse;
+    }
+    if (associated.length === 0) {
+      return {
+        response_action: "errors",
+        errors: {
+          hubspot_company: `Deal ${parsed.id} has no associated company. Link a company on the deal record in HubSpot, then re-open this form.`,
+        },
+      } as ViewSubmitResponse;
+    }
+    companyId = associated[0];
+    dealResolution = {
+      dealId: parsed.id,
+      companyId,
+      otherCompanyCount: associated.length - 1,
+    };
   }
 
   let company: { id: string; name: string | null } | null = null;
@@ -365,7 +447,11 @@ export const assignModalHandler: ViewSubmitHandler = async ({ payload }) => {
     return {
       response_action: "errors",
       errors: {
-        hubspot_company: `No HubSpot company with ID ${companyId}.`,
+        hubspot_company: `No HubSpot company with ID ${companyId}${
+          dealResolution
+            ? ` (resolved from deal ${dealResolution.dealId})`
+            : ""
+        }.`,
       },
     } as ViewSubmitResponse;
   }
@@ -462,6 +548,7 @@ export const assignModalHandler: ViewSubmitHandler = async ({ payload }) => {
       hubspotErrors,
       todoErrors,
       driveResult,
+      dealResolution,
     });
   }
 
@@ -470,6 +557,15 @@ export const assignModalHandler: ViewSubmitHandler = async ({ payload }) => {
     `:white_check_mark: Assigned *${companyName}* to *${v.ownerEmail}* (${v.status}).`,
     `• HubSpot: <https://app.hubspot.com/contacts/0/record/0-2/${company.id}|company record> — owner + status + risk (Light Green) set.`,
   ];
+  if (dealResolution) {
+    const extras = dealResolution.otherCompanyCount;
+    ackParts.push(
+      `• Resolved from deal ${dealResolution.dealId}` +
+        (extras > 0
+          ? ` (note: ${extras} other associated compan${extras === 1 ? "y" : "ies"} on this deal — used primary).`
+          : ".")
+    );
+  }
   if (hubspotErrors.length) ackParts.push(`⚠ HubSpot PATCH: ${hubspotErrors.join(" · ")}`);
   if (todoErrors.length) {
     ackParts.push(`⚠ To-dos: ${todoErrors.join(" · ")}`);
@@ -718,6 +814,11 @@ async function postAssignmentSummary(args: {
   driveResult:
     | { ok: true; id: string; webViewLink: string; name: string }
     | { ok: false; error: string };
+  /** Non-null when the user pasted a deal URL/ID; surfaces a note so
+   *  they can verify the right associated company was picked. */
+  dealResolution?:
+    | { dealId: string; companyId: string; otherCompanyCount: number }
+    | null;
 }): Promise<void> {
   const token = process.env.SLACK_BOT_TOKEN;
   if (!token) return;
@@ -725,6 +826,15 @@ async function postAssignmentSummary(args: {
   lines.push(
     `:white_check_mark: *<https://app.hubspot.com/contacts/0/record/0-2/${args.hubspotCompanyId}|${args.companyName}>* assigned to *${args.assignedCsmEmail}* (${args.status}).`
   );
+  if (args.dealResolution) {
+    const extras = args.dealResolution.otherCompanyCount;
+    lines.push(
+      `• Resolved from deal <https://app.hubspot.com/contacts/0/record/0-3/${args.dealResolution.dealId}|${args.dealResolution.dealId}>` +
+        (extras > 0
+          ? ` — note: ${extras} other associated compan${extras === 1 ? "y" : "ies"} on this deal; assignment used the primary.`
+          : ".")
+    );
+  }
   if (args.hubspotErrors.length === 0) {
     lines.push("• HubSpot updated — owner + status + risk (Light Green).");
   } else {

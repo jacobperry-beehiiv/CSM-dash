@@ -1075,6 +1075,40 @@ export async function listHubspotOwners(): Promise<HubspotOwner[]> {
  * field-level error inline in the modal).
  */
 /**
+ * Resolve a HubSpot deal to its associated company IDs via the
+ * v3 associations endpoint:
+ *   GET /crm/v3/objects/deals/{dealId}/associations/companies
+ * → { results: [{ id, type }, ...] }
+ *
+ * Returns the array of associated company IDs in association order
+ * (HubSpot's own order, typically primary first). Empty array when
+ * the deal exists but has no company associations. Null on 404 so
+ * the caller can surface "no such deal" cleanly.
+ */
+export async function fetchDealAssociatedCompanyIds(
+  dealId: string
+): Promise<string[] | null> {
+  const token = await getAccessToken();
+  const res = await fetch(
+    `https://api.hubapi.com/crm/v3/objects/deals/${encodeURIComponent(dealId)}/associations/companies`,
+    { headers: { Authorization: `Bearer ${token}` } }
+  );
+  if (res.status === 404) return null;
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(
+      `HubSpot deal ${dealId} associations fetch failed (${res.status}): ${body.slice(0, 200)}`
+    );
+  }
+  const json = (await res.json()) as {
+    results?: Array<{ id?: string }>;
+  };
+  return (json.results ?? [])
+    .map((r) => r.id)
+    .filter((id): id is string => typeof id === "string" && id.length > 0);
+}
+
+/**
  * Lightweight company GET — returns `{ id, name }` + any extra
  * properties the caller passes in `properties[]`. Used by the
  * Slack @bot assign flow to confirm a pasted company URL/ID before
