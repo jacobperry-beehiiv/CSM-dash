@@ -597,7 +597,7 @@ export function DeliverabilityPanel({
                         </div>
                       </td>
                       <td className="px-3 py-3 break-words">
-                        <div className="font-medium text-fg">
+                        <div className="font-semibold text-fg">
                           {group.workspaceName}
                         </div>
                         <div className="text-xs text-muted">
@@ -671,40 +671,55 @@ export function DeliverabilityPanel({
                         </div>
                       </td>
                     </tr>
-                    {isWorkspaceOpen
-                      ? group.alerts.map((alert) => (
-                          <PublicationAlertRows
-                            key={alert.post.post_id}
-                            alert={alert}
-                            targetDate={data.target_date}
-                            selected={selected.has(alert.post.post_id)}
-                            expanded={expandedPosts.has(alert.post.post_id)}
-                            busy={busyPosts.has(alert.post.post_id)}
-                            onToggleSelected={() =>
-                              toggleSelected(alert.post.post_id)
-                            }
-                            onToggleExpanded={() =>
-                              togglePost(alert.post.post_id)
-                            }
-                            onClear={(cleared, reason) =>
-                              void setClearedOptimistic(
-                                alert.post.post_id,
-                                cleared,
-                                reason
-                              )
-                            }
-                            onDraft={
-                              customer
-                                ? () =>
-                                    setOutreachFor({
-                                      customer,
-                                      scenario: "general-checkin",
-                                    })
-                                : undefined
-                            }
-                          />
-                        ))
-                      : null}
+                    {isWorkspaceOpen ? (
+                      <tr className="border-b border-border bg-canvas/30">
+                        <td colSpan={12} className="px-3 py-2 pl-16 pr-4">
+                          <div className="ml-4 rounded-lg border border-border bg-surface shadow-sm overflow-hidden">
+                            <div className="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted bg-canvas/60 border-b border-border/60">
+                              Publications ({group.alerts.length})
+                            </div>
+                            <table className="w-full text-xs">
+                              <tbody>
+                                {group.alerts.map((alert) => (
+                                  <PublicationAlertRows
+                                    key={alert.post.post_id}
+                                    alert={alert}
+                                    targetDate={data.target_date}
+                                    selected={selected.has(alert.post.post_id)}
+                                    expanded={expandedPosts.has(
+                                      alert.post.post_id
+                                    )}
+                                    busy={busyPosts.has(alert.post.post_id)}
+                                    onToggleSelected={() =>
+                                      toggleSelected(alert.post.post_id)
+                                    }
+                                    onToggleExpanded={() =>
+                                      togglePost(alert.post.post_id)
+                                    }
+                                    onClear={(cleared, reason) =>
+                                      void setClearedOptimistic(
+                                        alert.post.post_id,
+                                        cleared,
+                                        reason
+                                      )
+                                    }
+                                    onDraft={
+                                      customer
+                                        ? () =>
+                                            setOutreachFor({
+                                              customer,
+                                              scenario: "general-checkin",
+                                            })
+                                        : undefined
+                                    }
+                                  />
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </td>
+                      </tr>
+                    ) : null}
                   </Fragment>
                 );
               })}
@@ -799,6 +814,18 @@ function aggregateWorkspaceMetrics(alerts: DeliverabilityAlert[]) {
   };
 }
 
+function publicationAccent(
+  flagged: boolean,
+  critical: boolean,
+  cleared: boolean
+): string {
+  if (cleared) return "border-l-slate-300 dark:border-l-slate-500";
+  if (!flagged) return "border-l-emerald-300 dark:border-l-emerald-600";
+  return critical
+    ? "border-l-red-400 dark:border-l-red-500"
+    : "border-l-amber-400 dark:border-l-amber-500";
+}
+
 function PublicationAlertRows({
   alert,
   targetDate,
@@ -830,23 +857,18 @@ function PublicationAlertRows({
     workspace_name: alert.post.workspace_name,
     publication_id: alert.post.publication_id,
   });
+  const accent = publicationAccent(flagged, critical, cleared);
 
   return (
     <Fragment>
       <tr
         onClick={onToggleExpanded}
-        className={`border-b border-border/60 align-top cursor-pointer transition-colors bg-canvas/20 ${
-          expanded
-            ? flagged
-              ? critical
-                ? "bg-red-50/80 dark:bg-red-500/40"
-                : "bg-amber-50/80 dark:bg-amber-500/40"
-              : "bg-blue-50/60 dark:bg-blue-500/20"
-            : "hover:bg-canvas/50"
+        className={`border-b border-border/60 align-top cursor-pointer transition-colors text-xs bg-surface hover:bg-canvas/70 border-l-[3px] ${accent} ${
+          expanded ? "bg-canvas/50" : ""
         }`}
       >
         <td
-          className="px-3 py-2 text-subtle select-none"
+          className="px-2 py-2 text-subtle select-none w-8"
           onClick={(e) => e.stopPropagation()}
         >
           <input
@@ -857,16 +879,16 @@ function PublicationAlertRows({
             className="h-3.5 w-3.5 rounded border-border-strong cursor-pointer"
           />
         </td>
-        <td className="px-3 py-2 text-subtle select-none pl-5">
+        <td className="px-2 py-2 text-subtle select-none w-8">
           <span
-            className={`inline-block transition-transform ${
+            className={`inline-block transition-transform text-[10px] ${
               expanded ? "rotate-90" : ""
             }`}
           >
             ▸
           </span>
         </td>
-        <td className="px-3 py-2">
+        <td className="px-2 py-2 w-[8%]">
           <div className="flex flex-col items-start gap-1">
             {cleared ? (
               <span className="inline-flex items-center px-1.5 py-0.5 rounded-md text-[11px] font-medium bg-slate-200 text-slate-700 dark:bg-slate-500/30 dark:text-slate-200">
@@ -886,34 +908,34 @@ function PublicationAlertRows({
             ) : null}
           </div>
         </td>
-        <td className="px-3 py-2 break-words pl-5">
-          <div className="font-medium text-fg">{alert.post.newsletter}</div>
+        <td className="px-2 py-2 break-words w-[18%] pl-5">
+          <div className="text-fg">{alert.post.newsletter}</div>
           {isCarryover ? (
             <div className="text-[10px] text-subtle mt-0.5">
               Sent {fmtDate(alert.post.sent_date)}
             </div>
           ) : null}
         </td>
-        <td className="px-3 py-2 text-muted italic break-words hidden md:table-cell">
+        <td className="px-2 py-2 text-muted italic break-words hidden md:table-cell w-[22%]">
           &ldquo;{alert.post.subject}&rdquo;
         </td>
-        <td className="px-3 py-2 text-right tabular-nums">
+        <td className="px-2 py-2 text-right tabular-nums w-[7%]">
           {fmtNumber(alert.post.sent)}
         </td>
-        <td className="px-3 py-2 text-right tabular-nums">
+        <td className="px-2 py-2 text-right tabular-nums w-[7%]">
           {fmtPct(alert.post.delivery_rate * 100, 1)}
         </td>
-        <td className="px-3 py-2 text-right tabular-nums">
+        <td className="px-2 py-2 text-right tabular-nums w-[7%]">
           {fmtPct(alert.post.open_rate * 100, 1)}
         </td>
-        <td className="px-3 py-2 text-right tabular-nums hidden xl:table-cell">
+        <td className="px-2 py-2 text-right tabular-nums hidden xl:table-cell w-[7%]">
           {fmtPct(alert.post.ctr * 100, 1)}
         </td>
-        <td className="px-3 py-2 text-right tabular-nums hidden xl:table-cell">
+        <td className="px-2 py-2 text-right tabular-nums hidden xl:table-cell w-[7%]">
           {fmtRate(alert.post.spam_rate * 100, 3)}%
         </td>
-        <td className="px-3 py-2 hidden lg:table-cell" />
-        <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
+        <td className="px-2 py-2 hidden lg:table-cell w-[10%]" />
+        <td className="px-2 py-2 w-[7%]" onClick={(e) => e.stopPropagation()}>
           <div className="flex items-center gap-1 justify-end">
             {mbUrl ? (
               <a
@@ -972,16 +994,8 @@ function PublicationAlertRows({
         </td>
       </tr>
       {expanded ? (
-        <tr
-          className={`border-b border-border/60 ${
-            flagged
-              ? critical
-                ? "bg-red-50/60 dark:bg-red-500/25"
-                : "bg-amber-50/60 dark:bg-amber-500/25"
-              : "bg-blue-50/40 dark:bg-blue-500/10"
-          }`}
-        >
-          <td colSpan={12} className="px-6 py-3 bg-canvas/20">
+        <tr className="border-b border-border/60 bg-canvas/40">
+          <td colSpan={12} className="px-4 py-3 pl-8 border-l-[3px] border-l-border/80">
             <DeliverabilityDetail alert={alert} />
           </td>
         </tr>
