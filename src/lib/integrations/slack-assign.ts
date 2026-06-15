@@ -475,7 +475,12 @@ export const assignModalHandler: ViewSubmitHandler = async ({ payload }) => {
   }
   const requesterEmail = threadContext?.requester_user || "";
 
-  // ── HubSpot PATCH — owner + status + risk in one call.
+  // ── HubSpot PATCH — owner + status + risk in one call. This is the
+  // gate for everything downstream: if the assignment didn't land in
+  // HubSpot, there's nothing real to schedule to-dos or build a Drive
+  // folder for. The to-do batch + Drive folder steps are skipped in
+  // that case so we don't strand 17 to-dos against a customer whose
+  // owner reassignment never took.
   const hubspotErrors: string[] = [];
   try {
     await patchHubspotCompanyProperties(company.id, {
@@ -486,34 +491,44 @@ export const assignModalHandler: ViewSubmitHandler = async ({ payload }) => {
   } catch (e) {
     hubspotErrors.push(e instanceof Error ? e.message : String(e));
   }
+  const hubspotOk = hubspotErrors.length === 0;
 
-  // ── Personal to-do sequence for the assigned CSM.
+  // ── Personal to-do sequence for the assigned CSM (gated on HubSpot).
   const todoErrors: string[] = [];
   let todoCount = 0;
-  try {
-    const targetUserKey = userKeyFromEmail(v.ownerEmail);
-    const todos = buildAssignTodoSequence({
-      companyName,
-      hubspotCompanyId: company.id,
-      requesterEmail: requesterEmail || "a teammate",
-      flow: v.status,
-      slackUserId: payload.user.id,
-    });
-    await applyTodoOps(
-      targetUserKey,
-      todos.map((todo) => ({ type: "add" as const, todo }))
-    );
-    todoCount = todos.length;
-  } catch (e) {
-    todoErrors.push(e instanceof Error ? e.message : String(e));
+  if (hubspotOk) {
+    try {
+      const targetUserKey = userKeyFromEmail(v.ownerEmail);
+      const todos = buildAssignTodoSequence({
+        companyName,
+        hubspotCompanyId: company.id,
+        requesterEmail: requesterEmail || "a teammate",
+        flow: v.status,
+        slackUserId: payload.user.id,
+      });
+      await applyTodoOps(
+        targetUserKey,
+        todos.map((todo) => ({ type: "add" as const, todo }))
+      );
+      todoCount = todos.length;
+    } catch (e) {
+      todoErrors.push(e instanceof Error ? e.message : String(e));
+    }
+  } else {
+    todoErrors.push("skipped — HubSpot PATCH failed");
   }
 
-  // ── Drive folder.
+  // ── Drive folder (gated on HubSpot).
   let driveResult:
     | { ok: true; id: string; webViewLink: string; name: string }
     | { ok: false; error: string } = { ok: false, error: "skipped" };
 
-  if (requesterEmail) {
+  if (!hubspotOk) {
+    driveResult = {
+      ok: false,
+      error: "skipped — HubSpot PATCH failed",
+    };
+  } else if (requesterEmail) {
     try {
       if (!(await hasDriveAccess(requesterEmail))) {
         driveResult = {
@@ -561,11 +576,19 @@ export const assignModalHandler: ViewSubmitHandler = async ({ payload }) => {
     });
   }
 
-  // ── DM ack.
-  const ackParts: string[] = [
-    `:white_check_mark: Assigned *${companyName}* to *${v.ownerEmail}* (${v.status}).`,
-    `• HubSpot: <https://app.hubspot.com/contacts/0/record/0-2/${company.id}|company record> — owner + status + risk (Light Green) set.`,
-  ];
+  // ── DM ack. Headline reflects whether HubSpot landed — when it
+  // failed, the assignment never actually took, so leading with a
+  // green check would lie about what happened.
+  const ackParts: string[] = hubspotOk
+    ? [
+        `:white_check_mark: Assigned *${companyName}* to *${v.ownerEmail}* (${v.status}).`,
+        `• HubSpot: <https://app.hubspot.com/contacts/0/record/0-2/${company.id}|company record> — owner + status + risk (Light Green) set.`,
+      ]
+    : [
+        `:x: Assignment did NOT land — HubSpot PATCH failed for *${companyName}*.`,
+        `• Nothing else was applied (no to-dos, no Drive folder) since the HubSpot reassignment didn't take.`,
+        `• HubSpot record: <https://app.hubspot.com/contacts/0/record/0-2/${company.id}|company record>`,
+      ];
   if (dealResolution) {
     const extras = dealResolution.otherCompanyCount;
     ackParts.push(
@@ -831,10 +854,22 @@ async function postAssignmentSummary(args: {
 }): Promise<void> {
   const token = process.env.SLACK_BOT_TOKEN;
   if (!token) return;
+  const hubspotOk = args.hubspotErrors.length === 0;
   const lines: string[] = [];
-  lines.push(
-    `:white_check_mark: *<https://app.hubspot.com/contacts/0/record/0-2/${args.hubspotCompanyId}|${args.companyName}>* assigned to *${args.assignedCsmEmail}* (${args.status}).`
-  );
+  // When HubSpot fails the assignment never actually landed — the
+  // headline reflects that so the thread doesn't read as a success.
+  if (hubspotOk) {
+    lines.push(
+      `:white_check_mark: *<https://app.hubspot.com/contacts/0/record/0-2/${args.hubspotCompanyId}|${args.companyName}>* assigned to *${args.assignedCsmEmail}* (${args.status}).`
+    );
+  } else {
+    lines.push(
+      `:x: Assignment did NOT land — HubSpot PATCH failed for *<https://app.hubspot.com/contacts/0/record/0-2/${args.hubspotCompanyId}|${args.companyName}>*.`
+    );
+    lines.push(
+      "• To-dos + Drive folder were skipped (no point scheduling them when the HubSpot reassignment didn't take)."
+    );
+  }
   if (args.dealResolution) {
     const extras = args.dealResolution.otherCompanyCount;
     lines.push(
