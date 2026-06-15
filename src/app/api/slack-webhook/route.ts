@@ -830,7 +830,7 @@ async function handleReactionAdded(
 
   // Fetch the message text + permalink. Both calls go to Slack with the
   // bot token; the bot must be a member of the channel for
-  // conversations.history to succeed on public/private channels. DMs
+  // conversations.replies to succeed on public/private channels. DMs
   // would require im:history (we'll skip those for v1 since reacting
   // to a DM is unusual).
   const messageText = await fetchMessageText(event.item.channel, event.item.ts);
@@ -1098,25 +1098,44 @@ async function fetchMessageText(
 ): Promise<string | null> {
   const token = process.env.SLACK_BOT_TOKEN;
   if (!token) return null;
-  // conversations.history with latest=ts + inclusive=true + limit=1
-  // returns exactly that message. Works for public channels (needs
-  // channels:history) and private channels (groups:history).
+  // Use conversations.replies, not conversations.history.
+  //
+  // conversations.history returns ONLY top-level channel messages —
+  // threaded replies don't appear there. When the reacted message is
+  // a thread reply, passing its ts as `latest` to history resolves to
+  // the nearest top-level message at or before that timestamp, which
+  // is the wrong message entirely (the symptom: "reacted on a thread
+  // reply, but the to-do picks up the most recent channel message").
+  //
+  // conversations.replies handles all three cases we care about:
+  //   • Standalone non-threaded message → returns just that message.
+  //   • Thread parent → returns parent + all replies.
+  //   • Thread reply → returns the parent + all siblings (including
+  //     the reacted message).
+  // We scan the returned `messages` array for the exact ts to find
+  // the one the user actually reacted to.
+  //
+  // limit=200 is enough headroom for the vast majority of threads.
+  // Reactions on the 201st+ reply of an extremely long thread would
+  // miss; not worth paginating for v1.
   const params = new URLSearchParams({
     channel,
-    latest: ts,
+    ts,
     inclusive: "true",
-    limit: "1",
+    limit: "200",
   });
   try {
     const r = await fetch(
-      `https://slack.com/api/conversations.history?${params.toString()}`,
+      `https://slack.com/api/conversations.replies?${params.toString()}`,
       { headers: { Authorization: `Bearer ${token}` } }
     );
     const j = (await r.json()) as {
       ok: boolean;
-      messages?: Array<{ text?: string }>;
+      messages?: Array<{ ts?: string; text?: string }>;
     };
-    return j.ok ? (j.messages?.[0]?.text ?? null) : null;
+    if (!j.ok) return null;
+    const match = j.messages?.find((m) => m.ts === ts);
+    return match?.text ?? null;
   } catch {
     return null;
   }
