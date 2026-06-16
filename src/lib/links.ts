@@ -49,6 +49,23 @@ export function hubspotCompanyUrl(
 }
 
 /**
+ * HubSpot deal record URL — parallel to hubspotCompanyUrl. `0-3` is
+ * HubSpot's object-type id for deals (vs 0-2 companies, 0-1 contacts).
+ * Same portal-id source as the company helper so a future second-portal
+ * setup flows through the env var without touching call sites.
+ */
+export function hubspotDealUrl(
+  hubspotDealId: string | null | undefined
+): string | null {
+  if (!hubspotDealId) return null;
+  const portal =
+    process.env.NEXT_PUBLIC_HUBSPOT_PORTAL_ID ?? DEFAULT_HUBSPOT_PORTAL_ID;
+  return `https://app.hubspot.com/contacts/${portal}/record/0-3/${encodeURIComponent(
+    hubspotDealId
+  )}`;
+}
+
+/**
  * Stripe Dashboard URL for a customer record. Defaults to live mode
  * since this dashboard reads production data; set
  * NEXT_PUBLIC_STRIPE_TEST_MODE=true to point links at the test
