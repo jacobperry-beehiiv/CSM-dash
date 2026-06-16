@@ -44,6 +44,14 @@ export interface SlackSourceMeta {
    *  scheduling its 16-step onboarding playbook so a re-run for the
    *  same company doesn't duplicate every to-do. */
   hubspot_company_id?: string;
+  /** When a to-do is created or modified via the /admin/team-todos
+   *  surface, the admin's email is stamped here so the UI can render
+   *  an "edited by admin" tag and the owning CSM has a clear audit
+   *  trail. Updated on every admin-initiated op (add / patch /
+   *  toggle / delete-of-completed-rebuild). Self-edits leave the
+   *  field untouched. */
+  admin_acted_by?: string;
+  admin_acted_at?: string;
 }
 
 export interface PersonalTodo {

@@ -37,19 +37,54 @@ export async function getTodosForUser(userKey: string): Promise<PersonalTodo[]> 
   return all.by_user[userKey]?.todos ?? [];
 }
 
-/** Apply one op to a user's slice. Pure function — the store function
- *  below does the I/O around it. */
+/**
+ * Apply one op to a user's slice. Pure function — the store function
+ * below does the I/O around it.
+ *
+ * `audit` (optional): when provided, the op stamps source_meta with
+ * `admin_acted_by` + `admin_acted_at` so the UI can show "edited by
+ * admin: jacob@beehiiv.com" and the owning CSM has a clear trail of
+ * who did what. Only set when the op came in via the /admin/team-todos
+ * surface — self-edits leave the field untouched.
+ */
+export interface AdminAudit {
+  admin_acted_by: string;
+}
+
 export function applyTodoOp(
   todos: PersonalTodo[],
-  op: PersonalTodoOp
+  op: PersonalTodoOp,
+  audit?: AdminAudit
 ): PersonalTodo[] {
   const now = new Date().toISOString();
+  const stampAudit = (
+    existing: PersonalTodo["source_meta"]
+  ): PersonalTodo["source_meta"] => {
+    if (!audit) return existing;
+    return {
+      ...(existing ?? {}),
+      admin_acted_by: audit.admin_acted_by,
+      admin_acted_at: now,
+    };
+  };
   switch (op.type) {
     case "add":
-      return [...todos, op.todo];
+      return [
+        ...todos,
+        audit
+          ? { ...op.todo, source_meta: stampAudit(op.todo.source_meta) }
+          : op.todo,
+      ];
     case "patch":
       return todos.map((t) =>
-        t.id !== op.todoId ? t : { ...t, ...op.patch, updated_at: now }
+        t.id !== op.todoId
+          ? t
+          : {
+              ...t,
+              ...op.patch,
+              source_meta: stampAudit(t.source_meta),
+              updated_at: now,
+            }
       );
     case "toggle_complete":
       return todos.map((t) =>
@@ -58,10 +93,14 @@ export function applyTodoOp(
           : {
               ...t,
               completed_at: t.completed_at ? null : now,
+              source_meta: stampAudit(t.source_meta),
               updated_at: now,
             }
       );
     case "delete":
+      // Nothing to stamp — the row is gone. Audit of deletes lives
+      // elsewhere (the response shows what was removed; we could
+      // promote that to a separate audit log later if needed).
       return todos.filter((t) => t.id !== op.todoId);
   }
 }
@@ -74,12 +113,13 @@ export function applyTodoOp(
  */
 export async function applyTodoOps(
   userKey: string,
-  ops: PersonalTodoOp[]
+  ops: PersonalTodoOp[],
+  audit?: AdminAudit
 ): Promise<PersonalTodo[]> {
   const all = await loadAll();
   let userTodos = all.by_user[userKey]?.todos ?? [];
   for (const op of ops) {
-    userTodos = applyTodoOp(userTodos, op);
+    userTodos = applyTodoOp(userTodos, op, audit);
   }
   // Drop obvious garbage (id/title required) before persisting — same
   // safety net team-tasks has at saveTeamTasks.

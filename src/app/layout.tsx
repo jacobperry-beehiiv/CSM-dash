@@ -8,6 +8,8 @@ import { ThemeToggle } from "@/components/theme-toggle";
 import { UserMenu } from "@/components/user-menu";
 import { BeehiivLogo } from "@/components/beehiiv-logo";
 import { ReportIssueButton } from "@/components/report-issue-button";
+import { auth } from "@/auth";
+import { isAdmin } from "@/lib/auth/admin";
 
 export const metadata: Metadata = {
   title: "CSM Mission Control — beehiiv",
@@ -21,6 +23,11 @@ const NAV = [
   { href: "/feature-requests", label: "Feature requests" },
   { href: "/settings", label: "Settings" },
 ];
+
+/** Nav entries that only render for admins (isAdmin → true). Today
+ *  just the team-todos view; gate via the same helper any future
+ *  admin-only surfaces should share. */
+const ADMIN_NAV = [{ href: "/admin/team-todos", label: "Team to-dos" }];
 
 async function SnapshotMeta() {
   const meta = await dataSourceMeta();
@@ -40,9 +47,12 @@ try {
 } catch (e) {}
 `;
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
+  const session = await auth();
+  const viewerIsAdmin = isAdmin(session?.user?.email);
+  const nav = viewerIsAdmin ? [...NAV, ...ADMIN_NAV] : NAV;
   return (
     <html lang="en" className="h-full antialiased">
       <head>
@@ -72,7 +82,7 @@ export default function RootLayout({
                 <BeehiivLogo className="h-7 w-7" />
               </Link>
               <nav className="flex items-center gap-6 text-[13.5px]">
-                {NAV.map((n) => (
+                {nav.map((n) => (
                   <Link
                     key={n.href}
                     href={n.href}
