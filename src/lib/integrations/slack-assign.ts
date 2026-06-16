@@ -28,6 +28,7 @@
  */
 
 import { loadCustomers } from "../data/load-customers";
+import { loadSettings } from "../data/settings";
 import { applyTodoOps, getTodosForUser } from "../personal-todos/store";
 import { userKeyFromEmail } from "../personal-todos/identity";
 import { newTodoId, type PersonalTodo } from "../personal-todos/types";
@@ -63,18 +64,12 @@ export const ASSIGN_MODAL_CALLBACK_ID = "assign_modal";
  *    Downgraded (on beehiiv) / Do Not Use (Awaiting Onboarding)). */
 const HUBSPOT_RISK_LEVEL_PROPERTY = "risk_level__csm_";
 const HUBSPOT_STATUS_PROPERTY = "company_status";
-/** beehiiv's CSM-team custom property — enumeration keyed by the
- *  same HubSpot owner_id values as `hubspot_owner_id`, but they're
- *  separate fields. The dashboard's CSM column (via q10600) reads
- *  from THIS property, not from `hubspot_owner_id`, so setting only
- *  the standard owner would leave the CSM column unchanged after
- *  the next sync. */
+/** beehiiv's CSM-team custom property — enumeration keyed by HubSpot
+ *  owner_id values. q10600 + the dashboard read from THIS property.
+ *  Sister field hubspot_owner_id (the standard "Company owner") is
+ *  intentionally NOT touched here — it's used for sales workflows
+ *  and often diverges from the CSM assignment on Enterprise accounts. */
 const HUBSPOT_CSM_PROPERTY = "customer_success_manager";
-/** Matching string property for the CSM's email. The dashboard reads
- *  this as `customer_success_manager_email` (Metabase aliases it),
- *  and the userKey resolution + Slack mention rendering both depend
- *  on it being populated. */
-const HUBSPOT_CSM_EMAIL_PROPERTY = "owner_email__csm_";
 const DEFAULT_RISK_LEVEL = "Light Green";
 
 const STATUS_VALUES = ["Live", "Onboarding"] as const;
@@ -83,6 +78,60 @@ type AccountStatus = (typeof STATUS_VALUES)[number];
 const DRIVE_PARENT_FOLDER_ID =
   process.env.DRIVE_ASSIGN_PARENT_FOLDER_ID ??
   "1_8XXke1lzPqnw_qC0uzGp5hdDMbxJAHc";
+
+/**
+ * Resolve a CSM email to a Slack mention token (`<@U02ABC123>`) so
+ * the thread reply pings the newly-assigned person.
+ *
+ * Two-step lookup:
+ *   1. customer book   → email → customer_success_manager handle
+ *   2. settings.slack.csm_user_ids[handle] → Slack user id
+ *
+ * If either step misses, falls back to the email as plain text — the
+ * CSM won't get notified but the reply still reads correctly. Logged
+ * so an admin can fill in the missing csm_user_ids mapping next time
+ * they're in /settings/slack.
+ */
+async function resolveCsmMention(email: string): Promise<string> {
+  const fallback = `*${email}*`;
+  try {
+    const [customers, settings] = await Promise.all([
+      loadCustomers(),
+      loadSettings(),
+    ]);
+    const target = email.trim().toLowerCase();
+    let handle: string | null = null;
+    for (const c of customers) {
+      if (
+        c.customer_success_manager_email?.toLowerCase() === target &&
+        c.customer_success_manager
+      ) {
+        handle = c.customer_success_manager;
+        break;
+      }
+    }
+    if (!handle) {
+      console.warn("[slack-assign] no handle found for", email);
+      return fallback;
+    }
+    const slackId = settings.slack?.csm_user_ids?.[handle];
+    if (!slackId) {
+      console.warn(
+        "[slack-assign] no slack user id for handle",
+        handle,
+        "— add it at /settings/slack"
+      );
+      return fallback;
+    }
+    return `<@${slackId}>`;
+  } catch (e) {
+    console.warn(
+      "[slack-assign] resolveCsmMention threw",
+      e instanceof Error ? e.message : e
+    );
+    return fallback;
+  }
+}
 
 // ─── In-thread button (posted by app_mention handler) ─────────────────
 
@@ -519,17 +568,18 @@ export const assignModalHandler: ViewSubmitHandler = async ({ payload }) => {
   // folder for. The to-do batch + Drive folder steps are skipped in
   // that case so we don't strand 17 to-dos against a customer whose
   // owner reassignment never took.
+  // Three HubSpot fields only — Customer Success Manager (the CSM-team
+  // custom property, which q10600 and the dashboard read from),
+  // Company Status, and Risk Level. We deliberately do NOT touch
+  // hubspot_owner_id (HubSpot's standard "Owner" — used for sales
+  // workflows; often the AE, not the CSM) or owner_email__csm_
+  // (derivable from the owner record). Keeping the write set tight
+  // means a future HubSpot schema change can only break the three
+  // fields we actually care about for this flow.
   const hubspotErrors: string[] = [];
   try {
     await patchHubspotCompanyProperties(company.id, {
-      // Standard HubSpot owner — drives task assignment + workflows.
-      hubspot_owner_id: v.ownerId,
-      // beehiiv CSM custom property (same enum as hubspot_owner_id;
-      // the dashboard's CSM column reads from THIS one).
       [HUBSPOT_CSM_PROPERTY]: v.ownerId,
-      // Matching email custom property — keeps the dashboard's
-      // customer_success_manager_email column populated.
-      [HUBSPOT_CSM_EMAIL_PROPERTY]: v.ownerEmail,
       [HUBSPOT_STATUS_PROPERTY]: v.status,
       [HUBSPOT_RISK_LEVEL_PROPERTY]: DEFAULT_RISK_LEVEL,
     });
@@ -635,14 +685,18 @@ export const assignModalHandler: ViewSubmitHandler = async ({ payload }) => {
     };
   }
 
-  // ── Thread reply.
+  // ── Thread reply. Resolve the assignee's Slack id ahead of the
+  // call so the reply tags them — they get a Slack notification that
+  // they're newly assigned.
   if (threadContext?.channel && threadContext.thread_ts) {
+    const assignedCsmMention = await resolveCsmMention(v.ownerEmail);
     await postAssignmentSummary({
       channel: threadContext.channel,
       threadTs: threadContext.thread_ts,
       companyName,
       hubspotCompanyId: company.id,
       assignedCsmEmail: v.ownerEmail,
+      assignedCsmMention,
       status: v.status,
       todoCount,
       todoSkippedAsDuplicate,
@@ -941,6 +995,11 @@ async function postAssignmentSummary(args: {
   companyName: string;
   hubspotCompanyId: string;
   assignedCsmEmail: string;
+  /** Slack mention token for the assigned CSM (`<@U02ABC123>`) when
+   *  we could resolve their Slack id, or the email as a fallback.
+   *  Used in the headline so the new CSM gets a notification that
+   *  they've been assigned. */
+  assignedCsmMention: string;
   status: AccountStatus;
   todoCount: number;
   /** True when the dedupe check found an existing open assign batch
@@ -966,11 +1025,11 @@ async function postAssignmentSummary(args: {
   // headline reflects that so the thread doesn't read as a success.
   if (hubspotOk) {
     lines.push(
-      `:white_check_mark: *<${companyUrl}|${args.companyName}>* assigned to *${args.assignedCsmEmail}* (${args.status}).`
+      `:white_check_mark: *<${companyUrl}|${args.companyName}>* assigned to ${args.assignedCsmMention} (${args.status}).`
     );
   } else {
     lines.push(
-      `:x: Assignment did NOT land — HubSpot PATCH failed for *<${companyUrl}|${args.companyName}>*.`
+      `:x: Assignment did NOT land — HubSpot PATCH failed for *<${companyUrl}|${args.companyName}>* (intended owner: ${args.assignedCsmMention}).`
     );
     lines.push(
       "• To-dos + Drive folder were skipped (no point scheduling them when the HubSpot reassignment didn't take)."
