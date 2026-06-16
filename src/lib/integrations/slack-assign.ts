@@ -299,6 +299,24 @@ export function buildAssignView(
           text: "e.g. https://app.hubspot.com/contacts/123/record/0-2/22204103285 — or just 22204103285",
         },
       },
+      {
+        type: "input",
+        block_id: "folder_name",
+        optional: true,
+        label: { type: "plain_text", text: "Drive folder name" },
+        element: {
+          type: "plain_text_input",
+          action_id: "value",
+          placeholder: {
+            type: "plain_text",
+            text: "Leave blank to use the HubSpot company name",
+          },
+        },
+        hint: {
+          type: "plain_text",
+          text: "Folder is created under the shared CSM parent in Drive. Defaults to the HubSpot company name when this field is blank.",
+        },
+      },
     ],
   };
 }
@@ -345,6 +363,11 @@ interface AssignFormValues {
   ownerId: string;
   ownerEmail: string;
   status: AccountStatus;
+  /** Optional override for the Drive folder name. When null/blank,
+   *  the submit handler falls back to the resolved HubSpot company
+   *  name. We can't pre-populate this in the modal because the
+   *  company hasn't been fetched yet at modal-open time. */
+  folderName: string | null;
 }
 
 function readAssignForm(
@@ -353,6 +376,7 @@ function readAssignForm(
   const hubspotCompanyRaw = getTextValue(payload, "hubspot_company");
   const ownerRaw = getSelectValue(payload, "owner");
   const statusRaw = getSelectValue(payload, "status");
+  const folderNameRaw = getTextValue(payload, "folder_name");
 
   const errors: Record<string, string> = {};
   if (!hubspotCompanyRaw) errors.hubspot_company = "HubSpot company URL or ID is required.";
@@ -378,6 +402,7 @@ function readAssignForm(
       ownerId,
       ownerEmail: ownerEmail.toLowerCase(),
       status: statusRaw as AccountStatus,
+      folderName: folderNameRaw?.trim() || null,
     },
   };
 }
@@ -581,10 +606,16 @@ export const assignModalHandler: ViewSubmitHandler = async ({ payload }) => {
             "Drive scope not granted yet — visit /settings/gmail and click Reconnect Google to enable the drive.file scope. The rest of the assignment landed.",
         };
       } else {
+        // Use the user-supplied folder name when provided; fall back
+        // to the resolved HubSpot company name otherwise. The
+        // company name isn't available at modal-open time (we don't
+        // have the HubSpot record yet), so the form field can't be
+        // pre-populated — handle the default here at submit time.
+        const desiredFolderName = v.folderName || companyName;
         const folder = await createDriveFolder(
           requesterEmail,
           DRIVE_PARENT_FOLDER_ID,
-          companyName
+          desiredFolderName
         );
         driveResult = {
           ok: true,
@@ -659,6 +690,20 @@ export const assignModalHandler: ViewSubmitHandler = async ({ payload }) => {
     ackParts.push(`⚠ Drive: ${driveResult.error}`);
   }
   ackParts.push("• Dashboard catches up on the next sync.");
+
+  // Explicit Links: block at the end so the URLs are grabbable in the
+  // DM without parsing the narrative. Mirrors the thread reply.
+  if (hubspotOk) {
+    const hubspotUrl = `https://app.hubspot.com/contacts/0/record/0-2/${company.id}`;
+    ackParts.push("");
+    ackParts.push("*Links*");
+    ackParts.push(`🔗 HubSpot: ${hubspotUrl}`);
+    if (driveResult.ok) {
+      ackParts.push(`📂 Drive: ${driveResult.webViewLink}`);
+    } else {
+      ackParts.push(`📂 Drive: _not created — ${driveResult.error}_`);
+    }
+  }
 
   return { _ack_message: ackParts.join("\n") };
 };
@@ -962,6 +1007,25 @@ async function postAssignmentSummary(args: {
   } else {
     lines.push(`• ⚠ Drive: ${args.driveResult.error}`);
   }
+
+  // Explicit Links: footer so the HubSpot record + Drive folder are
+  // immediately grabbable from the thread reply — the inline links
+  // above sit inside narrative bullets and are easy to miss when the
+  // thread gets long. This block always renders on success so the
+  // assigned CSM can copy them out without scrolling. Skipped on the
+  // failure path (no Drive folder yet; HubSpot URL is already in the
+  // failure headline).
+  if (hubspotOk) {
+    const hubspotUrl = `https://app.hubspot.com/contacts/0/record/0-2/${args.hubspotCompanyId}`;
+    const driveLine = args.driveResult.ok
+      ? `📂 Drive: <${args.driveResult.webViewLink}|${args.driveResult.name}>`
+      : `📂 Drive: _not created — ${args.driveResult.error}_`;
+    lines.push("");
+    lines.push("*Links*");
+    lines.push(`🔗 HubSpot: <${hubspotUrl}|${args.companyName}>`);
+    lines.push(driveLine);
+  }
+
   try {
     await fetch("https://slack.com/api/chat.postMessage", {
       method: "POST",
