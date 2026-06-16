@@ -159,11 +159,23 @@ export function applyOverride(
   const baseCustomer: Customer = {
     ...customer,
     interval: ov.interval ?? customer.interval,
-    customer_success_manager:
-      ov.customer_success_manager ?? customer.customer_success_manager,
-    customer_success_manager_email:
-      ov.customer_success_manager_email ??
-      customer.customer_success_manager_email,
+    // CSM assignment is sourced ONLY from the Metabase snapshot
+    // (q10600's customer_success_manager column, which reads from
+    // HubSpot's `customer_success_manager` custom property). The
+    // dashboard intentionally does NOT layer the override KV on top
+    // of this field — any value in
+    // ov.customer_success_manager(_email) is legacy from the old
+    // refresh-CSM write path and is ignored here.
+    //
+    // Why no override: the old behavior wrote HubSpot's standard
+    // `hubspot_owner_id` to the override as the CSM, which mis-filed
+    // accounts under whoever held the Owner field (often the AE).
+    // Even after correcting which property gets read, override-layering
+    // means the dashboard can drift from q10600 silently. Now there's
+    // one source: the snapshot. Single source of truth, 1:1 parity
+    // with HubSpot's customer_success_manager via q10600.
+    customer_success_manager: customer.customer_success_manager,
+    customer_success_manager_email: customer.customer_success_manager_email,
     // HubSpot link overrides — when set, trump the sync snapshot.
     // Lets the "Re-resolve via Stripe ID" button flip the link badge
     // green and unblock the write paths (CSM refresh, post-note) the
