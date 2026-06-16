@@ -982,6 +982,167 @@ export async function fetchHubspotCompanyOwners(
   return result;
 }
 
+/**
+ * Batch counterpart to fetchHubspotCompanyCsm. Reads the
+ * `customer_success_manager` custom property (NOT the standard
+ * hubspot_owner_id) on every company in `companyIds`, then resolves
+ * each unique CSM owner_id → email + name. Identical pacing /
+ * batching as fetchHubspotCompanyOwners.
+ *
+ * Used by /api/customer-overrides/refresh-all-csms. The "all CSMs"
+ * sweep historically called fetchHubspotCompanyOwners and wrote the
+ * standard Owner as the dashboard's CSM — which silently re-filed
+ * accounts under whoever held the HubSpot Owner field (the AE on
+ * many Enterprise deals) instead of the actual CSM. This fixes that
+ * at the source: now the sweep reads the CSM-specific property.
+ */
+export async function fetchHubspotCompanyCsms(
+  companyIds: string[]
+): Promise<Map<string, HubspotOwner | null>> {
+  const result = new Map<string, HubspotOwner | null>();
+  const unique = [...new Set(companyIds.filter(Boolean))];
+  if (unique.length === 0) return result;
+  const token = await getAccessToken();
+
+  // Pass 1: batch-read customer_success_manager (owner_id enum) +
+  // owner_email__csm_ (string) for every company.
+  const companyToCsmOwnerId = new Map<string, string>();
+  const companyToCsmEmail = new Map<string, string>();
+  for (let i = 0; i < unique.length; i += BATCH_SIZE) {
+    const slice = unique.slice(i, i + BATCH_SIZE);
+    if (i > 0) await sleep(INTER_BATCH_DELAY_MS);
+
+    let res: Response;
+    try {
+      res = await fetch(COMPANY_BATCH_ENDPOINT, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          properties: ["customer_success_manager", "owner_email__csm_"],
+          inputs: slice.map((id) => ({ id })),
+        }),
+      });
+    } catch (e) {
+      console.error(
+        `[hubspot] csm batch ${i / BATCH_SIZE} network error:`,
+        e instanceof Error ? e.message : e
+      );
+      continue;
+    }
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      console.error(
+        `[hubspot] csm batch ${i / BATCH_SIZE} HTTP ${res.status}: ${body.slice(0, 200)}`
+      );
+      continue;
+    }
+    const json = (await res.json()) as {
+      results?: Array<{
+        id: string;
+        properties?: {
+          customer_success_manager?: string | null;
+          owner_email__csm_?: string | null;
+        };
+      }>;
+    };
+    for (const company of json.results ?? []) {
+      const csmOwnerId =
+        company.properties?.customer_success_manager?.trim() || null;
+      const csmEmail =
+        company.properties?.owner_email__csm_?.trim().toLowerCase() || null;
+      if (csmOwnerId) {
+        companyToCsmOwnerId.set(company.id, csmOwnerId);
+        if (csmEmail) companyToCsmEmail.set(company.id, csmEmail);
+      } else {
+        result.set(company.id, null);
+      }
+    }
+  }
+
+  // Pass 2: resolve each unique CSM owner_id → email + name. Same
+  // sequential lookup + cache as fetchHubspotCompanyOwners (no
+  // batch-owners endpoint on HubSpot's side).
+  const uniqueOwnerIds = [...new Set(companyToCsmOwnerId.values())];
+  const ownerById = new Map<string, HubspotOwner | null>();
+  for (const ownerId of uniqueOwnerIds) {
+    const cached = ownerCache.get(ownerId);
+    if (cached && cached.expires > Date.now()) {
+      ownerById.set(ownerId, cached.data);
+      continue;
+    }
+    try {
+      const ownerRes = await fetch(
+        `https://api.hubapi.com/crm/v3/owners/${encodeURIComponent(ownerId)}`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      if (ownerRes.status === 404) {
+        ownerById.set(ownerId, null);
+        ownerCache.set(ownerId, {
+          expires: Date.now() + OWNER_CACHE_TTL_MS,
+          data: null,
+        });
+        continue;
+      }
+      if (!ownerRes.ok) {
+        ownerById.set(ownerId, null);
+        continue;
+      }
+      const o = (await ownerRes.json()) as {
+        email?: string | null;
+        firstName?: string | null;
+        lastName?: string | null;
+      };
+      if (!o.email) {
+        ownerById.set(ownerId, null);
+        ownerCache.set(ownerId, {
+          expires: Date.now() + OWNER_CACHE_TTL_MS,
+          data: null,
+        });
+        continue;
+      }
+      const name = [o.firstName, o.lastName].filter(Boolean).join(" ").trim();
+      const data: HubspotOwner = {
+        owner_id: ownerId,
+        owner_email: o.email.toLowerCase(),
+        owner_name: name || null,
+      };
+      ownerById.set(ownerId, data);
+      ownerCache.set(ownerId, {
+        expires: Date.now() + OWNER_CACHE_TTL_MS,
+        data,
+      });
+    } catch (e) {
+      console.error(
+        `[hubspot] csm owner ${ownerId} fetch error:`,
+        e instanceof Error ? e.message : e
+      );
+      ownerById.set(ownerId, null);
+    }
+    await sleep(20);
+  }
+
+  // Stitch: per-company → resolved CSM. Prefer the company's
+  // owner_email__csm_ string property when set (canonical CSM email);
+  // fall back to the owner record's primary email.
+  for (const [companyId, ownerId] of companyToCsmOwnerId) {
+    const base = ownerById.get(ownerId);
+    if (!base) {
+      result.set(companyId, null);
+      continue;
+    }
+    const csmEmail = companyToCsmEmail.get(companyId) ?? base.owner_email;
+    result.set(companyId, {
+      owner_id: base.owner_id,
+      owner_email: csmEmail,
+      owner_name: base.owner_name,
+    });
+  }
+  return result;
+}
+
 // ─── Write helpers ────────────────────────────────────────────────────
 //
 // Used by the Slack-driven `/update-csm` slash command (and any future
@@ -1117,6 +1278,117 @@ export async function fetchDealAssociatedCompanyIds(
  * can surface a "no such company" error inline rather than a stack
  * trace.
  */
+/**
+ * Read the CSM-team custom property on a HubSpot company. This is a
+ * SEPARATE field from `hubspot_owner_id` (HubSpot's standard
+ * "Company owner"). Historically the dashboard's "Refresh CSM"
+ * button called `fetchHubspotCompanyOwner` which read the standard
+ * owner — but those two fields routinely diverge for Enterprise
+ * accounts (Owner = AE/Sales for renewal reasons, CSM = the assigned
+ * customer-success person). Sourcing CSM from the standard owner
+ * silently mis-files accounts under the wrong person in the
+ * dashboard.
+ *
+ * Reads two properties:
+ *   • customer_success_manager   — enumeration of owner_ids; the
+ *     value is one of the HubSpot owner IDs. Resolved to {email, name}
+ *     by looking up the owner record.
+ *   • owner_email__csm_          — string property carrying the
+ *     CSM's email directly (q10600 aliases this as
+ *     `customer_success_manager_email`).
+ *
+ * Returns null when the company isn't found OR when neither property
+ * is populated (no CSM is assigned). 404 → null; other errors throw
+ * so the caller can surface a clear message.
+ */
+export async function fetchHubspotCompanyCsm(
+  companyId: string
+): Promise<HubspotOwner | null> {
+  const token = await getAccessToken();
+  const cmpRes = await fetch(
+    `https://api.hubapi.com/crm/v3/objects/companies/${encodeURIComponent(companyId)}?properties=customer_success_manager,owner_email__csm_`,
+    { headers: { Authorization: `Bearer ${token}` } }
+  );
+  if (cmpRes.status === 404) return null;
+  if (!cmpRes.ok) {
+    const body = await cmpRes.text().catch(() => "");
+    throw new Error(
+      `HubSpot company ${companyId} CSM fetch failed (${cmpRes.status}): ${body.slice(0, 200)}`
+    );
+  }
+  const cmp = (await cmpRes.json()) as {
+    properties?: {
+      customer_success_manager?: string | null;
+      owner_email__csm_?: string | null;
+    };
+  };
+  const csmOwnerId = cmp.properties?.customer_success_manager?.trim() || null;
+  const csmEmailFromProp =
+    cmp.properties?.owner_email__csm_?.trim().toLowerCase() || null;
+  if (!csmOwnerId) return null;
+
+  // Resolve owner_id → name via the same cache fetchHubspotCompanyOwner
+  // uses. Both CSM and standard-owner reads share the owners table.
+  const cached = ownerCache.get(csmOwnerId);
+  if (cached && cached.expires > Date.now()) {
+    const c = cached.data;
+    return c
+      ? {
+          owner_id: c.owner_id,
+          // Prefer the dedicated CSM email property when set; fall
+          // back to the owner record's primary email. Both should
+          // match in practice but the property is the canonical
+          // CSM-side identifier.
+          owner_email: csmEmailFromProp ?? c.owner_email,
+          owner_name: c.owner_name,
+        }
+      : null;
+  }
+
+  const ownerRes = await fetch(
+    `https://api.hubapi.com/crm/v3/owners/${encodeURIComponent(csmOwnerId)}`,
+    { headers: { Authorization: `Bearer ${token}` } }
+  );
+  if (ownerRes.status === 404) {
+    ownerCache.set(csmOwnerId, {
+      expires: Date.now() + OWNER_CACHE_TTL_MS,
+      data: null,
+    });
+    return null;
+  }
+  if (!ownerRes.ok) {
+    const body = await ownerRes.text().catch(() => "");
+    throw new Error(
+      `HubSpot owner ${csmOwnerId} fetch failed (${ownerRes.status}): ${body.slice(0, 200)}`
+    );
+  }
+  const o = (await ownerRes.json()) as {
+    id?: string;
+    email?: string | null;
+    firstName?: string | null;
+    lastName?: string | null;
+  };
+  const baseEmail = o.email?.toLowerCase() ?? null;
+  if (!baseEmail && !csmEmailFromProp) {
+    ownerCache.set(csmOwnerId, {
+      expires: Date.now() + OWNER_CACHE_TTL_MS,
+      data: null,
+    });
+    return null;
+  }
+  const name = [o.firstName, o.lastName].filter(Boolean).join(" ").trim();
+  const data: HubspotOwner = {
+    owner_id: csmOwnerId,
+    owner_email: csmEmailFromProp ?? baseEmail!,
+    owner_name: name || null,
+  };
+  ownerCache.set(csmOwnerId, {
+    expires: Date.now() + OWNER_CACHE_TTL_MS,
+    data,
+  });
+  return data;
+}
+
 export async function fetchHubspotCompany(
   companyId: string,
   properties: string[] = ["name"]
