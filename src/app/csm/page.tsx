@@ -18,6 +18,7 @@ import { AtRiskTable } from "@/components/at-risk-table";
 import { DeliverabilityPanel } from "@/components/deliverability-panel";
 import { DeliverabilityBanner } from "@/components/deliverability-banner";
 import { DeliverabilityLoading } from "@/components/deliverability-loading";
+import { QbrChartsTab } from "@/components/qbr-charts/qbr-charts-tab";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -26,6 +27,7 @@ const TABS = [
   { id: "book", label: "All assigned" },
   { id: "deliverability", label: "Deliverability" },
   { id: "at-risk", label: "At-risk" },
+  { id: "qbr-charts", label: "QBR Charts" },
 ];
 
 interface SP {
@@ -115,6 +117,11 @@ export default async function CsmPage({
       ) : (
         <DeliverabilityBanner source={source} />
       );
+    } else if (tab === "qbr-charts") {
+      // QBR Charts is fully client-rendered — it talks to
+      // /api/qbr-charts/chart-spec on demand. No server-side data
+      // prep beyond the layout shell.
+      body = <QbrChartsTab />;
     } else {
       body = (
         <div className="text-sm text-muted">Unknown tab: {tab}</div>
