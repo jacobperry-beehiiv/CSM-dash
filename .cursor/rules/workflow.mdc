@@ -1,0 +1,60 @@
+---
+description: How to make changes in this repo — branching, commit style, CI
+alwaysApply: false
+---
+
+# Workflow
+
+## Branches
+
+- `main` deploys to production. Don't push directly for anything
+  non-trivial; use a feature branch and merge after the Vercel
+  preview looks right.
+- Branch names: `feat/<topic>` or `fix/<topic>` or `ide/<topic>` for
+  hand-edited tweaks.
+
+## Commit messages
+
+- One-line subject, imperative ("Fix sub-utilization heuristic",
+  not "Fixed sub-utilization heuristic").
+- Optional body explaining *why* the change matters — the *what*
+  is in the diff.
+- No `Co-Authored-By` for hand-edited commits.
+
+## Pre-commit
+
+- `npm run typecheck` is the gate. Run it before pushing if you've
+  touched types or signatures.
+- Vercel runs `npm run build` on push; build failures block the
+  preview URL from going live.
+
+## When something breaks in prod
+
+1. Open Vercel dashboard → Deployments → click the failed deploy
+   → Logs tab.
+2. For runtime errors: `/api` route logs go to Vercel Functions →
+   pick the route → Logs.
+3. To roll back quickly: Vercel dashboard → previous deploy →
+   "Promote to Production."
+
+## Local DB inspection
+
+The Neon DB is a single `kv(key TEXT, value JSONB)` table.
+
+```sql
+-- All keys
+SELECT key FROM kv ORDER BY key;
+
+-- Inspect a single value
+SELECT jsonb_pretty(value) FROM kv WHERE key = 'csm:hubspot-field-mappings:v1';
+
+-- Common keys:
+--   csm:personal-todos:<user_email>:v1
+--   csm:hubspot-field-mappings:v1
+--   csm:customer-overrides:v1
+--   csm:proactive-outreach:v1
+--   csm:settings:v1
+```
+
+Use the SQLTools VS Code extension with the Postgres driver and
+point it at `DATABASE_URL`.
