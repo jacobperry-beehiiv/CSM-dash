@@ -9,7 +9,7 @@ import {
   setOverride,
   ownerEmailToCsmId,
 } from "@/lib/data/customer-overrides";
-import { fetchHubspotCompanyOwners } from "@/lib/integrations/hubspot";
+import { fetchHubspotCompanyCsms } from "@/lib/integrations/hubspot";
 
 export const dynamic = "force-dynamic";
 // Sweep ~3K customers can issue ~30 batch reads + ~50 owner lookups.
@@ -105,9 +105,14 @@ export async function POST(req: Request) {
     companyToCustomer.set(c.hubspot_company_id, c);
   }
 
-  let ownerMap: Awaited<ReturnType<typeof fetchHubspotCompanyOwners>>;
+  // Read the CSM custom property (NOT hubspot_owner_id). The standard
+  // HubSpot Owner is a separate field — used for sales workflows — and
+  // routinely diverges from the CSM assignment on Enterprise accounts.
+  // Sourcing CSM from Owner silently mis-files accounts under whoever
+  // held the deal at close (typically the AE).
+  let ownerMap: Awaited<ReturnType<typeof fetchHubspotCompanyCsms>>;
   try {
-    ownerMap = await fetchHubspotCompanyOwners(idsToLookup);
+    ownerMap = await fetchHubspotCompanyCsms(idsToLookup);
   } catch (e) {
     return NextResponse.json(
       {
@@ -126,9 +131,10 @@ export async function POST(req: Request) {
     const customer = companyToCustomer.get(companyId);
     if (!customer || !customer.workspace_id) continue;
     if (!owner) {
-      // hubspot_owner_id was unset OR the owner lookup failed. Leave
-      // the snapshot value alone — keeping the stale-but-known CSM
-      // beats overwriting it with "unassigned".
+      // customer_success_manager (the CSM custom property) was unset
+      // OR the owner-record lookup failed. Leave the snapshot value
+      // alone — keeping the stale-but-known CSM beats overwriting it
+      // with "unassigned".
       noOwnerInHubspot++;
       continue;
     }

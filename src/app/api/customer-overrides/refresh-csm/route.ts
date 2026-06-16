@@ -7,7 +7,7 @@ import {
   getOverride,
   ownerEmailToCsmId,
 } from "@/lib/data/customer-overrides";
-import { fetchHubspotCompanyOwner } from "@/lib/integrations/hubspot";
+import { fetchHubspotCompanyCsm } from "@/lib/integrations/hubspot";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 30;
@@ -105,9 +105,14 @@ export async function POST(req: Request) {
     );
   }
 
-  let owner: Awaited<ReturnType<typeof fetchHubspotCompanyOwner>>;
+  // Read the CSM custom property (NOT hubspot_owner_id). The standard
+  // HubSpot Owner is a separate field, used for sales workflows; it
+  // routinely diverges from the CSM assignment (Owner = AE, CSM = the
+  // person actually running the account). Sourcing CSM from the
+  // standard Owner mis-filed accounts under whoever closed the deal.
+  let owner: Awaited<ReturnType<typeof fetchHubspotCompanyCsm>>;
   try {
-    owner = await fetchHubspotCompanyOwner(companyId);
+    owner = await fetchHubspotCompanyCsm(companyId);
   } catch (e) {
     return NextResponse.json(
       {
@@ -118,14 +123,16 @@ export async function POST(req: Request) {
   }
 
   if (!owner) {
-    // Company has no owner in HubSpot (unassigned). Don't write a
-    // null override — keeping the stale-but-known value beats showing
-    // "unassigned" on a row that still has a real CSM in q10600.
+    // No customer_success_manager set on the company in HubSpot.
+    // Don't write a null override — keeping the stale-but-known value
+    // beats showing "unassigned" on a row that still has a real CSM
+    // in q10600. The user should fix the CSM custom property in
+    // HubSpot, then retry.
     return NextResponse.json(
       {
         before,
         after: null,
-        note: "No HubSpot owner assigned for this company. Dashboard value left unchanged.",
+        note: "No CSM assigned on the HubSpot Customer Success Manager field. Dashboard value left unchanged.",
       },
       { status: 200 }
     );
