@@ -1,171 +1,41 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
-import { loadCustomers, invalidateCustomerCache } from "@/lib/data/load-customers";
-import {
-  loadOverrides,
-  setOverride,
-  getOverride,
-  ownerEmailToCsmId,
-} from "@/lib/data/customer-overrides";
-import { fetchHubspotCompanyCsm } from "@/lib/integrations/hubspot";
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 30;
 
 /**
  * POST /api/customer-overrides/refresh-csm
  *
- * On-demand HubSpot lookup of a single company's owner, written into
- * the customer-overrides KV store so the dashboard reflects HubSpot
- * reassignments without waiting for the next Metabase ETL + nightly
- * snapshot. Triggered from the "🔄 Refresh from HubSpot" button in
- * the customer detail panel's Contact section.
+ * DEPRECATED. The Metabase snapshot (q10600) is now the sole source
+ * of truth for the dashboard's CSM column — `applyOverride` no longer
+ * layers anything onto `customer_success_manager`, so writing here
+ * would be pure noise.
  *
- * Body: `{ workspace_id: string }`
+ * To update the dashboard's CSM column:
+ *   1. Update the `customer_success_manager` custom property on the
+ *      company in HubSpot.
+ *   2. Hit the global Refresh button at the top of the dashboard
+ *      (dispatches the sync-data workflow). The next render pulls
+ *      the fresh value via q10600.
  *
- * Response: `{ before, after }`
- *   - `before`: the CSM the dashboard was showing before this call
- *     (from Metabase + any prior override). Used by the UI to render
- *     "Was: Olivia · Now: Jacob".
- *   - `after`: the CSM we just pulled from HubSpot. `null` when the
- *     company has no owner assigned in HubSpot (we deliberately do
- *     NOT nuke the snapshot value in that case — better to keep the
- *     stale-but-known assignment than show "unassigned").
- *
- * Auth: NextAuth session. The viewer's email is stored on the override
- * as an audit trail (`csm_refreshed_by`).
+ * Historical behavior: this endpoint used to read HubSpot and write
+ * the CSM into the customer-overrides KV. The override layer is no
+ * longer applied to the CSM field, so the write has no effect on the
+ * dashboard's view. Returning 410 Gone so any client still calling
+ * this sees a clear "no-op" response instead of a silent success.
  */
-
-interface PostBody {
-  workspace_id?: string;
-}
-
-interface RefreshSnapshot {
-  customer_success_manager: string | null;
-  customer_success_manager_email: string | null;
-}
-
-export async function POST(req: Request) {
+export async function POST() {
   const session = await auth();
   if (!session?.user?.email) {
-    return NextResponse.json(
-      { error: "Sign in required." },
-      { status: 401 }
-    );
+    return NextResponse.json({ error: "Sign in required." }, { status: 401 });
   }
-  const viewer = session.user.email.toLowerCase();
-
-  let body: PostBody;
-  try {
-    body = (await req.json()) as PostBody;
-  } catch {
-    return NextResponse.json(
-      { error: "Body must be valid JSON" },
-      { status: 400 }
-    );
-  }
-  const workspaceId = body.workspace_id?.trim();
-  if (!workspaceId) {
-    return NextResponse.json(
-      { error: "workspace_id is required" },
-      { status: 400 }
-    );
-  }
-
-  // Load the customer (with any prior overrides applied) so we can
-  // (a) grab `hubspot_company_id` and (b) return a meaningful `before`
-  // diff. loadCustomers() pulls from the same cache the dashboard
-  // uses, so this is sub-ms once warm.
-  const list = await loadCustomers();
-  const customer = list.find((c) => c.workspace_id === workspaceId);
-  if (!customer) {
-    return NextResponse.json(
-      { error: `No customer row found for workspace_id=${workspaceId}` },
-      { status: 404 }
-    );
-  }
-  const before: RefreshSnapshot = {
-    customer_success_manager: customer.customer_success_manager ?? null,
-    customer_success_manager_email:
-      customer.customer_success_manager_email ?? null,
-  };
-
-  // hubspot_company_id is populated by the sync-time HubSpot enrichment
-  // (`scripts/sync.ts`). When it's missing the row never got matched —
-  // surface a clear error so the user can fix it in HubSpot or wait
-  // for the next nightly sync.
-  const companyId = customer.hubspot_company_id?.trim() || null;
-  if (!companyId) {
-    return NextResponse.json(
-      {
-        error:
-          "Couldn't resolve this workspace to a HubSpot company. The hubspot_company_id is missing on this row — fix the HubSpot match or wait for the next nightly sync.",
-      },
-      { status: 422 }
-    );
-  }
-
-  // Read the CSM custom property (NOT hubspot_owner_id). The standard
-  // HubSpot Owner is a separate field, used for sales workflows; it
-  // routinely diverges from the CSM assignment (Owner = AE, CSM = the
-  // person actually running the account). Sourcing CSM from the
-  // standard Owner mis-filed accounts under whoever closed the deal.
-  let owner: Awaited<ReturnType<typeof fetchHubspotCompanyCsm>>;
-  try {
-    owner = await fetchHubspotCompanyCsm(companyId);
-  } catch (e) {
-    return NextResponse.json(
-      {
-        error: `HubSpot fetch failed: ${e instanceof Error ? e.message : "unknown"}`,
-      },
-      { status: 502 }
-    );
-  }
-
-  if (!owner) {
-    // No customer_success_manager set on the company in HubSpot.
-    // Don't write a null override — keeping the stale-but-known value
-    // beats showing "unassigned" on a row that still has a real CSM
-    // in q10600. The user should fix the CSM custom property in
-    // HubSpot, then retry.
-    return NextResponse.json(
-      {
-        before,
-        after: null,
-        note: "No CSM assigned on the HubSpot Customer Success Manager field. Dashboard value left unchanged.",
-      },
-      { status: 200 }
-    );
-  }
-
-  const csmId = ownerEmailToCsmId(owner.owner_email);
-  const after: RefreshSnapshot = {
-    customer_success_manager: csmId,
-    customer_success_manager_email: owner.owner_email,
-  };
-
-  // Write the override + invalidate the load-customers cache so the
-  // next dashboard render picks up the new value. Matches the
-  // invalidation the existing /api/customer-overrides POST does for
-  // the interval field.
-  await setOverride(workspaceId, {
-    customer_success_manager: csmId,
-    customer_success_manager_email: owner.owner_email,
-    csm_refreshed_at: new Date().toISOString(),
-    csm_refreshed_by: viewer,
-  });
-  invalidateCustomerCache();
-
-  // Re-load the override entry to echo back what's persisted, so the
-  // client can show the same `csm_refreshed_at` it'll see on reload.
-  const overrides = await loadOverrides();
-  const persisted = getOverride(workspaceId, overrides);
-
-  return NextResponse.json({
-    before,
-    after,
-    owner_name: owner.owner_name,
-    csm_refreshed_at: persisted?.csm_refreshed_at ?? null,
-    csm_refreshed_by: persisted?.csm_refreshed_by ?? null,
-  });
+  return NextResponse.json(
+    {
+      ok: false,
+      deprecated: true,
+      message:
+        "Per-row Refresh CSM is no longer supported. The Metabase snapshot is the sole source of truth for the CSM field. Update customer_success_manager in HubSpot, then click the global Refresh button at the top of the dashboard to pull a fresh sync.",
+    },
+    { status: 410 }
+  );
 }
