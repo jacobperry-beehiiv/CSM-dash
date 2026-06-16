@@ -1,0 +1,31 @@
+# Files Cursor's AI shouldn't pull into context.
+# These are huge, opaque, or sensitive — including them tanks
+# response quality and wastes tokens.
+
+# Encrypted customer data — opaque, won't help the AI
+data/*.enc.json
+
+# Build artifacts
+.next/
+.vercel/
+dist/
+out/
+node_modules/
+
+# Lockfiles — never useful as context
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# TS build cache
+tsconfig.tsbuildinfo
+
+# Local env (defense in depth — .env.local is gitignored, but
+# keep it out of AI context too)
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+.DS_Store

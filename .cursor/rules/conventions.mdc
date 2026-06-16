@@ -1,0 +1,88 @@
+---
+description: Code conventions, recurring patterns, and known gotchas
+alwaysApply: true
+---
+
+# Conventions + gotchas
+
+## Server vs client components
+
+- **Default to server components.** Mark `"use client"` only when the
+  component needs hooks (`useState`, `useEffect`, `useRouter`, etc.).
+- Never import server-only modules (`postgres`, `fs`, `net`, `tls`)
+  into a client component — Next.js 16 will fail the build with
+  cryptic "Module not found" errors.
+- Pattern when this happens: split the module into a `-types.ts`
+  client-safe twin (see `src/lib/data/field-mappings-types.ts` vs
+  `src/lib/data/field-mappings.ts`).
+
+## Mutations: API routes only
+
+- Every write goes through `POST /api/...`. Server components don't
+  mutate.
+- After a successful mutation, the client calls `router.refresh()` to
+  re-fetch server data.
+- For collections under concurrent edit (personal-todos, customer
+  signals), use the PATCH-ops pattern: client sends a list of
+  operations (`add`, `update`, `remove` by id) rather than the full
+  collection. Avoids stomping concurrent writes.
+
+## KV store patterns
+
+- Keys are namespaced: `csm:<feature>:v<n>`. Bump the version when
+  shape changes.
+- `applyOverride(customer, override)` in `src/lib/data/customer-overrides.ts`
+  is the canonical merge. Don't bypass it.
+- `customer_overrides.field_overrides` is an open bag — new mappable
+  fields don't need a dedicated column.
+
+## HubSpot quirks
+
+- Internal property names are lowercase + underscored, sometimes with
+  a trailing underscore. Confirmed live names:
+  - Stripe customer ID: `stripe_customer_id__saas_` (note trailing `_`)
+  - Risk level: `property_risk_level_csm_`
+- HubSpot occasionally returns boolean `false` for string-typed
+  properties. The mapper coerces every string property through
+  `asStringCell()` — keep that pattern when adding new fields.
+- `searchCompaniesByStripeIds` in `src/lib/integrations/hubspot.ts`
+  is the primary join. `hubspot_company_id` is derived from this, not
+  read raw from q10600 anymore.
+
+## Metabase mapper allowlist (CRITICAL)
+
+`src/lib/data/metabase-mapper.ts` silently drops any field not
+explicitly listed. When you add a column to a Metabase question OR
+add a field to `Customer`, you MUST also add it to the mapper.
+Otherwise enrichment passes through but the UI reads `null`.
+
+## Tailwind patterns
+
+- Multi-row sections: prefer `divide-y divide-border/60` over
+  `space-y-N` — gives a visual separator and keeps rows aligned.
+- Row padding for stacked rows: `py-3 first:pt-0 last:pb-0`.
+- Long-form prose: `break-words whitespace-pre-wrap leading-relaxed`.
+- Inline edit + value: `inline-flex items-center gap-1.5`.
+
+## Customer helpers
+
+`src/lib/customer-helpers.ts` has shared derivation logic
+(`lastContacted`, `subUtilFraction`, etc.). Use these instead of
+recomputing — at least four bugs have come from divergent local
+implementations.
+
+## Things that have bitten us before
+
+- **React error #418** (hydration mismatch) usually from rendering
+  `Date.now()` / locale-formatted dates server-side. Use ISO strings
+  on the server and format in the client.
+- **Bulk operations silently fail** if `window.confirm()` is
+  suppressed by the browser. Use an inline two-step React confirm
+  (see `src/components/at-risk-table.tsx` `bulkResolve`) for
+  destructive actions.
+- **`property_customer_goals: false`** rendering as the literal word
+  "false" — fixed by `asStringCell()` in the mapper. Watch for the
+  same pattern on any new HubSpot string property.
+- **Sub-utilization heuristic** divides `active_subs / max_subscriptions`
+  directly. Don't reintroduce the old `> 1 ? /100 : x` heuristic — it
+  mis-handled over-cap customers.

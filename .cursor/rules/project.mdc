@@ -1,0 +1,88 @@
+---
+description: CSM Mission Control project primer — read first on every chat
+alwaysApply: true
+---
+
+# CSM Mission Control — project primer
+
+This is a Next.js 16 (App Router) dashboard for beehiiv's CSM team.
+Production: csm-dash.vercel.app. Single repo, no monorepo.
+
+## Stack
+
+- **Next.js 16** App Router, mostly server components.
+  Most pages use `export const dynamic = "force-dynamic"` because the
+  data is per-user and per-refresh. Wrap async data fetches in
+  `<Suspense>` with skeleton fallbacks.
+- **TypeScript** strict. Path alias `@/` → `src/`.
+- **Tailwind v4** with PostCSS plugin. Semantic colors:
+  `text-fg`, `text-muted`, `text-subtle`, `bg-surface`, `bg-canvas`,
+  `border-border`, `border-border-strong`, `bg-accent` / `text-accent-fg`.
+  Prefer these over raw `gray-*` / `slate-*`.
+- **Postgres on Neon** as the KV store (single `kv` table:
+  `key TEXT PRIMARY KEY, value JSONB`). Accessed via `src/lib/kv.ts`.
+  When `DATABASE_URL` is absent, falls back to a local JSON file —
+  this matters when running scripts/sync.ts locally.
+- **NextAuth (beta v5)** session-based auth, Google provider.
+  Session is read via `auth()` in server components and API routes.
+- **External integrations**:
+  - **Metabase** (q10600, q13268, q23101, q24620) via saved-question API
+  - **HubSpot CRM** v3 — companies + properties API, OAuth + Private App tokens
+  - **Slack** Web API + webhooks (bot token + signing secret)
+  - **Gmail** API with send-as aliases
+
+## Top-level layout
+
+```
+src/
+  app/                        Next.js routes
+    api/                      API routes (POST handlers for mutations)
+    csm/ am/ settings/        Page routes
+  components/                 React components (mix of server + client)
+  lib/
+    data/                     KV-backed stores + mappers
+    integrations/             External-service clients
+    customer-helpers.ts       Shared customer-derivation helpers
+    types.ts                  Core domain types (Customer, etc.)
+    kv.ts                     Postgres/file KV abstraction
+scripts/
+  sync.ts                     Nightly Metabase → HubSpot enrichment
+data/
+  snapshot.enc.json           Committed, encrypted customer snapshot
+```
+
+## Data flow at a glance
+
+```
+Metabase q10600 → metabaseRowToCustomer() → snapshot.enc.json (commit)
+                                          → /api/customers (runtime)
+                                          → applyOverride(customer, kv)
+                                          → UI
+```
+
+The mapper (`src/lib/data/metabase-mapper.ts`) is an **allowlist**.
+Any field added to `Customer` upstream must also be added here, or it
+silently drops. Multiple production bugs have traced back to this.
+
+## Auth + secrets
+
+- `.env.local` holds dev secrets (not committed).
+- Vercel env vars hold prod secrets. Don't commit them, don't paste
+  them in chat.
+- `DATABASE_URL` is the Neon connection string.
+- `HUBSPOT_ACCESS_TOKEN` is a Private App token (not OAuth) for the
+  HubSpot API calls in `scripts/sync.ts`.
+
+## Useful npm scripts
+
+- `npm run dev` — local server at :3000
+- `npm run sync` — refresh `data/snapshot.enc.json` from Metabase+HubSpot
+- `npm run typecheck` — full TS check (CI runs this)
+- `npm run run:at-risk` — manual at-risk evaluator
+- `npm run run:deliverability` — manual deliverability snapshot
+
+## Deploys
+
+- Push to `main` → Vercel deploys to production.
+- Push to any other branch → Vercel preview URL.
+- Don't `git push --force` to `main`.
