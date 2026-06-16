@@ -39,6 +39,7 @@ import {
   type HubspotOwner,
 } from "./hubspot";
 import { createDriveFolder, hasDriveAccess, folderUrl } from "./google-drive";
+import { hubspotCompanyUrl, hubspotDealUrl } from "../links";
 import type {
   ViewSubmissionPayload,
   ViewSubmitHandler,
@@ -655,15 +656,16 @@ export const assignModalHandler: ViewSubmitHandler = async ({ payload }) => {
   // ── DM ack. Headline reflects whether HubSpot landed — when it
   // failed, the assignment never actually took, so leading with a
   // green check would lie about what happened.
+  const companyUrl = hubspotCompanyUrl(company.id);
   const ackParts: string[] = hubspotOk
     ? [
         `:white_check_mark: Assigned *${companyName}* to *${v.ownerEmail}* (${v.status}).`,
-        `• HubSpot: <https://app.hubspot.com/contacts/0/record/0-2/${company.id}|company record> — owner + status + risk (Light Green) set.`,
+        `• HubSpot: <${companyUrl}|company record> — owner + status + risk (Light Green) set.`,
       ]
     : [
         `:x: Assignment did NOT land — HubSpot PATCH failed for *${companyName}*.`,
         `• Nothing else was applied (no to-dos, no Drive folder) since the HubSpot reassignment didn't take.`,
-        `• HubSpot record: <https://app.hubspot.com/contacts/0/record/0-2/${company.id}|company record>`,
+        `• HubSpot record: <${companyUrl}|company record>`,
       ];
   if (dealResolution) {
     const extras = dealResolution.otherCompanyCount;
@@ -693,11 +695,10 @@ export const assignModalHandler: ViewSubmitHandler = async ({ payload }) => {
 
   // Explicit Links: block at the end so the URLs are grabbable in the
   // DM without parsing the narrative. Mirrors the thread reply.
-  if (hubspotOk) {
-    const hubspotUrl = `https://app.hubspot.com/contacts/0/record/0-2/${company.id}`;
+  if (hubspotOk && companyUrl) {
     ackParts.push("");
     ackParts.push("*Links*");
-    ackParts.push(`🔗 HubSpot: ${hubspotUrl}`);
+    ackParts.push(`🔗 HubSpot: ${companyUrl}`);
     if (driveResult.ok) {
       ackParts.push(`📂 Drive: ${driveResult.webViewLink}`);
     } else {
@@ -890,7 +891,8 @@ function buildAssignTodoSequence(args: {
     args.flow === "Onboarding" ? ONBOARDING_PLAYBOOK : LIVE_PLAYBOOK;
   const now = new Date();
   const nowIso = now.toISOString();
-  const hubspotUrl = `https://app.hubspot.com/contacts/0/record/0-2/${args.hubspotCompanyId}`;
+  const hubspotUrl =
+    hubspotCompanyUrl(args.hubspotCompanyId) ?? args.hubspotCompanyId;
   const provenance =
     `Auto-scheduled via @bot assign by ${args.requesterEmail} for ${args.companyName}.\n` +
     `HubSpot: ${hubspotUrl}`;
@@ -958,16 +960,17 @@ async function postAssignmentSummary(args: {
   const token = process.env.SLACK_BOT_TOKEN;
   if (!token) return;
   const hubspotOk = args.hubspotErrors.length === 0;
+  const companyUrl = hubspotCompanyUrl(args.hubspotCompanyId);
   const lines: string[] = [];
   // When HubSpot fails the assignment never actually landed — the
   // headline reflects that so the thread doesn't read as a success.
   if (hubspotOk) {
     lines.push(
-      `:white_check_mark: *<https://app.hubspot.com/contacts/0/record/0-2/${args.hubspotCompanyId}|${args.companyName}>* assigned to *${args.assignedCsmEmail}* (${args.status}).`
+      `:white_check_mark: *<${companyUrl}|${args.companyName}>* assigned to *${args.assignedCsmEmail}* (${args.status}).`
     );
   } else {
     lines.push(
-      `:x: Assignment did NOT land — HubSpot PATCH failed for *<https://app.hubspot.com/contacts/0/record/0-2/${args.hubspotCompanyId}|${args.companyName}>*.`
+      `:x: Assignment did NOT land — HubSpot PATCH failed for *<${companyUrl}|${args.companyName}>*.`
     );
     lines.push(
       "• To-dos + Drive folder were skipped (no point scheduling them when the HubSpot reassignment didn't take)."
@@ -975,8 +978,9 @@ async function postAssignmentSummary(args: {
   }
   if (args.dealResolution) {
     const extras = args.dealResolution.otherCompanyCount;
+    const dealUrl = hubspotDealUrl(args.dealResolution.dealId);
     lines.push(
-      `• Resolved from deal <https://app.hubspot.com/contacts/0/record/0-3/${args.dealResolution.dealId}|${args.dealResolution.dealId}>` +
+      `• Resolved from deal <${dealUrl}|${args.dealResolution.dealId}>` +
         (extras > 0
           ? ` — note: ${extras} other associated compan${extras === 1 ? "y" : "ies"} on this deal; assignment used the primary.`
           : ".")
@@ -1015,14 +1019,13 @@ async function postAssignmentSummary(args: {
   // assigned CSM can copy them out without scrolling. Skipped on the
   // failure path (no Drive folder yet; HubSpot URL is already in the
   // failure headline).
-  if (hubspotOk) {
-    const hubspotUrl = `https://app.hubspot.com/contacts/0/record/0-2/${args.hubspotCompanyId}`;
+  if (hubspotOk && companyUrl) {
     const driveLine = args.driveResult.ok
       ? `📂 Drive: <${args.driveResult.webViewLink}|${args.driveResult.name}>`
       : `📂 Drive: _not created — ${args.driveResult.error}_`;
     lines.push("");
     lines.push("*Links*");
-    lines.push(`🔗 HubSpot: <${hubspotUrl}|${args.companyName}>`);
+    lines.push(`🔗 HubSpot: <${companyUrl}|${args.companyName}>`);
     lines.push(driveLine);
   }
 
