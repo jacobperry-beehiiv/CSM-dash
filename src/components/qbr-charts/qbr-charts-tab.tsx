@@ -1,14 +1,21 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChartCard } from "./chart-card";
+import {
+  DeckPreview,
+  type DeckContext,
+  type DeckSlide,
+} from "./deck-preview";
 import { PresetGrid, type TileState } from "./preset-grid";
 import {
   WorkspacePicker,
   type WorkspaceOption,
 } from "./workspace-picker";
 import { PublicationPicker } from "./publication-picker";
+import { useWorkspacePublications } from "@/lib/hooks/customer-publications-cache";
 import { QBR_PRESETS } from "@/lib/qbr-charts/qbr-presets";
+import { specHasData } from "@/lib/qbr-charts/has-data";
 import type {
   ChartSpec,
   ChartType,
@@ -25,20 +32,23 @@ import type {
  *   3. Optional: pick a date range / chart-type override.
  *   4. Click "Load charts". All 17 QBR presets are fetched
  *      sequentially. Each tile transitions idle → loading → ready
- *      (or → error) as its query lands.
+ *      (or → error) as its query lands. Charts with no usable data
+ *      get a "No data" badge and are auto-skipped from the deck.
  *   5. Click any ready tile to render the cached chart. Click an
  *      errored tile to retry just that one.
+ *   6. Click "Generate deck" → full-screen overlay renders the
+ *      Erzulie-style customer deck with cover + section divider +
+ *      one slide per hasData chart + thank-you slide. Print → PDF.
  *
- * Why sequential? Heavy QBR queries (multi-month subscriber growth,
- * open/CTR combos) can run 30-90s on a cold Metabase cache. Firing
- * 17 in parallel hammers Metabase and risks 504s; sequential keeps
- * the load gentle and lets early-finishing tiles become clickable
- * well before the full set is done.
+ * Why sequential? Heavy QBR queries can run 30-90s on a cold
+ * Metabase cache. Firing 17 in parallel hammers Metabase and risks
+ * 504s; sequential keeps load gentle and lets early-finishing tiles
+ * become clickable well before the full set is done.
  *
  * Cancellation: any input change (workspace, publication, dates,
- * chart-type override) aborts the in-flight queue, clears the
- * cached specs, and resets all tiles. The user re-clicks "Load
- * charts" to refresh.
+ * chart-type override) aborts the in-flight queue, clears cached
+ * specs, and resets all tiles. A stale spec rendered after a
+ * workspace switch would be a UX trap.
  */
 export function QbrChartsTab({
   workspaces,
@@ -57,9 +67,12 @@ export function QbrChartsTab({
 
   const [specs, setSpecs] = useState<Record<number, ChartSpec>>({});
   const [tileStates, setTileStates] = useState<Record<number, TileState>>({});
-  const [selectedSpec, setSelectedSpec] = useState<ChartSpec | null>(null);
+  const [selectedQuestionId, setSelectedQuestionId] = useState<number | null>(
+    null
+  );
   const [isRunning, setIsRunning] = useState(false);
   const [globalError, setGlobalError] = useState<string | null>(null);
+  const [deckOpen, setDeckOpen] = useState(false);
 
   const abortRef = useRef<AbortController | null>(null);
 
@@ -75,9 +88,10 @@ export function QbrChartsTab({
     abortRef.current = null;
     setSpecs({});
     setTileStates({});
-    setSelectedSpec(null);
+    setSelectedQuestionId(null);
     setIsRunning(false);
     setGlobalError(null);
+    setDeckOpen(false);
   }, [organizationId, publicationId, startMonth, endMonth, chartType]);
 
   const fetchOne = useCallback(
@@ -123,11 +137,8 @@ export function QbrChartsTab({
     setIsRunning(true);
     setGlobalError(null);
     setSpecs({});
-    setSelectedSpec(null);
+    setSelectedQuestionId(null);
 
-    // Seed all tiles to idle so the grid shows the full slate
-    // immediately (previously empty Record produced "Idle" but no
-    // visible upcoming work).
     const initial: Record<number, TileState> = {};
     for (const p of QBR_PRESETS) initial[p.questionId] = { status: "idle" };
     setTileStates(initial);
@@ -142,10 +153,15 @@ export function QbrChartsTab({
         try {
           const spec = await fetchOne(preset, controller.signal);
           if (controller.signal.aborted) return;
+          const hasData = specHasData(spec);
           setSpecs((m) => ({ ...m, [preset.questionId]: spec }));
           setTileStates((s) => ({
             ...s,
-            [preset.questionId]: { status: "ready" },
+            [preset.questionId]: {
+              status: "ready",
+              hasData,
+              inDeck: hasData,
+            },
           }));
         } catch (e) {
           if (controller.signal.aborted) return;
@@ -167,22 +183,15 @@ export function QbrChartsTab({
     setIsRunning(false);
   }, []);
 
-  // Tile click: ready → render cached spec; error → retry that one;
-  // idle/loading → no-op (the grid already disables the button, but
-  // be defensive).
   const handleTileClick = useCallback(
     async (preset: QbrPreset) => {
       const current = tileStates[preset.questionId];
       if (!current) return;
       if (current.status === "ready") {
-        const spec = specs[preset.questionId];
-        if (spec) setSelectedSpec(spec);
+        if (specs[preset.questionId]) setSelectedQuestionId(preset.questionId);
         return;
       }
       if (current.status === "error") {
-        // Single-tile retry. Reuses the same abort signal as the
-        // batch if one is live; otherwise mints a fresh one so the
-        // user can keep retrying after a batch ends.
         const controller = abortRef.current ?? new AbortController();
         if (!abortRef.current) abortRef.current = controller;
         setTileStates((s) => ({
@@ -192,10 +201,11 @@ export function QbrChartsTab({
         try {
           const spec = await fetchOne(preset, controller.signal);
           if (controller.signal.aborted) return;
+          const hasData = specHasData(spec);
           setSpecs((m) => ({ ...m, [preset.questionId]: spec }));
           setTileStates((s) => ({
             ...s,
-            [preset.questionId]: { status: "ready" },
+            [preset.questionId]: { status: "ready", hasData, inDeck: hasData },
           }));
         } catch (e) {
           if (controller.signal.aborted) return;
@@ -214,10 +224,71 @@ export function QbrChartsTab({
     (s) => s.status === "ready"
   ).length;
   const totalCount = QBR_PRESETS.length;
+  const selectedSpec =
+    selectedQuestionId != null ? specs[selectedQuestionId] ?? null : null;
+  const selectedState =
+    selectedQuestionId != null ? tileStates[selectedQuestionId] : undefined;
+
+  // Slide-deck composition. We walk the presets in their declared
+  // order so the deck order matches the grid. Only hasData specs land
+  // in the deck — no-data slides would render empty cards, which the
+  // user explicitly does not want in customer-facing output.
+  const deckSlides = useMemo<DeckSlide[]>(() => {
+    const out: DeckSlide[] = [];
+    for (const p of QBR_PRESETS) {
+      const state = tileStates[p.questionId];
+      const spec = specs[p.questionId];
+      if (
+        state?.status === "ready" &&
+        state.hasData === true &&
+        state.inDeck === true &&
+        spec
+      ) {
+        out.push({ questionId: p.questionId, spec });
+      }
+    }
+    return out;
+  }, [tileStates, specs]);
+
+  const toggleDeckForCurrent = useCallback(() => {
+    if (selectedQuestionId == null) return;
+    setTileStates((s) => {
+      const t = s[selectedQuestionId];
+      if (!t || t.status !== "ready" || t.hasData !== true) return s;
+      return { ...s, [selectedQuestionId]: { ...t, inDeck: !t.inDeck } };
+    });
+  }, [selectedQuestionId]);
+
+  const removeFromDeck = useCallback((questionId: number) => {
+    setTileStates((s) => {
+      const t = s[questionId];
+      if (!t || t.status !== "ready") return s;
+      return { ...s, [questionId]: { ...t, inDeck: false } };
+    });
+  }, []);
+
+  // Deck context — workspace + publication names for the cover and
+  // chart slide subtitles. Workspace name from the dropdown options;
+  // publication name resolved via the same publications cache the
+  // picker uses.
+  const workspaceName =
+    workspaces.find((w) => w.workspace_id === organizationId)?.workspace_name ??
+    null;
+  const publications = useWorkspacePublications(organizationId);
+  const publicationName =
+    publicationId && Array.isArray(publications)
+      ? publications.find((p) => p.publication_id === publicationId)
+          ?.publication_name ?? null
+      : null;
+  const deckContext: DeckContext = {
+    workspaceName,
+    publicationName,
+    startMonth: startMonth || null,
+    endMonth: endMonth || null,
+  };
 
   return (
     <div className="space-y-4">
-      {/* Controls */}
       <div className="bg-surface border border-border rounded-xl shadow-card p-4">
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
           <WorkspacePicker
@@ -292,13 +363,22 @@ export function QbrChartsTab({
           )}
           {hasResults ? (
             <span className="text-[11px] text-muted">
-              {readyCount}/{totalCount} ready
+              {readyCount}/{totalCount} ready · {deckSlides.length} in deck
             </span>
+          ) : null}
+          {deckSlides.length > 0 ? (
+            <button
+              type="button"
+              onClick={() => setDeckOpen(true)}
+              className="px-3 py-1.5 text-xs font-medium rounded-md border border-accent/40 text-accent bg-surface hover:bg-canvas/40"
+            >
+              Generate deck ({deckSlides.length})
+            </button>
           ) : null}
           {selectedSpec ? (
             <button
               type="button"
-              onClick={() => setSelectedSpec(null)}
+              onClick={() => setSelectedQuestionId(null)}
               className="ml-auto text-xs text-accent hover:underline"
             >
               ← Back to all charts
@@ -319,7 +399,25 @@ export function QbrChartsTab({
       ) : null}
 
       {selectedSpec ? (
-        <ChartCard spec={selectedSpec} />
+        <div className="space-y-2">
+          <div className="flex items-center gap-2 text-xs">
+            {selectedState?.hasData === false ? (
+              <span className="px-2 py-0.5 rounded bg-amber-50 dark:bg-amber-500/10 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-500/30">
+                No data — auto-excluded from the deck
+              </span>
+            ) : null}
+            {selectedState?.hasData === true ? (
+              <button
+                type="button"
+                onClick={toggleDeckForCurrent}
+                className="ml-auto px-2.5 py-1 rounded-md border border-border bg-surface text-fg hover:bg-canvas/40"
+              >
+                {selectedState.inDeck ? "Remove from deck" : "Add to deck"}
+              </button>
+            ) : null}
+          </div>
+          <ChartCard spec={selectedSpec} />
+        </div>
       ) : (
         <PresetGrid
           disabled={!canRun}
@@ -327,6 +425,15 @@ export function QbrChartsTab({
           states={tileStates}
         />
       )}
+
+      {deckOpen ? (
+        <DeckPreview
+          slides={deckSlides}
+          context={deckContext}
+          onClose={() => setDeckOpen(false)}
+          onRemoveSlide={removeFromDeck}
+        />
+      ) : null}
     </div>
   );
 }
