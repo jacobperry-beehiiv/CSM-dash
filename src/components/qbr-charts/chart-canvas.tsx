@@ -165,7 +165,7 @@ function CartesianCard({ spec }: { spec: ChartSpec }) {
           <YAxis
             {...axisProps}
             tickFormatter={(v) =>
-              yFormat === "percent" ? `${Number(v).toFixed(0)}%` : compactNumber(v)
+              yFormat === "percent" ? formatValue(v, "percent") : compactNumber(v)
             }
           />
           <Tooltip content={<ChartTooltip series={series} />} />
@@ -194,7 +194,7 @@ function CartesianCard({ spec }: { spec: ChartSpec }) {
           <YAxis
             {...axisProps}
             tickFormatter={(v) =>
-              yFormat === "percent" ? `${Number(v).toFixed(0)}%` : compactNumber(v)
+              yFormat === "percent" ? formatValue(v, "percent") : compactNumber(v)
             }
           />
           <Tooltip content={<ChartTooltip series={series} />} />

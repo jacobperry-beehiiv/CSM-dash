@@ -752,12 +752,12 @@ export function AtRiskTable({
                 <th className="px-2 py-2.5 w-8"></th>
                 <th className="px-2 py-2.5 font-medium text-muted">Account</th>
                 {columns.isVisible("arr") ? (
-                  <th className="px-2 py-2.5 font-medium text-muted text-right whitespace-nowrap">
+                  <th className="px-2 py-2.5 font-medium text-muted text-right">
                     ARR
                   </th>
                 ) : null}
                 {columns.isVisible("last_send") ? (
-                  <th className="px-2 py-2.5 font-medium text-muted whitespace-nowrap">
+                  <th className="px-2 py-2.5 font-medium text-muted">
                     Last send
                   </th>
                 ) : null}
@@ -765,17 +765,17 @@ export function AtRiskTable({
                   <th className="px-2 py-2.5 font-medium text-muted">Flags</th>
                 ) : null}
                 {columns.isVisible("last_login") ? (
-                  <th className="px-2 py-2.5 font-medium text-muted whitespace-nowrap">
+                  <th className="px-2 py-2.5 font-medium text-muted">
                     Last login
                   </th>
                 ) : null}
                 {columns.isVisible("last_contacted") ? (
-                  <th className="px-2 py-2.5 font-medium text-muted whitespace-nowrap">
+                  <th className="px-2 py-2.5 font-medium text-muted">
                     Last contacted
                   </th>
                 ) : null}
                 {columns.isVisible("pct_subs") ? (
-                  <th className="px-2 py-2.5 font-medium text-muted text-right whitespace-nowrap">
+                  <th className="px-2 py-2.5 font-medium text-muted text-right">
                     % subs
                   </th>
                 ) : null}
@@ -848,18 +848,18 @@ export function AtRiskTable({
                         <div className="font-medium text-fg">
                           {c.company_name ?? c.workspace_name}
                         </div>
-                        <div className="text-xs text-muted truncate">
+                        <div className="text-xs text-muted break-words">
                           {c.customer_success_manager?.replace(/_/g, " ") ??
                             "unassigned"}
                         </div>
                       </td>
                       {columns.isVisible("arr") ? (
-                        <td className="px-2 py-2.5 text-right font-medium whitespace-nowrap">
+                        <td className="px-2 py-2.5 text-right font-medium">
                           {fmtCurrency(c.arr)}
                         </td>
                       ) : null}
                       {columns.isVisible("last_send") ? (
-                        <td className={`px-2 py-2.5 whitespace-nowrap ${lastSendCls}`}>
+                        <td className={`px-2 py-2.5 ${lastSendCls}`}>
                           <div>{fmtDate(c.last_send)}</div>
                           {lastSendDays != null ? (
                             <div className="text-xs text-muted">
@@ -899,7 +899,7 @@ export function AtRiskTable({
                       </td>
                       ) : null}
                       {columns.isVisible("last_login") ? (
-                        <td className={`px-2 py-2.5 whitespace-nowrap ${lastLoginCls}`}>
+                        <td className={`px-2 py-2.5 ${lastLoginCls}`}>
                           {c.last_log_in ? (
                             <>
                               <div>{fmtDate(c.last_log_in)}</div>
@@ -921,7 +921,7 @@ export function AtRiskTable({
                        *  so a CSM eyeballing the at-risk list sees at a
                        *  glance which rows might be wrongly flagged. */}
                       {columns.isVisible("last_contacted") ? (
-                      <td className="px-2 py-2.5 whitespace-nowrap">
+                      <td className="px-2 py-2.5">
                         {(() => {
                           const lc = lastContacted(c, {
                             gmailDate: gmailDateFor(c),
@@ -966,7 +966,7 @@ export function AtRiskTable({
                               ) : null}
                               {match && (match.subject || match.from) ? (
                                 <div
-                                  className="text-[10px] text-subtle truncate max-w-[200px] italic"
+                                  className="text-[10px] text-subtle break-words max-w-[200px] italic"
                                   title={[
                                     match.from ? `From: ${match.from}` : null,
                                     match.subject
@@ -985,7 +985,7 @@ export function AtRiskTable({
                       </td>
                       ) : null}
                       {columns.isVisible("pct_subs") ? (
-                        <td className={`px-2 py-2.5 text-right whitespace-nowrap ${subsCls}`}>
+                        <td className={`px-2 py-2.5 text-right ${subsCls}`}>
                           <div>{fmtPct(subs)}</div>
                           {c.active_subs != null ? (
                             <div className="text-xs text-muted">
@@ -1010,7 +1010,7 @@ export function AtRiskTable({
                           {a.recommended_action}
                         </td>
                       ) : null}
-                      <td className="px-2 py-2.5 whitespace-nowrap">
+                      <td className="px-2 py-2.5">
                         <RowActions
                           customer={c}
                           onDraft={() =>

@@ -528,7 +528,7 @@ export function CustomerTable({
              *  without expanding the row. */}
             {c.workspace_name &&
             c.workspace_name !== (c.company_name ?? c.workspace_name) ? (
-              <div className="text-xs text-muted truncate">
+              <div className="text-xs text-muted break-words">
                 {c.workspace_name}
               </div>
             ) : null}
@@ -536,7 +536,7 @@ export function CustomerTable({
               <a
                 href={`mailto:${c.owner_email}`}
                 onClick={(e) => e.stopPropagation()}
-                className="text-xs text-subtle hover:text-accent truncate block"
+                className="text-xs text-subtle hover:text-accent break-words block"
                 title={c.owner_email}
               >
                 {c.owner_email}
@@ -850,7 +850,7 @@ export function CustomerTable({
                   // table-fixed, a too-long header would otherwise
                   // bleed into the next cell (e.g. "EngagementCSM"
                   // smashed together). Clip instead.
-                  className={`px-2 py-2.5 font-medium text-muted cursor-pointer hover:bg-surface-2 select-none overflow-hidden whitespace-nowrap text-ellipsis ${
+                  className={`px-2 py-2.5 font-medium text-muted cursor-pointer hover:bg-surface-2 select-none overflow-hidden text-ellipsis ${
                     col.align === "right" ? "text-right" : "text-left"
                   } ${SHOW_CLASS[col.showAt ?? "always"]}`}
                   title={col.label}
