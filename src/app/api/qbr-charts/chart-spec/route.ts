@@ -10,7 +10,15 @@ import { getPreset } from "@/lib/qbr-charts/qbr-presets";
 import type { ChartType } from "@/lib/qbr-charts/types";
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 30;
+// Some QBR queries on cold-cache first hit can run 30-60s against
+// Metabase (large workspaces, multi-month aggregations). Vercel's
+// default 10s timeout was killing the function before Metabase
+// finished. 90s gives generous headroom; subsequent clicks for the
+// same (questionId, workspaceId, params) hit Metabase's own cache
+// (cache_ttl=600s set on the runCard query body) and return
+// sub-second. Pro plan supports up to 300s — bump again here if 90
+// isn't enough on the slowest QBR question.
+export const maxDuration = 90;
 
 /**
  * POST /api/qbr-charts/chart-spec
