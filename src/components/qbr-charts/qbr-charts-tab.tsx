@@ -1,7 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChartCard } from "./chart-card";
+import { DeckPreview, type DeckSlide } from "./deck-preview";
 import { PresetGrid, type TileState } from "./preset-grid";
 import {
   WorkspacePicker,
@@ -9,6 +10,7 @@ import {
 } from "./workspace-picker";
 import { PublicationPicker } from "./publication-picker";
 import { QBR_PRESETS } from "@/lib/qbr-charts/qbr-presets";
+import { specHasData } from "@/lib/qbr-charts/has-data";
 import type {
   ChartSpec,
   ChartType,
@@ -57,9 +59,12 @@ export function QbrChartsTab({
 
   const [specs, setSpecs] = useState<Record<number, ChartSpec>>({});
   const [tileStates, setTileStates] = useState<Record<number, TileState>>({});
-  const [selectedSpec, setSelectedSpec] = useState<ChartSpec | null>(null);
+  const [selectedQuestionId, setSelectedQuestionId] = useState<number | null>(
+    null
+  );
   const [isRunning, setIsRunning] = useState(false);
   const [globalError, setGlobalError] = useState<string | null>(null);
+  const [deckOpen, setDeckOpen] = useState(false);
 
   const abortRef = useRef<AbortController | null>(null);
 
@@ -75,9 +80,10 @@ export function QbrChartsTab({
     abortRef.current = null;
     setSpecs({});
     setTileStates({});
-    setSelectedSpec(null);
+    setSelectedQuestionId(null);
     setIsRunning(false);
     setGlobalError(null);
+    setDeckOpen(false);
   }, [organizationId, publicationId, startMonth, endMonth, chartType]);
 
   const fetchOne = useCallback(
@@ -123,7 +129,7 @@ export function QbrChartsTab({
     setIsRunning(true);
     setGlobalError(null);
     setSpecs({});
-    setSelectedSpec(null);
+    setSelectedQuestionId(null);
 
     // Seed all tiles to idle so the grid shows the full slate
     // immediately (previously empty Record produced "Idle" but no
@@ -142,10 +148,18 @@ export function QbrChartsTab({
         try {
           const spec = await fetchOne(preset, controller.signal);
           if (controller.signal.aborted) return;
+          const hasData = specHasData(spec);
           setSpecs((m) => ({ ...m, [preset.questionId]: spec }));
           setTileStates((s) => ({
             ...s,
-            [preset.questionId]: { status: "ready" },
+            [preset.questionId]: {
+              status: "ready",
+              hasData,
+              // Auto-include in the deck only when the chart has
+              // data. No-data charts can be added back manually from
+              // the single-chart view.
+              inDeck: hasData,
+            },
           }));
         } catch (e) {
           if (controller.signal.aborted) return;
@@ -175,8 +189,7 @@ export function QbrChartsTab({
       const current = tileStates[preset.questionId];
       if (!current) return;
       if (current.status === "ready") {
-        const spec = specs[preset.questionId];
-        if (spec) setSelectedSpec(spec);
+        if (specs[preset.questionId]) setSelectedQuestionId(preset.questionId);
         return;
       }
       if (current.status === "error") {
@@ -192,10 +205,11 @@ export function QbrChartsTab({
         try {
           const spec = await fetchOne(preset, controller.signal);
           if (controller.signal.aborted) return;
+          const hasData = specHasData(spec);
           setSpecs((m) => ({ ...m, [preset.questionId]: spec }));
           setTileStates((s) => ({
             ...s,
-            [preset.questionId]: { status: "ready" },
+            [preset.questionId]: { status: "ready", hasData, inDeck: hasData },
           }));
         } catch (e) {
           if (controller.signal.aborted) return;
@@ -214,6 +228,45 @@ export function QbrChartsTab({
     (s) => s.status === "ready"
   ).length;
   const totalCount = QBR_PRESETS.length;
+  const selectedSpec =
+    selectedQuestionId != null ? specs[selectedQuestionId] ?? null : null;
+  const selectedState =
+    selectedQuestionId != null ? tileStates[selectedQuestionId] : undefined;
+
+  // Slide-deck composition. We walk the presets in their declared
+  // order so the deck order matches the grid; later this becomes
+  // user-orderable when the design lands.
+  const deckSlides = useMemo<DeckSlide[]>(() => {
+    const out: DeckSlide[] = [];
+    for (const p of QBR_PRESETS) {
+      const state = tileStates[p.questionId];
+      const spec = specs[p.questionId];
+      if (state?.status === "ready" && state.inDeck && spec) {
+        out.push({ questionId: p.questionId, spec });
+      }
+    }
+    return out;
+  }, [tileStates, specs]);
+
+  const toggleDeckForCurrent = useCallback(() => {
+    if (selectedQuestionId == null) return;
+    setTileStates((s) => {
+      const t = s[selectedQuestionId];
+      if (!t || t.status !== "ready") return s;
+      return {
+        ...s,
+        [selectedQuestionId]: { ...t, inDeck: !t.inDeck },
+      };
+    });
+  }, [selectedQuestionId]);
+
+  const removeFromDeck = useCallback((questionId: number) => {
+    setTileStates((s) => {
+      const t = s[questionId];
+      if (!t || t.status !== "ready") return s;
+      return { ...s, [questionId]: { ...t, inDeck: false } };
+    });
+  }, []);
 
   return (
     <div className="space-y-4">
@@ -292,13 +345,22 @@ export function QbrChartsTab({
           )}
           {hasResults ? (
             <span className="text-[11px] text-muted">
-              {readyCount}/{totalCount} ready
+              {readyCount}/{totalCount} ready · {deckSlides.length} in deck
             </span>
+          ) : null}
+          {deckSlides.length > 0 ? (
+            <button
+              type="button"
+              onClick={() => setDeckOpen(true)}
+              className="px-3 py-1.5 text-xs font-medium rounded-md border border-accent/40 text-accent bg-surface hover:bg-canvas/40"
+            >
+              Generate deck ({deckSlides.length})
+            </button>
           ) : null}
           {selectedSpec ? (
             <button
               type="button"
-              onClick={() => setSelectedSpec(null)}
+              onClick={() => setSelectedQuestionId(null)}
               className="ml-auto text-xs text-accent hover:underline"
             >
               ← Back to all charts
@@ -319,7 +381,23 @@ export function QbrChartsTab({
       ) : null}
 
       {selectedSpec ? (
-        <ChartCard spec={selectedSpec} />
+        <div className="space-y-2">
+          <div className="flex items-center gap-2 text-xs">
+            {selectedState?.hasData === false ? (
+              <span className="px-2 py-0.5 rounded bg-amber-50 dark:bg-amber-500/10 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-500/30">
+                No data detected
+              </span>
+            ) : null}
+            <button
+              type="button"
+              onClick={toggleDeckForCurrent}
+              className="ml-auto px-2.5 py-1 rounded-md border border-border bg-surface text-fg hover:bg-canvas/40"
+            >
+              {selectedState?.inDeck ? "Remove from deck" : "Add to deck"}
+            </button>
+          </div>
+          <ChartCard spec={selectedSpec} />
+        </div>
       ) : (
         <PresetGrid
           disabled={!canRun}
@@ -327,6 +405,14 @@ export function QbrChartsTab({
           states={tileStates}
         />
       )}
+
+      {deckOpen ? (
+        <DeckPreview
+          slides={deckSlides}
+          onClose={() => setDeckOpen(false)}
+          onRemoveSlide={removeFromDeck}
+        />
+      ) : null}
     </div>
   );
 }
