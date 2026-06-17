@@ -227,23 +227,53 @@ export class MissingParamsError extends Error {
  * Fetch a card's metadata + parameter schema. Used by the UI to know
  * what extra inputs to render when a question needs values outside
  * the standard map.
+ *
+ * In-process cache: card schemas rarely change (a question's
+ * parameter list only changes when an admin edits the question in
+ * Metabase). Caching for the lifetime of the serverless isolate
+ * means a CSM clicking through 5 charts in a row only pays the
+ * describe round-trip once instead of 5x. TTL is set conservatively
+ * — 5 min — so a Metabase edit picks up within minutes without a
+ * deploy.
  */
+interface CachedCard {
+  id: number;
+  name: string;
+  parameters: MetabaseParameter[];
+  expires_at: number;
+}
+const CARD_CACHE = new Map<number, CachedCard>();
+const CARD_CACHE_TTL_MS = 5 * 60 * 1000;
+
 export async function describeCard(questionId: number): Promise<{
   id: number;
   name: string;
   parameters: MetabaseParameter[];
 }> {
+  const cached = CARD_CACHE.get(questionId);
+  if (cached && cached.expires_at > Date.now()) {
+    return {
+      id: cached.id,
+      name: cached.name,
+      parameters: cached.parameters,
+    };
+  }
   const res = await metabaseFetch(`/api/card/${questionId}`);
   const json = (await res.json()) as {
     id: number;
     name: string;
     parameters?: MetabaseParameter[];
   };
-  return {
+  const result = {
     id: json.id,
     name: json.name,
     parameters: json.parameters ?? [],
   };
+  CARD_CACHE.set(questionId, {
+    ...result,
+    expires_at: Date.now() + CARD_CACHE_TTL_MS,
+  });
+  return result;
 }
 
 /**
@@ -320,19 +350,26 @@ export async function runCard(
 
   // POST /api/card/:id/query (NOT /query/json — we want the raw
   // shape with cols metadata so the heuristic can read base_type).
-  const body =
-    Object.keys(provided).length > 0
-      ? {
-          parameters: Object.entries(provided).map(([slug, value]) => ({
-            type: "category",
-            target: ["variable", ["template-tag", slug]],
-            value,
-          })),
-        }
-      : {};
+  //
+  // cache_ttl: tells Metabase to serve this question from its own
+  // query cache when the same (questionId, params) combo runs again
+  // within `cache_ttl` seconds. 600s = 10 min — long enough that a
+  // CSM clicking through 5 charts for the same customer hits cache
+  // on the second+ chart, but short enough that fresh-after-sync
+  // data lands within ~10 min. First click for a workspace is still
+  // cold (Metabase needs to actually run the SQL); subsequent clicks
+  // are sub-second.
+  const params: Record<string, unknown> = { cache_ttl: 600 };
+  if (Object.keys(provided).length > 0) {
+    params.parameters = Object.entries(provided).map(([slug, value]) => ({
+      type: "category",
+      target: ["variable", ["template-tag", slug]],
+      value,
+    }));
+  }
   const res = await metabaseFetch(`/api/card/${questionId}/query`, {
     method: "POST",
-    body: JSON.stringify(body),
+    body: JSON.stringify(params),
   });
   const json = (await res.json()) as {
     status?: string;
