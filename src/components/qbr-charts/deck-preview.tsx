@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { BeehiivLogo } from "@/components/beehiiv-logo";
 import { ChartCanvas } from "./chart-canvas";
 import { formatValue } from "@/lib/qbr-charts/format";
@@ -48,7 +49,28 @@ export interface DeckContext {
   endMonth: string | null;
 }
 
-export function DeckPreview({
+export function DeckPreview(props: {
+  slides: DeckSlide[];
+  context: DeckContext;
+  onClose: () => void;
+  onRemoveSlide: (questionId: number) => void;
+}) {
+  // SSR guard — createPortal needs document. The tab only mounts the
+  // overlay on user click so this only matters for very first paint.
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+  if (!mounted) return null;
+
+  // Portal to body so the deck root is a direct child of <body>.
+  // Critical for the print stylesheet: `body > *:not(.qbr-deck-
+  // print-root) { display: none }` only works when the deck is a
+  // sibling of the app shell, not nested inside <div id="__next">.
+  // Without this, print captures the app shell too (or hides the
+  // deck along with it), which is the "white PDF page" symptom.
+  return createPortal(<DeckOverlay {...props} />, document.body);
+}
+
+function DeckOverlay({
   slides,
   context,
   onClose,
@@ -59,11 +81,25 @@ export function DeckPreview({
   onClose: () => void;
   onRemoveSlide: (questionId: number) => void;
 }) {
+  // Lock body scroll while the overlay is open so the underlying
+  // page can't be scrolled behind it. Released for the brief window
+  // print() needs (some browsers refuse to paginate when the body
+  // has overflow:hidden), and re-locked after print returns.
   useEffect(() => {
     const prev = document.body.style.overflow;
     document.body.style.overflow = "hidden";
+    const release = () => {
+      document.body.style.overflow = "";
+    };
+    const lock = () => {
+      document.body.style.overflow = "hidden";
+    };
+    window.addEventListener("beforeprint", release);
+    window.addEventListener("afterprint", lock);
     return () => {
       document.body.style.overflow = prev;
+      window.removeEventListener("beforeprint", release);
+      window.removeEventListener("afterprint", lock);
     };
   }, []);
 
@@ -74,6 +110,19 @@ export function DeckPreview({
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, [onClose]);
+
+  // Recharts ResponsiveContainer sizes itself via ResizeObserver,
+  // which doesn't fire synchronously during print. If the chart hasn't
+  // already laid out (e.g. user clicks Print on first open before the
+  // scroll has hit a slide), the print captures a 0×0 chart. Dispatch
+  // a resize event + tick of the event loop before triggering print
+  // so the charts get a chance to measure against their final sizes.
+  const handlePrint = useCallback(() => {
+    window.dispatchEvent(new Event("resize"));
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => window.print());
+    });
+  }, []);
 
   const reportingPeriod = formatReportingPeriod(
     context.startMonth,
@@ -116,7 +165,7 @@ export function DeckPreview({
             <div className="ml-auto flex items-center gap-2">
               <button
                 type="button"
-                onClick={() => window.print()}
+                onClick={handlePrint}
                 disabled={slides.length === 0}
                 className="px-3 py-1.5 text-xs font-medium rounded-md disabled:opacity-50"
                 style={{ background: ACCENT_PINK, color: "#FFFFFF" }}
@@ -135,7 +184,7 @@ export function DeckPreview({
           </div>
         </div>
 
-        <div className="max-w-[1280px] mx-auto px-6 py-8 space-y-8">
+        <div className="qbr-deck-slides-stack max-w-[1280px] mx-auto px-6 py-8 space-y-8">
           {slides.length === 0 ? (
             <div
               className="text-center text-sm py-20"
@@ -543,6 +592,14 @@ const PRINT_CSS = `
       size: landscape;
       margin: 0;
     }
+    html, body {
+      background: ${DECK_BG} !important;
+      margin: 0 !important;
+      padding: 0 !important;
+      overflow: visible !important;
+    }
+    /* Hide every other body child — the app shell. The deck root is
+       portaled to body so this selector targets just it. */
     body > *:not(.qbr-deck-print-root) {
       display: none !important;
     }
@@ -550,17 +607,17 @@ const PRINT_CSS = `
       position: static !important;
       background: ${DECK_BG} !important;
       overflow: visible !important;
+      width: 100% !important;
+      height: auto !important;
+      inset: auto !important;
     }
     .qbr-deck-toolbar,
     .qbr-deck-remove {
       display: none !important;
     }
-    .qbr-deck-print-root > div {
-      max-width: none !important;
-      padding: 0 !important;
-      margin: 0 !important;
-    }
-    .qbr-deck-print-root > div > div {
+    /* Drop the scrollable container's max-width / padding so each
+       slide can fill the page exactly. */
+    .qbr-deck-print-root .qbr-deck-slides-stack {
       max-width: none !important;
       padding: 0 !important;
       margin: 0 !important;
@@ -569,11 +626,13 @@ const PRINT_CSS = `
     .qbr-deck-slide {
       break-after: page;
       page-break-after: always;
+      break-inside: avoid;
       width: 100% !important;
       height: 100vh !important;
       aspect-ratio: auto !important;
       box-shadow: none !important;
       border: none !important;
+      margin: 0 !important;
     }
     .qbr-deck-slide:last-of-type {
       break-after: auto;

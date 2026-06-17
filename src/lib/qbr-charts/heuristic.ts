@@ -66,6 +66,21 @@ export function heuristicSpec(input: {
     for (let i = 1; i < series.length; i++) series[i].variant = "line";
   }
 
+  // Scalar charts read data[0][series[0].key] for the headline
+  // number. When the underlying SQL returns multiple numerics (QBR
+  // questions 1850/1851 return both `active_sub_added` and
+  // `total_sub_count` for the matched month), the first-numeric
+  // default would show the delta rather than the cumulative total —
+  // the user complaint behind "Subscribers to Start is wrong." Score
+  // the columns and float the headline to position 0.
+  if (chartType === "scalar" && series.length > 1) {
+    const idx = pickScalarSeriesIndex(series);
+    if (idx !== 0) {
+      const [headline] = series.splice(idx, 1);
+      series.unshift(headline);
+    }
+  }
+
   const title = preset?.name ?? input.questionName;
   const subtitle = preset?.blurb;
 
@@ -164,6 +179,40 @@ function inferFormat(c: MetabaseColumn): SeriesFormat {
     return "currency";
   }
   return "number";
+}
+
+/**
+ * Score series by name hints to pick the "headline" column for a
+ * scalar render. Cumulative / total / count signals win; delta /
+ * added / change signals lose. Tuned against the QBR Dashboard 694
+ * questions whose SQL returns both the monthly delta and the
+ * running total side-by-side in the same row.
+ */
+function pickScalarSeriesIndex(series: SeriesConfig[]): number {
+  if (series.length <= 1) return 0;
+  const score = (s: SeriesConfig): number => {
+    const n = s.key.toLowerCase();
+    let pts = 0;
+    if (/total/.test(n)) pts += 10;
+    if (/cum/.test(n)) pts += 8;
+    if (/_count\b|count$/.test(n)) pts += 5;
+    if (/\bnow\b|current|active|live/.test(n)) pts += 5;
+    if (/start(ing)?|end(ing)?/.test(n)) pts += 3;
+    // Penalize delta-ish names — these are typically the "added in
+    // this month" columns that pair with a cumulative one.
+    if (/added|delta|change|net|new/.test(n)) pts -= 8;
+    return pts;
+  };
+  let bestIdx = 0;
+  let bestScore = score(series[0]);
+  for (let i = 1; i < series.length; i++) {
+    const s = score(series[i]);
+    if (s > bestScore) {
+      bestScore = s;
+      bestIdx = i;
+    }
+  }
+  return bestIdx;
 }
 
 function humanizeColumnName(c: MetabaseColumn): string {
