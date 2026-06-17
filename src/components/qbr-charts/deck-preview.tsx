@@ -466,7 +466,7 @@ function ChartSlide({
         {/* Chart card — white interior, chart renders against light
             palette (ChartCanvas already uses light-theme colors). */}
         <div
-          className="flex-1 mt-3 p-4 rounded-sm"
+          className="qbr-deck-chart-card flex-1 mt-3 p-4 rounded-sm"
           style={{ background: "#FFFFFF", color: "#1F1F2E", minHeight: 0 }}
         >
           <div className="flex flex-col h-full">
@@ -592,6 +592,21 @@ const PRINT_CSS = `
       size: landscape;
       margin: 0;
     }
+    /* Force the print engine to honor background colors. Chrome /
+       Safari strip backgrounds by default when saving as PDF unless
+       the user manually enables "Background graphics" — which most
+       CSMs won't think to do. Without this, the dark-navy slide bg
+       drops out and the chart card's white bg blends into the
+       page, producing all-white pages. The exact-keyword variant
+       has been standard since 2022; the -webkit-print-color-adjust
+       prefix is for older Safari. */
+    *,
+    *::before,
+    *::after {
+      -webkit-print-color-adjust: exact !important;
+      print-color-adjust: exact !important;
+      color-adjust: exact !important;
+    }
     html, body {
       background: ${DECK_BG} !important;
       margin: 0 !important;
@@ -633,10 +648,14 @@ const PRINT_CSS = `
       box-shadow: none !important;
       border: none !important;
       margin: 0 !important;
+      background: ${DECK_BG} !important;
     }
     .qbr-deck-slide:last-of-type {
       break-after: auto;
       page-break-after: auto;
+    }
+    .qbr-deck-chart-card {
+      background: #FFFFFF !important;
     }
   }
 `;
