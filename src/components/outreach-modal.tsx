@@ -16,11 +16,18 @@ import { useViewerEmail } from "@/lib/auth-client";
 import { getTierLadder } from "@/lib/tiers/client";
 import type { EnterpriseTier } from "@/lib/tiers/store";
 import type { AdGapReport } from "@/lib/types";
+import type { MergeContext } from "@/lib/templates/merge-tags";
 
 interface Props {
   customer: Customer;
   onClose: () => void;
   initialScenario?: TemplateScenario | string;
+  /** When set, populates ctx.deliverability so a deliverability-
+   *  warning template's tags ({{publication_name}}, {{send_name}},
+   *  {{flagged_metric}}, {{flagged_value}}, {{benchmark_value}},
+   *  {{above_or_below}}) resolve to real values. The
+   *  deliverability-panel builds this from the flagged alert. */
+  deliverability?: MergeContext["deliverability"];
 }
 
 interface GmailStatus {
@@ -44,7 +51,12 @@ function htmlToText(html: string): string {
     .trim();
 }
 
-export function OutreachModal({ customer, onClose, initialScenario }: Props) {
+export function OutreachModal({
+  customer,
+  onClose,
+  initialScenario,
+  deliverability,
+}: Props) {
   const viewerEmail = useViewerEmail();
   const [templates, setTemplates] = useState<StoredTemplate[]>([]);
   const [ladder, setLadder] = useState<EnterpriseTier[]>([]);
@@ -176,8 +188,16 @@ export function OutreachModal({ customer, onClose, initialScenario }: Props) {
   }, [templateUsesAdGap, adGap, customer.workspace_id]);
 
   // Drives the first-name resolver — "Hi Eric," when sending to one
-  // person, "Hi there," when sending to a group.
-  const ctx = { ladder, adGap, recipient_count: recipientEmails.length };
+  // person, "Hi there," when sending to a group. Also threads the
+  // deliverability sub-context through when the modal was opened
+  // from a flagged-send launcher, so deliverability-warning templates
+  // see real values instead of empty {{publication_name}} etc.
+  const ctx: MergeContext = {
+    ladder,
+    adGap,
+    recipient_count: recipientEmails.length,
+    deliverability,
+  };
   const subject = template
     ? applyMergeTags(template.subject, customer, ctx)
     : "";

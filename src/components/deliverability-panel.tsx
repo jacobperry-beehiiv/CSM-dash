@@ -10,7 +10,82 @@ import { BulkEmailLauncher } from "./am/bulk-email-launcher";
 import { OutreachModal } from "./outreach-modal";
 import { useUrlSearch } from "@/lib/hooks/use-url-search";
 import type { TemplateScenario } from "@/lib/templates/templates";
-import type { Customer, DeliverabilityAlert } from "@/lib/types";
+import type { Customer, DeliverabilityAlert, RedFlag } from "@/lib/types";
+import type { MergeContext } from "@/lib/templates/merge-tags";
+
+/** Build the MergeContext.deliverability sub-object from a flagged
+ *  alert. Picks the most severe flag as the headline (critical wins
+ *  over warning; if multiple critical, first wins). Used by the
+ *  Draft button → OutreachModal handoff so a deliverability-warning
+ *  template's tags resolve to real values. */
+function buildDeliverabilityCtx(
+  alert: DeliverabilityAlert
+): NonNullable<MergeContext["deliverability"]> {
+  const flag = pickHeadlineFlag(alert.flags);
+  return {
+    publication_name: alert.post.newsletter,
+    send_name: alert.post.subject,
+    flagged_metric: flag ? humanizeMetric(flag.metric) : null,
+    flagged_value: flag ? formatMetricValue(flag.metric, flag.value) : null,
+    benchmark_value: flag ? formatMetricValue(flag.metric, flag.threshold) : null,
+    above_or_below: flag
+      ? flag.value > flag.threshold
+        ? "above"
+        : "below"
+      : null,
+  };
+}
+
+function pickHeadlineFlag(flags: RedFlag[]): RedFlag | null {
+  if (flags.length === 0) return null;
+  return (
+    flags.find((f) => f.severity === "critical") ?? flags[0]
+  );
+}
+
+/** Pick the most-severe alert from a workspace group for the
+ *  workspace-row Draft launcher. Critical-flag alerts win over
+ *  warning-only; first match within a tier. */
+function pickHeadlineAlert(
+  alerts: DeliverabilityAlert[]
+): DeliverabilityAlert | null {
+  if (alerts.length === 0) return null;
+  return (
+    alerts.find((a) =>
+      a.flags.some((f) => f.severity === "critical")
+    ) ?? alerts[0]
+  );
+}
+
+function humanizeMetric(metric: string): string {
+  switch (metric) {
+    case "delivery_rate":
+      return "delivery rate";
+    case "open_rate":
+      return "open rate";
+    case "hard_bounce_rate":
+      return "hard bounce rate";
+    case "soft_bounce_rate":
+      return "soft bounce rate";
+    case "unsub_rate":
+      return "unsubscribe rate";
+    case "spam_rate":
+      return "spam complaint rate";
+    default:
+      return metric.replace(/_/g, " ");
+  }
+}
+
+/** All flagged metrics are 0–1 ratios. Render as a percentage with
+ *  enough decimals to keep small values like spam rate readable —
+ *  matches the same auto-precision the QBR charts use. */
+function formatMetricValue(metric: string, value: number): string {
+  const pct = value * 100;
+  const abs = Math.abs(pct);
+  const decimals =
+    abs === 0 ? 1 : abs < 0.01 ? 4 : abs < 0.1 ? 3 : abs < 1 ? 2 : 1;
+  return `${pct.toFixed(decimals)}%`;
+}
 
 interface RunResult {
   target_date: string;
@@ -124,6 +199,7 @@ export function DeliverabilityPanel({
   const [outreachFor, setOutreachFor] = useState<{
     customer: Customer;
     scenario: TemplateScenario;
+    deliverability?: NonNullable<MergeContext["deliverability"]>;
   } | null>(null);
   const [search, setSearch] = useUrlSearch("q");
   const customerByWorkspace = useCustomerByWorkspace();
@@ -656,12 +732,22 @@ export function DeliverabilityPanel({
                           {customer ? (
                             <button
                               type="button"
-                              onClick={() =>
+                              onClick={() => {
+                                // Workspace-level Draft picks the
+                                // headline alert from the group so
+                                // the deliverability merge tags
+                                // resolve against the worst send.
+                                const headline = pickHeadlineAlert(
+                                  group.alerts
+                                );
                                 setOutreachFor({
                                   customer,
                                   scenario: "general-checkin",
-                                })
-                              }
+                                  deliverability: headline
+                                    ? buildDeliverabilityCtx(headline)
+                                    : undefined,
+                                });
+                              }}
                               title="Draft outreach email (template picker + Gmail draft)"
                               className="px-2 py-1 text-xs border border-border-strong rounded-md hover:bg-canvas"
                             >
@@ -709,6 +795,8 @@ export function DeliverabilityPanel({
                                             setOutreachFor({
                                               customer,
                                               scenario: "general-checkin",
+                                              deliverability:
+                                                buildDeliverabilityCtx(alert),
                                             })
                                         : undefined
                                     }
@@ -738,6 +826,7 @@ export function DeliverabilityPanel({
         <OutreachModal
           customer={outreachFor.customer}
           initialScenario={outreachFor.scenario}
+          deliverability={outreachFor.deliverability}
           onClose={() => setOutreachFor(null)}
         />
       ) : null}
