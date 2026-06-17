@@ -351,15 +351,12 @@ export async function runCard(
   // POST /api/card/:id/query (NOT /query/json — we want the raw
   // shape with cols metadata so the heuristic can read base_type).
   //
-  // cache_ttl: tells Metabase to serve this question from its own
-  // query cache when the same (questionId, params) combo runs again
-  // within `cache_ttl` seconds. 600s = 10 min — long enough that a
-  // CSM clicking through 5 charts for the same customer hits cache
-  // on the second+ chart, but short enough that fresh-after-sync
-  // data lands within ~10 min. First click for a workspace is still
-  // cold (Metabase needs to actually run the SQL); subsequent clicks
-  // are sub-second.
-  const params: Record<string, unknown> = { cache_ttl: 600 };
+  // Metabase's per-card cache is configured on the Card model itself
+  // (admin → question → caching), not as a per-request body field.
+  // Sending cache_ttl here is silently ignored. Card-level caching
+  // for the heaviest QBR questions should be set in Metabase admin;
+  // app-side caching is layered above this in describeCard().
+  const params: Record<string, unknown> = {};
   if (Object.keys(provided).length > 0) {
     params.parameters = Object.entries(provided).map(([slug, value]) => ({
       type: "category",
