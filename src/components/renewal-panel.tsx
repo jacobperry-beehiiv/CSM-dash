@@ -591,7 +591,7 @@ export function RenewalPanel({ customers, csms }: Props) {
                           <div className="font-medium text-fg">
                             {c.company_name ?? c.workspace_name ?? "—"}
                           </div>
-                          <div className="text-xs text-muted truncate">
+                          <div className="text-xs text-muted break-words">
                             {c.property_main_contact ?? c.owner_email ?? ""}
                           </div>
                         </td>

@@ -15,13 +15,21 @@ export function formatValue(value: unknown, format?: SeriesFormat): string {
   const n = typeof value === "number" ? value : Number(value);
   if (Number.isNaN(n)) return String(value);
   switch (format) {
-    case "percent":
+    case "percent": {
       // Metabase returns percentages either as 0–1 ratios or 0–100
       // integers depending on the question. >2 means it's the
       // already-multiplied form; <=2 means it's a ratio.
-      return n > 2
-        ? `${n.toFixed(1)}%`
-        : `${(n * 100).toFixed(1)}%`;
+      const pct = n > 2 ? n : n * 100;
+      const abs = Math.abs(pct);
+      // Auto-precision: spam/complaint rates land in the 0.001-0.5%
+      // band and round to "0.0%" at 1 decimal — useless. Bucket the
+      // decimals to the magnitude so we keep ~2 significant figures
+      // for small values without breaking the "47.5%" open-rate look
+      // at the high end.
+      const decimals =
+        abs === 0 ? 1 : abs < 0.01 ? 4 : abs < 0.1 ? 3 : abs < 1 ? 2 : 1;
+      return `${pct.toFixed(decimals)}%`;
+    }
     case "currency":
       // Compact form for axis ticks ($1.2K) so labels don't crowd.
       // Tooltip uses full form via formatValue's twin in chart-tooltip.

@@ -536,7 +536,7 @@ export function ApproachingEnterprisePanel({ rows }: Props) {
                               onClick={() => toggleExpanded(k)}
                             />
                           </div>
-                          <div className="text-xs text-muted truncate">
+                          <div className="text-xs text-muted break-words">
                             {r.owner_name ?? r.owner_email ?? ""}
                           </div>
                         </td>

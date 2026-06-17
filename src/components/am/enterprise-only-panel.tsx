@@ -655,7 +655,7 @@ export function EnterpriseOnlyPanel({ rows, csms }: Props) {
                             }
                           />
                         </div>
-                        <div className="text-xs text-muted truncate">
+                        <div className="text-xs text-muted break-words">
                           {c.property_main_contact ?? c.owner_email ?? ""}
                         </div>
                       </td>

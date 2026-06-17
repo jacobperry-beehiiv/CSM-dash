@@ -56,10 +56,10 @@ export function CustomerPublicationsList({ workspaceId }: Props) {
               className="flex items-center gap-4 px-4 py-3 hover:bg-canvas/40"
             >
               <div className="flex-1 min-w-0">
-                <div className="text-sm font-medium text-fg truncate">
+                <div className="text-sm font-medium text-fg break-words">
                   {p.publication_name || "(unnamed)"}
                 </div>
-                <div className="text-xs text-muted truncate">
+                <div className="text-xs text-muted break-words">
                   {fmtNumber(p.subscribers ?? 0)} subscribers
                 </div>
               </div>

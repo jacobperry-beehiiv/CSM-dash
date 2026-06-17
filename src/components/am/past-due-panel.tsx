@@ -1197,7 +1197,7 @@ export function PastDuePanel({ rows, csms, totalSourceRows }: Props) {
                                     target="_blank"
                                     rel="noopener noreferrer"
                                     onClick={(e) => e.stopPropagation()}
-                                    className="block text-xs text-muted truncate font-mono hover:text-accent hover:underline decoration-dotted"
+                                    className="block text-xs text-muted break-all font-mono hover:text-accent hover:underline decoration-dotted"
                                     title="Open in Stripe Dashboard"
                                   >
                                     {r.customer_id}
