@@ -19,6 +19,8 @@ import { DeliverabilityPanel } from "@/components/deliverability-panel";
 import { DeliverabilityBanner } from "@/components/deliverability-banner";
 import { DeliverabilityLoading } from "@/components/deliverability-loading";
 import { QbrChartsTab } from "@/components/qbr-charts/qbr-charts-tab";
+import type { WorkspaceOption } from "@/components/qbr-charts/workspace-picker";
+import { isAdmin } from "@/lib/auth/admin";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -118,10 +120,28 @@ export default async function CsmPage({
         <DeliverabilityBanner source={source} />
       );
     } else if (tab === "qbr-charts") {
-      // QBR Charts is fully client-rendered — it talks to
-      // /api/qbr-charts/chart-spec on demand. No server-side data
-      // prep beyond the layout shell.
-      body = <QbrChartsTab />;
+      // Workspace dropdown defaults to the viewer's CSM scope; admins
+      // get a "show all" toggle. Pass the deduped book + admin flag —
+      // /api/qbr-charts/chart-spec runs on demand from the client.
+      const admin = isAdmin(session?.user?.email);
+      const wsOptions: WorkspaceOption[] = [];
+      const seen = new Set<string>();
+      for (const c of all) {
+        if (!c.workspace_id || seen.has(c.workspace_id)) continue;
+        seen.add(c.workspace_id);
+        wsOptions.push({
+          workspace_id: c.workspace_id,
+          workspace_name: c.workspace_name,
+          customer_success_manager: c.customer_success_manager,
+        });
+      }
+      body = (
+        <QbrChartsTab
+          workspaces={wsOptions}
+          csm={csm}
+          isAdmin={admin}
+        />
+      );
     } else {
       body = (
         <div className="text-sm text-muted">Unknown tab: {tab}</div>
