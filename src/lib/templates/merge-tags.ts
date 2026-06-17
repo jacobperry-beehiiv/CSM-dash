@@ -44,6 +44,48 @@ export interface MergeContext {
    *  flow. */
   past_due_month?: string | null;
   past_due_reason?: string | null;
+  /** Deliverability-outreach context. Filled in by callers building
+   *  a one-off deliverability warning email — populates the
+   *  `publication_name`, `send_name`, `flagged_metric`, `flagged_value`,
+   *  `above_or_below`, `benchmark_value`, `cta`, `sender_name`, and
+   *  `sender_title` tags below.
+   *
+   *  Designed as a single nested object instead of nine top-level
+   *  fields so it's clear which tags belong to the same flow — and
+   *  so a future second deliverability template (warning-resolved,
+   *  follow-up, etc.) can share the same shape.
+   *
+   *  Each field is independently optional: a template that
+   *  references `send_name` still renders cleanly on a draft where
+   *  send_name is unknown — the conditional-block syntax
+   *  `{{#send_name}}…{{/send_name}}` (handled in applyMergeTags)
+   *  drops the wrapping copy on absent values. */
+  deliverability?: {
+    publication_name?: string | null;
+    send_name?: string | null;
+    /** Human label for the metric being flagged. e.g. "open rate",
+     *  "spam rate", "click-through rate". Capitalize as you'd read
+     *  it in prose. */
+    flagged_metric?: string | null;
+    /** Pre-formatted value, e.g. "0.23%", "12.4K". The library
+     *  doesn't try to format from a number here because metrics
+     *  in this flow come pre-rendered from the deliverability
+     *  panel's existing formatters. */
+    flagged_value?: string | null;
+    /** "above" or "below". Free-text so a template can also use
+     *  phrases like "well below" without us coercing. */
+    above_or_below?: string | null;
+    benchmark_value?: string | null;
+    /** Call-to-action sentence. e.g. "Reply here if you'd like
+     *  me to dig in" or a calendar link. */
+    cta?: string | null;
+    /** Sender's display name. Defaults to the customer's CSM
+     *  (humanized) when absent. */
+    sender_name?: string | null;
+    /** Sender's title. Defaults to "Customer Success Manager"
+     *  when absent. */
+    sender_title?: string | null;
+  };
 }
 
 export interface MergeTag {
@@ -502,25 +544,156 @@ export const MERGE_TAGS: MergeTag[] = [
       "Humanized phrase for why the charge failed (e.g. \"due to insufficient funds\", \"due to card decline\"). Derived from Stripe's failure_code on PastDueRow. Falls back to \"due to a payment issue\" for codes we haven't mapped.",
     resolve: (_, ctx) => ctx.past_due_reason || "—",
   },
+
+  // ─── Deliverability warning template ──────────────────────────────
+  //
+  // Powers the "we noticed a deliverability signal" outreach email.
+  // All resolve via ctx.deliverability — when that's missing, each
+  // returns an empty string (NOT "—") so the conditional-block
+  // wrapper `{{#token}}…{{/token}}` can correctly hide the
+  // surrounding sentence on absent fields.
+  //
+  // Unprefixed token names (no `customer.` prefix) match the
+  // convention MONTH/REASON established for the Past Due template:
+  // when the tag is template-specific rather than customer-attribute
+  // derived, dropping the prefix reads cleaner in the source
+  // template ("noticed {{flagged_metric}} of {{flagged_value}}").
+  {
+    token: "first_name",
+    label: "Recipient first name (unprefixed alias)",
+    description:
+      "Convenience alias for customer.contact_first_name — reads cleaner in unprefixed templates like the deliverability warning.",
+    resolve: (c, ctx) => firstNameForContext(c, ctx),
+  },
+  {
+    token: "publication_name",
+    label: "Publication — name",
+    description:
+      "Name of the publication being flagged. Set by the caller (deliverability panel's outreach launcher).",
+    resolve: (_, ctx) => ctx.deliverability?.publication_name?.trim() || "",
+  },
+  {
+    token: "send_name",
+    label: "Send — name / subject",
+    description:
+      "Name or subject line of the specific send being flagged. Optional — wrap dependent copy in {{#send_name}}…{{/send_name}} to hide it cleanly when absent.",
+    resolve: (_, ctx) => ctx.deliverability?.send_name?.trim() || "",
+  },
+  {
+    token: "flagged_metric",
+    label: "Flagged metric — label",
+    description:
+      "Human label for the metric being flagged (e.g. \"an open rate\", \"a spam rate\"). Set by the caller; not auto-derived from the deliverability snapshot.",
+    resolve: (_, ctx) => ctx.deliverability?.flagged_metric?.trim() || "",
+  },
+  {
+    token: "flagged_value",
+    label: "Flagged metric — value",
+    description:
+      "Pre-formatted value of the flagged metric (e.g. \"0.23%\", \"43%\"). Library does not coerce numbers — pass formatted strings from the deliverability panel's formatters.",
+    resolve: (_, ctx) => ctx.deliverability?.flagged_value?.trim() || "",
+  },
+  {
+    token: "above_or_below",
+    label: "Direction — above or below benchmark",
+    description:
+      "\"above\" or \"below\" (free-text so callers can also use phrases like \"well below\"). Renders the comparator copy: \"X% above the Y% we'd typically expect\".",
+    resolve: (_, ctx) => ctx.deliverability?.above_or_below?.trim() || "",
+  },
+  {
+    token: "benchmark_value",
+    label: "Benchmark — value",
+    description:
+      "Pre-formatted benchmark the flagged value is being compared against (e.g. \"0.10%\", \"25%\").",
+    resolve: (_, ctx) => ctx.deliverability?.benchmark_value?.trim() || "",
+  },
+  {
+    token: "cta",
+    label: "Call-to-action",
+    description:
+      "Closing sentence offering the next step. Free-text so it can be a question, a calendar link, or a meeting invite.",
+    resolve: (_, ctx) => ctx.deliverability?.cta?.trim() || "",
+  },
+  {
+    token: "sender_name",
+    label: "Sender — display name",
+    description:
+      "Sender's full name. Defaults to the customer's CSM (humanized) when ctx.deliverability.sender_name is unset, so a template renders cleanly without explicit context.",
+    resolve: (c, ctx) =>
+      ctx.deliverability?.sender_name?.trim() ||
+      c.customer_success_manager?.replace(/_/g, " ") ||
+      "",
+  },
+  {
+    token: "sender_title",
+    label: "Sender — title",
+    description:
+      "Sender's job title. Defaults to \"Customer Success Manager\" when unset.",
+    resolve: (_, ctx) =>
+      ctx.deliverability?.sender_title?.trim() || "Customer Success Manager",
+  },
 ];
 
 const TAG_INDEX = new Map(MERGE_TAGS.map((t) => [t.token, t]));
 
 /**
- * Replace every `{{token}}` (whitespace-tolerant) with the resolved value.
- * Unknown tokens are left as-is so the user can see them in the preview.
+ * Replace `{{token}}` occurrences with resolved values. Two passes:
  *
- * Pass `ctx.ladder` from any caller that wants tier-aware tags to resolve.
+ *   1. Conditional blocks: `{{#token}}…{{/token}}` renders the
+ *      inner content only when `token` resolves to a non-empty
+ *      string. Useful for optional fields where the surrounding
+ *      copy would read awkwardly with the value missing — e.g.
+ *      `"Your recent send{{#send_name}}, \"{{send_name}},\"{{/send_name}}
+ *      showed…"` keeps the comma + quotes only when the send has a
+ *      name to surface. Subset of Mustache section syntax (no
+ *      iteration, no nesting); enough for the templates we have.
+ *
+ *   2. Plain `{{token}}` substitution against the resolved value.
+ *      Unknown tokens are left as-is so the user can see them in
+ *      the preview rather than getting a silently-empty render.
+ *
+ * Pass `ctx.ladder` from any caller that wants tier-aware tags to
+ * resolve; `ctx.deliverability` for the deliverability-template
+ * tags; etc. — see MergeContext.
  */
 export function applyMergeTags(
   template: string,
   customer: Customer,
   ctx: MergeContext = {}
 ): string {
-  return template.replace(/\{\{\s*([a-zA-Z0-9_.]+)\s*\}\}/g, (match, token) => {
+  // Resolve a token to its string value once per call so the
+  // conditional-block check and the substitution agree (a tag's
+  // resolver could theoretically return different values across
+  // calls; cache once for consistency).
+  const resolveToken = (token: string): string | null => {
     const tag = TAG_INDEX.get(token);
-    return tag ? tag.resolve(customer, ctx) : match;
+    if (!tag) return null;
+    return tag.resolve(customer, ctx);
+  };
+
+  // Pass 1: conditional sections. We match {{#NAME}}…{{/NAME}}
+  // non-greedily (the `.` flag is implicit via [\s\S]) so multiple
+  // blocks in the same template don't gobble each other. Inner
+  // content keeps its own {{token}}s — they're substituted in pass
+  // 2 below.
+  let out = template.replace(
+    /\{\{\s*#\s*([a-zA-Z0-9_.]+)\s*\}\}([\s\S]*?)\{\{\s*\/\s*\1\s*\}\}/g,
+    (_match, token: string, inner: string) => {
+      const value = resolveToken(token);
+      // Truthy = non-null + non-empty after trim. Unknown tags
+      // (resolveToken returns null) also drop the block — there's
+      // no value to anchor the surrounding copy to.
+      return value && value.trim().length > 0 ? inner : "";
+    }
+  );
+
+  // Pass 2: plain tokens.
+  out = out.replace(/\{\{\s*([a-zA-Z0-9_.]+)\s*\}\}/g, (match, token) => {
+    const resolved = resolveToken(token);
+    return resolved !== null ? resolved : match;
   });
+
+  return out;
 }
 
 export function isKnownTag(token: string): boolean {
