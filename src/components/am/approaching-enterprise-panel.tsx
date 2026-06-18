@@ -388,6 +388,7 @@ export function ApproachingEnterprisePanel({ rows }: Props) {
           disabled={selected.size === 0 || customerBook.length === 0}
           label="✉️ Email selected"
           trackingIdFor={(c) => c.workspace_id ?? null}
+          auditLabel="Approaching-Enterprise email sent"
           onDraftCreated={async (ids) => {
             if (ids.length === 0) return;
             try {

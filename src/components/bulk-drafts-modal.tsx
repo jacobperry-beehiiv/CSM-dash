@@ -74,6 +74,17 @@ export interface BulkDraft {
   rerender?: (ctx: RerenderContext) => RerenderResult;
   /** True for Below-$3.5K BCC batches — recipients stay in BCC, not To. */
   bcc_batch?: boolean;
+  /** Optional audit-log target. When set with `audit_label`, the
+   *  server appends a `kind: "action_log"` note to that workspace's
+   *  feed once the draft lands. Past-due / renewals callers use
+   *  this so the Notes feed shows "Past-due email sent" etc. */
+  audit_workspace_id?: string;
+  /** Multi-workspace audit-log target — used by BCC-batch drafts
+   *  where one draft covers N customers. Server writes one action_log
+   *  entry per id when the batch lands. Same `audit_label` applies to
+   *  all. Either this OR `audit_workspace_id` (not both) should be set. */
+  audit_workspace_ids?: string[];
+  audit_label?: string;
 }
 
 function buildGmailComposeUrl(
@@ -495,6 +506,9 @@ export function BulkDraftsModal({
             // this we'd over-stamp partial failures.
             tracking_id: d.tracking_id,
             tracking_ids: d.tracking_ids,
+            audit_workspace_id: d.audit_workspace_id,
+            audit_workspace_ids: d.audit_workspace_ids,
+            audit_label: d.audit_label,
           })),
         }),
       });

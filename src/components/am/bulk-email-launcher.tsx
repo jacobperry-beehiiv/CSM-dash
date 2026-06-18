@@ -76,6 +76,11 @@ interface Props {
   bccBatchSize?: number;
   /** To: address for BCC-batch drafts — typically `am.bulk_alias_email`. */
   bccBatchTo?: string;
+  /** Human-readable label stamped onto each draft's audit-log entry
+   *  in the customer's Notes feed. e.g. "Past-due email sent",
+   *  "Renewal email sent", "At-risk email sent". Unset → no audit
+   *  entry written for this launcher's drafts. */
+  auditLabel?: string;
 }
 
 export function BulkEmailLauncher({
@@ -91,6 +96,7 @@ export function BulkEmailLauncher({
   extraContextFor,
   bccBatchSize,
   bccBatchTo,
+  auditLabel,
 }: Props) {
   const viewerEmail = useViewerEmail();
   const [open, setOpen] = useState(false);
@@ -165,8 +171,9 @@ export function BulkEmailLauncher({
       extraContextFor,
       bccBatchSize,
       bccBatchTo,
+      auditLabel,
     });
-  }, [open, templateId, customers, templates, ladder, ccLookup, bccLookup, trackingIdFor, extraContextFor, bccBatchSize, bccBatchTo]);
+  }, [open, templateId, customers, templates, ladder, ccLookup, bccLookup, trackingIdFor, extraContextFor, bccBatchSize, bccBatchTo, auditLabel]);
 
   useEffect(() => {
     setDrafts(builtDrafts);

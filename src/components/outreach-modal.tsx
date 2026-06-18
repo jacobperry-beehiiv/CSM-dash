@@ -226,6 +226,10 @@ export function OutreachModal({
               subject,
               body_html,
               from: template.send_as_email || undefined,
+              audit_workspace_id: customer.workspace_id || undefined,
+              audit_label: customer.workspace_id
+                ? `${template.label} email sent`
+                : undefined,
             },
           ],
         }),

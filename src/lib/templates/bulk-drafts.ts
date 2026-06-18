@@ -75,6 +75,13 @@ export interface BuildBulkDraftsInput {
    *  bulk outreach alias. May be empty; Gmail compose still works with
    *  BCC-only. */
   bccBatchTo?: string;
+  /** Optional human-readable label stamped onto the customer's Notes
+   *  feed (kind: "action_log") after the draft lands. e.g.
+   *  "Past-due email sent". When set, every draft with a resolvable
+   *  workspace_id carries this label through to /api/drafts/bulk-create
+   *  so the server can write an audit entry. Drafts missing a
+   *  workspace_id silently drop from the audit log. */
+  auditLabel?: string;
 }
 
 /**
@@ -104,6 +111,7 @@ export function buildBulkDrafts(input: BuildBulkDraftsInput): BulkDraft[] {
     extraContextFor,
     bccBatchSize,
     bccBatchTo,
+    auditLabel,
   } = input;
 
   if (bccBatchSize && bccBatchSize > 0) {
@@ -116,6 +124,7 @@ export function buildBulkDrafts(input: BuildBulkDraftsInput): BulkDraft[] {
       extraContextFor,
       batchSize: bccBatchSize,
       toEmail: (bccBatchTo ?? "").trim(),
+      auditLabel,
     });
   }
   const usesAdGap =
@@ -207,6 +216,9 @@ export function buildBulkDrafts(input: BuildBulkDraftsInput): BulkDraft[] {
       compose_url: composeUrl,
       recipients,
       rerender,
+      audit_workspace_id:
+        auditLabel && c.workspace_id ? c.workspace_id : undefined,
+      audit_label: auditLabel && c.workspace_id ? auditLabel : undefined,
     });
   }
   return drafts;
@@ -225,6 +237,7 @@ function buildBccBatchDrafts(args: {
   extraContextFor?: (c: Customer) => Partial<MergeContext>;
   batchSize: number;
   toEmail: string;
+  auditLabel?: string;
 }): BulkDraft[] {
   const {
     targets,
@@ -235,6 +248,7 @@ function buildBccBatchDrafts(args: {
     extraContextFor,
     batchSize,
     toEmail,
+    auditLabel,
   } = args;
 
   const eligible = targets.filter((c) => Boolean(c.owner_email));
@@ -281,6 +295,9 @@ function buildBccBatchDrafts(args: {
       authuser: tpl.send_as_email || undefined,
     });
 
+    const audit_workspace_ids = auditLabel
+      ? batch.map((c) => c.workspace_id).filter((id): id is string => Boolean(id))
+      : undefined;
     drafts.push({
       customer_label: `Batch ${i + 1} of ${batches.length} — ${batch.length} recipient${
         batch.length === 1 ? "" : "s"
@@ -299,6 +316,14 @@ function buildBccBatchDrafts(args: {
         name: c.property_main_contact ?? c.company_name ?? null,
         default: true,
       })),
+      audit_workspace_ids:
+        audit_workspace_ids && audit_workspace_ids.length > 0
+          ? audit_workspace_ids
+          : undefined,
+      audit_label:
+        audit_workspace_ids && audit_workspace_ids.length > 0
+          ? auditLabel
+          : undefined,
     });
   }
 

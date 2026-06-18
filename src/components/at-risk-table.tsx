@@ -657,6 +657,7 @@ export function AtRiskTable({
                 disabled={selected.size === 0}
                 label={`📥 Draft for ${selected.size}`}
                 trackingIdFor={(c) => c.workspace_id ?? null}
+                auditLabel="At-risk email sent"
               />
             );
           })()}

@@ -7,19 +7,29 @@ import { CollapsibleSection } from "../collapsible-section";
 /**
  * Inline "Notes" editor used inside the AM tabs' expanded company
  * rows. Reads + writes the same `customer-signals` KV the CSM
- * profile-page renders from, scoped to `kind === "note"` so it stays
- * a free-text scratchpad and doesn't pollute the structured Claude-
- * skill signals (touchpoints, goals, risk_signals, …).
+ * profile-page renders from, surfacing two kinds:
+ *
+ *   • `note` — free-text scratchpad notes a CSM writes by hand.
+ *     Editable, deletable, can be mirrored to HubSpot.
+ *   • `action_log` — auto-events emitted by every mutation endpoint
+ *     when a bulk or per-row action runs against the workspace
+ *     ("Past-due email sent", "Marked Skip", "Pinged on Slack"…).
+ *     Visually distinct (muted, 🤖 prefix) and read-only — no Edit /
+ *     Delete / Post-to-HubSpot affordances.
+ *
+ * Both render in a single chronological feed so the CSM sees actions
+ * interleaved with their own commentary. The count chip in the
+ * section header is intentionally CSM-notes-only — auto-events would
+ * otherwise inflate it and break its "has the CSM written anything?"
+ * signal.
  *
  * Wire-up:
- *   • GET  /api/customer-signals?workspace_id=…  → list, filter to notes
+ *   • GET  /api/customer-signals?workspace_id=…  → list, filter to
+ *     `note` + `action_log`
  *   • POST /api/customer-signals { workspace_id, kind: "note", text }
- *     creates a new entry; the API stamps `created_at` + `event_at`.
- *
- * Renders as a CollapsibleSection so the expanded company panel can
- * sit as a clean stack of titles with notes opt-in. Default open here
- * (vs closed on Status/Dates/Contact) because the AM's whole reason
- * for expanding the row is usually to leave a note.
+ *     creates a manual note; the API stamps `created_at` + `event_at`.
+ *   • Action-log entries are written server-side by the endpoint that
+ *     fired the action — see appendActionLog() in customer-signals.ts.
  */
 interface Props {
   workspaceId: string;
@@ -48,18 +58,21 @@ export function CompanyNotes({ workspaceId }: Props) {
       );
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const j = (await r.json()) as { signals: CustomerSignal[] };
-      // Only surface manual notes here. Other kinds (touchpoint, goal,
-      // risk_signal, …) live in the CSM /account profile view.
-      const onlyNotes = (j.signals ?? []).filter((s) => s.kind === "note");
+      // Surface free-text notes + auto-emitted action-log entries.
+      // Other kinds (touchpoint, goal, risk_signal, …) still live in
+      // the CSM /account profile view, not here.
+      const feed = (j.signals ?? []).filter(
+        (s) => s.kind === "note" || s.kind === "action_log"
+      );
       // Server already trims + sorts newest-first by event_at, but the
       // GET result is whatever order it landed in storage, so resort
       // here defensively.
-      onlyNotes.sort((a, b) => {
+      feed.sort((a, b) => {
         const ad = Date.parse(a.event_at ?? a.created_at) || 0;
         const bd = Date.parse(b.event_at ?? b.created_at) || 0;
         return bd - ad;
       });
-      setNotes(onlyNotes);
+      setNotes(feed);
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load notes");
@@ -160,7 +173,10 @@ export function CompanyNotes({ workspaceId }: Props) {
     }
   }
 
-  const count = notes?.length ?? 0;
+  // Count chip surfaces CSM-authored notes only — auto-events would
+  // otherwise inflate the count and lose its "human has written
+  // here" signal.
+  const count = (notes ?? []).filter((n) => n.kind === "note").length;
 
   return (
     <CollapsibleSection
@@ -184,6 +200,25 @@ export function CompanyNotes({ workspaceId }: Props) {
         ) : (
           <ul className="space-y-2">
             {notes.map((n) => {
+              const isAuto = n.kind === "action_log";
+              if (isAuto) {
+                return (
+                  <li
+                    key={n.id}
+                    className="rounded-md border border-border/60 bg-canvas/20 px-3 py-2 text-xs"
+                  >
+                    <div className="flex items-baseline gap-2 text-muted">
+                      <span aria-hidden>🤖</span>
+                      <span className="text-fg/80 italic break-words">
+                        {n.text}
+                      </span>
+                    </div>
+                    <p className="mt-0.5 text-[11px] text-subtle pl-5">
+                      {n.created_by ?? "—"} · {fmtWhen(n.event_at ?? n.created_at)}
+                    </p>
+                  </li>
+                );
+              }
               const posted = Boolean(
                 (n.metadata as Record<string, unknown> | undefined)
                   ?.hubspot_note_id

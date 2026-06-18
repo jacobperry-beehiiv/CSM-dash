@@ -494,6 +494,7 @@ export function DeliverabilityPanel({
                 : "📥 Draft selected"
             }
             trackingIdFor={(c) => c.workspace_id ?? null}
+            auditLabel="Deliverability outreach email sent"
           />
         </div>
       ) : null}

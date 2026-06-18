@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { setProactiveStatus } from "@/lib/data/proactive-outreach";
+import { appendActionLog } from "@/lib/data/customer-signals";
 
 export const dynamic = "force-dynamic";
 
@@ -49,6 +50,17 @@ export async function POST(req: Request) {
     const map = await setProactiveStatus(workspaceId, next, {
       updatedBy: session.user.email,
     });
+    await appendActionLog([
+      {
+        workspace_id: workspaceId,
+        text: next
+          ? `Status set: ${next} (proactive)`
+          : "Status cleared (proactive)",
+        created_by: session.user.email.toLowerCase(),
+        action_kind: "proactive_status",
+        metadata: { status: next },
+      },
+    ]);
     return NextResponse.json(map);
   } catch (e) {
     return NextResponse.json(

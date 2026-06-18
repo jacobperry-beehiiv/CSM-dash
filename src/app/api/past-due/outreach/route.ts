@@ -6,6 +6,39 @@ import {
   setPastDueOutreach,
   type PastDueOutreachStatus,
 } from "@/lib/data/past-due-outreach";
+import { appendActionLog } from "@/lib/data/customer-signals";
+import { loadCustomers } from "@/lib/data/load-customers";
+
+/** Past-due outreach is keyed by Stripe customer_id; the audit log
+ *  is keyed by workspace_id. Resolve via the customer book — same
+ *  index loadPastDue + the AM panel use, so a row visible in the
+ *  panel will reliably resolve here too. Rows whose Customer can't
+ *  be matched silently drop from the audit (no log entry); the
+ *  primary mutation has already succeeded. */
+async function resolveWorkspaceIdsByStripeIds(
+  customerIds: string[]
+): Promise<Map<string, string>> {
+  const customers = await loadCustomers();
+  const idx = new Map<string, string>();
+  for (const c of customers) {
+    if (c.stripe_customer_id && c.workspace_id) {
+      idx.set(c.stripe_customer_id, c.workspace_id);
+    }
+  }
+  const out = new Map<string, string>();
+  for (const cid of customerIds) {
+    const ws = idx.get(cid);
+    if (ws) out.set(cid, ws);
+  }
+  return out;
+}
+
+const STATUS_LABELS: Record<PastDueOutreachStatus, string> = {
+  touched: "Marked touched",
+  follow_up_sent: "Marked follow-up sent",
+  paid: "Marked paid",
+  lost: "Marked lost",
+};
 
 export const dynamic = "force-dynamic";
 
@@ -86,6 +119,24 @@ export async function POST(req: Request) {
     updatedBy: session.user.email,
     note: body.note ?? null,
   });
+  // Audit trail — only logged when the row maps to a workspace and
+  // we have a labeled status. Clears (status=null) get no entry to
+  // avoid noise from accidental un-touch clicks.
+  if (status) {
+    const resolved = await resolveWorkspaceIdsByStripeIds([customerId]);
+    const ws = resolved.get(customerId);
+    if (ws) {
+      await appendActionLog([
+        {
+          workspace_id: ws,
+          text: STATUS_LABELS[status] + " (past-due)",
+          created_by: session.user.email.toLowerCase(),
+          action_kind: "past_due_status",
+          metadata: { status, customer_id: customerId },
+        },
+      ]);
+    }
+  }
   return NextResponse.json(map);
 }
 
@@ -113,9 +164,21 @@ export async function PUT(req: Request) {
       { status: 400 }
     );
   }
+  const actor = session.user.email.toLowerCase();
   const map = await bulkSetPastDueOutreach(body.customer_ids, status, {
-    updatedBy: session.user.email,
+    updatedBy: actor,
     note: body.note ?? null,
   });
+  // Audit trail — one entry per resolved workspace.
+  const resolved = await resolveWorkspaceIdsByStripeIds(body.customer_ids);
+  await appendActionLog(
+    [...resolved.entries()].map(([cid, ws]) => ({
+      workspace_id: ws,
+      text: STATUS_LABELS[status] + " (past-due)",
+      created_by: actor,
+      action_kind: "past_due_status",
+      metadata: { status, customer_id: cid, bulk: true },
+    }))
+  );
   return NextResponse.json(map);
 }

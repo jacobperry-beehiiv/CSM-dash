@@ -537,6 +537,7 @@ export function EnterpriseOnlyPanel({ rows, csms }: Props) {
           label="✉️ Email selected (CCs CSM)"
           ccLookup={(c) => c.customer_success_manager_email ?? null}
           trackingIdFor={(c) => c.workspace_id ?? null}
+          auditLabel="Enterprise outreach email sent"
           onDraftCreated={async (ids) => {
             // Auto-stamp `last_outreach_at` so the row picks up the
             // green Outreach-logged badge AND the 5-day nudge cycle

@@ -83,12 +83,21 @@ export async function POST(req: Request) {
       )
     : undefined;
 
+  // Session email for manual runs → stamped on per-workspace
+  // action_log entries the engine writes after a successful post.
+  let actor: string | undefined;
+  if (triggeredBy === "manual") {
+    const session = await auth();
+    actor = session?.user?.email?.toLowerCase() ?? undefined;
+  }
+
   try {
     const result = await runReviewDigestSweep({
       dryRun: Boolean(body.dry_run),
       triggeredBy,
       workflows,
       workspaceIds,
+      actor,
     });
     return NextResponse.json({
       ok: true,
