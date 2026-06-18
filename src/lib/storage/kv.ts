@@ -1,5 +1,6 @@
 import { mkdir, readFile, writeFile, unlink } from "node:fs/promises";
 import path from "node:path";
+import { isDemoMode } from "../demo/mode";
 
 /**
  * Tiny key-value store. One backend at a time:
@@ -73,6 +74,12 @@ export async function kvGet<T>(key: string): Promise<T | null> {
 }
 
 export async function kvSet<T>(key: string, value: T): Promise<void> {
+  // Demo-mode write guard. Defense in depth — even if a UI action
+  // bypasses our front-end checks and calls a write endpoint, the
+  // underlying KV mutation no-ops so no real customer data is
+  // touched. Local file backend is OK to write to in dev, but we
+  // still skip in DEMO_MODE so the fixture stays pure across reloads.
+  if (isDemoMode()) return;
   if (backend() === "postgres") {
     await ensureSchema();
     const sql = await pg();
@@ -90,6 +97,7 @@ export async function kvSet<T>(key: string, value: T): Promise<void> {
 }
 
 export async function kvDelete(key: string): Promise<void> {
+  if (isDemoMode()) return;
   if (backend() === "postgres") {
     await ensureSchema();
     const sql = await pg();

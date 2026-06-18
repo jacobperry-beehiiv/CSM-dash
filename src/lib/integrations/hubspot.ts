@@ -38,6 +38,8 @@
  * 100 IDs per call and add a small inter-batch delay as a guardrail.
  */
 
+import { isDemoMode } from "../demo/mode";
+
 const COMPANY_BATCH_ENDPOINT =
   "https://api.hubapi.com/crm/v3/objects/companies/batch/read";
 const CONTACT_BATCH_ENDPOINT =
@@ -1424,6 +1426,15 @@ export async function patchHubspotCompanyProperties(
   companyId: string,
   properties: Record<string, string | number | boolean | null>
 ): Promise<void> {
+  // Demo-mode write guard — never touch real HubSpot from a screenshot
+  // session. Log the attempted patch for debugging visibility.
+  if (isDemoMode()) {
+    console.log(
+      `[demo-mode] suppressed HubSpot PATCH on company ${companyId}:`,
+      properties
+    );
+    return;
+  }
   const token = await getAccessToken();
   const res = await fetch(
     `https://api.hubapi.com/crm/v3/objects/companies/${encodeURIComponent(companyId)}`,

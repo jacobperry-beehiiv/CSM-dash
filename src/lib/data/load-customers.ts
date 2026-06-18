@@ -4,6 +4,8 @@ import { loadCustomersFromSnapshot, snapshotMetadata } from "./snapshot-loader";
 import { metabaseRowToCustomer } from "./metabase-mapper";
 import { applyOverride, loadOverrides } from "./customer-overrides";
 import { TEST_CUSTOMER } from "./test-customer";
+import { isDemoMode } from "../demo/mode";
+import { buildDemoCustomers } from "../demo/customer-fixture";
 
 export function getDataSource(): DataSource {
   const raw = (process.env.DATA_SOURCE ?? "").toLowerCase().trim();
@@ -113,6 +115,14 @@ async function loadRawCustomers(): Promise<Customer[]> {
 }
 
 export async function loadCustomers(): Promise<Customer[]> {
+  // Demo mode short-circuit: never touch the real snapshot / Metabase
+  // when DEMO_MODE=true. Returns the hand-built fixture book and
+  // skips the override application (overrides are KV-backed and
+  // shouldn't bleed in from real-data sessions). See
+  // src/lib/demo/customer-fixture.ts.
+  if (isDemoMode()) {
+    return buildDemoCustomers(new Date());
+  }
   const raw = await loadRawCustomers();
   const overrides = await loadOverrides();
   // Append the synthetic test workspace after overrides — it's not in the
@@ -229,6 +239,11 @@ export function resolveCsmFilter(
   viewerEmail: string | null | undefined
 ): string | null {
   if (raw === "all") return null;
+  // In demo mode, default to "show all" instead of scoping to the
+  // viewer's CSM handle — every demo customer is owned by the same
+  // synthetic Demo_User, so any real viewer would see an empty book
+  // under the normal default-filter behavior.
+  if (raw === undefined && isDemoMode()) return null;
   if (raw === undefined) {
     return findCsmHandleForViewer(customers, viewerEmail);
   }

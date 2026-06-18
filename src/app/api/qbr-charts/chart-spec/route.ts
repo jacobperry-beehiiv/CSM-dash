@@ -8,6 +8,8 @@ import {
 import { heuristicSpec, tagMatch } from "@/lib/qbr-charts/heuristic";
 import { getPreset } from "@/lib/qbr-charts/qbr-presets";
 import type { ChartType } from "@/lib/qbr-charts/types";
+import { isDemoMode } from "@/lib/demo/mode";
+import { buildDemoChartSpec } from "@/lib/demo/qbr-fixtures";
 
 export const dynamic = "force-dynamic";
 // Heavy QBR questions (Subscriber Growth by Month, Open Rate & CTR,
@@ -104,6 +106,25 @@ export async function POST(req: Request) {
       { error: "Couldn't resolve a question id" },
       { status: 400 }
     );
+  }
+
+  // Demo mode short-circuit — return canned spec from
+  // src/lib/demo/qbr-fixtures.ts instead of hitting Metabase. Keeps
+  // local screenshot sessions snappy and isolated from production data.
+  if (isDemoMode()) {
+    const spec = buildDemoChartSpec(questionId);
+    if (!spec) {
+      return NextResponse.json(
+        { error: "NO_DEMO_FIXTURE", message: `Demo fixture missing for question ${questionId}` },
+        { status: 422 }
+      );
+    }
+    const preset = getPreset(questionId);
+    return NextResponse.json({
+      spec,
+      matchedQuestionId: questionId,
+      matchedPreset: preset ?? null,
+    });
   }
 
   // Run the card.
