@@ -26,7 +26,7 @@ import { BulkEmailLauncher } from "./am/bulk-email-launcher";
 import { CopyPubIdsButton } from "./am/copy-pub-ids-button";
 import { ReviewStateCell } from "./am/review-state-cell";
 import { BulkReviewStateActions } from "./am/bulk-review-state-actions";
-import { SendDigestButton } from "./am/send-digest-button";
+import { PingSelectedButton } from "./am/ping-selected-button";
 import {
   billingPeriodSuffix,
   bucketLabel,
@@ -452,7 +452,6 @@ export function RenewalPanel({ customers, csms }: Props) {
         emptyLabel="Any lifecycle"
         options={lifecycleFilterOptions}
       />
-      <SendDigestButton workflows={["renewals"]} />
     </FilterBar>
   );
 
@@ -502,6 +501,10 @@ export function RenewalPanel({ customers, csms }: Props) {
           workspaceIds={selectedWorkspaceIds}
           workflow="renewals"
           onApplied={setReviewStates}
+        />
+        <PingSelectedButton
+          workspaceIds={selectedWorkspaceIds}
+          workflow="renewals"
         />
         <div className="flex-1" />
         <BulkEmailLauncher

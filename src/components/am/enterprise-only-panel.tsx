@@ -13,7 +13,6 @@ import { BulkEmailLauncher } from "./bulk-email-launcher";
 import { CustomerDetailPanel } from "../customer-detail-panel";
 import { ReviewStateCell } from "./review-state-cell";
 import { BulkReviewStateActions } from "./bulk-review-state-actions";
-import { SendDigestButton } from "./send-digest-button";
 import { CopyPubIdsButton } from "./copy-pub-ids-button";
 import { usePublicationsIndex } from "@/lib/hooks/use-publications-index";
 import type { ProactiveOutreachMap } from "@/lib/data/proactive-outreach";
@@ -522,7 +521,6 @@ export function EnterpriseOnlyPanel({ rows, csms }: Props) {
             ? "Pinging…"
             : `📣 Ping ${selected.size > 0 ? `${selected.size} ` : ""}selected on Slack`}
         </button>
-        <SendDigestButton workflows={["proactive"]} />
         <CopyPubIdsButton
           workspaceIds={selectedCustomers
             .map((c) => c.workspace_id)

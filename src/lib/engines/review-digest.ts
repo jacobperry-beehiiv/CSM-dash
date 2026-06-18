@@ -105,12 +105,21 @@ interface BuildArgs {
   reviewStates: ReviewStatesMap;
   workflows: Set<ReviewWorkflow>;
   now: Date;
+  /** When non-empty, restrict eligibility to accounts whose
+   *  workspace_id is in this set. Used by the AM panels' "Ping N
+   *  selected on Slack" button so a CSM can blast a subset rather
+   *  than the full cron-eligible cohort. Past-due rows are
+   *  resolved via the stripe-id → workspace-id index before the
+   *  check, so a past-due row whose customer no longer matches a
+   *  workspace gets dropped. */
+  workspaceIds?: Set<string>;
 }
 
 /** Compute per-CSM digest data. Pure function — no IO — so the
  *  endpoint can return it in dryRun mode without sending Slack. */
 export function buildDigest(args: BuildArgs): DigestPerCsm[] {
-  const { customers, pastDueRows, reviewStates, workflows, now } = args;
+  const { customers, pastDueRows, reviewStates, workflows, now, workspaceIds } = args;
+  const hasScope = workspaceIds && workspaceIds.size > 0;
 
   // Stripe customer_id → workspace_id index. PastDueRow.customer_id is
   // a Stripe ID; review-states are keyed by workspace_id.
@@ -149,6 +158,7 @@ export function buildDigest(args: BuildArgs): DigestPerCsm[] {
     for (const row of pastDueRows) {
       if (!row.customer_success_manager || !row.customer_id) continue;
       const ws = wsByStripeId.get(row.customer_id) ?? null;
+      if (hasScope && (!ws || !workspaceIds!.has(ws))) continue;
       if (!needsReview(ws ? reviewStates[ws] : undefined, "past_due")) {
         continue;
       }
@@ -160,6 +170,7 @@ export function buildDigest(args: BuildArgs): DigestPerCsm[] {
   if (workflows.has("proactive")) {
     for (const c of customers) {
       if (!c.customer_success_manager || !c.workspace_id) continue;
+      if (hasScope && !workspaceIds!.has(c.workspace_id)) continue;
       if (!isEnterprise(c)) continue;
       const u = utilFraction(c);
       if (u == null || u < ENT_UTIL_THRESHOLD) continue;
@@ -176,6 +187,7 @@ export function buildDigest(args: BuildArgs): DigestPerCsm[] {
   if (workflows.has("renewals")) {
     for (const c of customers) {
       if (!c.customer_success_manager || !c.workspace_id) continue;
+      if (hasScope && !workspaceIds!.has(c.workspace_id)) continue;
       const renewIso = c.renewal_date ?? c.next_invoice ?? null;
       if (!renewIso) continue;
       const renew = new Date(renewIso).getTime();
@@ -277,6 +289,12 @@ export async function runReviewDigestSweep(
     triggeredBy?: "cron" | "manual";
     /** Limit to a subset of workflows. Empty / undefined = all three. */
     workflows?: ReviewWorkflow[];
+    /** Scope the digest to a hand-picked list of workspace_ids. Used
+     *  by the manual "Ping N selected on Slack" button on the AM
+     *  panels — the engine still groups by CSM, so a CSM with 3 of
+     *  the selected accounts gets a single ping with count=3 instead
+     *  of three separate messages. Empty / undefined = full cohort. */
+    workspaceIds?: string[];
   } = {}
 ): Promise<DigestResult> {
   const dryRun = Boolean(opts.dryRun);
@@ -350,6 +368,10 @@ export async function runReviewDigestSweep(
     reviewStates,
     workflows: sendingWorkflows,
     now,
+    workspaceIds:
+      opts.workspaceIds && opts.workspaceIds.length > 0
+        ? new Set(opts.workspaceIds)
+        : undefined,
   })
     .filter((p) => p.total > 0)
     .map((p) => ({ ...p, mention: csmMention(p.csm, settings) }))
