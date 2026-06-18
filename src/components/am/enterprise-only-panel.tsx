@@ -12,6 +12,7 @@ import { BucketSection } from "./bucket-section";
 import { BulkEmailLauncher } from "./bulk-email-launcher";
 import { CustomerDetailPanel } from "../customer-detail-panel";
 import { ReviewStateCell } from "./review-state-cell";
+import { BulkReviewStateActions } from "./bulk-review-state-actions";
 import { SendDigestButton } from "./send-digest-button";
 import { CopyPubIdsButton } from "./copy-pub-ids-button";
 import { usePublicationsIndex } from "@/lib/hooks/use-publications-index";
@@ -399,6 +400,11 @@ export function EnterpriseOnlyPanel({ rows, csms }: Props) {
         >
           Clear
         </button>
+        <BulkReviewStateActions
+          workspaceIds={selectedWorkspaceIds}
+          workflow="proactive"
+          onApplied={setReviewStates}
+        />
         <button
           onClick={async () => {
             const ids = selectedCustomers
