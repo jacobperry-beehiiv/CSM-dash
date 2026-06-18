@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { loadResolutions, setResolution } from "@/lib/data/flag-resolutions";
 import type { RiskFlagCode } from "@/lib/types";
+import { appendActionLog } from "@/lib/data/customer-signals";
 
 export const dynamic = "force-dynamic";
 
@@ -40,6 +41,17 @@ export async function POST(req: Request) {
       Boolean(body.resolved),
       { resolvedBy: body.resolved_by, note: body.note }
     );
+    await appendActionLog([
+      {
+        workspace_id: body.workspace_id,
+        text: body.resolved
+          ? `Flag ${body.flag_code} resolved`
+          : `Flag ${body.flag_code} unresolved`,
+        created_by: body.resolved_by?.toLowerCase() ?? undefined,
+        action_kind: "flag_resolution",
+        metadata: { flag_code: body.flag_code, resolved: Boolean(body.resolved) },
+      },
+    ]);
     return NextResponse.json(map);
   } catch (error) {
     console.error("Failed to update resolution:", error);

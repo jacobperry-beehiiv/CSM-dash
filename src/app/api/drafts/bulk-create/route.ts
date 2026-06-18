@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createGmailDraftFor } from "@/lib/integrations/gmail-api";
 import { getActiveEmail } from "@/lib/data/active-user";
+import { appendActionLog } from "@/lib/data/customer-signals";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -30,6 +31,23 @@ interface PostBody {
     /** BCC-batch drafts — every customer id in the batch. When set,
      *  all ids are echoed on success instead of `tracking_id`. */
     tracking_ids?: string[];
+    /** Optional workspace_id for the customer-signals audit log.
+     *  When set together with `audit_label`, a single
+     *  `kind: "action_log"` row gets appended to that workspace's
+     *  Notes feed once the draft is successfully created. Distinct
+     *  from `tracking_id` because past-due tracking_ids are Stripe
+     *  customer_ids — those don't resolve to workspace_id without an
+     *  extra lookup the callers already have on hand. */
+    audit_workspace_id?: string;
+    /** Multi-workspace variant — BCC-batch drafts cover N customers
+     *  in one draft. Server writes one action_log entry per id when
+     *  the batch lands. Either this OR `audit_workspace_id` should
+     *  be set, not both. */
+    audit_workspace_ids?: string[];
+    /** Short human-readable label for the action_log entry. Used
+     *  with `audit_workspace_id`. e.g. "Past-due email sent",
+     *  "Renewal email sent", "At-risk email sent". */
+    audit_label?: string;
   }>;
 }
 
@@ -223,6 +241,36 @@ export async function POST(req: Request) {
           ? `${Math.round((created / body.drafts.length) * 100)}%`
           : "n/a",
     });
+
+    // Audit trail — one action_log entry per workspace per draft that
+    // has audit_label set AND whose tracking_id ended up in
+    // succeeded_tracking_ids (the draft actually landed in Gmail).
+    // Drafts without audit fields skip silently; this keeps back-compat
+    // for callers that haven't been updated. BCC-batch drafts use
+    // `audit_workspace_ids` so one batch fans out to N audit rows.
+    const succeededSet = new Set(succeeded_tracking_ids);
+    const auditEvents = body.drafts.flatMap((d) => {
+      if (!d.audit_label) return [];
+      const workspaceIds = d.audit_workspace_ids?.length
+        ? d.audit_workspace_ids
+        : d.audit_workspace_id
+          ? [d.audit_workspace_id]
+          : [];
+      if (workspaceIds.length === 0) return [];
+      const landed = d.tracking_ids?.length
+        ? d.tracking_ids.some((t) => succeededSet.has(t))
+        : d.tracking_id
+          ? succeededSet.has(d.tracking_id)
+          : true;
+      if (!landed) return [];
+      return workspaceIds.map((ws) => ({
+        workspace_id: ws,
+        text: d.audit_label!,
+        created_by: activeEmail,
+        action_kind: "email_draft_created",
+      }));
+    });
+    await appendActionLog(auditEvents);
 
     return NextResponse.json({
       created,

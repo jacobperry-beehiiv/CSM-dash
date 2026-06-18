@@ -404,6 +404,7 @@ export function CustomerTable({
       template: tpl,
       ladder,
       adGapByOrg,
+      auditLabel: `${tpl.label} email sent`,
     });
   }
 

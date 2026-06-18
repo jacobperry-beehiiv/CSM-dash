@@ -40,7 +40,14 @@ export type SignalKind =
   | "contact_update"
   | "action_item"
   | "risk_signal"
-  | "customer_overview";
+  | "customer_overview"
+  // Auto-emitted by mutation endpoints when a CSM takes a bulk OR
+  // per-row action against the workspace. Short, dated entries like
+  // "Past-due email sent" / "Marked Skip" / "Pinged on Slack
+  // (renewals)" — see appendActionLog() below. Renders in the
+  // CompanyNotes panel alongside hand-typed notes, but visually
+  // distinct (muted style, system icon, no edit affordances).
+  | "action_log";
 
 export const VALID_SIGNAL_KINDS: SignalKind[] = [
   "note",
@@ -56,6 +63,7 @@ export const VALID_SIGNAL_KINDS: SignalKind[] = [
   "action_item",
   "risk_signal",
   "customer_overview",
+  "action_log",
 ];
 
 export interface CustomerSignal {
@@ -225,6 +233,85 @@ export async function deleteSignal(
   if (next.length === list.length) return false;
   await kvSet(keyFor(workspaceId), next);
   return true;
+}
+
+/** Input shape for the batched action-log writer. One entry per
+ *  workspace_id; multiple entries for the same workspace_id are
+ *  fine (each appears as its own signal row, but they share one KV
+ *  write per workspace). */
+export interface ActionLogInput {
+  workspace_id: string;
+  /** Short human-readable text — "Past-due email sent" / "Marked
+   *  Reach out approved" / "Pinged on Slack (renewals)". Kept short
+   *  on purpose so the CompanyNotes feed stays scannable. */
+  text: string;
+  /** Session email of the CSM who triggered the action. Stamped onto
+   *  the signal so the panel can render `— Jacob` next to the entry. */
+  created_by?: string;
+  /** Free-form discriminator for future filtering (e.g. "show only
+   *  email-sent events"). Conventional values match the endpoint
+   *  table in the plan: "past_due_email", "ping_slack",
+   *  "review_state_change", etc. */
+  action_kind?: string;
+  /** Anything else the endpoint wants to surface — template id,
+   *  state value, channel destination, etc. Merged into metadata. */
+  metadata?: Record<string, unknown>;
+}
+
+/**
+ * Append one auto-event per workspace to the customer-signals feed.
+ *
+ * Used by every mutation endpoint that wants to leave an audit trail
+ * on the affected customers — bulk email sends, bulk review-state
+ * changes, Slack pings, etc. Each event is a CustomerSignal with
+ * `kind: "action_log"`, distinguishing it from hand-typed CSM notes
+ * (`kind: "note"`) in the same feed.
+ *
+ * Failure semantics: never throws. An action-log write failure must
+ * not abort the underlying mutation — the user already saw a success
+ * toast from the primary action, and a failed audit line is a logging
+ * problem, not a data correctness problem. Failures are console.warn'd
+ * with the workspace + text for forensics.
+ *
+ * Cost: one KV write per workspace (each workspace is its own KV
+ * row), regardless of how many events target the same workspace in
+ * one call. Events for distinct workspaces are independent writes.
+ */
+export async function appendActionLog(
+  events: ActionLogInput[]
+): Promise<void> {
+  if (events.length === 0) return;
+  // Group by workspace so multiple events for the same workspace in
+  // one call still cost a single KV write.
+  const byWorkspace = new Map<string, ActionLogInput[]>();
+  for (const e of events) {
+    if (!e.workspace_id) continue;
+    const arr = byWorkspace.get(e.workspace_id) ?? [];
+    arr.push(e);
+    byWorkspace.set(e.workspace_id, arr);
+  }
+  for (const [workspaceId, batch] of byWorkspace.entries()) {
+    try {
+      const inputs: AppendInput[] = batch.map((e) => ({
+        workspace_id: workspaceId,
+        kind: "action_log",
+        text: e.text,
+        source: "action_log",
+        created_by: e.created_by,
+        metadata: {
+          action_kind: e.action_kind ?? "unspecified",
+          ...(e.metadata ?? {}),
+        },
+      }));
+      await upsertSignalsForWorkspace(workspaceId, inputs);
+    } catch (e) {
+      console.warn("[customer-signals] action_log write failed", {
+        workspace_id: workspaceId,
+        count: batch.length,
+        error: e instanceof Error ? e.message : "unknown",
+      });
+    }
+  }
 }
 
 /**

@@ -9,6 +9,7 @@ import {
 } from "../data/review-states";
 import { needsReview } from "../data/review-states-types";
 import { postSlackMessage } from "../integrations/slack";
+import { appendActionLog } from "../data/customer-signals";
 import type { Customer } from "../types";
 import {
   resolveSlackNotificationPref,
@@ -78,6 +79,17 @@ export interface DigestPerCsm {
     proactive: number;
     renewals: number;
   };
+  /** Per-workflow workspace_id lists feeding the counts above. Used
+   *  by the sender to write per-account action_log entries after a
+   *  successful Slack ping. Empty arrays when the workflow has count
+   *  0 for this CSM. Lists may contain duplicates only for past_due
+   *  (one row per failed charge attempt); the sender de-dupes
+   *  before logging. */
+  workspaces: {
+    past_due: string[];
+    proactive: string[];
+    renewals: string[];
+  };
   /** Total across all three; CSMs with 0 here are skipped entirely. */
   total: number;
 }
@@ -130,11 +142,16 @@ export function buildDigest(args: BuildArgs): DigestPerCsm[] {
     }
   }
 
-  // CSM handle → aggregated counts
+  // CSM handle → aggregated counts + per-workflow workspace lists.
+  // The workspace lists drive the per-account action_log entries that
+  // get written after a successful Slack ping — see the sender loop
+  // in runReviewDigestSweep. They're internal-only and don't appear
+  // on DigestPerCsm in the public API.
   const acc = new Map<
     string,
     {
       counts: { past_due: number; proactive: number; renewals: number };
+      workspaces: { past_due: string[]; proactive: string[]; renewals: string[] };
       csm_email: string | null;
     }
   >();
@@ -142,13 +159,16 @@ export function buildDigest(args: BuildArgs): DigestPerCsm[] {
   const bump = (
     csmHandle: string,
     csmEmail: string | null,
-    workflow: ReviewWorkflow
+    workflow: ReviewWorkflow,
+    workspaceId: string | null
   ) => {
     const existing = acc.get(csmHandle) ?? {
       counts: { past_due: 0, proactive: 0, renewals: 0 },
+      workspaces: { past_due: [], proactive: [], renewals: [] },
       csm_email: csmEmail,
     };
     existing.counts[workflow] += 1;
+    if (workspaceId) existing.workspaces[workflow].push(workspaceId);
     if (!existing.csm_email && csmEmail) existing.csm_email = csmEmail;
     acc.set(csmHandle, existing);
   };
@@ -162,7 +182,7 @@ export function buildDigest(args: BuildArgs): DigestPerCsm[] {
       if (!needsReview(ws ? reviewStates[ws] : undefined, "past_due")) {
         continue;
       }
-      bump(row.customer_success_manager, null, "past_due");
+      bump(row.customer_success_manager, null, "past_due", ws);
     }
   }
 
@@ -190,7 +210,8 @@ export function buildDigest(args: BuildArgs): DigestPerCsm[] {
       bump(
         c.customer_success_manager,
         c.customer_success_manager_email ?? null,
-        "proactive"
+        "proactive",
+        c.workspace_id
       );
     }
   }
@@ -218,7 +239,8 @@ export function buildDigest(args: BuildArgs): DigestPerCsm[] {
       bump(
         c.customer_success_manager,
         c.customer_success_manager_email ?? null,
-        "renewals"
+        "renewals",
+        c.workspace_id
       );
     }
   }
@@ -228,6 +250,7 @@ export function buildDigest(args: BuildArgs): DigestPerCsm[] {
     csm_email: v.csm_email,
     mention: "", // Filled in by the caller (needs settings.slack.csm_user_ids)
     counts: v.counts,
+    workspaces: v.workspaces,
     total:
       v.counts.past_due +
       v.counts.proactive +
@@ -307,6 +330,11 @@ export async function runReviewDigestSweep(
   opts: {
     dryRun?: boolean;
     triggeredBy?: "cron" | "manual";
+    /** Session email of the CSM who fired a manual ping. Stamped onto
+     *  the per-workspace action_log entries written after a Slack post
+     *  lands. Cron leaves this unset — entries render with author "—"
+     *  in the Notes panel. */
+    actor?: string;
     /** Limit to a subset of workflows. Empty / undefined = all three. */
     workflows?: ReviewWorkflow[];
     /** Scope the digest to a hand-picked list of workspace_ids. Used
@@ -418,6 +446,22 @@ export async function runReviewDigestSweep(
             text: composeSingleWorkflowMessage(per, workflow),
           });
           messages_sent++;
+          // Audit trail — one action_log entry per workspace that
+          // contributed to this (CSM, workflow) message. De-dupe
+          // since past-due rows can show up multiple times per
+          // workspace (one per failed charge attempt).
+          const uniqueWorkspaces = [
+            ...new Set(per.workspaces[workflow]),
+          ];
+          await appendActionLog(
+            uniqueWorkspaces.map((ws) => ({
+              workspace_id: ws,
+              text: `Pinged on Slack (${workflow.replace("_", "-")})`,
+              created_by: opts.actor,
+              action_kind: "slack_ping",
+              metadata: { workflow, channel },
+            }))
+          );
         } catch (e) {
           messages_failed++;
           failures.push({

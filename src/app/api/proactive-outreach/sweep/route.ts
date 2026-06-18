@@ -47,6 +47,15 @@ export async function POST(req: Request) {
     ? body.workspace_ids.filter((id): id is string => typeof id === "string" && id.length > 0)
     : undefined;
 
+  // Resolve session email for manual runs so action-log entries on
+  // affected workspaces carry the actor. Cron runs leave actor
+  // unset (rendered as "—" in the Notes panel).
+  let actor: string | undefined;
+  if (auth_result === "manual") {
+    const session = await auth();
+    actor = session?.user?.email?.toLowerCase() ?? undefined;
+  }
+
   try {
     const result = await runProactiveOutreachSweep({
       dryRun,
@@ -55,6 +64,7 @@ export async function POST(req: Request) {
       // manual. The settings toggle only mutes cron runs so an admin
       // can still ping on-demand from the panel button.
       triggeredBy: auth_result === "cron" ? "cron" : "manual",
+      actor,
     });
     // Disabled-by-settings is a non-error 200 — the cron should see
     // this as a deliberate skip, not a failure. ok stays true.

@@ -9,6 +9,25 @@ import {
   type ReviewState,
   type ReviewWorkflow,
 } from "@/lib/data/review-states";
+import { appendActionLog } from "@/lib/data/customer-signals";
+
+/** Short human-readable description for the auto-event entry that
+ *  lands on the customer's Notes feed when a review state changes.
+ *  Keep this in sync with REVIEW_STATES — the dropdown labels in
+ *  the per-row + bulk UI are the same words. */
+function reviewStateActionText(
+  state: ReviewState | null,
+  workflow: ReviewWorkflow
+): string {
+  const label = state === null ? "Cleared review" : `Marked ${REVIEW_LABELS[state]}`;
+  return `${label} (${workflow.replace("_", "-")})`;
+}
+
+const REVIEW_LABELS: Record<ReviewState, string> = {
+  reach_out: "Reach out approved",
+  skip: "Skip",
+  done: "Done",
+};
 
 export const dynamic = "force-dynamic";
 
@@ -114,6 +133,17 @@ export async function POST(req: Request) {
         note: body.note ?? null,
       }
     );
+    // Audit trail — appears in the workspace's Notes feed as a
+    // muted auto-event. Never throws (see appendActionLog).
+    await appendActionLog([
+      {
+        workspace_id: workspaceId,
+        text: reviewStateActionText(nextState, workflow as ReviewWorkflow),
+        created_by: session.user.email.toLowerCase(),
+        action_kind: "review_state_change",
+        metadata: { workflow, state: nextState },
+      },
+    ]);
     return NextResponse.json(map);
   } catch (e) {
     return NextResponse.json(
@@ -176,14 +206,26 @@ export async function PATCH(req: Request) {
       { status: 400 }
     );
   }
+  const actor = session.user.email.toLowerCase();
   try {
     const map = await setReviewStatesBatch({
       workspaceIds,
       workflow: workflow as ReviewWorkflow,
       state: nextState,
-      setBy: session.user.email.toLowerCase(),
+      setBy: actor,
       note: body.note ?? null,
     });
+    // Audit trail — one auto-event per workspace in the batch.
+    const text = reviewStateActionText(nextState, workflow as ReviewWorkflow);
+    await appendActionLog(
+      workspaceIds.map((ws) => ({
+        workspace_id: ws,
+        text,
+        created_by: actor,
+        action_kind: "review_state_change",
+        metadata: { workflow, state: nextState, bulk: true },
+      }))
+    );
     return NextResponse.json({
       ok: true,
       applied: workspaceIds.length,

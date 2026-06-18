@@ -514,6 +514,7 @@ export function RenewalPanel({ customers, csms }: Props) {
           label="✉️ Email selected (CCs CSM)"
           ccLookup={(c) => c.customer_success_manager_email ?? null}
           trackingIdFor={(c) => c.workspace_id ?? null}
+          auditLabel="Renewal email sent"
         />
       </div>
 

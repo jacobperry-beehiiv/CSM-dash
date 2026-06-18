@@ -6,6 +6,7 @@ import {
   saveOutreachLogged,
   clearProactiveEntry,
 } from "@/lib/data/proactive-outreach";
+import { appendActionLog } from "@/lib/data/customer-signals";
 
 export const dynamic = "force-dynamic";
 
@@ -71,6 +72,14 @@ export async function POST(req: Request) {
     loggedBy: session.user.email,
     note: body.note ?? null,
   });
+  await appendActionLog([
+    {
+      workspace_id: workspaceId,
+      text: "Marked outreach logged",
+      created_by: session.user.email.toLowerCase(),
+      action_kind: "outreach_logged",
+    },
+  ]);
   return NextResponse.json(map);
 }
 
@@ -91,10 +100,20 @@ export async function PUT(req: Request) {
       { status: 400 }
     );
   }
+  const actor = session.user.email.toLowerCase();
   const map = await bulkSaveOutreachLogged(body.workspace_ids, {
-    loggedBy: session.user.email,
+    loggedBy: actor,
     note: body.note ?? null,
   });
+  await appendActionLog(
+    body.workspace_ids.map((ws) => ({
+      workspace_id: ws,
+      text: "Marked outreach logged",
+      created_by: actor,
+      action_kind: "outreach_logged",
+      metadata: { bulk: true },
+    }))
+  );
   return NextResponse.json(map);
 }
 
@@ -117,5 +136,13 @@ export async function DELETE(req: Request) {
     );
   }
   const map = await clearProactiveEntry(workspaceId);
+  await appendActionLog([
+    {
+      workspace_id: workspaceId,
+      text: "Cleared ping status (proactive)",
+      created_by: session.user.email.toLowerCase(),
+      action_kind: "proactive_clear",
+    },
+  ]);
   return NextResponse.json(map);
 }

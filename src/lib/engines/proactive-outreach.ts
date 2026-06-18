@@ -1,6 +1,7 @@
 import type { Customer } from "../types";
 import { isEnterprise, loadCustomers } from "../data/load-customers";
 import { subUtilFraction } from "../customer-helpers";
+import { appendActionLog } from "../data/customer-signals";
 import {
   loadProactiveOutreach,
   savePingSent,
@@ -139,6 +140,14 @@ export async function runProactiveOutreachSweep(
      * callers that haven't been updated yet.
      */
     triggeredBy?: "cron" | "manual";
+    /**
+     * Session email of the CSM who fired the manual sweep, if any.
+     * Stamped onto the per-workspace action_log entry so the audit
+     * line on each customer's Notes feed shows who pinged. Cron
+     * runs omit this — entries land with no created_by (rendered as
+     * "—" in the UI), which the panel handles cleanly.
+     */
+    actor?: string;
   } = {}
 ): Promise<SweepResult & { disabled?: boolean; reason?: string }> {
   const result: SweepResult = {
@@ -312,6 +321,21 @@ export async function runProactiveOutreachSweep(
             await savePingSent(c.workspace_id, { messageTs });
           }
         }
+        // Audit trail — one auto-event per workspace that actually
+        // got pinged. Fire-and-forget; never throws.
+        await appendActionLog(
+          group
+            .filter((c): c is Customer & { workspace_id: string } =>
+              Boolean(c.workspace_id)
+            )
+            .map((c) => ({
+              workspace_id: c.workspace_id,
+              text: "Pinged on Slack (proactive)",
+              created_by: opts.actor,
+              action_kind: "slack_ping",
+              metadata: { workflow: "proactive", channel: channelId },
+            }))
+        );
       }
       // Count one "ping" per account so the existing UI counter
       // ("pinged N") keeps reading correctly. Counting per-group

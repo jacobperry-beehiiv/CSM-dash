@@ -850,6 +850,11 @@ export function PastDuePanel({ rows, csms, totalSourceRows }: Props) {
                     : undefined
                 }
                 trackingIdFor={(c) => c.stripe_customer_id ?? null}
+                auditLabel={
+                  subtab === "followup"
+                    ? "Past-due follow-up email sent"
+                    : "Past-due email sent"
+                }
                 extraContextFor={(c) => {
                   // Past-due-only context for {{MONTH}} / {{REASON}}.
                   // Look up the customer's failed-charge row from
