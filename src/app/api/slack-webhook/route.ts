@@ -24,6 +24,11 @@ import {
   openAssignModal,
 } from "@/lib/integrations/slack-assign";
 import {
+  DIGEST_REACH_OUT_ACTION_ID,
+  DIGEST_SKIP_ACTION_ID,
+  handleDigestButtonClick,
+} from "@/lib/integrations/digest-buttons";
+import {
   newTodoId,
   type PersonalTodo,
   type TodoSource,
@@ -537,6 +542,42 @@ async function handleBlockActions(
       ok: result.ok,
       error: result.error,
     });
+    return NextResponse.json({ ok: true });
+  }
+
+  // ── Send-digest per-account buttons ───────────────────────────────
+  // Posted by the manual Send Digest button on each AM tab. The
+  // handler writes review_state to KV (dashboard reads from there)
+  // and POSTs an ephemeral confirmation back via response_url. The
+  // threaded Slack message itself is intentionally NOT modified —
+  // status lives in the dashboard only.
+  if (
+    action.action_id === DIGEST_REACH_OUT_ACTION_ID ||
+    action.action_id === DIGEST_SKIP_ACTION_ID
+  ) {
+    const result = await handleDigestButtonClick({
+      actionId: action.action_id,
+      buttonValue: action.value ?? "",
+      slackUserId: typed.user?.id ?? null,
+    });
+    if (typed.response_url) {
+      // Fire-and-forget would be cut off by serverless on return — so
+      // await the response_url POST. It's a single HTTP round-trip
+      // well inside Slack's 3-second window.
+      try {
+        await fetch(typed.response_url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            response_type: "ephemeral",
+            replace_original: false,
+            text: result.ephemeralText,
+          }),
+        });
+      } catch (e) {
+        console.warn("[slack-webhook] digest ephemeral post failed", e);
+      }
+    }
     return NextResponse.json({ ok: true });
   }
 
