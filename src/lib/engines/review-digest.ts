@@ -8,7 +8,8 @@ import {
   type ReviewWorkflow,
 } from "../data/review-states";
 import { needsReview } from "../data/review-states-types";
-import { postSlackMessage } from "../integrations/slack";
+import { postSlackMessageRich } from "../integrations/slack";
+import { buildDigestAccountBlocks } from "../integrations/digest-buttons";
 import type { Customer } from "../types";
 import {
   resolveSlackNotificationPref,
@@ -46,6 +47,17 @@ const ENT_UTIL_THRESHOLD = 0.75;
 const RENEWAL_WINDOW_DAYS = 30;
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
+/** One account that landed in a CSM's review queue. Carried alongside
+ *  the aggregate counts so the engine can post a threaded reply per
+ *  account with action buttons. workspace_name is the human label
+ *  shown in the threaded reply; workspace_id is what we write to KV
+ *  on a button click. */
+export interface DigestAccount {
+  workspace_id: string;
+  workspace_name: string;
+  workflow: ReviewWorkflow;
+}
+
 export interface DigestPerCsm {
   csm: string;
   csm_email: string | null;
@@ -57,6 +69,9 @@ export interface DigestPerCsm {
     proactive: number;
     renewals: number;
   };
+  /** Flat list of every account in this CSM's queue. Walked by the
+   *  sender to emit one threaded Slack reply per account. */
+  accounts: DigestAccount[];
   /** Total across all three; CSMs with 0 here are skipped entirely. */
   total: number;
 }
@@ -100,11 +115,24 @@ export function buildDigest(args: BuildArgs): DigestPerCsm[] {
     }
   }
 
-  // CSM handle → { counts, csm_email }
+  // workspace_id → workspace_name fallback. PastDueRow doesn't carry
+  // the workspace name, so we resolve via the customer book.
+  const nameByWorkspace = new Map<string, string>();
+  for (const c of customers) {
+    if (c.workspace_id) {
+      nameByWorkspace.set(
+        c.workspace_id,
+        c.workspace_name ?? c.company_name ?? c.workspace_id
+      );
+    }
+  }
+
+  // CSM handle → aggregated row
   const acc = new Map<
     string,
     {
       counts: { past_due: number; proactive: number; renewals: number };
+      accounts: DigestAccount[];
       csm_email: string | null;
     }
   >();
@@ -112,13 +140,15 @@ export function buildDigest(args: BuildArgs): DigestPerCsm[] {
   const bump = (
     csmHandle: string,
     csmEmail: string | null,
-    workflow: ReviewWorkflow
+    account: DigestAccount
   ) => {
     const existing = acc.get(csmHandle) ?? {
       counts: { past_due: 0, proactive: 0, renewals: 0 },
+      accounts: [],
       csm_email: csmEmail,
     };
-    existing.counts[workflow] += 1;
+    existing.counts[account.workflow] += 1;
+    existing.accounts.push(account);
     if (!existing.csm_email && csmEmail) existing.csm_email = csmEmail;
     acc.set(csmHandle, existing);
   };
@@ -128,10 +158,13 @@ export function buildDigest(args: BuildArgs): DigestPerCsm[] {
     for (const row of pastDueRows) {
       if (!row.customer_success_manager || !row.customer_id) continue;
       const ws = wsByStripeId.get(row.customer_id) ?? null;
-      if (!needsReview(ws ? reviewStates[ws] : undefined, "past_due")) {
-        continue;
-      }
-      bump(row.customer_success_manager, null, "past_due");
+      if (!ws) continue;
+      if (!needsReview(reviewStates[ws], "past_due")) continue;
+      bump(row.customer_success_manager, null, {
+        workspace_id: ws,
+        workspace_name: nameByWorkspace.get(ws) ?? row.email ?? ws,
+        workflow: "past_due",
+      });
     }
   }
 
@@ -146,7 +179,12 @@ export function buildDigest(args: BuildArgs): DigestPerCsm[] {
       bump(
         c.customer_success_manager,
         c.customer_success_manager_email ?? null,
-        "proactive"
+        {
+          workspace_id: c.workspace_id,
+          workspace_name:
+            c.workspace_name ?? c.company_name ?? c.workspace_id,
+          workflow: "proactive",
+        }
       );
     }
   }
@@ -165,7 +203,12 @@ export function buildDigest(args: BuildArgs): DigestPerCsm[] {
       bump(
         c.customer_success_manager,
         c.customer_success_manager_email ?? null,
-        "renewals"
+        {
+          workspace_id: c.workspace_id,
+          workspace_name:
+            c.workspace_name ?? c.company_name ?? c.workspace_id,
+          workflow: "renewals",
+        }
       );
     }
   }
@@ -175,6 +218,7 @@ export function buildDigest(args: BuildArgs): DigestPerCsm[] {
     csm_email: v.csm_email,
     mention: "", // Filled in by the caller (needs settings.slack.csm_user_ids)
     counts: v.counts,
+    accounts: v.accounts,
     total:
       v.counts.past_due +
       v.counts.proactive +
@@ -196,26 +240,80 @@ function dashboardUrl(): string {
   return process.env.DASHBOARD_BASE_URL ?? "https://csm-dash.vercel.app";
 }
 
-/** Slack-mrkdwn message body. Counts == 0 lines drop out so a CSM
- *  with only past-due to review sees a single bullet, not three with
- *  "0 renewals" noise. */
-function composeMessage(per: DigestPerCsm): string {
+/** Workflow label + dashboard tab + filtered-list URL builder. Used by
+ *  both the multi-workflow bullet message (cron) and the per-workflow
+ *  past-due-style header (manual "Send digest" buttons). */
+function workflowMeta(
+  workflow: ReviewWorkflow,
+  csmHandle: string
+): { label: string; noun: string; filteredUrl: string } {
   const base = dashboardUrl();
-  const csmHandle = encodeURIComponent(per.csm);
+  const enc = encodeURIComponent(csmHandle);
+  switch (workflow) {
+    case "past_due":
+      return {
+        label: "past-due outreach",
+        noun: "past-due account",
+        filteredUrl: `${base}/am?tab=past-due&csm=${enc}&needs_review=1`,
+      };
+    case "proactive":
+      return {
+        label: "proactive outreach",
+        noun: "Enterprise account approaching cap",
+        filteredUrl: `${base}/am?tab=proactive&csm=${enc}&needs_review=1`,
+      };
+    case "renewals":
+      return {
+        label: "renewals",
+        noun: "renewal",
+        filteredUrl: `${base}/am?tab=renewals&csm=${enc}&needs_review=1`,
+      };
+  }
+}
+
+/** Past-due-style header used by the manual Send Digest buttons. Each
+ *  button is scoped to exactly one workflow, so the message is a
+ *  single sentence + a filtered-list link — same shape as the existing
+ *  past-due ping.
+ *
+ *  Example:
+ *    "Hey @CSM, you have 3 accounts that need review for renewals.
+ *     <link|Open the filtered list>" */
+function composeSingleWorkflowMessage(
+  per: DigestPerCsm,
+  workflow: ReviewWorkflow
+): string {
+  const meta = workflowMeta(workflow, per.csm);
+  const count = per.counts[workflow];
+  return `Hey ${per.mention}, you have *${count}* account${
+    count === 1 ? "" : "s"
+  } that need review for ${meta.label}. <${meta.filteredUrl}|Open the filtered list>`;
+}
+
+/** Multi-workflow bullet body — used by the cron (which doesn't scope
+ *  to one workflow). Same shape as before, just routed through the
+ *  workflowMeta helper. */
+function composeMultiMessage(
+  per: DigestPerCsm,
+  workflows: Set<ReviewWorkflow>
+): string {
   const lines: string[] = [];
-  if (per.counts.past_due > 0) {
+  if (workflows.has("past_due") && per.counts.past_due > 0) {
+    const m = workflowMeta("past_due", per.csm);
     lines.push(
-      `• <${base}/am?tab=past-due&csm=${csmHandle}&needs_review=1|${per.counts.past_due} past-due account${per.counts.past_due === 1 ? "" : "s"} to review>`
+      `• <${m.filteredUrl}|${per.counts.past_due} ${m.noun}${per.counts.past_due === 1 ? "" : "s"} to review>`
     );
   }
-  if (per.counts.proactive > 0) {
+  if (workflows.has("proactive") && per.counts.proactive > 0) {
+    const m = workflowMeta("proactive", per.csm);
     lines.push(
-      `• <${base}/am?tab=proactive&csm=${csmHandle}&needs_review=1|${per.counts.proactive} Enterprise account${per.counts.proactive === 1 ? "" : "s"} approaching cap>`
+      `• <${m.filteredUrl}|${per.counts.proactive} ${m.noun}${per.counts.proactive === 1 ? "" : "s"}>`
     );
   }
-  if (per.counts.renewals > 0) {
+  if (workflows.has("renewals") && per.counts.renewals > 0) {
+    const m = workflowMeta("renewals", per.csm);
     lines.push(
-      `• <${base}/am?tab=renewals&csm=${csmHandle}&needs_review=1|${per.counts.renewals} renewal${per.counts.renewals === 1 ? "" : "s"} in the next ${RENEWAL_WINDOW_DAYS} days>`
+      `• <${m.filteredUrl}|${per.counts.renewals} ${m.noun}${per.counts.renewals === 1 ? "" : "s"} in the next ${RENEWAL_WINDOW_DAYS} days>`
     );
   }
   return [
@@ -284,11 +382,56 @@ export async function runReviewDigestSweep(
   if (!dryRun) {
     for (const per of perCsm) {
       try {
-        await postSlackMessage({
+        // Past-due-style header when the caller scoped to exactly one
+        // workflow (the manual Send Digest button case). Otherwise
+        // fall back to the bullet body used by the cron.
+        const single =
+          wfFilter.size === 1
+            ? ([...wfFilter][0] as ReviewWorkflow)
+            : null;
+        const parentText = single
+          ? composeSingleWorkflowMessage(per, single)
+          : composeMultiMessage(per, wfFilter);
+        const parent = await postSlackMessageRich({
           channel: channelId,
-          text: composeMessage(per),
+          text: parentText,
         });
         messages_sent++;
+
+        // Threaded per-account replies — only the workflows the
+        // caller asked for. Each has Reach Out Approved / Skip
+        // buttons that write review_state to KV on click. The
+        // threaded message itself is never updated; status is on the
+        // dashboard.
+        const accountsToPost = per.accounts.filter((a) =>
+          wfFilter.has(a.workflow)
+        );
+        for (const account of accountsToPost) {
+          try {
+            await postSlackMessageRich({
+              channel: channelId,
+              thread_ts: parent.ts,
+              text: account.workspace_name,
+              blocks: buildDigestAccountBlocks({
+                workspaceId: account.workspace_id,
+                workspaceName: account.workspace_name,
+                workflow: account.workflow,
+              }),
+            });
+          } catch (e) {
+            // A threaded-reply failure shouldn't take down the whole
+            // digest run. Log the gap, leave the parent intact, keep
+            // going.
+            console.warn(
+              "[review-digest] threaded reply failed",
+              {
+                csm: per.csm,
+                workspace_id: account.workspace_id,
+                error: e instanceof Error ? e.message : "unknown",
+              }
+            );
+          }
+        }
       } catch (e) {
         messages_failed++;
         failures.push({
