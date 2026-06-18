@@ -91,10 +91,18 @@ export const PROACTIVE_OUTREACH_CHANNEL_ID = "proactive_outreach";
 export type CsmSlackIdMap = Record<string, string>;
 
 /** Stable kinds for automated Slack pings. Each row in
- *  SLACK_NOTIFICATION_DEFINITIONS maps to one of these. */
+ *  SLACK_NOTIFICATION_DEFINITIONS maps to one of these.
+ *
+ *  `review_digest` is retained for back-compat — it was the original
+ *  unified digest setting before we split into per-workflow kinds.
+ *  Stored values are still read by the resolver (as a fallback for
+ *  `digest_past_due`) but the kind is hidden from the settings UI. */
 export type SlackNotificationKind =
   | "deliverability_critical"
   | "review_digest"
+  | "digest_past_due"
+  | "digest_proactive"
+  | "digest_renewals"
   | "proactive_outreach"
   | "feature_request_comment";
 
@@ -130,11 +138,27 @@ export const SLACK_NOTIFICATION_DEFINITIONS: SlackNotificationDefinition[] = [
     has_destination: true,
   },
   {
-    kind: "review_digest",
-    label: "Per-CSM review digest",
+    kind: "digest_past_due",
+    label: "Past-due digest",
     description:
-      "One Slack message per CSM each morning with counts of past-due, approaching-cap, and renewal accounts still needing review.",
-    schedule: "Daily ~8:30am CT",
+      "Past-due-style ping per CSM with a threaded reply per account, each with Reach Out Approved / Skip buttons. Fired by the manual Send Digest button on /am Past Due, and by the daily cron when its toggle is on.",
+    schedule: "Daily ~8:30am CT (cron only)",
+    has_destination: true,
+  },
+  {
+    kind: "digest_proactive",
+    label: "Proactive-outreach digest",
+    description:
+      "Same per-account threaded format, scoped to Enterprise accounts at ≥75% of plan cap. Fired by the manual Send Digest button on /am Proactive Outreach, and by the daily cron when its toggle is on. Independent of the 75%-cap rollup ping above.",
+    schedule: "Daily ~8:30am CT (cron only)",
+    has_destination: true,
+  },
+  {
+    kind: "digest_renewals",
+    label: "Renewals digest",
+    description:
+      "Same per-account threaded format, scoped to renewals in the next 30 days. Fired by the manual Send Digest button on /am Renewals, and by the daily cron when its toggle is on.",
+    schedule: "Daily ~8:30am CT (cron only)",
     has_destination: true,
   },
   {
@@ -442,6 +466,29 @@ export function resolveSlackNotificationPref(
         enabled: stored?.enabled ?? destination.length > 0,
         destination,
         cron_enabled: stored?.cron_enabled ?? true,
+      };
+    }
+    // Per-workflow digest kinds. Each falls back to the legacy
+    // `review_digest` setting when the per-workflow pref hasn't been
+    // saved yet — that way users upgrading from the unified setting
+    // get a sensible default and aren't dropped to "no channel" on
+    // first load.
+    case "digest_past_due":
+    case "digest_proactive":
+    case "digest_renewals": {
+      const legacy = settings.slack.notifications?.review_digest;
+      const legacyDest =
+        legacy?.destination?.trim() ||
+        settings.am?.daily_digest_channel_id?.trim() ||
+        "";
+      const destination =
+        stored?.destination?.trim() || legacyDest;
+      return {
+        enabled: stored?.enabled ?? destination.length > 0,
+        destination,
+        // Per-workflow cron toggle defaults to the legacy unified
+        // setting (or true if even that was unset).
+        cron_enabled: stored?.cron_enabled ?? legacy?.cron_enabled ?? true,
       };
     }
     case "proactive_outreach": {
