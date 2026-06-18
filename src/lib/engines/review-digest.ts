@@ -167,13 +167,25 @@ export function buildDigest(args: BuildArgs): DigestPerCsm[] {
   }
 
   // proactive (Enterprise ≥ ENT_UTIL_THRESHOLD)
+  //
+  // Cohort-mode (cron / Ping all): both gates apply — only ping
+  // Enterprise accounts past the cap threshold.
+  //
+  // Manual-selection mode (Ping N selected): both gates are skipped.
+  // The user explicitly picked these rows, so respect that choice
+  // even for a non-Enterprise or sub-threshold workspace they want
+  // to flag. The needsReview gate still applies though — a row
+  // already marked "done" stays silent on click (the count goes to
+  // zero, no message).
   if (workflows.has("proactive")) {
     for (const c of customers) {
       if (!c.customer_success_manager || !c.workspace_id) continue;
       if (hasScope && !workspaceIds!.has(c.workspace_id)) continue;
-      if (!isEnterprise(c)) continue;
-      const u = utilFraction(c);
-      if (u == null || u < ENT_UTIL_THRESHOLD) continue;
+      if (!hasScope) {
+        if (!isEnterprise(c)) continue;
+        const u = utilFraction(c);
+        if (u == null || u < ENT_UTIL_THRESHOLD) continue;
+      }
       if (!needsReview(reviewStates[c.workspace_id], "proactive")) continue;
       bump(
         c.customer_success_manager,
@@ -184,16 +196,24 @@ export function buildDigest(args: BuildArgs): DigestPerCsm[] {
   }
 
   // renewals (annual, renewing within RENEWAL_WINDOW_DAYS)
+  //
+  // Same cohort-vs-manual split as proactive above. The cron is
+  // about urgency (renewals in the next 30 days that need triage);
+  // the manual button is about CSM judgment — if a user selects a
+  // row whose renewal is 60 days out and clicks Ping, they meant it.
+  // Skip the window check entirely in manual mode.
   if (workflows.has("renewals")) {
     for (const c of customers) {
       if (!c.customer_success_manager || !c.workspace_id) continue;
       if (hasScope && !workspaceIds!.has(c.workspace_id)) continue;
-      const renewIso = c.renewal_date ?? c.next_invoice ?? null;
-      if (!renewIso) continue;
-      const renew = new Date(renewIso).getTime();
-      if (!Number.isFinite(renew)) continue;
-      const days = Math.round((renew - now.getTime()) / MS_PER_DAY);
-      if (days < 0 || days > RENEWAL_WINDOW_DAYS) continue;
+      if (!hasScope) {
+        const renewIso = c.renewal_date ?? c.next_invoice ?? null;
+        if (!renewIso) continue;
+        const renew = new Date(renewIso).getTime();
+        if (!Number.isFinite(renew)) continue;
+        const days = Math.round((renew - now.getTime()) / MS_PER_DAY);
+        if (days < 0 || days > RENEWAL_WINDOW_DAYS) continue;
+      }
       if (!needsReview(reviewStates[c.workspace_id], "renewals")) continue;
       bump(
         c.customer_success_manager,
