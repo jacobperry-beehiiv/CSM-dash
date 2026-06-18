@@ -54,55 +54,6 @@ export async function postSlackMessage(args: {
   return { ok: true };
 }
 
-/**
- * Richer sender that returns the message ts. Needed by the review-
- * digest flow so per-account replies can be threaded under the parent
- * "you have N accounts" message. Also accepts blocks (Block Kit) and
- * thread_ts so this same helper can post both the parent and the
- * threaded children.
- *
- * Demo-mode guard: returns a fake ts so caller code that chains
- * replies under the returned ts doesn't crash. The downstream call is
- * also demo-guarded so the chain is fully suppressed.
- */
-export async function postSlackMessageRich(args: {
-  channel: string;
-  text: string;
-  blocks?: unknown[];
-  thread_ts?: string;
-}): Promise<{ ok: true; ts: string }> {
-  if (!args.channel) {
-    throw new Error("Slack channel is required.");
-  }
-  if (isDemoMode()) {
-    console.log(
-      `[demo-mode] suppressed Slack post → ${args.channel}: ${args.text.slice(0, 120)}`
-    );
-    return { ok: true, ts: "demo.000000" };
-  }
-  if (!SLACK_BOT_TOKEN) {
-    throw new Error("SLACK_BOT_TOKEN is not configured — set it in .env.local.");
-  }
-  const res = await fetch("https://slack.com/api/chat.postMessage", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${SLACK_BOT_TOKEN}`,
-      "Content-Type": "application/json; charset=utf-8",
-    },
-    body: JSON.stringify({
-      channel: args.channel,
-      text: args.text,
-      blocks: args.blocks,
-      thread_ts: args.thread_ts,
-    }),
-  });
-  const data = (await res.json()) as { ok?: boolean; ts?: string; error?: string };
-  if (!data.ok || !data.ts) {
-    throw new Error(`Slack post failed: ${data.error ?? "unknown"}`);
-  }
-  return { ok: true, ts: data.ts };
-}
-
 export async function postDeliverabilityAlerts(
   result: DeliverabilityRunResult
 ): Promise<void> {
