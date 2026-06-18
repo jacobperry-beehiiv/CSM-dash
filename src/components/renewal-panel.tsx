@@ -25,6 +25,7 @@ import { needsReview } from "@/lib/data/review-states-types";
 import { BulkEmailLauncher } from "./am/bulk-email-launcher";
 import { CopyPubIdsButton } from "./am/copy-pub-ids-button";
 import { ReviewStateCell } from "./am/review-state-cell";
+import { BulkReviewStateActions } from "./am/bulk-review-state-actions";
 import { SendDigestButton } from "./am/send-digest-button";
 import {
   billingPeriodSuffix,
@@ -497,6 +498,11 @@ export function RenewalPanel({ customers, csms }: Props) {
           Clear
         </button>
         <CopyPubIdsButton workspaceIds={selectedWorkspaceIds} />
+        <BulkReviewStateActions
+          workspaceIds={selectedWorkspaceIds}
+          workflow="renewals"
+          onApplied={setReviewStates}
+        />
         <div className="flex-1" />
         <BulkEmailLauncher
           customers={selectedCustomers}

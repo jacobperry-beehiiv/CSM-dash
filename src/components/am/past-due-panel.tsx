@@ -24,6 +24,7 @@ import { BulkEmailLauncher } from "./bulk-email-launcher";
 import { NotesChip } from "./notes-chip";
 import { ReviewStateCell } from "./review-state-cell";
 import { SendDigestButton } from "./send-digest-button";
+import { BulkReviewStateActions } from "./bulk-review-state-actions";
 import { CustomerDetailPanel } from "../customer-detail-panel";
 import {
   needsReview,
@@ -656,6 +657,25 @@ export function PastDuePanel({ rows, csms, totalSourceRows }: Props) {
         >
           Clear
         </button>
+        <BulkReviewStateActions
+          workspaceIds={(() => {
+            // Resolve selected past-due rows → workspace_ids via the
+            // stripe_customer_id index. Rows whose Customer can't be
+            // matched (cancelled workspace, etc.) are dropped — same
+            // resolution as the email/draft flows below.
+            const ids = new Set<string>();
+            for (const [i, r] of searched.entries()) {
+              if (!selected.has(rowKey(r, i))) continue;
+              const ws = r.customer_id
+                ? customerByStripeId.get(r.customer_id)?.workspace_id ?? null
+                : null;
+              if (ws) ids.add(ws);
+            }
+            return [...ids];
+          })()}
+          workflow="past_due"
+          onApplied={setReviewStates}
+        />
         <div className="flex-1" />
         {(() => {
           // Resolve each selected past-due row to a Customer record (by

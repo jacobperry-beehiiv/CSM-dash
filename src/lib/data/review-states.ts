@@ -50,8 +50,45 @@ export async function setReviewState(
   meta: { setBy?: string | null; note?: string | null } = {}
 ): Promise<ReviewStatesMap> {
   const map = { ...(await loadReviewStates()) };
-  const current: WorkspaceReviewStates = { ...(map[workspaceId] ?? {}) };
+  applyOne(map, workspaceId, workflow, state, meta);
+  await kvSet(KEY, map);
+  return map;
+}
 
+/** Apply the same (workflow, state) to many workspace_ids in a single
+ *  read-modify-write. Used by the bulk-action bar on the AM panels —
+ *  a CSM selecting 30 rows and clicking "Skip" goes through one KV
+ *  write instead of 30. Empty `workspaceIds` is a no-op and returns
+ *  the current map. */
+export async function setReviewStatesBatch(args: {
+  workspaceIds: string[];
+  workflow: ReviewWorkflow;
+  state: ReviewState | null;
+  setBy?: string | null;
+  note?: string | null;
+}): Promise<ReviewStatesMap> {
+  const map = { ...(await loadReviewStates()) };
+  if (args.workspaceIds.length === 0) return map;
+  const meta = { setBy: args.setBy ?? null, note: args.note ?? null };
+  for (const id of args.workspaceIds) {
+    if (!id) continue;
+    applyOne(map, id, args.workflow, args.state, meta);
+  }
+  await kvSet(KEY, map);
+  return map;
+}
+
+/** Shared mutation step — extracted so setReviewState + the batch
+ *  helper apply identical semantics (entry deletion when state is
+ *  null, drop the workspace key when no workflows remain). */
+function applyOne(
+  map: ReviewStatesMap,
+  workspaceId: string,
+  workflow: ReviewWorkflow,
+  state: ReviewState | null,
+  meta: { setBy?: string | null; note?: string | null }
+): void {
+  const current: WorkspaceReviewStates = { ...(map[workspaceId] ?? {}) };
   if (state === null) {
     delete current[workflow];
   } else {
@@ -62,12 +99,9 @@ export async function setReviewState(
       note: meta.note ?? null,
     };
   }
-
   if (Object.keys(current).length === 0) {
     delete map[workspaceId];
   } else {
     map[workspaceId] = current;
   }
-  await kvSet(KEY, map);
-  return map;
 }
