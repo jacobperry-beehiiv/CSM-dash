@@ -32,6 +32,10 @@ export const maxDuration = 60;
 interface PostBody {
   dry_run?: boolean;
   workflows?: string[];
+  /** Optional hand-picked workspace_ids — used by the AM panels'
+   *  "Ping N selected on Slack" button to scope the digest to just
+   *  the rows the user ticked. Engine still groups by CSM. */
+  workspace_ids?: string[];
 }
 
 const WORKFLOW_SET: Set<string> = new Set(REVIEW_WORKFLOWS);
@@ -72,11 +76,19 @@ export async function POST(req: Request) {
     if (workflows.length === 0) workflows = undefined;
   }
 
+  // Normalize workspace_ids — accept array of strings, ignore everything else.
+  const workspaceIds = Array.isArray(body.workspace_ids)
+    ? (body.workspace_ids as unknown[]).filter(
+        (v): v is string => typeof v === "string" && v.trim().length > 0
+      )
+    : undefined;
+
   try {
     const result = await runReviewDigestSweep({
       dryRun: Boolean(body.dry_run),
       triggeredBy,
       workflows,
+      workspaceIds,
     });
     return NextResponse.json({
       ok: true,

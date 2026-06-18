@@ -23,7 +23,7 @@ import {
 import { BulkEmailLauncher } from "./bulk-email-launcher";
 import { NotesChip } from "./notes-chip";
 import { ReviewStateCell } from "./review-state-cell";
-import { SendDigestButton } from "./send-digest-button";
+import { PingSelectedButton } from "./ping-selected-button";
 import { BulkReviewStateActions } from "./bulk-review-state-actions";
 import { CustomerDetailPanel } from "../customer-detail-panel";
 import {
@@ -482,6 +482,23 @@ export function PastDuePanel({ rows, csms, totalSourceRows }: Props) {
     customerByStripeId,
   ]);
 
+  /** Workspace-id set derived from the user's current selection.
+   *  Drives the BulkReviewStateActions + Ping selected on Slack
+   *  buttons in the toolbar. Past-due rows whose stripe_customer_id
+   *  doesn't resolve to a workspace_id (cancelled workspace, etc.)
+   *  silently drop — matches the rest of the panel's behavior. */
+  const selectedWorkspaceIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const [i, r] of searched.entries()) {
+      if (!selected.has(rowKey(r, i))) continue;
+      const ws = r.customer_id
+        ? customerByStripeId.get(r.customer_id)?.workspace_id ?? null
+        : null;
+      if (ws) ids.add(ws);
+    }
+    return [...ids];
+  }, [searched, selected, customerByStripeId]);
+
   const maxArr = useMemo(
     () => filteredRows.reduce((m, r) => Math.max(m, r.arr_dollars), 0),
     [filteredRows]
@@ -658,21 +675,7 @@ export function PastDuePanel({ rows, csms, totalSourceRows }: Props) {
           Clear
         </button>
         <BulkReviewStateActions
-          workspaceIds={(() => {
-            // Resolve selected past-due rows → workspace_ids via the
-            // stripe_customer_id index. Rows whose Customer can't be
-            // matched (cancelled workspace, etc.) are dropped — same
-            // resolution as the email/draft flows below.
-            const ids = new Set<string>();
-            for (const [i, r] of searched.entries()) {
-              if (!selected.has(rowKey(r, i))) continue;
-              const ws = r.customer_id
-                ? customerByStripeId.get(r.customer_id)?.workspace_id ?? null
-                : null;
-              if (ws) ids.add(ws);
-            }
-            return [...ids];
-          })()}
+          workspaceIds={selectedWorkspaceIds}
           workflow="past_due"
           onApplied={setReviewStates}
         />
@@ -981,7 +984,10 @@ export function PastDuePanel({ rows, csms, totalSourceRows }: Props) {
         >
           {historyBusy ? "Reconciling…" : "🕓 Refresh history"}
         </button>
-        <SendDigestButton workflows={["past_due"]} />
+        <PingSelectedButton
+          workspaceIds={selectedWorkspaceIds}
+          workflow="past_due"
+        />
 
         <button
           onClick={() => setComposeOpen(true)}
