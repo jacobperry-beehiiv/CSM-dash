@@ -14,7 +14,19 @@ import type { Customer } from "../types";
 import {
   resolveSlackNotificationPref,
   type SettingsShape,
+  type SlackNotificationKind,
 } from "../data/settings-types";
+
+/** Per-workflow notification kind. Each workflow has its own settings
+ *  row in /settings/slack — destination channel + enabled toggle +
+ *  cron_enabled toggle — so admins can route past-due to one channel,
+ *  renewals to another, and silence individual workflows from the
+ *  scheduled run without disabling the whole digest. */
+const WORKFLOW_TO_KIND: Record<ReviewWorkflow, SlackNotificationKind> = {
+  past_due: "digest_past_due",
+  proactive: "digest_proactive",
+  renewals: "digest_renewals",
+};
 
 /**
  * Aggregate per-CSM digest engine — Phase B of the review workflow.
@@ -290,39 +302,9 @@ function composeSingleWorkflowMessage(
   } that need review for ${meta.label}. <${meta.filteredUrl}|Open the filtered list>`;
 }
 
-/** Multi-workflow bullet body — used by the cron (which doesn't scope
- *  to one workflow). Same shape as before, just routed through the
- *  workflowMeta helper. */
-function composeMultiMessage(
-  per: DigestPerCsm,
-  workflows: Set<ReviewWorkflow>
-): string {
-  const lines: string[] = [];
-  if (workflows.has("past_due") && per.counts.past_due > 0) {
-    const m = workflowMeta("past_due", per.csm);
-    lines.push(
-      `• <${m.filteredUrl}|${per.counts.past_due} ${m.noun}${per.counts.past_due === 1 ? "" : "s"} to review>`
-    );
-  }
-  if (workflows.has("proactive") && per.counts.proactive > 0) {
-    const m = workflowMeta("proactive", per.csm);
-    lines.push(
-      `• <${m.filteredUrl}|${per.counts.proactive} ${m.noun}${per.counts.proactive === 1 ? "" : "s"}>`
-    );
-  }
-  if (workflows.has("renewals") && per.counts.renewals > 0) {
-    const m = workflowMeta("renewals", per.csm);
-    lines.push(
-      `• <${m.filteredUrl}|${per.counts.renewals} ${m.noun}${per.counts.renewals === 1 ? "" : "s"} in the next ${RENEWAL_WINDOW_DAYS} days>`
-    );
-  }
-  return [
-    `:wave: Hey ${per.mention}, your review queue:`,
-    ...lines,
-    "",
-    `Mark each account as :large_orange_circle: *Reach out* / :black_circle: *Skip* / :white_check_mark: *Done* on the dashboard, drop a note for the why, and the next digest only resurfaces what's still pending.`,
-  ].join("\n");
-}
+// (Note: composeMultiMessage was removed in the per-workflow refactor
+// — every workflow now sends its own past-due-style header to its own
+// channel, so the bullet-list shape isn't used anywhere.)
 
 export async function runReviewDigestSweep(
   opts: {
@@ -350,9 +332,39 @@ export async function runReviewDigestSweep(
   const now = new Date();
   const generated_at = now.toISOString();
 
-  const digestPref = resolveSlackNotificationPref(settings, "review_digest");
-  const channelId = digestPref.destination.trim();
-  if ((!digestPref.enabled || !channelId) && !dryRun) {
+  // Resolve a channel + enabled state per workflow. Each workflow has
+  // its own settings row now; the legacy unified `review_digest`
+  // setting is the fallback when the per-workflow pref is unset (see
+  // resolveSlackNotificationPref). Cron runs additionally gate on
+  // each workflow's cron_enabled toggle so admins can mute one
+  // workflow's scheduled run without touching the others.
+  const isCron = opts.triggeredBy === "cron";
+  const effective: Array<{ workflow: ReviewWorkflow; channel: string }> = [];
+  const skipped: Array<{ workflow: ReviewWorkflow; reason: string }> = [];
+  for (const wf of wfFilter) {
+    const pref = resolveSlackNotificationPref(settings, WORKFLOW_TO_KIND[wf]);
+    const channel = pref.destination.trim();
+    if (!pref.enabled) {
+      skipped.push({ workflow: wf, reason: "disabled" });
+      continue;
+    }
+    if (!channel) {
+      skipped.push({ workflow: wf, reason: "no_channel" });
+      continue;
+    }
+    if (isCron && pref.cron_enabled === false) {
+      skipped.push({ workflow: wf, reason: "cron_disabled" });
+      continue;
+    }
+    effective.push({ workflow: wf, channel });
+  }
+  // If every workflow was skipped because no channel is configured,
+  // surface the same `no_channel_configured` hint the manual button
+  // checks for so admins get a clean error.
+  if (effective.length === 0 && !dryRun) {
+    const allMissingChannel = skipped.every(
+      (s) => s.reason === "no_channel"
+    );
     return {
       generated_at,
       per_csm: [],
@@ -360,15 +372,18 @@ export async function runReviewDigestSweep(
       messages_failed: 0,
       failures: [],
       dry_run: dryRun,
-      no_channel_configured: true,
+      no_channel_configured: allMissingChannel,
     };
   }
+  // Narrow wfFilter to just the workflows we'll actually send so the
+  // buildDigest call below doesn't compute counts we won't use.
+  const sendingWorkflows = new Set(effective.map((e) => e.workflow));
 
   const perCsm = buildDigest({
     customers,
     pastDueRows,
     reviewStates,
-    workflows: wfFilter,
+    workflows: sendingWorkflows,
     now,
   })
     .filter((p) => p.total > 0)
@@ -379,65 +394,52 @@ export async function runReviewDigestSweep(
   let messages_failed = 0;
   const failures: Array<{ csm: string; error: string }> = [];
 
+  // Post one parent (+ threaded replies) per CSM per workflow. Each
+  // workflow has its own channel, so a CSM could get up to 3 separate
+  // pings — one per workflow's destination — when the cron fires.
   if (!dryRun) {
     for (const per of perCsm) {
-      try {
-        // Past-due-style header when the caller scoped to exactly one
-        // workflow (the manual Send Digest button case). Otherwise
-        // fall back to the bullet body used by the cron.
-        const single =
-          wfFilter.size === 1
-            ? ([...wfFilter][0] as ReviewWorkflow)
-            : null;
-        const parentText = single
-          ? composeSingleWorkflowMessage(per, single)
-          : composeMultiMessage(per, wfFilter);
-        const parent = await postSlackMessageRich({
-          channel: channelId,
-          text: parentText,
-        });
-        messages_sent++;
+      for (const { workflow, channel } of effective) {
+        const count = per.counts[workflow];
+        if (count === 0) continue;
+        try {
+          const parent = await postSlackMessageRich({
+            channel,
+            text: composeSingleWorkflowMessage(per, workflow),
+          });
+          messages_sent++;
 
-        // Threaded per-account replies — only the workflows the
-        // caller asked for. Each has Reach Out Approved / Skip
-        // buttons that write review_state to KV on click. The
-        // threaded message itself is never updated; status is on the
-        // dashboard.
-        const accountsToPost = per.accounts.filter((a) =>
-          wfFilter.has(a.workflow)
-        );
-        for (const account of accountsToPost) {
-          try {
-            await postSlackMessageRich({
-              channel: channelId,
-              thread_ts: parent.ts,
-              text: account.workspace_name,
-              blocks: buildDigestAccountBlocks({
-                workspaceId: account.workspace_id,
-                workspaceName: account.workspace_name,
-                workflow: account.workflow,
-              }),
-            });
-          } catch (e) {
-            // A threaded-reply failure shouldn't take down the whole
-            // digest run. Log the gap, leave the parent intact, keep
-            // going.
-            console.warn(
-              "[review-digest] threaded reply failed",
-              {
+          const accounts = per.accounts.filter((a) => a.workflow === workflow);
+          for (const account of accounts) {
+            try {
+              await postSlackMessageRich({
+                channel,
+                thread_ts: parent.ts,
+                text: account.workspace_name,
+                blocks: buildDigestAccountBlocks({
+                  workspaceId: account.workspace_id,
+                  workspaceName: account.workspace_name,
+                  workflow: account.workflow,
+                }),
+              });
+            } catch (e) {
+              // Threaded-reply failure is logged but doesn't abort —
+              // the parent + remaining replies still land.
+              console.warn("[review-digest] threaded reply failed", {
                 csm: per.csm,
+                workflow,
                 workspace_id: account.workspace_id,
                 error: e instanceof Error ? e.message : "unknown",
-              }
-            );
+              });
+            }
           }
+        } catch (e) {
+          messages_failed++;
+          failures.push({
+            csm: per.csm,
+            error: `${workflow}: ${e instanceof Error ? e.message : "unknown"}`,
+          });
         }
-      } catch (e) {
-        messages_failed++;
-        failures.push({
-          csm: per.csm,
-          error: e instanceof Error ? e.message : "unknown",
-        });
       }
     }
   }
