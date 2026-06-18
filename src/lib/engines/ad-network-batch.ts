@@ -1,4 +1,5 @@
 import { DB, runNativeQuery } from "../metabase";
+import { isDemoMode } from "../demo/mode";
 
 /**
  * Batched ad-network roll-up — one Postgres round trip returns ad metrics
@@ -33,6 +34,10 @@ export async function rollupAdNetwork(
   organizationIds: string[]
 ): Promise<Map<string, AdNetworkRollup>> {
   const result = new Map<string, AdNetworkRollup>();
+  // Demo mode — same reasoning as feature-utilization-batch: fake
+  // workspace IDs aren't valid UUIDs, the SQL IN-list breaks. Return
+  // empty so each customer renders the no-activity state.
+  if (isDemoMode()) return result;
   const now = Date.now();
   const stale: string[] = [];
 
