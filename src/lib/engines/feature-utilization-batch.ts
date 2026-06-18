@@ -1,4 +1,5 @@
 import { DB, runNativeQuery } from "../metabase";
+import { isDemoMode } from "../demo/mode";
 
 /**
  * Batched Enterprise Feature Utilization
@@ -170,6 +171,11 @@ export async function runFeatureUtilizationBatch(
   organizationIds: string[]
 ): Promise<FeatureBatchMap> {
   if (organizationIds.length === 0) return {};
+
+  // Demo mode — fake-workspace IDs aren't valid UUIDs, and the SQL
+  // CTE casts each id to uuid. Return an empty map so each customer
+  // shows the "no features detected" state in the UI.
+  if (isDemoMode()) return {};
 
   // Cache by the sorted-id signature so repeated filter-open requests are
   // free as long as the book hasn't changed.

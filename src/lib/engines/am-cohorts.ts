@@ -1,6 +1,11 @@
 import { runSavedQuestion } from "../metabase";
 import { kvGet, kvSet } from "../storage/kv";
 import { readCohortSnapshot } from "../data/cohort-snapshots";
+import { isDemoMode } from "../demo/mode";
+import {
+  buildDemoApproachingEnt,
+  buildDemoPastDue,
+} from "../demo/am-fixtures";
 
 /**
  * Cohort fetchers for the AM dashboard tabs.
@@ -268,6 +273,7 @@ async function refreshAndStore<T>(
 }
 
 export async function loadApproachingEnterprise(): Promise<ApproachingEntRow[]> {
+  if (isDemoMode()) return buildDemoApproachingEnt();
   return loadCohort<ApproachingEntRow>(
     APPROACHING_ENT_QUESTION_ID,
     APPROACHING_SNAPSHOT_BASENAME,
@@ -281,6 +287,7 @@ export async function loadApproachingEnterprise(): Promise<ApproachingEntRow[]> 
 }
 
 export async function loadPastDue(): Promise<PastDueRow[]> {
+  if (isDemoMode()) return buildDemoPastDue();
   return loadCohort<PastDueRow>(
     PAST_DUE_QUESTION_ID,
     PAST_DUE_SNAPSHOT_BASENAME,

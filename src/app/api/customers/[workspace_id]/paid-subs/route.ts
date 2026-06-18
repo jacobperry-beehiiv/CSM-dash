@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { DB, runNativeQuery } from "@/lib/metabase";
+import { isDemoMode } from "@/lib/demo/mode";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 30;
@@ -74,6 +75,14 @@ export async function GET(
   }
 
   const { workspace_id } = await ctx.params;
+  // Demo mode — return an empty paid-subs payload. The UI renders
+  // "no paid tiers" without erroring; revenue/MRR boxes show $0.
+  if (isDemoMode()) {
+    return NextResponse.json({
+      tiers: [],
+      lifetime_revenue_cents: 0,
+    });
+  }
   const orgId = (workspace_id ?? "").replace(/'/g, "''");
   if (!orgId) {
     return NextResponse.json(

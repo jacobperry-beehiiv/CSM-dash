@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { DB, runNativeQuery } from "@/lib/metabase";
+import { isDemoMode } from "@/lib/demo/mode";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 30;
@@ -36,6 +37,20 @@ export async function GET(
     return NextResponse.json({ error: "Sign in required" }, { status: 401 });
   }
   const { workspace_id } = await ctx.params;
+  // Demo mode — return a fake publication so the expanded-row UI has
+  // something to render. The workspace id from the fixture isn't a
+  // valid UUID, so we can't query Postgres for real pubs.
+  if (isDemoMode()) {
+    return NextResponse.json({
+      publications: [
+        {
+          publication_id: `pub_demo_${workspace_id}_main`,
+          publication_name: "Main publication",
+          subscribers: null,
+        },
+      ],
+    });
+  }
   const orgId = (workspace_id ?? "").replace(/'/g, "''");
   if (!orgId) {
     return NextResponse.json(

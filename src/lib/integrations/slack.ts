@@ -2,6 +2,7 @@ import type {
   AtRiskRunResult,
 } from "../engines/at-risk";
 import type { DeliverabilityRunResult } from "../engines/deliverability";
+import { isDemoMode } from "../demo/mode";
 
 /**
  * Thin Slack integration — used by cron routes to post summary
@@ -13,6 +14,15 @@ const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN;
 const CHANNEL = process.env.SLACK_DELIVERABILITY_CHANNEL;
 
 async function slackPost(channel: string, text: string, blocks?: unknown[]) {
+  // Demo-mode write guard. Same intent as kvSet's guard — even if a
+  // route fires a Slack notification, suppress it in DEMO_MODE so a
+  // screenshot session can't blast real channels with fake content.
+  if (isDemoMode()) {
+    console.log(
+      `[demo-mode] suppressed Slack post → ${channel}: ${text.slice(0, 120)}`
+    );
+    return;
+  }
   if (!SLACK_BOT_TOKEN) {
     throw new Error(
       "SLACK_BOT_TOKEN is not configured — set it in .env.local."

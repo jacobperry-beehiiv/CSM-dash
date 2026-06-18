@@ -1,4 +1,52 @@
 import { DB, runNativeQuery } from "../metabase";
+import { isDemoMode } from "../demo/mode";
+
+/** All-zeros FeatureUtilization for DEMO_MODE callers. Keeps every
+ *  field at its empty-state default so the panel renders the
+ *  "no signals yet" UI instead of throwing on a malformed Metabase
+ *  response. */
+function buildEmptyFeatureUtilization(
+  organizationId: string
+): FeatureUtilization {
+  return {
+    organization_id: organizationId,
+    generated_at: new Date().toISOString(),
+    mcp_calls: 0,
+    mcp_last_call: null,
+    podcast_shows: 0,
+    podcast_episodes: 0,
+    podcast_last_episode: null,
+    ad_network_count: 0,
+    ad_network_last_run: null,
+    ad_network_revenue_usd: 0,
+    direct_sponsorship_count: 0,
+    direct_sponsorship_last_run: null,
+    direct_sponsorship_revenue_usd: 0,
+    automations_total: 0,
+    automations_active: 0,
+    automations_last_created: null,
+    automations_last_edited: null,
+    automations_last_published: null,
+    segments_total: 0,
+    segments_last_created: null,
+    segments_last_used: null,
+    boost_monetize_agreements: 0,
+    boost_monetize_last_send: null,
+    boost_monetize_potential_payout_usd: 0,
+    boost_grow_offers: 0,
+    boost_grow_last_offer: null,
+    boost_grow_allocated_spend_usd: 0,
+    referral_program_created: null,
+    referral_program_active: null,
+    polls_total: 0,
+    polls_last_created: null,
+    polls_last_response: null,
+    t4_completed_at: null,
+    t4_status: null,
+    t4_active_recs: 0,
+    t4_total_recs: 0,
+  };
+}
 
 /**
  * Consolidated Enterprise Feature Utilization
@@ -251,6 +299,15 @@ export async function runFeatureUtilization(
 ): Promise<FeatureUtilization> {
   if (!organizationId) {
     throw new Error("organizationId is required");
+  }
+
+  // Demo mode — skip the per-workspace Metabase query entirely.
+  // Returning a zero-valued FeatureUtilization keeps the caller's
+  // contract intact (the UI renders the panel with empty signals)
+  // and avoids the UUID-cast error Metabase throws on demo IDs like
+  // "ws-demo-001-morning-brew-makers".
+  if (isDemoMode()) {
+    return buildEmptyFeatureUtilization(organizationId);
   }
 
   const now = Date.now();
