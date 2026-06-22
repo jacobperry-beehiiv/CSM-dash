@@ -58,6 +58,11 @@ export default auth((req) => {
   // instead of a 307 → /login.
   if (pathname.startsWith("/api/review-digest/sweep")) return;
 
+  // Deliverability Slack sweep — same dual session/bearer auth on the
+  // route. Without this bypass the GH Actions cron POSTs get 307'd to
+  // /login and the workflow fails with HTTP 307 / exit 1.
+  if (pathname.startsWith("/api/deliverability/sweep")) return;
+
   // Personal-todos sweep — same dual-auth shape. Activates scheduled
   // (future-dated) todos when their surface_at hits and fires the
   // 4-stage due-date reminder ladder. Cron at
