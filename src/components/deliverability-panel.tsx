@@ -204,6 +204,48 @@ export function DeliverabilityPanel({
   const [search, setSearch] = useUrlSearch("q");
   const customerByWorkspace = useCustomerByWorkspace();
 
+  // Manual "Sync Slack alerts" — POSTs the same sweep the weekday cron
+  // hits. Idempotent per post_id, so a manual click between cron ticks
+  // just no-ops on already-pinged sends. Session auth (no bearer needed).
+  const [syncing, setSyncing] = useState(false);
+  const [syncMessage, setSyncMessage] = useState<string | null>(null);
+  async function syncSlackSweep() {
+    setSyncing(true);
+    setSyncMessage(null);
+    try {
+      const r = await fetch("/api/deliverability/sweep", { method: "POST" });
+      const j = (await r.json()) as {
+        messages_sent?: number;
+        messages_failed?: number;
+        disabled?: boolean;
+        reason?: string;
+        error?: string;
+      };
+      if (!r.ok) throw new Error(j.error ?? `HTTP ${r.status}`);
+      if (j.disabled) {
+        setSyncMessage(
+          `Skipped — ${j.reason ?? "deliverability sweep is disabled"}. Configure at /settings/slack.`
+        );
+      } else {
+        const sent = j.messages_sent ?? 0;
+        const failed = j.messages_failed ?? 0;
+        setSyncMessage(
+          sent === 0 && failed === 0
+            ? "No new alerts to post — Slack is already up to date."
+            : `Posted ${sent} new alert${sent === 1 ? "" : "s"} to Slack${
+                failed > 0 ? ` (${failed} failed)` : ""
+              }.`
+        );
+      }
+    } catch (e) {
+      setSyncMessage(
+        `Sync failed: ${e instanceof Error ? e.message : "unknown"}`
+      );
+    } finally {
+      setSyncing(false);
+    }
+  }
+
   async function setClearedOptimistic(
     postId: string,
     cleared: boolean,
@@ -398,7 +440,20 @@ export function DeliverabilityPanel({
             </span>
           </label>
         ) : null}
+        <div className="flex-1" />
+        <button
+          type="button"
+          onClick={syncSlackSweep}
+          disabled={syncing}
+          className="px-3 py-1.5 border border-border-strong rounded-md text-xs hover:bg-canvas disabled:opacity-50"
+          title="Post any new critical deliverability alerts to Slack now (same as the daily 09:15 UTC cron). Idempotent per send."
+        >
+          {syncing ? "Syncing…" : "Sync Slack alerts"}
+        </button>
       </FilterBar>
+      {syncMessage ? (
+        <div className="text-xs text-muted">{syncMessage}</div>
+      ) : null}
       <div className="text-xs text-muted">
         {(() => {
           const flaggedAll = data.alerts.filter(
