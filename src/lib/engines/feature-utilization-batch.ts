@@ -15,6 +15,7 @@ import { isDemoMode } from "../demo/mode";
 
 export interface FeatureBatchRow {
   organization_id: string;
+  send_api: boolean;
   mcp: boolean;
   podcasts: boolean;
   ad_network: boolean;
@@ -42,6 +43,22 @@ function buildSql(orgIds: string[]): string {
       FROM public.publications
       WHERE organization_id IN (${list})
         AND deleted_at IS NULL
+    ),
+    send_api AS (
+      -- Any completed (send_status=2) API-created post in the org's
+      -- publications. Same exclusions as the per-customer engine —
+      -- content_import_id IS NULL because Postgres stores non-imported
+      -- posts as NULL (PeerDB rewrites to a zero UUID downstream).
+      SELECT op.organization_id, COUNT(p.id) > 0 AS used
+      FROM org_pubs op
+      JOIN public.posts p
+        ON p.publication_id = op.publication_id
+       AND p.send_status = 2
+       AND p.api_created = TRUE
+       AND p.deleted_at IS NULL
+       AND p.platform <> 1
+       AND p.content_import_id IS NULL
+      GROUP BY op.organization_id
     ),
     mcp AS (
       SELECT organization_id, COUNT(*) > 0 AS mcp_used
@@ -139,6 +156,7 @@ function buildSql(orgIds: string[]): string {
     )
     SELECT
       orgs.organization_id AS organization_id,
+      COALESCE(send_api.used, false)            AS send_api,
       COALESCE(mcp.mcp_used, false)             AS mcp,
       COALESCE(podcasts.used, false)            AS podcasts,
       COALESCE(ad_combined.ad_network_used, false) AS ad_network,
@@ -151,6 +169,7 @@ function buildSql(orgIds: string[]): string {
       COALESCE(polls.used, false)               AS polls,
       COALESCE(t4.used, false)                  AS t4
     FROM orgs
+    LEFT JOIN send_api       ON send_api.organization_id = orgs.organization_id
     LEFT JOIN mcp            ON mcp.organization_id = orgs.organization_id
     LEFT JOIN podcasts       ON podcasts.organization_id = orgs.organization_id
     LEFT JOIN ad_combined    ON ad_combined.organization_id = orgs.organization_id
@@ -196,6 +215,7 @@ export async function runFeatureUtilizationBatch(
     const id = String(r.organization_id);
     map[id] = {
       organization_id: id,
+      send_api: Boolean(r.send_api),
       mcp: Boolean(r.mcp),
       podcasts: Boolean(r.podcasts),
       ad_network: Boolean(r.ad_network),
@@ -214,8 +234,9 @@ export async function runFeatureUtilizationBatch(
   return map;
 }
 
-/** The 11 features we expose in the filter — matches the panel order. */
+/** The 12 features we expose in the filter — matches the panel order. */
 export const FEATURE_BATCH_KEYS = [
+  "send_api",
   "mcp",
   "podcasts",
   "ad_network",
@@ -232,6 +253,7 @@ export const FEATURE_BATCH_KEYS = [
 export type FeatureBatchKey = (typeof FEATURE_BATCH_KEYS)[number];
 
 export const FEATURE_BATCH_LABELS: Record<FeatureBatchKey, string> = {
+  send_api: "Send API",
   mcp: "MCP",
   podcasts: "Podcasts",
   ad_network: "Ad Network",

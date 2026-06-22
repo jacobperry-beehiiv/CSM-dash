@@ -11,6 +11,10 @@ function buildEmptyFeatureUtilization(
   return {
     organization_id: organizationId,
     generated_at: new Date().toISOString(),
+    send_api_posts_total: 0,
+    send_api_posts_30d: 0,
+    send_api_pct_30d: 0,
+    send_api_last_send: null,
     mcp_calls: 0,
     mcp_last_call: null,
     podcast_shows: 0,
@@ -71,6 +75,17 @@ function buildEmptyFeatureUtilization(
 export interface FeatureUtilization {
   organization_id: string;
   generated_at: string;
+
+  // 0. Send API — posts where api_created = true. Mirrors the
+  // signal Metabase cards 35808 / 35839 / 36664 already track
+  // for the ad-network rollups. send_api_pct_30d = share of the
+  // org's last-30-day completed sends that were API-created
+  // (0-100, two decimals). Last-send timestamp is the most recent
+  // api_created post's send_completed_at across all org pubs.
+  send_api_posts_total: number;
+  send_api_posts_30d: number;
+  send_api_pct_30d: number;
+  send_api_last_send: string | null;
 
   // 1. MCP
   mcp_calls: number;
@@ -141,6 +156,49 @@ function buildSql(orgId: string): string {
       FROM public.publications
       WHERE organization_id = ${o}
         AND deleted_at IS NULL
+    ),
+    send_api AS (
+      -- Send API usage: posts the customer created via the API
+      -- vs. the studio composer. send_status = 2 means the send
+      -- actually went out (matches the deliverability-engine
+      -- filter); platform != 1 drops web-only posts; the
+      -- content_import_id zero-UUID filter drops imported posts.
+      -- These match the exclusions Metabase card #35808 uses so
+      -- the dashboard's per-org % lines up with PMJ's plan-level
+      -- rollup if you ever cross-check. Note the content_import_id
+      -- check uses IS NULL (Postgres) vs the all-zero UUID the
+      -- ClickHouse card uses — PeerDB rewrites NULL → 00000…00 on
+      -- replication, so the two filters carry the same semantics.
+      SELECT
+        COUNT(*) FILTER (WHERE api_created)::int
+          AS send_api_posts_total,
+        COUNT(*) FILTER (
+          WHERE api_created
+            AND send_completed_at >= NOW() - INTERVAL '30 days'
+        )::int AS send_api_posts_30d,
+        CASE
+          WHEN COUNT(*) FILTER (
+            WHERE send_completed_at >= NOW() - INTERVAL '30 days'
+          ) = 0 THEN 0
+          ELSE ROUND(
+            COUNT(*) FILTER (
+              WHERE api_created
+                AND send_completed_at >= NOW() - INTERVAL '30 days'
+            )::numeric
+            / COUNT(*) FILTER (
+              WHERE send_completed_at >= NOW() - INTERVAL '30 days'
+            )::numeric * 100,
+            2
+          )
+        END AS send_api_pct_30d,
+        MAX(send_completed_at) FILTER (WHERE api_created)
+          AS send_api_last_send
+      FROM public.posts
+      WHERE publication_id IN (SELECT id FROM org_pubs)
+        AND send_status = 2
+        AND deleted_at IS NULL
+        AND platform <> 1
+        AND content_import_id IS NULL
     ),
     mcp AS (
       SELECT
@@ -276,6 +334,7 @@ function buildSql(orgId: string): string {
     )
     SELECT
       ${o}::text AS organization_id,
+      send_api.*,
       mcp.*,
       podcasts.*,
       ad_combined.*,
@@ -286,7 +345,7 @@ function buildSql(orgId: string): string {
       referrals.*,
       polls.*,
       t4.*
-    FROM mcp, podcasts, ad_combined, automations, segments,
+    FROM send_api, mcp, podcasts, ad_combined, automations, segments,
          boost_monetize, boost_grow, referrals, polls, t4
   `;
 }
@@ -339,6 +398,11 @@ export async function runFeatureUtilization(
   const result: FeatureUtilization = {
     organization_id: organizationId,
     generated_at: new Date().toISOString(),
+
+    send_api_posts_total: num("send_api_posts_total"),
+    send_api_posts_30d: num("send_api_posts_30d"),
+    send_api_pct_30d: num("send_api_pct_30d"),
+    send_api_last_send: str("send_api_last_send"),
 
     mcp_calls: num("mcp_calls"),
     mcp_last_call: str("mcp_last_call"),
