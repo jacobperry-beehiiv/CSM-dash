@@ -11,6 +11,7 @@ import { CustomerPublicationsList } from "./customer-publications-list";
 import { CustomerPaidSubsList } from "./customer-paid-subs-list";
 import { CollapsibleSection } from "./collapsible-section";
 import { CompanyNotes } from "./am/company-notes";
+import { ReviewStatesSection } from "./am/review-states-section";
 import { CopyButton } from "./copy-button";
 import { CsmRefreshRow } from "./csm-refresh-row";
 import { HubSpotLinkBadge } from "./hubspot-link-badge";
@@ -337,6 +338,14 @@ export function CustomerDetailPanel({
           <HubSpotContactsList contacts={c.hubspot_contacts} />
         </Section>
       </div>
+
+      {/* Review state — Past Due / Proactive / Renewals dropdowns.
+       *  Lives here (not just on the workflow tabs) so a CSM who
+       *  spots a wrong setting on one tab can fix it from any
+       *  surface where the customer's detail panel appears. */}
+      {c.workspace_id ? (
+        <ReviewStatesSection workspaceId={c.workspace_id} />
+      ) : null}
 
       {/* Manual notes — same KV the CSM profile-page renders from, but
        *  scoped to kind:note so the inline editor stays a free-text
