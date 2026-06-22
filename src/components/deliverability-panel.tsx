@@ -246,6 +246,36 @@ export function DeliverabilityPanel({
     }
   }
 
+  // Manual "Refresh data" — fires the deliverability-data-sync GH
+  // workflow via /api/sync/deliverability. The workflow re-pulls the
+  // ClickHouse snapshot, commits it, and Vercel auto-redeploys with the
+  // fresh data (~90s end-to-end). Button stays disabled until the
+  // dispatch returns so a CSM can't queue dozens.
+  const [refreshing, setRefreshing] = useState(false);
+  async function refreshSnapshot() {
+    setRefreshing(true);
+    setSyncMessage(null);
+    try {
+      const r = await fetch("/api/sync/deliverability", { method: "POST" });
+      const j = (await r.json()) as {
+        message?: string;
+        actions_url?: string;
+        error?: string;
+      };
+      if (!r.ok) throw new Error(j.error ?? `HTTP ${r.status}`);
+      setSyncMessage(
+        j.message ??
+          "Refresh started. Fresh data should be live in ~90 seconds."
+      );
+    } catch (e) {
+      setSyncMessage(
+        `Refresh failed: ${e instanceof Error ? e.message : "unknown"}`
+      );
+    } finally {
+      setRefreshing(false);
+    }
+  }
+
   async function setClearedOptimistic(
     postId: string,
     cleared: boolean,
@@ -441,6 +471,15 @@ export function DeliverabilityPanel({
           </label>
         ) : null}
         <div className="flex-1" />
+        <button
+          type="button"
+          onClick={refreshSnapshot}
+          disabled={refreshing}
+          className="px-3 py-1.5 border border-border-strong rounded-md text-xs hover:bg-canvas disabled:opacity-50"
+          title="Kick the deliverability-data-sync GitHub Action to re-pull the ClickHouse snapshot now. Fresh data lands after Vercel redeploys (~90 seconds)."
+        >
+          {refreshing ? "Refreshing…" : "Refresh data"}
+        </button>
         <button
           type="button"
           onClick={syncSlackSweep}

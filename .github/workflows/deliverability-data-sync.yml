@@ -1,0 +1,92 @@
+name: deliverability-data-sync
+
+# Re-pulls ONLY the deliverability snapshot from ClickHouse (the
+# joined Q1-Q4 result + spam dates) and commits
+# data/deliverability.enc.json back to the repo. Vercel's GitHub
+# integration sees the new commit and auto-redeploys.
+#
+# Trigger:
+#   • manually via "Run workflow" on this page
+#   • via the dashboard "Refresh data" button on /csm?tab=deliverability
+#     (POST /api/sync/deliverability → GitHub workflow_dispatch API)
+#
+# This is the lightweight sibling of sync-data.yml — that workflow
+# pulls Metabase + HubSpot + ClickHouse and takes 3–5 min. This one
+# skips everything except the ~30s ClickHouse fetch.
+#
+# Required repo secrets (already set for the full sync):
+#   • SNAPSHOT_ENCRYPTION_KEY  — 32-byte base64; same one set in Vercel env
+# ClickHouse credentials come from public env vars baked into the engine.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  # Coordinate with sync-data.yml so we never push at the same time.
+  group: sync-data
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - name: Verify required secrets are set
+        env:
+          SNAPSHOT_ENCRYPTION_KEY: ${{ secrets.SNAPSHOT_ENCRYPTION_KEY }}
+        run: |
+          if [ -z "${SNAPSHOT_ENCRYPTION_KEY}" ]; then
+            echo "::error::Missing required repo secret: SNAPSHOT_ENCRYPTION_KEY"
+            exit 1
+          fi
+          echo "Secret present."
+
+      - name: Sync + encrypt deliverability snapshot
+        run: npm run sync -- --only=deliverability
+        env:
+          SNAPSHOT_ENCRYPTION_KEY: ${{ secrets.SNAPSHOT_ENCRYPTION_KEY }}
+
+      - name: Commit + push deliverability snapshot
+        run: |
+          git config user.name  "csm-dash-bot"
+          git config user.email "csm-dash-bot@users.noreply.github.com"
+          if [ ! -f data/deliverability.enc.json ]; then
+            echo "::warning::Deliverability snapshot missing — engine may have soft-failed. Skipping commit."
+            exit 0
+          fi
+          git add data/deliverability.enc.json
+          if git diff --staged --quiet; then
+            echo "Snapshot unchanged — nothing to commit"
+            exit 0
+          fi
+          git commit -m "chore(data): refresh deliverability snapshot ($(date -u +%FT%TZ))"
+
+          # Same retry-on-non-fast-forward pattern as sync-data.yml — a
+          # concurrent push to main during the ~60s run window would
+          # otherwise reject our push.
+          push_attempt=0
+          max_attempts=5
+          until git push; do
+            push_attempt=$((push_attempt + 1))
+            if [ "$push_attempt" -ge "$max_attempts" ]; then
+              echo "::error::Push rejected after $max_attempts retries — giving up."
+              exit 1
+            fi
+            echo "Push rejected (attempt $push_attempt/$max_attempts) — rebasing and retrying…"
+            sleep $((RANDOM % 5 + 2))
+            git fetch origin main
+            git rebase --strategy-option=theirs origin/main
+          done

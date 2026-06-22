@@ -61,16 +61,28 @@ const COHORT_QUESTIONS: Array<{ id: number; basename: string; label: string }> =
 ];
 
 async function main() {
-  if (!process.env.METABASE_URL) {
-    throw new Error(
-      "METABASE_URL not set — run via `npm run sync` (which loads .env.local) or export the vars manually."
-    );
-  }
+  // `--only=deliverability` short-circuits the full Metabase + HubSpot
+  // pull and runs ONLY the ClickHouse-backed deliverability snapshot
+  // block. Used by the dashboard-driven "Refresh data" button so a CSM
+  // can get a fresh snapshot in ~60s instead of waiting for the next
+  // 08/16 UTC tick of the full sync.
+  const onlyDeliverability = process.argv.includes("--only=deliverability");
 
   const usePlaintext = process.env.SYNC_PLAINTEXT === "1";
   if (!usePlaintext && !process.env.SNAPSHOT_ENCRYPTION_KEY) {
     throw new Error(
       "SNAPSHOT_ENCRYPTION_KEY not set. Generate one with `openssl rand -base64 32` and add it to .env.local + GitHub Actions secrets."
+    );
+  }
+
+  if (onlyDeliverability) {
+    await syncDeliverability(usePlaintext);
+    return;
+  }
+
+  if (!process.env.METABASE_URL) {
+    throw new Error(
+      "METABASE_URL not set — run via `npm run sync` (which loads .env.local) or export the vars manually."
     );
   }
 
@@ -383,42 +395,45 @@ async function main() {
   }
 
   // ─── Deliverability snapshot ──────────────────────────────────────
-  // Pre-compute the joined Q1-Q4 ClickHouse result for the last 15
-  // days so /csm?tab=deliverability reads from disk instead of waiting
-  // 30–60s on 4 separate ClickHouse queries. Thresholds are applied at
-  // request time, so /settings/general edits take effect immediately
-  // without a resync.
-  {
-    const started = Date.now();
-    try {
-      console.error(
-        `[sync] pulling deliverability (last ${DELIVERABILITY_LOOKBACK_DAYS}d posts + spam for recent dates)…`
-      );
-      const { posts, spam_dates } = await fetchDeliverabilityPosts(
-        DELIVERABILITY_LOOKBACK_DAYS
-      );
-      const written = await writeDeliverabilitySnapshot(
-        {
-          generated_at: new Date().toISOString(),
-          lookback_days: DELIVERABILITY_LOOKBACK_DAYS,
-          row_count: posts.length,
-          posts,
-          spam_dates,
-        },
-        { plaintext: usePlaintext }
-      );
-      const elapsed = ((Date.now() - started) / 1000).toFixed(1);
-      console.error(
-        `[sync] wrote ${written} (${posts.length} posts, spam dates: ${
-          spam_dates.length ? spam_dates.join(", ") : "none"
-        }, ${elapsed}s)`
-      );
-    } catch (e) {
-      console.error(
-        "[sync] deliverability snapshot failed (continuing):",
-        e instanceof Error ? e.message : e
-      );
-    }
+  // Same self-contained block the `--only=deliverability` path runs.
+  await syncDeliverability(usePlaintext);
+}
+
+/** Pre-compute the joined Q1-Q4 ClickHouse result for the last 15
+ *  days so /csm?tab=deliverability reads from disk instead of waiting
+ *  30–60s on 4 separate ClickHouse queries. Self-contained (no
+ *  Metabase / HubSpot deps) so it can run standalone via the
+ *  `--only=deliverability` flag the dashboard-driven refresh uses. */
+async function syncDeliverability(usePlaintext: boolean) {
+  const started = Date.now();
+  try {
+    console.error(
+      `[sync] pulling deliverability (last ${DELIVERABILITY_LOOKBACK_DAYS}d posts + spam for recent dates)…`
+    );
+    const { posts, spam_dates } = await fetchDeliverabilityPosts(
+      DELIVERABILITY_LOOKBACK_DAYS
+    );
+    const written = await writeDeliverabilitySnapshot(
+      {
+        generated_at: new Date().toISOString(),
+        lookback_days: DELIVERABILITY_LOOKBACK_DAYS,
+        row_count: posts.length,
+        posts,
+        spam_dates,
+      },
+      { plaintext: usePlaintext }
+    );
+    const elapsed = ((Date.now() - started) / 1000).toFixed(1);
+    console.error(
+      `[sync] wrote ${written} (${posts.length} posts, spam dates: ${
+        spam_dates.length ? spam_dates.join(", ") : "none"
+      }, ${elapsed}s)`
+    );
+  } catch (e) {
+    console.error(
+      "[sync] deliverability snapshot failed (continuing):",
+      e instanceof Error ? e.message : e
+    );
   }
 }
 
