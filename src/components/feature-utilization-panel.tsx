@@ -76,6 +76,20 @@ export function FeatureUtilizationPanel({ workspaceId }: Props) {
     >
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
         <Feature
+          name="Send API"
+          used={data.send_api_posts_total > 0}
+          activeBadge={
+            data.send_api_pct_30d > 0
+              ? `${data.send_api_pct_30d.toFixed(1)}% of last 30d`
+              : null
+          }
+          rows={[
+            ["Total API posts", fmtNumber(data.send_api_posts_total)],
+            ["Last 30 days", fmtNumber(data.send_api_posts_30d)],
+            ["Last API send", fmtDate(data.send_api_last_send)],
+          ]}
+        />
+        <Feature
           name="MCP"
           used={data.mcp_calls > 0}
           rows={[
