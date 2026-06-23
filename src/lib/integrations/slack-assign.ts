@@ -39,7 +39,13 @@ import {
   patchHubspotCompanyProperties,
   type HubspotOwner,
 } from "./hubspot";
-import { createDriveFolder, hasDriveAccess, folderUrl } from "./google-drive";
+import {
+  createDriveFolder,
+  hasDriveAccess,
+  folderUrl,
+  copyDriveFolderContents,
+  type SeedResult,
+} from "./google-drive";
 import { hubspotCompanyUrl, hubspotDealUrl } from "../links";
 import type {
   ViewSubmissionPayload,
@@ -640,7 +646,19 @@ export const assignModalHandler: ViewSubmitHandler = async ({ payload }) => {
 
   // ── Drive folder (gated on HubSpot).
   let driveResult:
-    | { ok: true; id: string; webViewLink: string; name: string }
+    | {
+        ok: true;
+        id: string;
+        webViewLink: string;
+        name: string;
+        /** Outcome of the template-seeding pass when one ran. Null
+         *  when no template is configured OR the folder already
+         *  existed (idempotent re-run — see `created` on createDriveFolder).
+         *  Set with `skipped: [{ reason }]` when the user hasn't
+         *  granted drive.readonly yet so the Slack summary can tell
+         *  them to reconnect. */
+        seed: SeedResult | { skipped_reason: string } | null;
+      }
     | { ok: false; error: string } = { ok: false, error: "skipped" };
 
   if (!hubspotOk) {
@@ -668,11 +686,52 @@ export const assignModalHandler: ViewSubmitHandler = async ({ payload }) => {
           DRIVE_PARENT_FOLDER_ID,
           desiredFolderName
         );
+
+        // Template seeding — only when (1) a template ID is
+        // configured, (2) this is a brand-new folder (not an
+        // idempotent reuse), and (3) the requester has granted
+        // drive.readonly. The first two are hard checks; the
+        // third gets surfaced as a "reconnect Google" hint in the
+        // Slack summary so the rest of the assignment still ships
+        // when scope is missing.
+        const driveSettings = await loadSettings();
+        const templateId = (
+          driveSettings.am?.onboarding_drive_template_folder_id ?? ""
+        ).trim();
+        let seed: SeedResult | { skipped_reason: string } | null = null;
+        if (templateId && folder.created) {
+          if (
+            !(await hasDriveAccess(requesterEmail, {
+              requireReadonly: true,
+            }))
+          ) {
+            seed = {
+              skipped_reason:
+                "drive.readonly not granted — reconnect at /settings/gmail to enable template seeding",
+            };
+          } else {
+            try {
+              seed = await copyDriveFolderContents(
+                requesterEmail,
+                templateId,
+                folder.id
+              );
+            } catch (e) {
+              seed = {
+                skipped_reason: `seeding failed: ${
+                  e instanceof Error ? e.message : String(e)
+                }`,
+              };
+            }
+          }
+        }
+
         driveResult = {
           ok: true,
           id: folder.id,
           webViewLink: folder.webViewLink ?? folderUrl(folder.id),
           name: folder.name,
+          seed,
         };
       }
     } catch (e) {
@@ -1008,7 +1067,17 @@ async function postAssignmentSummary(args: {
   hubspotErrors: string[];
   todoErrors: string[];
   driveResult:
-    | { ok: true; id: string; webViewLink: string; name: string }
+    | {
+        ok: true;
+        id: string;
+        webViewLink: string;
+        name: string;
+        /** Template-seed outcome (see DriveResult shape in the
+         *  submission handler). Null means no seeding ran — either
+         *  no template configured, or the folder was reused from a
+         *  prior assignment. */
+        seed: SeedResult | { skipped_reason: string } | null;
+      }
     | { ok: false; error: string };
   /** Non-null when the user pasted a deal URL/ID; surfaces a note so
    *  they can verify the right associated company was picked. */
@@ -1067,6 +1136,45 @@ async function postAssignmentSummary(args: {
     lines.push(
       `• 📂 Drive folder: <${args.driveResult.webViewLink}|${args.driveResult.name}>`
     );
+    // Template seed status — only one of three shapes is possible:
+    // null (no template configured or idempotent reuse, nothing to say);
+    // { copied, skipped } (real pass ran); { skipped_reason } (scope
+    // missing or list call threw). Keeps the thread reply quiet when
+    // the feature isn't in use.
+    const seed = args.driveResult.seed;
+    if (seed) {
+      if ("skipped_reason" in seed) {
+        lines.push(`   ⚠ Template seeding: ${seed.skipped_reason}`);
+      } else if (seed.copied === 0 && seed.skipped.length === 0) {
+        lines.push("   • Template folder was empty — nothing to seed.");
+      } else {
+        const partsParts: string[] = [
+          `${seed.copied} file${seed.copied === 1 ? "" : "s"} copied from template`,
+        ];
+        const failed = seed.skipped.filter(
+          (s) => s.reason !== "subfolder (not recursed)"
+        );
+        if (failed.length > 0) {
+          partsParts.push(
+            `${failed.length} failed (${failed
+              .map((s) => s.name)
+              .slice(0, 3)
+              .join(", ")}${failed.length > 3 ? "…" : ""})`
+          );
+        }
+        const subfolders = seed.skipped.filter(
+          (s) => s.reason === "subfolder (not recursed)"
+        );
+        if (subfolders.length > 0) {
+          partsParts.push(
+            `${subfolders.length} subfolder${
+              subfolders.length === 1 ? "" : "s"
+            } skipped (not recursed)`
+          );
+        }
+        lines.push(`   • Seeded: ${partsParts.join(" · ")}`);
+      }
+    }
   } else {
     lines.push(`• ⚠ Drive: ${args.driveResult.error}`);
   }

@@ -24,6 +24,14 @@ const CORE_SCOPES = [
   // the Slack flow falls back to skipping the folder step with a
   // clear "reconnect Google" link in the modal's response.
   "https://www.googleapis.com/auth/drive.file",
+  // drive.readonly lets the @bot assign flow READ the configured
+  // onboarding template folder so its contents can be cloned into
+  // every newly-created assignment folder. drive.file alone only
+  // grants access to files the app itself created, so it can't see
+  // a template folder admins set up out of band. Without this scope
+  // granted, folder creation still works — only the template seed
+  // step short-circuits.
+  "https://www.googleapis.com/auth/drive.readonly",
 ];
 
 /** Optional scope added later for alias auto-discovery. Has to be

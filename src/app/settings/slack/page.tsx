@@ -641,6 +641,19 @@ export default function SlackSettingsPage() {
         }
       />
 
+      <OnboardingDriveTemplateSection
+        folderId={settings.am?.onboarding_drive_template_folder_id ?? ""}
+        onChange={(next) =>
+          setSettings((prev) => ({
+            ...prev,
+            am: {
+              ...(prev.am ?? {}),
+              onboarding_drive_template_folder_id: next,
+            },
+          }))
+        }
+      />
+
       <section className="bg-surface rounded-xl border border-border shadow-card p-4 space-y-3">
         <h2 className="text-sm font-semibold text-fg">CSM Slack IDs</h2>
         <p className="text-xs text-muted">
@@ -1174,6 +1187,49 @@ function LifecycleStagesSection({
       restoreTitle="Reset to the built-in list — Mid-Year, CSM Aligned, First Outreach Sent, Follow Up Sent, Call Scheduled, Pricing Negotiation, Renewal Confirmed, Renewal Lost."
       onChange={onChange}
     />
+  );
+}
+
+/** Drive folder ID for the @bot assign template-seeding pass. Stored
+ *  as a free-text field — Drive doesn't have a typed picker we can
+ *  embed and the IDs are stable. Leaving the field empty disables the
+ *  seed step entirely; new folders ship empty (current behavior). */
+function OnboardingDriveTemplateSection({
+  folderId,
+  onChange,
+}: {
+  folderId: string;
+  onChange: (next: string) => void;
+}) {
+  return (
+    <section className="bg-surface rounded-xl border border-border shadow-card p-4 space-y-3">
+      <div>
+        <h2 className="text-sm font-semibold text-fg">
+          Onboarding template folder
+        </h2>
+        <p className="text-xs text-muted mt-1">
+          Drive folder ID whose top-level files get cloned into every
+          newly-created onboarding folder from the Slack{" "}
+          <code className="font-mono bg-surface-2 px-1 rounded">
+            @bot assign
+          </code>{" "}
+          flow. Subfolders aren&rsquo;t recursed. Leave blank to keep
+          new folders empty. Requires CSMs to have reconnected Google
+          with the new{" "}
+          <code className="font-mono bg-surface-2 px-1 rounded">
+            drive.readonly
+          </code>{" "}
+          scope.
+        </p>
+      </div>
+      <input
+        type="text"
+        value={folderId}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder="1AbCDefGhIjKlMnOpQrStUvWxYz0123456"
+        className="w-full px-3 py-2 text-sm font-mono bg-canvas border border-border rounded-md focus:outline-none focus:ring-2 focus:ring-accent"
+      />
+    </section>
   );
 }
 
