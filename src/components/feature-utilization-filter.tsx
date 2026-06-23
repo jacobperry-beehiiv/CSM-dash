@@ -18,17 +18,6 @@ interface Props {
 type Combine = "any" | "all";
 type Mode = "using" | "not_using";
 
-/** Groupings for the 11 panel features — keeps the layout readable. */
-const FEATURE_GROUPS: Array<{
-  group: string;
-  keys: ReadonlyArray<FeatureBatchKey>;
-}> = [
-  { group: "Monetization", keys: ["ad_network", "direct_sponsorships", "boost_monetize"] },
-  { group: "Growth", keys: ["boost_grow", "referrals"] },
-  { group: "Engagement", keys: ["podcasts", "automations", "segments", "polls"] },
-  { group: "Onboarding", keys: ["t4", "mcp"] },
-];
-
 /**
  * Book-level feature filter. Mirrors the 11 features shown in the per-
  * customer Enterprise Feature Utilization panel. The first time the user
@@ -80,20 +69,8 @@ export function FeatureUtilizationFilter({ customers, onFilterChange }: Props) {
     });
   }
 
-  function selectGroup(keys: ReadonlyArray<FeatureBatchKey>) {
-    setPicked((prev) => {
-      const next = new Set(prev);
-      for (const k of keys) next.add(k);
-      return next;
-    });
-  }
-
-  function clearGroup(keys: ReadonlyArray<FeatureBatchKey>) {
-    setPicked((prev) => {
-      const next = new Set(prev);
-      for (const k of keys) next.delete(k);
-      return next;
-    });
+  function selectAll() {
+    setPicked(new Set(FEATURE_BATCH_KEYS));
   }
 
   function clear() {
@@ -258,57 +235,47 @@ export function FeatureUtilizationFilter({ customers, onFilterChange }: Props) {
             </div>
           ) : null}
 
-          {FEATURE_GROUPS.map(({ group, keys }) => {
-            const allInGroup = keys.every((k) => picked.has(k));
-            return (
-              <fieldset
-                key={group}
-                className="border border-border rounded-md p-2"
-              >
-                <legend className="text-xs text-muted px-1 flex items-center gap-2">
-                  <span>{group}</span>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      allInGroup ? clearGroup(keys) : selectGroup(keys)
-                    }
-                    className="text-[11px] text-accent hover:underline"
-                  >
-                    {allInGroup ? "Clear all" : "Select all"}
-                  </button>
-                </legend>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-1">
-                  {keys.map((k) => {
-                    const checked = picked.has(k);
-                    const count = perFeatureCount?.[k] ?? null;
-                    return (
-                      <label
-                        key={k}
-                        className={`flex items-center gap-2 px-2 py-1.5 rounded cursor-pointer text-sm hover:bg-surface-2 ${
-                          checked ? "bg-accent-soft" : ""
-                        }`}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={checked}
-                          onChange={() => toggle(k)}
-                          className="h-4 w-4 rounded border-border-strong cursor-pointer flex-shrink-0 accent-[var(--accent)]"
-                        />
-                        <span className="text-fg break-words flex-1">
-                          {FEATURE_BATCH_LABELS[k]}
-                        </span>
-                        {count != null ? (
-                          <span className="text-[11px] text-subtle tabular-nums">
-                            {count}
-                          </span>
-                        ) : null}
-                      </label>
-                    );
-                  })}
-                </div>
-              </fieldset>
-            );
-          })}
+          <div className="flex items-center justify-between">
+            <span className="text-xs text-muted">Features</span>
+            <button
+              type="button"
+              onClick={picked.size === FEATURE_BATCH_KEYS.length ? clear : selectAll}
+              className="text-[11px] text-accent hover:underline"
+            >
+              {picked.size === FEATURE_BATCH_KEYS.length
+                ? "Clear all"
+                : "Select all"}
+            </button>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-1">
+            {FEATURE_BATCH_KEYS.map((k) => {
+              const checked = picked.has(k);
+              const count = perFeatureCount?.[k] ?? null;
+              return (
+                <label
+                  key={k}
+                  className={`flex items-center gap-2 px-2 py-1.5 rounded cursor-pointer text-sm hover:bg-surface-2 ${
+                    checked ? "bg-accent-soft" : ""
+                  }`}
+                >
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={() => toggle(k)}
+                    className="h-4 w-4 rounded border-border-strong cursor-pointer flex-shrink-0 accent-[var(--accent)]"
+                  />
+                  <span className="text-fg break-words flex-1">
+                    {FEATURE_BATCH_LABELS[k]}
+                  </span>
+                  {count != null ? (
+                    <span className="text-[11px] text-subtle tabular-nums">
+                      {count}
+                    </span>
+                  ) : null}
+                </label>
+              );
+            })}
+          </div>
 
           {picked.size > 0 ? (
             <div className="flex">
