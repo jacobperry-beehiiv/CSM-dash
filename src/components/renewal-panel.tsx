@@ -44,7 +44,7 @@ import {
  *
  * Annual / other cadences use the date as-is.
  */
-function nextRenewalDate(c: Customer): string | null {
+export function nextRenewalDate(c: Customer): string | null {
   const baseStr = c.next_invoice ?? c.renewal_date;
   if (!baseStr) return null;
   const base = new Date(baseStr);
