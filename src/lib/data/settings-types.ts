@@ -283,6 +283,19 @@ export interface AmSettings {
    * dropping messages.
    */
   daily_digest_channel_id?: string;
+  /**
+   * Drive folder ID whose top-level files get cloned into every new
+   * onboarding folder created via the Slack @bot assign flow. Unset
+   * (or empty string) → no pre-seeding; the assignment still creates
+   * the new folder, just empty (current behavior). Subfolders inside
+   * the template are NOT recursed in v1 — see plan for follow-up.
+   *
+   * Requires the requesting CSM to have re-consented with the
+   * drive.readonly scope (see /api/auth/google/start). Folders
+   * without read access on the template silently skip the seed step
+   * and surface the reason in the assign-flow Slack thread.
+   */
+  onboarding_drive_template_folder_id?: string;
 }
 
 /** Built-in status list. The first two names ("Pinged" and
@@ -406,6 +419,7 @@ export const DEFAULTS: SettingsShape = {
     proactive_outreach_statuses: [...DEFAULT_PROACTIVE_OUTREACH_STATUSES],
     lifecycle_stages: [...DEFAULT_LIFECYCLE_STAGES],
     daily_digest_channel_id: "",
+    onboarding_drive_template_folder_id: "",
   },
   personal_todos: {
     trigger_emoji: DEFAULT_TODO_TRIGGER_EMOJI,

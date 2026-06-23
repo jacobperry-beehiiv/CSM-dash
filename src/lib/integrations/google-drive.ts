@@ -14,24 +14,43 @@ import { getValidAccessTokenFor, loadTokenFor } from "../data/gmail-token";
  */
 
 const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.file";
+/** Required by the template-folder seeding path: drive.file alone
+ *  only grants access to files the app itself created, so it can't
+ *  read a template folder admins set up out of band. */
+const DRIVE_READONLY_SCOPE = "https://www.googleapis.com/auth/drive.readonly";
 
 /** True if the stored token includes the drive.file scope. Used to
  *  short-circuit Drive calls when the user hasn't reconsented yet —
- *  the call would fail with a generic 403 otherwise. */
+ *  the call would fail with a generic 403 otherwise. Pass
+ *  `{ requireReadonly: true }` to additionally require drive.readonly
+ *  (the template-seeding path needs that to list + copy from a folder
+ *  the app didn't create). */
 export async function hasDriveAccess(
-  email: string | null | undefined
+  email: string | null | undefined,
+  opts?: { requireReadonly?: boolean }
 ): Promise<boolean> {
   if (!email) return false;
   const token = await loadTokenFor(email);
   if (!token?.scope) return false;
   // Google stores scopes as a space-separated string.
-  return token.scope.split(/\s+/).includes(DRIVE_SCOPE);
+  const granted = new Set(token.scope.split(/\s+/));
+  if (!granted.has(DRIVE_SCOPE)) return false;
+  if (opts?.requireReadonly && !granted.has(DRIVE_READONLY_SCOPE)) {
+    return false;
+  }
+  return true;
 }
 
 export interface DriveFolderRef {
   id: string;
   name: string;
   webViewLink: string;
+  /** True when `createDriveFolder` just created this folder via the
+   *  Drive API; false when an existing folder with the same name
+   *  was returned from the idempotent short-circuit. Lets the
+   *  Slack-assign caller skip the template-seeding pass on re-runs
+   *  so we don't duplicate every template file on every re-assign. */
+  created: boolean;
 }
 
 /**
@@ -62,7 +81,7 @@ export async function createDriveFolder(
   // created, which is exactly what we want; collisions across users'
   // unrelated Drives won't show up here.
   const existing = await findFolderByName(token, parentId, name);
-  if (existing) return existing;
+  if (existing) return { ...existing, created: false };
 
   const res = await fetch(
     "https://www.googleapis.com/drive/v3/files?fields=id,name,webViewLink&supportsAllDrives=true",
@@ -96,6 +115,7 @@ export async function createDriveFolder(
     id: json.id,
     name: json.name,
     webViewLink: json.webViewLink ?? folderUrl(json.id),
+    created: true,
   };
 }
 
@@ -106,11 +126,117 @@ export function folderUrl(folderId: string): string {
   return `https://drive.google.com/drive/folders/${folderId}`;
 }
 
+/** Outcome of the template-seeding pass. `skipped` lists the
+ *  per-file failures so the assign-flow Slack thread can mention
+ *  how many didn't make it without dumping the raw API error. */
+export interface SeedResult {
+  copied: number;
+  skipped: Array<{ name: string; reason: string }>;
+}
+
+/**
+ * Clone every top-level file from `sourceFolderId` into
+ * `destFolderId`. Folders inside the template are NOT recursed in
+ * v1 — they get skipped with a `subfolder (not recursed)` reason.
+ * Each file copy is soft-failed: one un-copyable doc doesn't kill
+ * the whole pass.
+ *
+ * Requires the requester to have re-consented with drive.readonly
+ * — the source folder isn't one the app itself created, so the
+ * default drive.file scope can't read it. Caller should gate on
+ * `hasDriveAccess(email, { requireReadonly: true })` and surface a
+ * "reconnect Google" hint when it returns false.
+ */
+export async function copyDriveFolderContents(
+  requesterEmail: string,
+  sourceFolderId: string,
+  destFolderId: string
+): Promise<SeedResult> {
+  const token = await getValidAccessTokenFor(requesterEmail);
+
+  // Paginate so a template with >100 files doesn't silently
+  // truncate. Drive caps pageSize at 1000; we set 100 to keep
+  // each round-trip light. trashed = false drops anything the
+  // template owner moved to trash.
+  const safeSource = sourceFolderId.replace(/'/g, "\\'");
+  const q = `'${safeSource}' in parents and trashed = false`;
+  const files: Array<{ id: string; name: string; mimeType: string }> = [];
+  let pageToken: string | undefined;
+  do {
+    const url = new URL("https://www.googleapis.com/drive/v3/files");
+    url.searchParams.set("q", q);
+    url.searchParams.set("fields", "nextPageToken,files(id,name,mimeType)");
+    url.searchParams.set("pageSize", "100");
+    url.searchParams.set("supportsAllDrives", "true");
+    url.searchParams.set("includeItemsFromAllDrives", "true");
+    if (pageToken) url.searchParams.set("pageToken", pageToken);
+    const res = await fetch(url.toString(), {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) {
+      const body = await res.text();
+      throw new Error(
+        `Drive template list failed: ${res.status} ${body.slice(0, 400)}`
+      );
+    }
+    const json = (await res.json()) as {
+      files?: Array<{ id: string; name: string; mimeType: string }>;
+      nextPageToken?: string;
+    };
+    if (json.files) files.push(...json.files);
+    pageToken = json.nextPageToken;
+  } while (pageToken);
+
+  let copied = 0;
+  const skipped: SeedResult["skipped"] = [];
+
+  for (const f of files) {
+    if (f.mimeType === "application/vnd.google-apps.folder") {
+      skipped.push({ name: f.name, reason: "subfolder (not recursed)" });
+      continue;
+    }
+    try {
+      const res = await fetch(
+        `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(
+          f.id
+        )}/copy?fields=id,name&supportsAllDrives=true`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            name: f.name,
+            parents: [destFolderId],
+          }),
+        }
+      );
+      if (!res.ok) {
+        const body = await res.text();
+        skipped.push({
+          name: f.name,
+          reason: `${res.status} ${body.slice(0, 200)}`,
+        });
+        continue;
+      }
+      copied++;
+    } catch (e) {
+      skipped.push({
+        name: f.name,
+        reason: e instanceof Error ? e.message : String(e),
+      });
+    }
+  }
+
+  return { copied, skipped };
+}
+
 async function findFolderByName(
   accessToken: string,
   parentId: string,
   name: string
-): Promise<DriveFolderRef | null> {
+): Promise<Omit<DriveFolderRef, "created"> | null> {
   // q syntax: parent + name + mimeType + not-trashed.
   // single-quotes inside the name need to be escaped per Drive's
   // query grammar (backslash escape).
