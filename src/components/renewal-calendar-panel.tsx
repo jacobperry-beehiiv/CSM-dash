@@ -33,7 +33,7 @@ import {
   cadenceRowLabel,
   intervalBucket,
 } from "@/lib/customer-helpers";
-import { nextRenewalDate } from "./renewal-panel";
+import { nextRenewalDate, priorRenewalDate } from "./renewal-panel";
 
 /**
  * Renewal Calendar — calendar-anchored sibling of RenewalPanel.
@@ -239,17 +239,19 @@ export function RenewalCalendarPanel({ customers, csms }: Props) {
   }
 
   // Sparse list of YYYY-MM keys for every month that has at least one
-  // renewal in the book. Plus the current month, even if empty — so
-  // "This month" always lands on a real option in the dropdown.
+  // renewal (upcoming OR inferred-past) in the book. Plus the current
+  // month, even if empty — so "This month" always lands on a real
+  // option in the dropdown.
   const monthOptions = useMemo(() => {
     const set = new Set<string>();
     set.add(thisMonthKey());
     for (const c of customers) {
-      const iso = nextRenewalDate(c);
-      if (!iso) continue;
-      const d = new Date(iso);
-      if (isNaN(d.getTime())) continue;
-      set.add(monthKey(d));
+      for (const iso of [nextRenewalDate(c), priorRenewalDate(c)]) {
+        if (!iso) continue;
+        const d = new Date(iso);
+        if (isNaN(d.getTime())) continue;
+        set.add(monthKey(d));
+      }
     }
     const sorted = [...set].sort();
     return sorted.map((ym) => ({ value: ym, label: monthLabel(ym) }));
@@ -360,13 +362,31 @@ export function RenewalCalendarPanel({ customers, csms }: Props) {
         list = list.filter((c) => lifecycleStage(c) === lifecycleFilter);
       }
     }
-    const enriched = list
-      .map((c) => {
-        const iso = nextRenewalDate(c);
-        const d = iso ? new Date(iso) : null;
-        return { c, date: iso, day: d };
-      })
-      .filter(({ day }) => inMonth(day, month));
+    // For each customer, surface whichever of (prior renewal, next
+    // renewal) falls in the picked month — never both, since the same
+    // customer's prior and next dates are always at least a full
+    // cadence cycle apart and thus can't coexist in one calendar
+    // month. `renewed` distinguishes a confirmed-past renewal (derived
+    // from priorRenewalDate) from an upcoming one.
+    const enriched: Array<{
+      c: Customer;
+      date: string | null;
+      day: Date | null;
+      renewed: boolean;
+    }> = [];
+    for (const c of list) {
+      const priorIso = priorRenewalDate(c);
+      const priorDay = priorIso ? new Date(priorIso) : null;
+      if (inMonth(priorDay, month)) {
+        enriched.push({ c, date: priorIso, day: priorDay, renewed: true });
+        continue;
+      }
+      const nextIso = nextRenewalDate(c);
+      const nextDay = nextIso ? new Date(nextIso) : null;
+      if (inMonth(nextDay, month)) {
+        enriched.push({ c, date: nextIso, day: nextDay, renewed: false });
+      }
+    }
     enriched.sort((a, b) => {
       const av = a.day?.getTime() ?? 0;
       const bv = b.day?.getTime() ?? 0;
@@ -408,12 +428,18 @@ export function RenewalCalendarPanel({ customers, csms }: Props) {
     [selectedCustomers]
   );
 
-  // Roll-up: total ARR of visible renewals. Useful for the "what's
-  // June worth in book?" question and cheap to compute.
+  // Roll-up: total ARR + split between already-renewed and upcoming
+  // so the headline gives a CSM the full picture of the month at a
+  // glance ("23 renewals · $X ARR · 14 renewed, 9 upcoming").
   const totalArr = useMemo(
     () => visibleRows.reduce((sum, r) => sum + (r.c.arr ?? 0), 0),
     [visibleRows]
   );
+  const renewedCount = useMemo(
+    () => visibleRows.filter((r) => r.renewed).length,
+    [visibleRows]
+  );
+  const upcomingCount = visibleRows.length - renewedCount;
 
   const isCurrentMonth = month === thisMonthKey();
   const isPastMonth = month < thisMonthKey();
@@ -475,22 +501,23 @@ export function RenewalCalendarPanel({ customers, csms }: Props) {
     <div className="space-y-4">
       {filterStrip}
 
-      {/* Honest data caveat — only shown when viewing a past month,
-       *  where the "rolled forward" effect actually bites. Future
-       *  months are unaffected. */}
+      {/* Softened data caveat — surfaced only when viewing a past
+       *  month. The prior-renewal inference catches the rolled-forward
+       *  case, but churned / non-renewed customers (where the date
+       *  was cleared on cancellation) are still invisible. */}
       {isPastMonth ? (
         <div className="text-xs text-muted bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/30 rounded-md px-3 py-2">
           <strong className="text-amber-900 dark:text-amber-200">
             Heads up:
           </strong>{" "}
-          Stripe rolls a customer&rsquo;s{" "}
+          Past renewals are inferred by subtracting the customer&rsquo;s
+          cadence from their current{" "}
           <code className="font-mono bg-surface px-1 rounded">
             renewal_date
-          </code>{" "}
-          forward (typically by 12 months) after they renew. Customers
-          who already renewed in {monthLabel(month)} may not appear here
-          if their date has already incremented to next year — a
-          historical renewal log is the right long-term fix.
+          </code>
+          . Customers who churned or whose Stripe cadence changed mid-
+          cycle may be missing from this list — a KV-backed historical
+          renewal log is the right long-term fix.
         </div>
       ) : null}
 
@@ -504,6 +531,24 @@ export function RenewalCalendarPanel({ customers, csms }: Props) {
             <strong className="text-fg">{fmtCurrency(totalArr)}</strong>{" "}
             ARR
           </>
+        ) : null}
+        {renewedCount > 0 && upcomingCount > 0 ? (
+          <>
+            {" · "}
+            <span className="text-emerald-700 dark:text-emerald-300">
+              {renewedCount} renewed
+            </span>
+            , {upcomingCount} upcoming
+          </>
+        ) : renewedCount > 0 ? (
+          <>
+            {" · "}
+            <span className="text-emerald-700 dark:text-emerald-300">
+              all {renewedCount} already renewed
+            </span>
+          </>
+        ) : visibleRows.length > 0 ? (
+          <>{" · all upcoming"}</>
         ) : null}
       </div>
 
@@ -592,7 +637,7 @@ export function RenewalCalendarPanel({ customers, csms }: Props) {
               </tr>
             </thead>
             <tbody>
-              {visibleRows.map(({ c, date, key }) => {
+              {visibleRows.map(({ c, date, key, renewed }) => {
                 const isOpen = expanded.has(key);
                 const cadenceLabel = cadenceRowLabel(c);
                 const arrBillingSuffix = billingPeriodSuffix(c);
@@ -652,7 +697,17 @@ export function RenewalCalendarPanel({ customers, csms }: Props) {
                         />
                       </td>
                       <td className="px-3 py-2 text-muted">
-                        <div>{fmtDate(date ?? null)}</div>
+                        <div className="flex items-center gap-1.5">
+                          <span>{fmtDate(date ?? null)}</span>
+                          {renewed ? (
+                            <span
+                              className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-emerald-100 text-emerald-800 dark:bg-emerald-500/20 dark:text-emerald-200 border border-emerald-200 dark:border-emerald-500/40"
+                              title="Inferred prior renewal — derived by subtracting the customer's cadence from their current renewal_date."
+                            >
+                              ✓ Renewed
+                            </span>
+                          ) : null}
+                        </div>
                         {cadenceLabel ? (
                           <div className="text-xs text-muted">
                             {cadenceLabel}
