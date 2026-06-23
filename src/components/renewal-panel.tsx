@@ -69,38 +69,48 @@ export function nextRenewalDate(c: Customer): string | null {
 }
 
 /**
- * Infer the customer's MOST-RECENT renewal date by subtracting their
- * cadence from the current `renewal_date` — so a customer with an
- * annual cadence whose `renewal_date` has rolled forward to
- * 2027-06-05 implies a prior renewal on 2026-06-05.
+ * Infer the customer's MOST-RECENT past renewal date by walking
+ * backwards from their forward-looking renewal date one cadence-step
+ * at a time. So an annual customer whose `next_invoice` has rolled
+ * forward to 2027-06-05 implies a prior renewal on 2026-06-05.
  *
- * Used by the Renewal Calendar tab to surface "already renewed
- * earlier this month" rows alongside upcoming ones. Without this,
- * picking June 2026 once Stripe has rolled the date forward would
- * silently miss every account that renewed earlier in the month.
+ * Uses the same base source as `nextRenewalDate` (`next_invoice ??
+ * renewal_date`) on purpose. `next_invoice` is Stripe-managed and
+ * rolls forward reliably the moment a renewal completes; HubSpot's
+ * `renewal_date` is often a manually-set contract anchor that can
+ * stay stale for months after the actual renewal lands. Using both
+ * (next_invoice first) is what lets the Calendar tab surface
+ * already-renewed accounts for the picked month even when HubSpot's
+ * column hasn't caught up.
  *
  * Returns null when:
- *   • there's no `renewal_date` on the customer (churned / never set);
- *   • the cadence is monthly (these accounts are excluded from the
- *     Renewals tabs entirely);
- *   • the implied prior date would be in the future (the renewal date
- *     hasn't rolled forward yet — `nextRenewalDate` already covers
- *     that case, no need to double-count);
- *   • the implied prior date is absurdly old (>5 years), which usually
- *     means the renewal_date is stale or the cadence inference is off.
+ *   • neither `next_invoice` nor `renewal_date` is set (churned);
+ *   • cadence is monthly (excluded from Renewals tabs entirely);
+ *   • the base date is already in the past — that means there's no
+ *     forward-looking renewal to walk back FROM, so `nextRenewalDate`
+ *     is the right surface for this customer instead;
+ *   • the inferred prior is absurdly old (>5y), usually wrong cadence.
  *
- * Best-effort, not authoritative — a real historical log would be more
- * reliable for churn / sub-cycle changes. Tracked as a follow-up.
+ * Best-effort, not authoritative — a KV-backed renewal-event log
+ * would be more reliable for churn / mid-cycle cadence changes.
+ * Tracked as a follow-up.
  */
 export function priorRenewalDate(c: Customer): string | null {
-  const baseStr = c.renewal_date;
+  // Same base as nextRenewalDate so the two helpers agree on which
+  // forward-looking date we trust. next_invoice (Stripe) is preferred
+  // because it actually rolls forward when a renewal completes.
+  const baseStr = c.next_invoice ?? c.renewal_date;
   if (!baseStr) return null;
   const base = new Date(baseStr);
   if (isNaN(base.getTime())) return null;
 
-  // How many months to subtract. Honors interval_count when set
-  // (quarterly = 3, semi-annual = 6, biennial = 24, …); falls back
-  // to the raw Stripe interval string when not.
+  const now = Date.now();
+  // If the base is already in the past, there's no "next renewal"
+  // to step backwards from — nextRenewalDate already surfaces this
+  // customer in the right month. Bail to avoid double-rendering.
+  if (base.getTime() <= now) return null;
+
+  // How many months per cadence cycle.
   let monthsBack: number | null = null;
   if (typeof c.interval_count === "number" && c.interval_count > 0) {
     if (c.interval_count === 1) return null; // monthly
@@ -113,25 +123,27 @@ export function priorRenewalDate(c: Customer): string | null {
   }
   if (!monthsBack) return null;
 
-  const prior = new Date(
-    Date.UTC(
-      base.getUTCFullYear(),
-      base.getUTCMonth() - monthsBack,
-      base.getUTCDate()
-    )
-  );
-  const now = Date.now();
-  if (prior.getTime() > now) {
-    // The implied prior renewal is in the future — meaning the
-    // current renewal_date hasn't rolled forward yet, so
-    // `nextRenewalDate` already covers them. Don't double-count.
-    return null;
+  // Walk backwards one cadence at a time until we land in the past.
+  // Usually a single step is enough — but if `next_invoice` is
+  // somehow many cycles out (annual customer who just paid
+  // multi-year, for example), keep stepping until we land in the
+  // most-recent prior renewal.
+  let cur = base;
+  let safety = 12; // hard cap so a misread cadence can't infinite-loop
+  while (cur.getTime() > now && safety-- > 0) {
+    cur = new Date(
+      Date.UTC(
+        cur.getUTCFullYear(),
+        cur.getUTCMonth() - monthsBack,
+        cur.getUTCDate()
+      )
+    );
   }
-  // Sanity floor: discard dates more than 5 years back. Stale or
-  // misread cadence usually trips this.
+  if (cur.getTime() > now) return null; // safety-cap bailed early
+
   const fiveYearsMs = 5 * 365 * 24 * 60 * 60 * 1000;
-  if (now - prior.getTime() > fiveYearsMs) return null;
-  return prior.toISOString();
+  if (now - cur.getTime() > fiveYearsMs) return null;
+  return cur.toISOString();
 }
 
 interface Props {
