@@ -19,6 +19,7 @@ import { TabBar } from "@/components/tab-bar";
 import { ProactiveOutreachPanel } from "@/components/am/proactive-outreach-panel";
 import { PastDuePanel } from "@/components/am/past-due-panel";
 import { RenewalPanel } from "@/components/renewal-panel";
+import { RenewalCalendarPanel } from "@/components/renewal-calendar-panel";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 120;
@@ -27,6 +28,7 @@ const TABS = [
   { id: "proactive", label: "Proactive Outreach" },
   { id: "past-due", label: "Past Due" },
   { id: "renewals", label: "Renewals" },
+  { id: "renewal-calendar", label: "Renewal Calendar" },
 ];
 
 // Per the AM Hackathon brief follow-up: surface Enterprise accounts at
@@ -201,6 +203,13 @@ export default async function AmPage({
       // for the team-wide view.
       const book = filterCustomers(all, { csm });
       body = <RenewalPanel customers={book} csms={csms} />;
+    } else if (tab === "renewal-calendar") {
+      // Calendar-anchored sibling of Renewals — same data, different
+      // filter axis. Picks a calendar month instead of a forward-
+      // relative time window, so a CSM can scope to "all of June" or
+      // "what's coming up in August" cleanly.
+      const book = filterCustomers(all, { csm });
+      body = <RenewalCalendarPanel customers={book} csms={csms} />;
     } else {
       body = <div className="text-sm text-muted">Unknown tab: {tab}</div>;
     }
