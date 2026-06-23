@@ -68,6 +68,72 @@ export function nextRenewalDate(c: Customer): string | null {
   return new Date(candidate).toISOString();
 }
 
+/**
+ * Infer the customer's MOST-RECENT renewal date by subtracting their
+ * cadence from the current `renewal_date` — so a customer with an
+ * annual cadence whose `renewal_date` has rolled forward to
+ * 2027-06-05 implies a prior renewal on 2026-06-05.
+ *
+ * Used by the Renewal Calendar tab to surface "already renewed
+ * earlier this month" rows alongside upcoming ones. Without this,
+ * picking June 2026 once Stripe has rolled the date forward would
+ * silently miss every account that renewed earlier in the month.
+ *
+ * Returns null when:
+ *   • there's no `renewal_date` on the customer (churned / never set);
+ *   • the cadence is monthly (these accounts are excluded from the
+ *     Renewals tabs entirely);
+ *   • the implied prior date would be in the future (the renewal date
+ *     hasn't rolled forward yet — `nextRenewalDate` already covers
+ *     that case, no need to double-count);
+ *   • the implied prior date is absurdly old (>5 years), which usually
+ *     means the renewal_date is stale or the cadence inference is off.
+ *
+ * Best-effort, not authoritative — a real historical log would be more
+ * reliable for churn / sub-cycle changes. Tracked as a follow-up.
+ */
+export function priorRenewalDate(c: Customer): string | null {
+  const baseStr = c.renewal_date;
+  if (!baseStr) return null;
+  const base = new Date(baseStr);
+  if (isNaN(base.getTime())) return null;
+
+  // How many months to subtract. Honors interval_count when set
+  // (quarterly = 3, semi-annual = 6, biennial = 24, …); falls back
+  // to the raw Stripe interval string when not.
+  let monthsBack: number | null = null;
+  if (typeof c.interval_count === "number" && c.interval_count > 0) {
+    if (c.interval_count === 1) return null; // monthly
+    monthsBack = c.interval_count;
+  } else {
+    const t = (c.interval ?? "").trim().toLowerCase();
+    if (t === "year" || t === "annual" || t === "yearly") monthsBack = 12;
+    else if (t === "quarter" || t === "quarterly") monthsBack = 3;
+    else if (t === "month" || t === "monthly") return null;
+  }
+  if (!monthsBack) return null;
+
+  const prior = new Date(
+    Date.UTC(
+      base.getUTCFullYear(),
+      base.getUTCMonth() - monthsBack,
+      base.getUTCDate()
+    )
+  );
+  const now = Date.now();
+  if (prior.getTime() > now) {
+    // The implied prior renewal is in the future — meaning the
+    // current renewal_date hasn't rolled forward yet, so
+    // `nextRenewalDate` already covers them. Don't double-count.
+    return null;
+  }
+  // Sanity floor: discard dates more than 5 years back. Stale or
+  // misread cadence usually trips this.
+  const fiveYearsMs = 5 * 365 * 24 * 60 * 60 * 1000;
+  if (now - prior.getTime() > fiveYearsMs) return null;
+  return prior.toISOString();
+}
+
 interface Props {
   customers: Customer[];
   csms: string[];
