@@ -21,7 +21,7 @@ export function CsmTeamLogo({ dog }: { dog: CsmDog }) {
       src={dog.src}
       alt={dog.alt}
       title={dog.alt}
-      className="h-7 w-7 object-contain rounded"
+      className="h-10 w-auto object-contain rounded"
       onError={(e) => {
         (e.target as HTMLImageElement).style.visibility = "hidden";
       }}
