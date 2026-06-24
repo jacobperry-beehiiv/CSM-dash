@@ -1,4 +1,5 @@
 import configJson from "./config.json";
+import { DEFAULTS, type MigrationOverrides } from "./overrides";
 import type {
   Approach,
   Batch,
@@ -8,6 +9,28 @@ import type {
   PlanInput,
   Week,
 } from "./types";
+
+/** Resolve admin overrides → fully-populated knob values. Pure, sync.
+ *  Used by `determineApproach`, `_buildWeeks`, `generateSchedule`. */
+function resolveKnobs(overrides?: MigrationOverrides) {
+  return {
+    openRateThreshold:
+      overrides?.open_rate_conservative_threshold ??
+      DEFAULTS.open_rate_conservative_threshold,
+    approachMultipliers: {
+      standard:
+        overrides?.approach_multipliers?.standard ??
+        DEFAULTS.approach_multipliers.standard,
+      conservative:
+        overrides?.approach_multipliers?.conservative ??
+        DEFAULTS.approach_multipliers.conservative,
+      aggressive:
+        overrides?.approach_multipliers?.aggressive ??
+        DEFAULTS.approach_multipliers.aggressive,
+    } satisfies Record<Approach, number>,
+    maxWeeks: overrides?.max_weeks ?? DEFAULTS.max_weeks,
+  };
+}
 
 /**
  * Deterministic beehiiv migration warm-up scheduler.
@@ -151,16 +174,21 @@ export function roundClean(x: number): number {
   return Math.round(x);
 }
 
-export function determineApproach(li: ListInput, spw: number): Approach {
+export function determineApproach(
+  li: ListInput,
+  spw: number,
+  overrides?: MigrationOverrides
+): Approach {
+  const knobs = resolveKnobs(overrides);
   const openRate = normalizeOpenRate(li.open_rate);
   const conservative =
     openRate === null ||
-    openRate < 0.3 ||
+    openRate < knobs.openRateThreshold ||
     li.deliverability_concern === true;
   if (conservative) return "conservative";
   if (li.deadline_weeks !== null && li.deadline_weeks !== undefined) {
     const subs = normalizeSubscribers(li.subscribers);
-    const stdWeeks = _buildWeeks(tierFor(subs), "standard", spw, subs).length;
+    const stdWeeks = _buildWeeks(tierFor(subs), "standard", spw, subs, overrides).length;
     if (li.deadline_weeks < stdWeeks) return "aggressive";
   }
   return "standard";
@@ -272,10 +300,12 @@ function _buildWeeks(
   tier: TierConfig,
   approach: Approach,
   spw: number,
-  listSize: number
+  listSize: number,
+  overrides?: MigrationOverrides
 ): Week[] {
-  const multiplier = CONFIG.approach_multipliers[approach];
-  const maxWeeks = CONFIG.limits.max_weeks;
+  const knobs = resolveKnobs(overrides);
+  const multiplier = knobs.approachMultipliers[approach];
+  const maxWeeks = knobs.maxWeeks;
   const biWeekly = spw === 0.5;
 
   const weeks: Week[] = [];
@@ -349,13 +379,17 @@ function _buildWeeks(
 // Top-level generators
 // --------------------------------------------------------------------- //
 
-export function generateSchedule(li: ListInput): ListSchedule {
+export function generateSchedule(
+  li: ListInput,
+  overrides?: MigrationOverrides
+): ListSchedule {
+  const knobs = resolveKnobs(overrides);
   const subs = normalizeSubscribers(li.subscribers);
   const { spw, flag: cadenceFlag } = normalizeCadence(li.cadence);
   const openRate = normalizeOpenRate(li.open_rate);
   const tier = tierFor(subs);
-  const approach = determineApproach(li, spw);
-  const weeks = _buildWeeks(tier, approach, spw, subs);
+  const approach = determineApproach(li, spw, overrides);
+  const weeks = _buildWeeks(tier, approach, spw, subs, overrides);
 
   const flags: string[] = [];
   if (cadenceFlag) flags.push(cadenceFlag);
@@ -363,8 +397,10 @@ export function generateSchedule(li: ListInput): ListSchedule {
     flags.push(
       "Open rate unknown — used conservative approach; confirm OR before sharing with customer."
     );
-  } else if (openRate < 0.3) {
-    flags.push(`Open rate ${Math.round(openRate * 100)}% < 30% — conservative approach.`);
+  } else if (openRate < knobs.openRateThreshold) {
+    flags.push(
+      `Open rate ${Math.round(openRate * 100)}% < ${Math.round(knobs.openRateThreshold * 100)}% — conservative approach.`
+    );
   }
   if (li.deliverability_concern) {
     flags.push("Deliverability concern flagged — conservative approach.");
@@ -409,8 +445,11 @@ export function generateSchedule(li: ListInput): ListSchedule {
   };
 }
 
-export function buildPlan(plan: PlanInput): MigrationPlan {
-  const schedules = plan.lists.map(generateSchedule);
+export function buildPlan(
+  plan: PlanInput,
+  overrides?: MigrationOverrides
+): MigrationPlan {
+  const schedules = plan.lists.map((li) => generateSchedule(li, overrides));
   return {
     customer_name: plan.customer_name.trim(),
     structure: plan.structure ?? "separate",

@@ -1,6 +1,12 @@
 import { auth } from "@/auth";
 import { isCsmWithGmail } from "@/lib/auth/csm-eligibility";
+import { isAdmin } from "@/lib/auth/admin";
 import { MigrationWarmupForm } from "@/components/migration-warmup-form";
+import { loadMigrationOverrides } from "@/lib/data/migration-overrides";
+import {
+  DEFAULTS,
+  type MigrationOverrides,
+} from "@/lib/engines/migration-warmup/overrides";
 
 export const dynamic = "force-dynamic";
 
@@ -41,6 +47,12 @@ export default async function MigrationWarmupPage() {
     );
   }
 
+  // Read overrides server-side so the form can show the active
+  // values without an extra fetch. Falls back to the bundled
+  // defaults for anything unset.
+  const overrides = await loadMigrationOverrides();
+  const viewerIsAdmin = isAdmin(email);
+
   return (
     <div className="space-y-5">
       <section className="bg-surface rounded-xl border border-border shadow-card p-5">
@@ -55,7 +67,97 @@ export default async function MigrationWarmupPage() {
           produce a byte-identical schedule.
         </p>
       </section>
+      <ActiveSettingsCard
+        overrides={overrides}
+        viewerIsAdmin={viewerIsAdmin}
+      />
       <MigrationWarmupForm />
     </div>
+  );
+}
+
+/** Compact "what numbers is the engine using right now?" card.
+ *  Surfaces the three knobs the admin can tune at
+ *  /admin/migration-warmup. Each value falls back to the bundled
+ *  default when no override is set; we mark overridden values so
+ *  it's visible at a glance which ones the team has changed. */
+function ActiveSettingsCard({
+  overrides,
+  viewerIsAdmin,
+}: {
+  overrides: MigrationOverrides;
+  viewerIsAdmin: boolean;
+}) {
+  const orT =
+    overrides.open_rate_conservative_threshold ??
+    DEFAULTS.open_rate_conservative_threshold;
+  const orOverridden =
+    overrides.open_rate_conservative_threshold !== undefined &&
+    overrides.open_rate_conservative_threshold !==
+      DEFAULTS.open_rate_conservative_threshold;
+  const m = overrides.approach_multipliers ?? {};
+  const mStd =
+    m.standard ?? DEFAULTS.approach_multipliers.standard;
+  const mCon =
+    m.conservative ?? DEFAULTS.approach_multipliers.conservative;
+  const mAgg =
+    m.aggressive ?? DEFAULTS.approach_multipliers.aggressive;
+  const mw = overrides.max_weeks ?? DEFAULTS.max_weeks;
+  return (
+    <section className="bg-surface rounded-xl border border-border shadow-card p-4 text-xs">
+      <div className="flex items-baseline justify-between gap-3 mb-2">
+        <h3 className="text-sm font-semibold text-fg">
+          Algorithm settings
+        </h3>
+        {viewerIsAdmin ? (
+          <a
+            href="/admin/migration-warmup"
+            className="text-[11px] text-accent hover:underline"
+          >
+            Edit ↗
+          </a>
+        ) : (
+          <span className="text-[11px] text-muted">
+            Tunable by super-admin
+          </span>
+        )}
+      </div>
+      <ul className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-1.5 text-muted">
+        <li>
+          Conservative if open rate &lt;{" "}
+          <span className="font-mono text-fg">
+            {Math.round(orT * 100)}%
+          </span>
+          {orOverridden ? <Overridden /> : null}
+        </li>
+        <li>
+          Max weeks (safety bound):{" "}
+          <span className="font-mono text-fg">{mw}</span>
+          {overrides.max_weeks !== undefined &&
+          overrides.max_weeks !== DEFAULTS.max_weeks ? (
+            <Overridden />
+          ) : null}
+        </li>
+        <li className="md:col-span-2">
+          Multipliers:{" "}
+          <span className="font-mono text-fg">standard {mStd}×</span> ·{" "}
+          <span className="font-mono text-fg">
+            conservative {mCon}×
+          </span>{" "}
+          ·{" "}
+          <span className="font-mono text-fg">
+            aggressive {mAgg}×
+          </span>
+        </li>
+      </ul>
+    </section>
+  );
+}
+
+function Overridden() {
+  return (
+    <span className="ml-1 text-[10px] font-medium text-amber-700 dark:text-amber-300">
+      (overridden)
+    </span>
   );
 }
