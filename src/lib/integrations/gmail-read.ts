@@ -319,10 +319,12 @@ export async function lastEmailWithCached(
  */
 export async function lastEmailWithBatch(
   csmEmail: string,
-  targetEmails: string[]
+  targetEmails: string[],
+  opts?: { forceFresh?: boolean }
 ): Promise<Record<string, GmailLastContactBatchEntry>> {
   const result: Record<string, GmailLastContactBatchEntry> = {};
   if (targetEmails.length === 0) return result;
+  const forceFresh = opts?.forceFresh === true;
 
   // Dedupe (the customer book occasionally has multiple rows with the
   // same owner_email after a merge) + lower-case so cache keys align.
@@ -334,24 +336,30 @@ export async function lastEmailWithBatch(
     )
   );
 
-  // Cache-first pass — fills `result` for hits, leaves misses for fanout.
+  // Cache-first pass — fills `result` for hits, leaves misses for
+  // fanout. With `forceFresh`, treat every target as a miss so the
+  // book-wide refresh button can fully re-warm the cache.
   const misses: string[] = [];
-  await Promise.all(
-    unique.map(async (target) => {
-      const cached = await readCache(csmEmail, target);
-      if (cached) {
-        result[target] = {
-          date: cached.date,
-          subject: cached.subject,
-          from: cached.from,
-          fetched_at: cached.fetched_at,
-          cached: true,
-        };
-      } else {
-        misses.push(target);
-      }
-    })
-  );
+  if (forceFresh) {
+    misses.push(...unique);
+  } else {
+    await Promise.all(
+      unique.map(async (target) => {
+        const cached = await readCache(csmEmail, target);
+        if (cached) {
+          result[target] = {
+            date: cached.date,
+            subject: cached.subject,
+            from: cached.from,
+            fetched_at: cached.fetched_at,
+            cached: true,
+          };
+        } else {
+          misses.push(target);
+        }
+      })
+    );
+  }
 
   if (misses.length === 0) return result;
 
