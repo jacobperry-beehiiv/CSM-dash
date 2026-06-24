@@ -2,6 +2,8 @@
 
 import { useEffect, useRef, useState } from "react";
 import { DogIcon } from "./dog-icon";
+import { CsmDogIcon } from "./csm-dog-icon";
+import { useIsCsmTeam } from "./csm-team-provider";
 
 /**
  * One-shot "you finished a to-do" animation overlay.
@@ -61,6 +63,9 @@ interface Props {
 export function TodoCelebration({ play, onDone }: Props) {
   const [active, setActive] = useState(false);
   const [word, setWord] = useState<string>("");
+  // CSM-team viewers see the Sherlock-themed dog; everyone else
+  // sees the default chunky silhouette.
+  const isCsmTeam = useIsCsmTeam();
   // Ref to the trigger value last seen so the effect only fires on
   // false → true transitions, not on every re-render where `play` is
   // still true.
@@ -117,7 +122,14 @@ export function TodoCelebration({ play, onDone }: Props) {
           }}
         />
         <div className="absolute top-1/2 right-0 -translate-y-1/2 translate-x-1/2 text-fg dark:text-fg drop-shadow-sm">
-          <DogIcon className="w-9 h-7" />
+          {isCsmTeam ? (
+            // The Sherlock-themed PNG is rendered at a slightly
+            // larger height so the detective hat reads — the
+            // silhouette is more compact at the same pixel size.
+            <CsmDogIcon className="h-10 w-auto" />
+          ) : (
+            <DogIcon className="w-9 h-7" />
+          )}
         </div>
       </div>
 
