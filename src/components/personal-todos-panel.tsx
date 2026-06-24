@@ -10,6 +10,8 @@ import {
   type TodoSource,
 } from "@/lib/personal-todos/types";
 import { normalizeSlackText } from "@/lib/personal-todos/normalize-text";
+import { DoneCheckbox } from "./done-checkbox";
+import { TodoCelebration } from "./todo-celebration";
 
 /**
  * Personal to-do list — rendered on the home page directly beneath
@@ -487,19 +489,21 @@ interface RowProps {
 function TodoRow({ todo, onToggle, onPatch, onDelete, dim }: RowProps) {
   const sourceInfo = SOURCE_LABEL[todo.source] ?? SOURCE_LABEL.manual;
   const isDone = Boolean(todo.completed_at);
+  // Fires the celebration overlay only on the not-done → done
+  // transition. Un-completing a row is intentionally quiet.
+  const [celebrate, setCelebrate] = useState(false);
+  function handleToggle() {
+    if (!isDone) setCelebrate(true);
+    onToggle();
+  }
   return (
     <div
-      className={`px-5 py-3 flex flex-wrap items-start gap-3 ${
+      className={`relative px-5 py-3 flex flex-wrap items-start gap-3 ${
         dim ? "opacity-60" : ""
       }`}
     >
-      <input
-        type="checkbox"
-        checked={isDone}
-        onChange={onToggle}
-        className="mt-1"
-        aria-label="Mark complete"
-      />
+      <TodoCelebration play={celebrate} onDone={() => setCelebrate(false)} />
+      <DoneCheckbox done={isDone} onToggle={handleToggle} />
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 flex-wrap">
           <input
