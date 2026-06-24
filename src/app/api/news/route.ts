@@ -8,6 +8,10 @@ import {
   saveNewsCache,
   type NewsCacheEntry,
 } from "@/lib/data/news-cache";
+import {
+  dismissalKey,
+  loadDismissedKeySet,
+} from "@/lib/data/news-dismissals";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 30;
@@ -43,8 +47,9 @@ export async function GET(req: Request) {
 
   try {
     let entry = await loadNewsCache(workspaceId);
+    const dismissed = await loadDismissedKeySet();
     if (!forceRefresh && entry && !isStale(entry)) {
-      return NextResponse.json(entry);
+      return NextResponse.json(filterDismissed(entry, workspaceId, dismissed));
     }
 
     // Cold or stale or explicitly refreshed. Resolve the company
@@ -71,7 +76,7 @@ export async function GET(req: Request) {
 
     const headlines = await fetchNewsForCompany(companyName);
     entry = await saveNewsCache(workspaceId, headlines);
-    return NextResponse.json(entry satisfies NewsCacheEntry);
+    return NextResponse.json(filterDismissed(entry, workspaceId, dismissed));
   } catch (e) {
     console.error("[news] route failed", { workspaceId, error: e });
     return NextResponse.json(
@@ -79,4 +84,20 @@ export async function GET(req: Request) {
       { status: 500 }
     );
   }
+}
+
+/** Drop any headline whose (workspace_id, url) is in the dismissals
+ *  set. Preserves all other entry fields so the panel can still show
+ *  the `fetched_at` chip. */
+function filterDismissed(
+  entry: NewsCacheEntry,
+  workspaceId: string,
+  dismissed: Set<string>
+): NewsCacheEntry {
+  if (dismissed.size === 0) return entry;
+  const headlines = entry.headlines.filter(
+    (h) => !dismissed.has(dismissalKey(workspaceId, h.url))
+  );
+  if (headlines.length === entry.headlines.length) return entry;
+  return { ...entry, headlines };
 }
