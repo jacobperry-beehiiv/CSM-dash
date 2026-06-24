@@ -285,10 +285,11 @@ export interface AmSettings {
   daily_digest_channel_id?: string;
   /**
    * Drive folder ID whose top-level files get cloned into every new
-   * onboarding folder created via the Slack @bot assign flow. Unset
-   * (or empty string) → no pre-seeding; the assignment still creates
+   * onboarding folder created via the Slack @bot assign flow when
+   * the deal's `onboarding_package` field reads "Yes". Unset (or
+   * empty string) → no pre-seeding; the assignment still creates
    * the new folder, just empty (current behavior). Subfolders inside
-   * the template are NOT recursed in v1 — see plan for follow-up.
+   * the template are NOT recursed in v1.
    *
    * Requires the requesting CSM to have re-consented with the
    * drive.readonly scope (see /api/auth/google/start). Folders
@@ -296,6 +297,17 @@ export interface AmSettings {
    * and surface the reason in the assign-flow Slack thread.
    */
   onboarding_drive_template_folder_id?: string;
+  /**
+   * Sibling of `onboarding_drive_template_folder_id` for the no-OP
+   * onboarding path — used when the deal's `onboarding_package`
+   * reads anything other than "Yes" (typically "No", missing, or a
+   * company-triggered assign with no deal context). Lets the OP and
+   * no-OP onboarding kits diverge (e.g. different KO deck variant)
+   * without per-file matching logic. Unset → fall back to the
+   * with-OP template if that's set; if both are unset the seed step
+   * is a no-op (current behavior).
+   */
+  onboarding_drive_template_folder_id_no_op?: string;
 }
 
 /** Built-in status list. The first two names ("Pinged" and
@@ -420,6 +432,7 @@ export const DEFAULTS: SettingsShape = {
     lifecycle_stages: [...DEFAULT_LIFECYCLE_STAGES],
     daily_digest_channel_id: "",
     onboarding_drive_template_folder_id: "",
+    onboarding_drive_template_folder_id_no_op: "",
   },
   personal_todos: {
     trigger_emoji: DEFAULT_TODO_TRIGGER_EMOJI,

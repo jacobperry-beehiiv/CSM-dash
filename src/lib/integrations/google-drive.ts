@@ -141,6 +141,13 @@ export interface SeedResult {
  * Each file copy is soft-failed: one un-copyable doc doesn't kill
  * the whole pass.
  *
+ * Optional `companyName` — when set, the literal `[insert customer
+ * name]` token in each source filename is replaced with the actual
+ * company name on copy. Lets the template hold a file called
+ * `[insert customer name] | Newsletter Breakdown` and have it
+ * land in the new folder as `{ActualCompany} | Newsletter Breakdown`.
+ * When unset, names are copied as-is.
+ *
  * Requires the requester to have re-consented with drive.readonly
  * — the source folder isn't one the app itself created, so the
  * default drive.file scope can't read it. Caller should gate on
@@ -150,9 +157,11 @@ export interface SeedResult {
 export async function copyDriveFolderContents(
   requesterEmail: string,
   sourceFolderId: string,
-  destFolderId: string
+  destFolderId: string,
+  opts?: { companyName?: string }
 ): Promise<SeedResult> {
   const token = await getValidAccessTokenFor(requesterEmail);
+  const companyName = opts?.companyName?.trim() ?? "";
 
   // Paginate so a template with >100 files doesn't silently
   // truncate. Drive caps pageSize at 1000; we set 100 to keep
@@ -195,6 +204,12 @@ export async function copyDriveFolderContents(
       skipped.push({ name: f.name, reason: "subfolder (not recursed)" });
       continue;
     }
+    // Filename token substitution — only fires when the caller
+    // supplied a non-empty companyName. Case-insensitive match so
+    // [Insert Customer Name] / [insert customer name] both work.
+    const renamedName = companyName
+      ? f.name.replace(/\[insert customer name\]/gi, companyName)
+      : f.name;
     try {
       const res = await fetch(
         `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(
@@ -207,7 +222,7 @@ export async function copyDriveFolderContents(
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
-            name: f.name,
+            name: renamedName,
             parents: [destFolderId],
           }),
         }

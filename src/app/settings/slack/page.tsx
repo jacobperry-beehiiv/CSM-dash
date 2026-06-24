@@ -643,12 +643,24 @@ export default function SlackSettingsPage() {
 
       <OnboardingDriveTemplateSection
         folderId={settings.am?.onboarding_drive_template_folder_id ?? ""}
+        folderIdNoOp={
+          settings.am?.onboarding_drive_template_folder_id_no_op ?? ""
+        }
         onChange={(next) =>
           setSettings((prev) => ({
             ...prev,
             am: {
               ...(prev.am ?? {}),
               onboarding_drive_template_folder_id: next,
+            },
+          }))
+        }
+        onChangeNoOp={(next) =>
+          setSettings((prev) => ({
+            ...prev,
+            am: {
+              ...(prev.am ?? {}),
+              onboarding_drive_template_folder_id_no_op: next,
             },
           }))
         }
@@ -1196,39 +1208,67 @@ function LifecycleStagesSection({
  *  seed step entirely; new folders ship empty (current behavior). */
 function OnboardingDriveTemplateSection({
   folderId,
+  folderIdNoOp,
   onChange,
+  onChangeNoOp,
 }: {
   folderId: string;
+  folderIdNoOp: string;
   onChange: (next: string) => void;
+  onChangeNoOp: (next: string) => void;
 }) {
   return (
-    <section className="bg-surface rounded-xl border border-border shadow-card p-4 space-y-3">
+    <section className="bg-surface rounded-xl border border-border shadow-card p-4 space-y-4">
       <div>
         <h2 className="text-sm font-semibold text-fg">
-          Onboarding template folder
+          Onboarding template folders
         </h2>
         <p className="text-xs text-muted mt-1">
-          Drive folder ID whose top-level files get cloned into every
+          Drive folder IDs whose top-level files get cloned into every
           newly-created onboarding folder from the Slack{" "}
           <code className="font-mono bg-surface-2 px-1 rounded">
             @bot assign
           </code>{" "}
-          flow. Subfolders aren&rsquo;t recursed. Leave blank to keep
-          new folders empty. Requires CSMs to have reconnected Google
-          with the new{" "}
+          flow. The assign flow picks <strong>with-OP</strong> or{" "}
+          <strong>no-OP</strong> based on the deal&rsquo;s{" "}
           <code className="font-mono bg-surface-2 px-1 rounded">
-            drive.readonly
+            onboarding_package
           </code>{" "}
-          scope.
+          field. Files named{" "}
+          <code className="font-mono bg-surface-2 px-1 rounded">
+            [insert customer name]
+          </code>{" "}
+          get the customer&rsquo;s name substituted on copy. Subfolders
+          aren&rsquo;t recursed. Leave a field blank to disable
+          seeding for that path.
         </p>
       </div>
-      <input
-        type="text"
-        value={folderId}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder="1AbCDefGhIjKlMnOpQrStUvWxYz0123456"
-        className="w-full px-3 py-2 text-sm font-mono bg-canvas border border-border rounded-md focus:outline-none focus:ring-2 focus:ring-accent"
-      />
+      <div className="space-y-3">
+        <div>
+          <label className="block text-xs font-medium text-muted mb-1">
+            With Onboarding Package (OP = Yes)
+          </label>
+          <input
+            type="text"
+            value={folderId}
+            onChange={(e) => onChange(e.target.value)}
+            placeholder="1AbCDefGhIjKlMnOpQrStUvWxYz0123456"
+            className="w-full px-3 py-2 text-sm font-mono bg-canvas border border-border rounded-md focus:outline-none focus:ring-2 focus:ring-accent"
+          />
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-muted mb-1">
+            Without Onboarding Package (OP = No, or unset)
+          </label>
+          <input
+            type="text"
+            value={folderIdNoOp}
+            onChange={(e) => onChangeNoOp(e.target.value)}
+            placeholder="1AbCDefGhIjKlMnOpQrStUvWxYz0123456"
+            className="w-full px-3 py-2 text-sm font-mono bg-canvas border border-border rounded-md focus:outline-none focus:ring-2 focus:ring-accent"
+          />
+        </div>
+      </div>
     </section>
   );
 }
