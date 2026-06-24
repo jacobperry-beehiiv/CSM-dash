@@ -3,9 +3,8 @@
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
 import {
   fontFamilyFor,
-  type FontKey,
   type Personalization,
-} from "@/lib/data/personalization";
+} from "@/lib/data/personalization-types";
 
 /**
  * Personalization runtime — applies the viewer's saved theme overrides

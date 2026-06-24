@@ -5,7 +5,7 @@ import {
   FONT_OPTIONS,
   type FontKey,
   type Personalization,
-} from "@/lib/data/personalization";
+} from "@/lib/data/personalization-types";
 
 /**
  * /settings/personalize — per-user dashboard customization.

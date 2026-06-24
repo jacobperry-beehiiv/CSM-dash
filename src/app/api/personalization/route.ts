@@ -4,8 +4,8 @@ import { isCsmWithGmail } from "@/lib/auth/csm-eligibility";
 import {
   loadPersonalization,
   savePersonalization,
-  type Personalization,
 } from "@/lib/data/personalization";
+import type { Personalization } from "@/lib/data/personalization-types";
 
 export const dynamic = "force-dynamic";
 
