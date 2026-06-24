@@ -3,6 +3,7 @@ import { auth } from "@/auth";
 import { filterCustomers, loadCustomers } from "@/lib/data/load-customers";
 import { loadNewsCache } from "@/lib/data/news-cache";
 import type { NewsCategory, NewsHeadline } from "@/lib/integrations/google-news";
+import type { Segment } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 30;
@@ -53,6 +54,15 @@ export async function GET(req: Request) {
   const daysParam = Number(url.searchParams.get("days") ?? "30");
   const days =
     Number.isFinite(daysParam) && daysParam > 0 ? Math.min(daysParam, 90) : 30;
+  // Segment filter — "enterprise" / "growth" / "all" (default). Used
+  // by the panel's "All ENT" scope toggle. Validation: anything other
+  // than the three known values falls back to "all" so a bogus URL
+  // param can't break the panel.
+  const segmentParam = (url.searchParams.get("segment") ?? "all").trim();
+  const segment: Segment =
+    segmentParam === "enterprise" || segmentParam === "growth"
+      ? segmentParam
+      : "all";
   const categoryParam = url.searchParams.get("categories");
   const wantedCategories = categoryParam
     ? new Set(
@@ -67,7 +77,7 @@ export async function GET(req: Request) {
 
   try {
     const all = await loadCustomers();
-    const scoped = filterCustomers(all, { csm });
+    const scoped = filterCustomers(all, { csm, segment });
     const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
 
     // Batch parallel-read the cache for every workspace in scope.
