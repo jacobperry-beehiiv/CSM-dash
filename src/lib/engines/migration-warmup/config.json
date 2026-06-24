@@ -1,0 +1,158 @@
+{
+  "_comment": "Single source of truth for the beehiiv migration warm-up schedule algorithm. All numeric values are derived directly from the migration-warmup SKILL.md tables and worked examples. See migration_warmup_spec.md for how each fuzzy rule in the skill was made deterministic.",
+
+  "version": "1.0.0",
+
+  "cadence_map": {
+    "_comment": "Normalized cadence keyword -> sends_per_week. Match is done on a lowercased, stripped string against the longest matching key. 'irregular' and 'monthly' set flags handled in code.",
+    "daily": 5,
+    "weekdays": 5,
+    "5x": 5,
+    "5x/week": 5,
+    "2x/day": 5,
+    "4x": 4,
+    "4x/week": 4,
+    "3x": 3,
+    "3x/week": 3,
+    "2x": 2,
+    "2x/week": 2,
+    "twice weekly": 2,
+    "weekly": 1,
+    "1x": 1,
+    "1x/week": 1,
+    "bi-weekly": 0.5,
+    "biweekly": 0.5,
+    "every 2 weeks": 0.5,
+    "monthly": 0.25,
+    "irregular": 1
+  },
+
+  "cadence_flags": {
+    "_comment": "Cadences that require a CSM-review note appended to the output.",
+    "monthly": "Monthly cadence produces a very slow ramp - flag for CSM review.",
+    "irregular": "Irregular cadence treated as 1x/week - confirm true send frequency with customer.",
+    "bi-weekly": "Bi-weekly cadence: each send event is a 2-week block; calendar duration is ~2x the week count."
+  },
+
+  "tiers": [
+    {
+      "name": "Micro",
+      "min": 0,
+      "max": 75000,
+      "max_batches_default": 2,
+      "week1_max_batches": 2,
+      "profile_selector": "spw",
+      "profiles": {
+        "multi": {
+          "_comment": "sends_per_week >= 2. Skill 'Micro Standard (OR>=30, spw>=2)' table.",
+          "applies_when_spw_gte": 2,
+          "progression": [2500, 5000],
+          "continuation_batch": 5000,
+          "caps": [5000, 15000]
+        },
+        "single": {
+          "_comment": "sends_per_week < 2. Skill 'Micro 1x/week' table.",
+          "applies_when_spw_gte": 0,
+          "progression": [5000, 10000, 20000, 30000],
+          "continuation_batch": 30000,
+          "caps": [5000, 15000, 35000, 65000]
+        }
+      },
+      "cap_continuation_increment": 30000
+    },
+    {
+      "name": "Small",
+      "min": 75001,
+      "max": 250000,
+      "max_batches_default": null,
+      "week1": { "default_batch": 5000, "max_batches": 4, "overrides": {} },
+      "progression": [10000, 20000, 30000, 40000],
+      "continuation_batch": 50000,
+      "caps": [20000, 75000, 175000],
+      "cap_continuation_increment": 100000
+    },
+    {
+      "name": "Medium",
+      "min": 250001,
+      "max": 750000,
+      "max_batches_default": null,
+      "week1": {
+        "explicit_bands": [
+          { "min_spw": 4, "batches": [5000, 5000, 10000, 10000] },
+          { "min_spw": 2, "batches": [10000, 10000] },
+          { "min_spw": 0, "batches": [15000] }
+        ]
+      },
+      "progression": [15000, 30000, 50000],
+      "continuation_batch": 75000,
+      "caps": [30000, 80000, 200000, 400000],
+      "cap_continuation_increment": 175000
+    },
+    {
+      "name": "Large",
+      "min": 750001,
+      "max": 2000000,
+      "max_batches_default": null,
+      "week1": { "default_batch": 10000, "max_batches": 4, "overrides": { "1": [20000] } },
+      "progression": [15000, 25000, 50000, 100000],
+      "continuation_batch": 200000,
+      "caps": [40000, 100000, 200000, 400000, 750000],
+      "cap_continuation_increment": 250000
+    },
+    {
+      "name": "Super Large",
+      "min": 2000001,
+      "max": null,
+      "max_batches_default": null,
+      "week1": { "default_batch": 10000, "max_batches": 4, "overrides": {} },
+      "progression": [15000, 30000, 60000, 125000, 250000],
+      "continuation_batch": 250000,
+      "caps": [40000, 100000, 250000, 500000, 1000000, 1500000, 2000000, 2000000, 2500000, 2500000, 3000000, 3000000],
+      "cap_continuation_increment": 500000
+    }
+  ],
+
+  "approach_multipliers": {
+    "_comment": "Applied to every per-import batch size before cap enforcement and rounding. Conservative shrinks batches (so the engine naturally adds weeks); aggressive grows them (so the engine naturally compresses), while caps are always enforced.",
+    "standard": 1.0,
+    "conservative": 0.75,
+    "aggressive": 1.25
+  },
+
+  "approach_rules": {
+    "_comment": "Deterministic selection. Evaluated top to bottom; first match wins, except aggressive which is only chosen after comparing the standard timeline to the deadline.",
+    "conservative_if": "open_rate is None OR open_rate < 0.30 OR deliverability_concern == True",
+    "aggressive_if": "NOT conservative AND deadline_weeks is not None AND deadline_weeks < standard_week_count",
+    "default": "standard"
+  },
+
+  "rounding_ladder": {
+    "_comment": "round_clean(x): snap a batch size to a clean granularity by magnitude. Keeps outputs human-readable and deterministic.",
+    "bands": [
+      { "below": 5000, "round_to": 500 },
+      { "below": 50000, "round_to": 1000 },
+      { "below": 250000, "round_to": 5000 },
+      { "below": null, "round_to": 25000 }
+    ]
+  },
+
+  "limits": {
+    "max_weeks": 52,
+    "_comment": "Safety bound to guarantee termination. Engine raises if exceeded (e.g. monthly cadence on a huge list)."
+  },
+
+  "excel": {
+    "font_name": "Arial",
+    "font_size": 10,
+    "week_header_colors": ["D9D2E9", "CFE2F3", "D9EAD3", "FCE5CD", "EAD1DC", "FDF2CC"],
+    "total_row_fill": "EFEFEF",
+    "checkbox_default": "No",
+    "checkbox_emailed_label": "Emailed 1-2 times?",
+    "checkbox_complete_label": "Migration Complete?",
+    "fill_columns_a_to": "Z",
+    "number_format": "#,##0",
+    "col_widths": { "label_col": 28, "batch_col": 14, "checkbox_col": 18 },
+    "filename_template": "{customer} | beehiiv Migration Schedule.xlsx",
+    "title_template": "{customer} | beehiiv Migration Schedule"
+  }
+}
