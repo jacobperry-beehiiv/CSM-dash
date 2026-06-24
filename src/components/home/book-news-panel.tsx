@@ -59,7 +59,22 @@ const CATEGORY_CHIP: Record<NewsCategory, string> = {
 
 const DEFAULT_VISIBLE = 20;
 
-export function BookNewsPanel() {
+/** Three-way scope filter that overrides the URL-driven CSM scope at
+ *  the panel level. Picking "mine" forces ?csm=<viewer's handle>;
+ *  "ent" forces segment=enterprise + ?csm=all; "everyone" drops both
+ *  filters. Default lands on "mine" when the viewer has a CSM handle,
+ *  else "everyone" (an admin who isn't a CSM shouldn't open the
+ *  panel and see only their own zero-account book). */
+type Scope = "mine" | "ent" | "everyone";
+
+interface BookNewsPanelProps {
+  /** The signed-in viewer's CSM handle (e.g. "Jacob_Perry"), or null
+   *  when we can't match them in the customer book. Resolved server-
+   *  side on the home page so the panel doesn't have to refetch. */
+  viewerCsmHandle?: string | null;
+}
+
+export function BookNewsPanel({ viewerCsmHandle = null }: BookNewsPanelProps) {
   const [data, setData] = useState<BookResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -68,6 +83,12 @@ export function BookNewsPanel() {
   );
   const [days, setDays] = useState<7 | 30>(30);
   const [showAll, setShowAll] = useState(false);
+  // Default scope = "mine" when we have a handle to scope to; falls
+  // back to "everyone" otherwise. CSM-team admins / non-CSM viewers
+  // get a meaningful first render under the fallback.
+  const [scope, setScope] = useState<Scope>(
+    viewerCsmHandle ? "mine" : "everyone"
+  );
   // Refresh-now state. The sweep is multi-second (~30-60s for a
   // 150-customer book even when scoped to one CSM); the button shows
   // "Refreshing…" + a hint about expected time so it doesn't read
@@ -76,17 +97,32 @@ export function BookNewsPanel() {
   const [refreshing, setRefreshing] = useState(false);
   const [refreshMessage, setRefreshMessage] = useState<string | null>(null);
 
-  /** Fetch /api/news/book for the URL-scoped CSM + the active days
-   *  filter. Used both on mount and after a successful Refresh-now
-   *  so the freshly-warmed cache shows up immediately. */
+  /** Stamp the right `csm` + `segment` query params on a URL based
+   *  on the active scope. Shared by the fetch + refresh paths so the
+   *  two stay in lock-step. */
+  const applyScope = useCallback(
+    (url: URL): void => {
+      if (scope === "mine" && viewerCsmHandle) {
+        url.searchParams.set("csm", viewerCsmHandle);
+      } else if (scope === "ent") {
+        url.searchParams.set("csm", "all");
+        url.searchParams.set("segment", "enterprise");
+      } else {
+        url.searchParams.set("csm", "all");
+      }
+    },
+    [scope, viewerCsmHandle]
+  );
+
+  /** Fetch /api/news/book for the active scope + days filter. Used
+   *  both on mount and after a successful Refresh-now so the freshly-
+   *  warmed cache shows up immediately. */
   const fetchBook = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const params = new URLSearchParams(window.location.search);
-      const csm = params.get("csm") ?? "all";
       const url = new URL("/api/news/book", window.location.origin);
-      url.searchParams.set("csm", csm);
+      applyScope(url);
       url.searchParams.set("days", String(days));
       const r = await fetch(url.toString());
       if (!r.ok) {
@@ -100,7 +136,7 @@ export function BookNewsPanel() {
     } finally {
       setLoading(false);
     }
-  }, [days]);
+  }, [days, applyScope]);
 
   useEffect(() => {
     let cancelled = false;
@@ -112,19 +148,18 @@ export function BookNewsPanel() {
     };
   }, [fetchBook]);
 
-  /** POST /api/news/sweep?csm=<handle> to refresh the CSM's book on
-   *  demand, then re-fetch the book aggregator so the new headlines
-   *  show up without a page reload. Scoped to the URL-visible CSM
-   *  so a CSM viewing "all" gets the full team refresh, while a
-   *  CSM viewing their own scope only refreshes their own book. */
+  /** POST /api/news/sweep with the active scope params, then re-fetch
+   *  the book aggregator so the new headlines show up without a page
+   *  reload. The sweep is scoped exactly the same way the panel's
+   *  current filter is (so toggling to "All ENT" then hitting
+   *  Refresh refreshes every Enterprise account team-wide; toggling
+   *  to "My book" refreshes just the viewer's customers). */
   async function refreshNow() {
     setRefreshing(true);
     setRefreshMessage(null);
     try {
-      const params = new URLSearchParams(window.location.search);
-      const csm = params.get("csm") ?? "all";
       const url = new URL("/api/news/sweep", window.location.origin);
-      url.searchParams.set("csm", csm);
+      applyScope(url);
       const r = await fetch(url.toString(), { method: "POST" });
       const j = (await r.json().catch(() => ({}))) as {
         ok?: boolean;
@@ -206,6 +241,40 @@ export function BookNewsPanel() {
       {refreshMessage ? (
         <div className="mb-3 text-xs text-muted">{refreshMessage}</div>
       ) : null}
+
+      {/* Scope segmented control — overrides the URL-driven CSM
+       *  scope at the panel level so a CSM viewing /am with their
+       *  own ?csm= filter can still pivot the news feed to "All
+       *  ENT" without changing the rest of the page. */}
+      <div
+        className="inline-flex items-center rounded-md border border-border-strong overflow-hidden mb-3"
+        role="tablist"
+        aria-label="News feed scope"
+      >
+        <ScopeButton
+          label="My book"
+          active={scope === "mine"}
+          disabled={!viewerCsmHandle}
+          onClick={() => setScope("mine")}
+          title={
+            viewerCsmHandle
+              ? `Customers assigned to ${viewerCsmHandle.replace(/_/g, " ")}`
+              : "No CSM handle resolved for your account — pick another scope"
+          }
+        />
+        <ScopeButton
+          label="All ENT"
+          active={scope === "ent"}
+          onClick={() => setScope("ent")}
+          title="Every Enterprise customer across the team"
+        />
+        <ScopeButton
+          label="Everyone"
+          active={scope === "everyone"}
+          onClick={() => setScope("everyone")}
+          title="Every customer in the book"
+        />
+      </div>
 
       <div className="flex flex-wrap items-center gap-2 mb-4">
         {ALL_CATEGORIES.map((c) => {
@@ -317,5 +386,37 @@ export function BookNewsPanel() {
         </>
       )}
     </section>
+  );
+}
+
+function ScopeButton({
+  label,
+  active,
+  disabled,
+  onClick,
+  title,
+}: {
+  label: string;
+  active: boolean;
+  disabled?: boolean;
+  onClick: () => void;
+  title: string;
+}) {
+  return (
+    <button
+      type="button"
+      role="tab"
+      aria-selected={active}
+      disabled={disabled}
+      onClick={onClick}
+      title={title}
+      className={`px-3 py-1 text-xs transition border-r border-border-strong last:border-r-0 ${
+        active
+          ? "bg-accent text-accent-fg"
+          : "bg-surface text-fg hover:bg-canvas"
+      } disabled:opacity-40 disabled:cursor-not-allowed`}
+    >
+      {label}
+    </button>
   );
 }

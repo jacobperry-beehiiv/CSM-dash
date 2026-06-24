@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { runNewsSweep } from "@/lib/engines/news-sweep";
 import { filterCustomers, loadCustomers } from "@/lib/data/load-customers";
+import type { Segment } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 // 150 customers × ~3 RSS fetches × ~1-2s each, run 5 concurrent ⇒
@@ -31,9 +32,15 @@ export const maxDuration = 240;
  * named CSM's book (via `customer_success_manager` on the customer
  * book). When set, only workspaces owned by that CSM get refreshed.
  * Used by the homepage "Refresh now" button so a CSM can warm their
- * own book on demand without triggering a full-book sweep. When
- * both `?csm` and `workspace_ids` are set, `workspace_ids` wins
- * (the explicit subset is the most specific signal).
+ * own book on demand without triggering a full-book sweep.
+ *
+ * Query (optional): `?segment=enterprise|growth|all` — additional
+ * scope filter that composes with `?csm`. The homepage "All ENT"
+ * filter uses this to refresh Enterprise-only headlines across the
+ * team. Defaults to "all" when missing or invalid.
+ *
+ * When `workspace_ids` is set in the body, it wins over both query
+ * params (explicit subset = most specific signal).
  */
 
 interface PostBody {
@@ -60,6 +67,11 @@ export async function POST(req: Request) {
   const csmParam = (url.searchParams.get("csm") ?? "").trim();
   const csmScope =
     csmParam && csmParam.toLowerCase() !== "all" ? csmParam : null;
+  const segmentParam = (url.searchParams.get("segment") ?? "all").trim();
+  const segment: Segment =
+    segmentParam === "enterprise" || segmentParam === "growth"
+      ? segmentParam
+      : "all";
 
   let body: PostBody = {};
   if (req.headers.get("content-length")) {
@@ -75,14 +87,14 @@ export async function POST(req: Request) {
       )
     : undefined;
 
-  // Resolve ?csm=<handle> → workspace_ids server-side using the
+  // Resolve ?csm + ?segment → workspace_ids server-side via the
   // customer book. Explicit workspace_ids in the body always win;
   // they're the most-specific signal (used by tests + the optional
-  // back-fill path). When neither is set we sweep the full book —
-  // that's the cron's mode.
-  if (!workspaceIds && csmScope) {
+  // back-fill path). When neither query param NOR a body subset is
+  // set, sweep the full book — that's the cron's mode.
+  if (!workspaceIds && (csmScope || segment !== "all")) {
     const all = await loadCustomers();
-    const scoped = filterCustomers(all, { csm: csmScope });
+    const scoped = filterCustomers(all, { csm: csmScope, segment });
     workspaceIds = scoped
       .map((c) => c.workspace_id)
       .filter((id): id is string => typeof id === "string" && id.length > 0);

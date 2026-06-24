@@ -86,7 +86,7 @@ export default async function MissionControl({
 
       <TeamTasksPanel />
       <PersonalTodosPanel />
-      <BookNewsPanel />
+      <BookNewsPanel viewerCsmHandle={csm} />
       <FeatureUpdatesPanel />
     </>
   );
