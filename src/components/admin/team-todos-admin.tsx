@@ -429,16 +429,27 @@ function TodoRow({
   const [draftDue, setDraftDue] = useState(todo.due_date ?? "");
   const adminEdited = todo.source_meta?.admin_acted_by;
   const isDone = Boolean(todo.completed_at);
+  // See personal-todos-panel for the deferred-toggle pattern — same
+  // reasoning here. Completing the row re-sorts it into a separate
+  // "Completed" section, unmounting mid-animation otherwise.
   const [celebrate, setCelebrate] = useState(false);
+  const visualDone = isDone || celebrate;
   function handleToggle() {
-    if (!isDone) setCelebrate(true);
+    if (isDone) {
+      onToggle();
+      return;
+    }
+    setCelebrate(true);
+  }
+  function finishCelebration() {
+    setCelebrate(false);
     onToggle();
   }
 
   return (
     <li className="relative px-5 py-2 flex items-start gap-3 hover:bg-canvas/20 transition-colors">
-      <TodoCelebration play={celebrate} onDone={() => setCelebrate(false)} />
-      <DoneCheckbox done={isDone} onToggle={handleToggle} />
+      <TodoCelebration play={celebrate} onDone={finishCelebration} />
+      <DoneCheckbox done={visualDone} onToggle={handleToggle} />
       <div className="flex-1 min-w-0">
         {editing ? (
           <div className="space-y-1.5">
@@ -490,7 +501,7 @@ function TodoRow({
           <>
             <p
               className={`text-sm break-words whitespace-pre-wrap ${
-                todo.completed_at
+                visualDone
                   ? "line-through text-muted"
                   : "text-fg"
               }`}
