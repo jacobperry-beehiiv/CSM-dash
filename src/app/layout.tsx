@@ -13,6 +13,8 @@ import {
   PersonalizationProvider,
 } from "@/components/personalization-provider";
 import { PersonalizedHeader } from "@/components/personalized-header";
+import { CsmTeamLogo } from "@/components/csm-team-logo";
+import { pickRandomCsmDog } from "@/lib/branding/csm-dogs";
 import { auth } from "@/auth";
 import { isAdmin } from "@/lib/auth/admin";
 import { isCsmWithGmail } from "@/lib/auth/csm-eligibility";
@@ -47,6 +49,7 @@ const NAV = [
   { href: "/am", label: "AM" },
   { href: "/ad-gap", label: "Ad Gap" },
   { href: "/feature-requests", label: "Feature requests" },
+  { href: "/csm/migration-warmup", label: "Migration warm-up" },
   { href: "/settings", label: "Settings" },
 ];
 
@@ -145,7 +148,13 @@ export default async function RootLayout({
                   className="text-fg hover:opacity-80 transition-opacity flex items-center gap-2"
                 >
                   <PersonalizedHeader
-                    fallbackLogo={<BeehiivLogo className="h-7 w-7" />}
+                    fallbackLogo={
+                      viewerIsCsmTeam ? (
+                        <CsmTeamLogo dog={pickRandomCsmDog()} />
+                      ) : (
+                        <BeehiivLogo className="h-7 w-7" />
+                      )
+                    }
                   />
                 </Link>
                 <nav className="flex items-center gap-6 text-[13.5px]">
