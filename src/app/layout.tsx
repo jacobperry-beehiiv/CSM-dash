@@ -16,8 +16,10 @@ import { PersonalizedHeader } from "@/components/personalized-header";
 import { auth } from "@/auth";
 import { isAdmin } from "@/lib/auth/admin";
 import { isCsmWithGmail } from "@/lib/auth/csm-eligibility";
+import { isCsmTeamMember } from "@/lib/auth/csm-team";
 import { isFeatureEnabledFor } from "@/lib/auth/feature-flags";
 import { loadPersonalization } from "@/lib/data/personalization";
+import { CsmTeamProvider } from "@/components/csm-team-provider";
 
 const DEFAULT_TITLE = "CSM Mission Control — beehiiv";
 
@@ -93,6 +95,12 @@ export default async function RootLayout({
   const personalization = personalizationEnabled
     ? await loadPersonalization(viewerEmail)
     : null;
+  // Looser "is this viewer part of the CSM team?" check (roster
+  // only, no Gmail gate) — drives CSM-team-specific chrome like the
+  // Sherlock dog icon in the to-do celebration sweep.
+  const viewerIsCsmTeam = viewerEmail
+    ? await isCsmTeamMember(viewerEmail)
+    : false;
   return (
     <html lang="en" className="h-full antialiased">
       <head>
@@ -126,6 +134,7 @@ export default async function RootLayout({
         />
       </head>
       <body className="min-h-full bg-canvas text-fg">
+        <CsmTeamProvider value={viewerIsCsmTeam}>
         <PersonalizationProvider initial={personalization}>
           <header className="border-b border-border bg-canvas/85 backdrop-blur-md sticky top-0 z-20">
             <div className="max-w-[1400px] mx-auto px-6 h-16 flex items-center justify-between gap-4">
@@ -165,6 +174,7 @@ export default async function RootLayout({
               via useViewerEmail), so the login page chrome stays clean. */}
           <ReportIssueButton />
         </PersonalizationProvider>
+        </CsmTeamProvider>
       </body>
     </html>
   );
