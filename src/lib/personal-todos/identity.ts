@@ -95,11 +95,27 @@ export async function resolveUserKeyForSlackId(
   // Catches CSMs who are correctly mapped in csm_user_ids but don't
   // appear in the customer book (no accounts assigned yet) or whose
   // book entry has a null email. Requires `users:read.email` scope.
+  //
+  // Hard gate: the fallback email must match a known CSM email in
+  // the customer book. Without this gate, anyone with a @beehiiv.com
+  // address who DMs the bot once opens their own todo bucket — that's
+  // how `tyler@`, `kanishka@`, etc. ended up in the admin panel.
+  // New-hire CSMs who aren't in the book yet should be added to
+  // csm_user_ids OR the customer book before they can use the feature.
   const fallback = await fetchSlackUserEmail(targetId);
   if (fallback) {
+    const fallbackKey = userKeyFromEmail(fallback);
+    const knownCsm = customers.some(
+      (c) =>
+        c.customer_success_manager_email?.trim().toLowerCase() === fallbackKey
+    );
+    if (knownCsm) {
+      return { userKey: fallbackKey, via: "slack_users_info" };
+    }
     return {
-      userKey: userKeyFromEmail(fallback),
-      via: "slack_users_info",
+      userKey: null,
+      via: null,
+      reason: `${fallback} isn't recognized as a CSM — this feature is only available to CSMs (must appear as a customer_success_manager_email in the customer book, or be mapped at /settings/slack → CSM Slack IDs)`,
     };
   }
 
