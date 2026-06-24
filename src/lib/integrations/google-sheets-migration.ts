@@ -459,11 +459,19 @@ function yesNoValidation(
 function standardColumnWidths(sheetId: number): SheetsRequest[] {
   // A=label (28ch ≈ 200px), then alternating batch (14ch ≈ 100px) /
   // checkbox (18ch ≈ 130px). 1ch ≈ ~7px at the default Sheets font.
+  // GRID_COLS = the default Sheets grid (A..Z = 26 columns, indices
+  // 0..25). updateDimensionProperties' endIndex is exclusive, so the
+  // max valid endIndex is 26 — anything past that 400s with "Tried
+  // to update column index 26 but there are only 26 columns".
+  const GRID_COLS = 26;
   const reqs: SheetsRequest[] = [];
   reqs.push(widthRequest(sheetId, 0, 1, 200));
-  for (let col = 1; col < 26; col += 2) {
-    reqs.push(widthRequest(sheetId, col, col + 1, 100));
-    reqs.push(widthRequest(sheetId, col + 1, col + 2, 130));
+  for (let col = 1; col < GRID_COLS; col++) {
+    // Odd-indexed cols are batch (100px); even-indexed are
+    // checkbox (130px). The "Import Size 100 / checkbox 130" pair
+    // for the same batch lives at (col, col+1) by construction.
+    const px = col % 2 === 1 ? 100 : 130;
+    reqs.push(widthRequest(sheetId, col, col + 1, px));
   }
   return reqs;
 }
