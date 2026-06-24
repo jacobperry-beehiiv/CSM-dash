@@ -16,6 +16,7 @@ import { PersonalizedHeader } from "@/components/personalized-header";
 import { auth } from "@/auth";
 import { isAdmin } from "@/lib/auth/admin";
 import { isCsmWithGmail } from "@/lib/auth/csm-eligibility";
+import { isFeatureEnabledFor } from "@/lib/auth/feature-flags";
 import { loadPersonalization } from "@/lib/data/personalization";
 
 const DEFAULT_TITLE = "CSM Mission Control — beehiiv";
@@ -28,6 +29,9 @@ export async function generateMetadata(): Promise<Metadata> {
   const email = session?.user?.email ?? null;
   if (!email) return { title: DEFAULT_TITLE };
   if (!(await isCsmWithGmail(email))) return { title: DEFAULT_TITLE };
+  if (!(await isFeatureEnabledFor("personalization", email))) {
+    return { title: DEFAULT_TITLE };
+  }
   const p = await loadPersonalization(email);
   const name = p?.dashboard_name?.trim();
   return {
@@ -44,10 +48,11 @@ const NAV = [
   { href: "/settings", label: "Settings" },
 ];
 
-/** Nav entries that only render for admins (isAdmin → true). Today
- *  just the team-todos view; gate via the same helper any future
- *  admin-only surfaces should share. */
-const ADMIN_NAV = [{ href: "/admin/team-todos", label: "Team to-dos" }];
+/** Nav entries that only render for admins (isAdmin → true). The
+ *  single entry points at /admin — the Super Admin layout then
+ *  surfaces sub-sections (feature flags, team to-dos, …) via its
+ *  own sidebar. */
+const ADMIN_NAV = [{ href: "/admin", label: "Super Admin" }];
 
 async function SnapshotMeta() {
   const meta = await dataSourceMeta();
@@ -73,14 +78,21 @@ export default async function RootLayout({
   const session = await auth();
   const viewerIsAdmin = isAdmin(session?.user?.email);
   const nav = viewerIsAdmin ? [...NAV, ...ADMIN_NAV] : NAV;
-  // Per-user personalization — only resolved when the viewer is a
-  // CSM with Gmail connected. Otherwise the provider gets `null` and
-  // the page renders defaults regardless of what's in KV.
+  // Per-user personalization — three layered gates:
+  //   1. Eligibility (CSM with Gmail connected) — protects against
+  //      random viewers skinning the dashboard.
+  //   2. Feature flag (admin can restrict to an allow list) — lets
+  //      a controlled rollout happen without removing eligibility.
+  //   3. Saved personalization exists.
+  // Any miss → provider gets `null` and defaults render.
   const viewerEmail = session?.user?.email ?? null;
-  const personalization =
-    viewerEmail && (await isCsmWithGmail(viewerEmail))
-      ? await loadPersonalization(viewerEmail)
-      : null;
+  const personalizationEnabled =
+    viewerEmail &&
+    (await isCsmWithGmail(viewerEmail)) &&
+    (await isFeatureEnabledFor("personalization", viewerEmail));
+  const personalization = personalizationEnabled
+    ? await loadPersonalization(viewerEmail)
+    : null;
   return (
     <html lang="en" className="h-full antialiased">
       <head>

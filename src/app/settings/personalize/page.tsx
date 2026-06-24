@@ -48,7 +48,9 @@ export default function PersonalizePage() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [ineligible, setIneligible] = useState(false);
+  const [gateState, setGateState] = useState<
+    "ok" | "ineligible" | "disabled"
+  >("ok");
   const [message, setMessage] = useState<string | null>(null);
 
   useEffect(() => {
@@ -56,7 +58,13 @@ export default function PersonalizePage() {
     fetch("/api/personalization", { cache: "no-store" })
       .then(async (r) => {
         if (r.status === 403) {
-          if (!cancelled) setIneligible(true);
+          const j = (await r.json().catch(() => ({}))) as {
+            disabled?: boolean;
+            ineligible?: boolean;
+          };
+          if (!cancelled) {
+            setGateState(j.disabled ? "disabled" : "ineligible");
+          }
           return null;
         }
         if (!r.ok) {
@@ -137,7 +145,7 @@ export default function PersonalizePage() {
     setError(null);
   }
 
-  if (ineligible) {
+  if (gateState === "ineligible") {
     return (
       <section className="bg-surface rounded-xl border border-border shadow-card p-5 max-w-prose">
         <h2 className="text-lg font-semibold text-fg">
@@ -159,6 +167,24 @@ export default function PersonalizePage() {
           Non-CSM viewers (admins, sales, demo accounts) see the
           dashboard&rsquo;s default look — your customizations only
           render for you.
+        </p>
+      </section>
+    );
+  }
+
+  if (gateState === "disabled") {
+    return (
+      <section className="bg-surface rounded-xl border border-border shadow-card p-5 max-w-prose">
+        <h2 className="text-lg font-semibold text-fg">
+          Personalize the dashboard
+        </h2>
+        <p className="text-sm text-muted mt-2">
+          Personalization is currently restricted by your super-admin.
+          Your email isn&rsquo;t on the allow list yet.
+        </p>
+        <p className="text-xs text-muted mt-3">
+          If you need access, ask the super-admin to add you at{" "}
+          <code className="font-mono">/admin/flags</code>.
         </p>
       </section>
     );

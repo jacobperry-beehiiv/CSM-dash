@@ -1,11 +1,26 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { isCsmWithGmail } from "@/lib/auth/csm-eligibility";
+import { isFeatureEnabledFor } from "@/lib/auth/feature-flags";
 import {
   loadPersonalization,
   savePersonalization,
 } from "@/lib/data/personalization";
 import type { Personalization } from "@/lib/data/personalization-types";
+
+/** Combined gate: eligibility (CSM with Gmail) AND the
+ *  admin-configured feature flag (which may restrict to an
+ *  allow-list). Both must pass. Returns the reason for the failure
+ *  so the route can return a UX-friendly error body. */
+async function checkAccess(
+  email: string
+): Promise<{ ok: true } | { ok: false; reason: "ineligible" | "disabled" }> {
+  if (!(await isCsmWithGmail(email))) return { ok: false, reason: "ineligible" };
+  if (!(await isFeatureEnabledFor("personalization", email))) {
+    return { ok: false, reason: "disabled" };
+  }
+  return { ok: true };
+}
 
 export const dynamic = "force-dynamic";
 
@@ -30,13 +45,20 @@ export async function GET() {
   if (!email) {
     return NextResponse.json({ error: "Sign in required" }, { status: 401 });
   }
-  if (!(await isCsmWithGmail(email))) {
+  const access = await checkAccess(email);
+  if (!access.ok) {
     return NextResponse.json(
-      {
-        error:
-          "Personalization is only available to CSMs with a Gmail account connected. Connect at /settings/gmail.",
-        ineligible: true,
-      },
+      access.reason === "disabled"
+        ? {
+            error:
+              "Personalization is currently restricted. Ask your super-admin to add your email to the allow list at /admin/flags.",
+            disabled: true,
+          }
+        : {
+            error:
+              "Personalization is only available to CSMs with a Gmail account connected. Connect at /settings/gmail.",
+            ineligible: true,
+          },
       { status: 403 }
     );
   }
@@ -50,13 +72,20 @@ export async function PUT(req: Request) {
   if (!email) {
     return NextResponse.json({ error: "Sign in required" }, { status: 401 });
   }
-  if (!(await isCsmWithGmail(email))) {
+  const access = await checkAccess(email);
+  if (!access.ok) {
     return NextResponse.json(
-      {
-        error:
-          "Personalization is only available to CSMs with a Gmail account connected. Connect at /settings/gmail.",
-        ineligible: true,
-      },
+      access.reason === "disabled"
+        ? {
+            error:
+              "Personalization is currently restricted. Ask your super-admin to add your email to the allow list at /admin/flags.",
+            disabled: true,
+          }
+        : {
+            error:
+              "Personalization is only available to CSMs with a Gmail account connected. Connect at /settings/gmail.",
+            ineligible: true,
+          },
       { status: 403 }
     );
   }
