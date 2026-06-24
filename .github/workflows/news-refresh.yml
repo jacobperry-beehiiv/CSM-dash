@@ -1,0 +1,61 @@
+name: news-refresh
+
+# Walks the customer book and refreshes the per-workspace Google
+# News headline cache. Runs once daily at 06:00 UTC (≈ 2am ET / 1am
+# CT) so the dashboard's homepage feed is fresh by the time CSMs
+# start their day. Each customer triggers three Google News RSS
+# queries (business / staffing / sales-funding) — concurrency is
+# capped at 5 inside the sweep engine to stay polite.
+#
+# Required repo secrets:
+#   • CRON_SECRET    — bearer; same value as the Vercel env var
+#   • DASHBOARD_URL  — root URL, no trailing slash
+#
+# Triggers:
+#   • daily at 06:00 UTC
+#   • manually via "Run workflow"
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 6 * * *"
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify required secrets are set
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          DASHBOARD_URL: ${{ secrets.DASHBOARD_URL }}
+        run: |
+          missing=()
+          for v in CRON_SECRET DASHBOARD_URL; do
+            if [ -z "${!v}" ]; then
+              missing+=("$v")
+            fi
+          done
+          if [ "${#missing[@]}" -ne 0 ]; then
+            echo "::error::Missing required repo secret(s): ${missing[*]}"
+            exit 1
+          fi
+          echo "All required secrets present."
+
+      - name: POST /api/news/sweep
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          DASHBOARD_URL: ${{ secrets.DASHBOARD_URL }}
+        run: |
+          set -e
+          response=$(curl -sS -w "\n%{http_code}" -X POST \
+            -H "Authorization: Bearer ${CRON_SECRET}" \
+            -H "Content-Type: application/json" \
+            "${DASHBOARD_URL}/api/news/sweep")
+          body=$(echo "$response" | sed '$d')
+          code=$(echo "$response" | tail -n1)
+          echo "HTTP $code"
+          echo "$body"
+          if [ "$code" != "200" ]; then
+            echo "::error::News refresh sweep failed with HTTP $code"
+            exit 1
+          fi

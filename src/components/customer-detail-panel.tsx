@@ -12,6 +12,7 @@ import { CustomerPaidSubsList } from "./customer-paid-subs-list";
 import { CollapsibleSection } from "./collapsible-section";
 import { CompanyNotes } from "./am/company-notes";
 import { ReviewStatesSection } from "./am/review-states-section";
+import { CustomerNewsSection } from "./am/customer-news-section";
 import { CopyButton } from "./copy-button";
 import { CsmRefreshRow } from "./csm-refresh-row";
 import { HubSpotLinkBadge } from "./hubspot-link-badge";
@@ -345,6 +346,14 @@ export function CustomerDetailPanel({
        *  surface where the customer's detail panel appears. */}
       {c.workspace_id ? (
         <ReviewStatesSection workspaceId={c.workspace_id} />
+      ) : null}
+
+      {/* Recent news — Google News headlines scoped to this
+       *  customer + categorized into structure / staffing / sales-
+       *  funding signals. Cached daily by the news-refresh cron;
+       *  Refresh button bypasses on demand. */}
+      {c.workspace_id ? (
+        <CustomerNewsSection workspaceId={c.workspace_id} />
       ) : null}
 
       {/* Manual notes — same KV the CSM profile-page renders from, but

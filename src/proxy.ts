@@ -63,6 +63,11 @@ export default auth((req) => {
   // /login and the workflow fails with HTTP 307 / exit 1.
   if (pathname.startsWith("/api/deliverability/sweep")) return;
 
+  // Google News headlines sweep — same dual session/bearer auth. The
+  // daily cron warms the per-workspace KV cache the homepage feed
+  // reads from.
+  if (pathname.startsWith("/api/news/sweep")) return;
+
   // Personal-todos sweep — same dual-auth shape. Activates scheduled
   // (future-dated) todos when their surface_at hits and fires the
   // 4-stage due-date reminder ladder. Cron at
