@@ -193,15 +193,57 @@ export function BookNewsPanel({ viewerCsmHandle = null }: BookNewsPanelProps) {
     }
   }
 
+  // Local optimistic dismiss state — a dismissed headline is hidden
+  // immediately rather than waiting for the server roundtrip + refetch.
+  // Keyed `${workspace_id}::${url}` to match the server-side composite.
+  const [pendingDismissed, setPendingDismissed] = useState<Set<string>>(
+    new Set()
+  );
+
   const filteredHeadlines = useMemo(() => {
     if (!data) return [];
-    return data.headlines.filter((h) => activeCategories.has(h.category));
-  }, [data, activeCategories]);
+    return data.headlines.filter(
+      (h) =>
+        activeCategories.has(h.category) &&
+        !pendingDismissed.has(`${h.customer.workspace_id}::${h.url}`)
+    );
+  }, [data, activeCategories, pendingDismissed]);
 
   const visible = showAll
     ? filteredHeadlines
     : filteredHeadlines.slice(0, DEFAULT_VISIBLE);
   const hasMore = filteredHeadlines.length > visible.length;
+
+  async function dismissHeadline(h: BookHeadline) {
+    const k = `${h.customer.workspace_id}::${h.url}`;
+    // Optimistic — hide immediately. On failure we revert + surface
+    // the error so the row doesn't ghost out without explanation.
+    setPendingDismissed((prev) => new Set(prev).add(k));
+    try {
+      const r = await fetch("/api/news/dismissals", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          workspace_id: h.customer.workspace_id,
+          url: h.url,
+          title: h.title,
+        }),
+      });
+      if (!r.ok) {
+        const j = (await r.json().catch(() => ({}))) as { error?: string };
+        throw new Error(j.error ?? `HTTP ${r.status}`);
+      }
+    } catch (e) {
+      setPendingDismissed((prev) => {
+        const next = new Set(prev);
+        next.delete(k);
+        return next;
+      });
+      setRefreshMessage(
+        `Couldn't dismiss: ${e instanceof Error ? e.message : "unknown"}`
+      );
+    }
+  }
 
   function toggleCategory(c: NewsCategory) {
     setActiveCategories((prev) => {
@@ -345,7 +387,7 @@ export function BookNewsPanel({ viewerCsmHandle = null }: BookNewsPanelProps) {
             {visible.map((h) => (
               <li
                 key={`${h.customer.workspace_id}::${h.url}`}
-                className="flex items-start gap-3 text-sm leading-snug"
+                className="group flex items-start gap-3 text-sm leading-snug"
               >
                 <span
                   className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium border flex-shrink-0 mt-0.5 ${CATEGORY_CHIP[h.category]}`}
@@ -371,6 +413,15 @@ export function BookNewsPanel({ viewerCsmHandle = null }: BookNewsPanelProps) {
                     {h.title}
                   </a>
                 </span>
+                <button
+                  type="button"
+                  onClick={() => void dismissHeadline(h)}
+                  title={`Hide — not related to ${h.customer.company_name}`}
+                  aria-label={`Hide this headline from ${h.customer.company_name}`}
+                  className="flex-shrink-0 mt-0.5 px-1.5 py-0.5 text-[11px] text-muted hover:text-red-700 dark:hover:text-red-300 opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity"
+                >
+                  ×
+                </button>
               </li>
             ))}
           </ul>
