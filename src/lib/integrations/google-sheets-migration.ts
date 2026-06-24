@@ -23,15 +23,19 @@ import type {
 
 const SHEETS_BASE = "https://sheets.googleapis.com/v4/spreadsheets";
 
-const WEEK_HEADER_COLORS: Array<{ r: number; g: number; b: number }> = [
-  { r: 0.851, g: 0.824, b: 0.914 }, // D9D2E9
-  { r: 0.812, g: 0.886, b: 0.953 }, // CFE2F3
-  { r: 0.851, g: 0.918, b: 0.827 }, // D9EAD3
-  { r: 0.988, g: 0.898, b: 0.804 }, // FCE5CD
-  { r: 0.918, g: 0.82, b: 0.863 }, // EAD1DC
-  { r: 0.992, g: 0.949, b: 0.8 }, // FDF2CC
+// Sheets API Color objects use `red`/`green`/`blue` (0..1 floats) —
+// the short `r`/`g`/`b` keys 400 the batchUpdate with
+// "Unknown name 'r'". Both backgroundColor and border.color expect
+// this same shape.
+const WEEK_HEADER_COLORS: Array<{ red: number; green: number; blue: number }> = [
+  { red: 0.851, green: 0.824, blue: 0.914 }, // D9D2E9
+  { red: 0.812, green: 0.886, blue: 0.953 }, // CFE2F3
+  { red: 0.851, green: 0.918, blue: 0.827 }, // D9EAD3
+  { red: 0.988, green: 0.898, blue: 0.804 }, // FCE5CD
+  { red: 0.918, green: 0.82, blue: 0.863 }, // EAD1DC
+  { red: 0.992, green: 0.949, blue: 0.8 }, // FDF2CC
 ];
-const TOTAL_ROW_FILL = { r: 0.937, g: 0.937, b: 0.937 }; // EFEFEF
+const TOTAL_ROW_FILL = { red: 0.937, green: 0.937, blue: 0.937 }; // EFEFEF
 
 interface SheetsRequest {
   // The Sheets API request shape is enormous; we only use a few
@@ -392,7 +396,7 @@ function writeRow(
 function rowFormatRequest(
   sheetId: number,
   rowIndex: number,
-  fill: { r: number; g: number; b: number },
+  fill: { red: number; green: number; blue: number },
   topBorder: boolean
 ): SheetsRequest {
   return {
@@ -410,7 +414,10 @@ function rowFormatRequest(
           ...(topBorder
             ? {
                 borders: {
-                  top: { style: "SOLID_MEDIUM", color: { r: 0, g: 0, b: 0 } },
+                  top: {
+                    style: "SOLID_MEDIUM",
+                    color: { red: 0, green: 0, blue: 0 },
+                  },
                 },
               }
             : {}),
