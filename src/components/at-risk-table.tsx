@@ -170,6 +170,14 @@ export function AtRiskTable({
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
   const [bulkMessage, setBulkMessage] = useState<string | null>(null);
+  // Book-wide "Refresh from Gmail" — force-busts the 6h Gmail cache
+  // for every customer in the active CSM scope. Lets a CSM start
+  // their at-risk triage from the freshest possible "last contacted"
+  // signal without waiting for the cache to age out. The sweep is
+  // metered against the viewer's own Gmail quota (250 req/sec) and
+  // typically finishes in ~15-30s for a 100-customer book.
+  const [refreshBusy, setRefreshBusy] = useState(false);
+  const [refreshMessage, setRefreshMessage] = useState<string | null>(null);
   // Client-side search across the already-flagged accounts. URL-synced
   // (`?q=…`) so navigating away and back restores the filter.
   const [search, setSearch] = useUrlSearch("q");
@@ -319,6 +327,70 @@ export function AtRiskTable({
       setSelected(new Set());
     } else {
       setSelected(new Set(allKeys));
+    }
+  }
+
+  /** POST /api/last-contact/gmail/refresh-book with the active CSM
+   *  scope. Force-busts every cache entry; lastEmailWithBatch fans
+   *  out at 8 concurrent. After success, calls router.refresh() so
+   *  the at-risk RunResult re-computes against the freshly-warmed
+   *  Gmail data on the next server-component pass. */
+  async function refreshFromGmail() {
+    setRefreshBusy(true);
+    setRefreshMessage(null);
+    try {
+      // Mirror the at-risk page's CSM scope by reading the URL
+      // param. Empty / missing → server defaults to ?csm=all per
+      // the route's convention.
+      const params = new URLSearchParams(window.location.search);
+      const csm = params.get("csm") ?? "all";
+      const url = new URL(
+        "/api/last-contact/gmail/refresh-book",
+        window.location.origin
+      );
+      url.searchParams.set("csm", csm);
+      const r = await fetch(url.toString(), { method: "POST" });
+      const j = (await r.json().catch(() => ({}))) as {
+        ok?: boolean;
+        processed?: number;
+        succeeded?: number;
+        failed?: number;
+        customers_in_scope?: number;
+        unique_emails?: number;
+        truncated?: boolean;
+        needs_reconsent?: boolean;
+        no_active_gmail?: boolean;
+        error?: string;
+      };
+      if (!r.ok || j.ok === false) {
+        if (j.needs_reconsent) {
+          throw new Error(
+            "Gmail scope missing — reconnect at /settings/gmail."
+          );
+        }
+        if (j.no_active_gmail) {
+          throw new Error(
+            "No Gmail account connected for this browser. Visit /settings/gmail."
+          );
+        }
+        throw new Error(j.error ?? `HTTP ${r.status}`);
+      }
+      const parts: string[] = [];
+      parts.push(
+        `${j.succeeded ?? 0}/${j.processed ?? 0} customers refreshed`
+      );
+      if ((j.failed ?? 0) > 0) parts.push(`${j.failed} failed`);
+      if (j.truncated) parts.push("hit 1000-email cap (refresh again)");
+      setRefreshMessage(parts.join(" · "));
+      // Re-run the page's server components so the at-risk engine
+      // reads the freshly-cached Gmail data on its next pass.
+      router.refresh();
+    } catch (e) {
+      setRefreshMessage(
+        `Refresh failed: ${e instanceof Error ? e.message : "unknown"}`
+      );
+    } finally {
+      setRefreshBusy(false);
     }
   }
 
@@ -557,7 +629,21 @@ export function AtRiskTable({
           placeholder="Search name, owner, CSM, workspace / publication ID…"
         />
         <CsmSelector csms={csms} />
+        <button
+          type="button"
+          onClick={() => void refreshFromGmail()}
+          disabled={refreshBusy}
+          className="px-3 py-1.5 border border-border-strong rounded-md text-xs hover:bg-canvas disabled:opacity-50 ml-auto"
+          title="Force a live Gmail lookup for every customer in the active CSM scope. Buster the 6h cache so the at-risk re-evaluation reads the freshest 'last contacted' signal. Takes ~15-30s for a 100-customer book."
+        >
+          {refreshBusy
+            ? "Refreshing from Gmail… (~30s)"
+            : "↻ Refresh from Gmail"}
+        </button>
       </FilterBar>
+      {refreshMessage ? (
+        <div className="text-xs text-muted">{refreshMessage}</div>
+      ) : null}
       <div className="text-xs text-muted">
         {filterActive || search ? (
           <>

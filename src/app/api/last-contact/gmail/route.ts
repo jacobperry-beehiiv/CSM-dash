@@ -134,8 +134,11 @@ export async function POST(req: Request) {
       activeEmail,
       requested: emails.length,
       processed: truncated.length,
+      force_fresh: Boolean(body.forceFresh),
     });
-    const results = await lastEmailWithBatch(activeEmail, truncated);
+    const results = await lastEmailWithBatch(activeEmail, truncated, {
+      forceFresh: Boolean(body.forceFresh),
+    });
     return NextResponse.json({
       results,
       count: Object.keys(results).length,
