@@ -9,6 +9,8 @@ import {
   type PersonalTodoOp,
   type TodoPriority,
 } from "@/lib/personal-todos/types";
+import { DoneCheckbox } from "../done-checkbox";
+import { TodoCelebration } from "../todo-celebration";
 
 /**
  * Admin-only team to-dos surface, mounted at /admin/team-todos.
@@ -426,15 +428,17 @@ function TodoRow({
   const [draftTitle, setDraftTitle] = useState(todo.title);
   const [draftDue, setDraftDue] = useState(todo.due_date ?? "");
   const adminEdited = todo.source_meta?.admin_acted_by;
+  const isDone = Boolean(todo.completed_at);
+  const [celebrate, setCelebrate] = useState(false);
+  function handleToggle() {
+    if (!isDone) setCelebrate(true);
+    onToggle();
+  }
 
   return (
-    <li className="px-5 py-2 flex items-start gap-3 hover:bg-canvas/20 transition-colors">
-      <input
-        type="checkbox"
-        checked={Boolean(todo.completed_at)}
-        onChange={onToggle}
-        className="mt-1 rounded border-border-strong"
-      />
+    <li className="relative px-5 py-2 flex items-start gap-3 hover:bg-canvas/20 transition-colors">
+      <TodoCelebration play={celebrate} onDone={() => setCelebrate(false)} />
+      <DoneCheckbox done={isDone} onToggle={handleToggle} />
       <div className="flex-1 min-w-0">
         {editing ? (
           <div className="space-y-1.5">
