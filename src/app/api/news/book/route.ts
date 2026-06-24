@@ -2,6 +2,10 @@ import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { filterCustomers, loadCustomers } from "@/lib/data/load-customers";
 import { loadNewsCache } from "@/lib/data/news-cache";
+import {
+  dismissalKey,
+  loadDismissedKeySet,
+} from "@/lib/data/news-dismissals";
 import type { NewsCategory, NewsHeadline } from "@/lib/integrations/google-news";
 import type { Segment } from "@/lib/types";
 
@@ -102,6 +106,9 @@ export async function GET(req: Request) {
         )
     );
 
+    // Dismissed (workspace, url) pairs hidden globally — every CSM
+    // benefits when one of them flags an off-topic match.
+    const dismissed = await loadDismissedKeySet();
     let withCache = 0;
     const out: BookHeadline[] = [];
     for (const { customer, entry } of entries) {
@@ -111,6 +118,7 @@ export async function GET(req: Request) {
         if (!wantedCategories.has(h.category)) continue;
         const ts = Date.parse(h.published_at);
         if (isNaN(ts) || ts < cutoff) continue;
+        if (dismissed.has(dismissalKey(customer.workspace_id, h.url))) continue;
         out.push({ ...h, customer });
       }
     }
