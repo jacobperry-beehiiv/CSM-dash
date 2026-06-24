@@ -1391,6 +1391,40 @@ export async function fetchHubspotCompanyCsm(
   return data;
 }
 
+/**
+ * Lightweight deal GET — returns `{ id, properties: Record<string, string|null> }`
+ * for the requested property names. Used by the Slack @bot assign
+ * flow to read deal-side fields (touch_level, onboarding_package,
+ * subscriber_tier_billing_cadence, etc.) so they can be transposed
+ * onto the associated company. Returns null on 404 so the caller
+ * can surface "no such deal" inline rather than a stack trace.
+ */
+export async function fetchHubspotDeal(
+  dealId: string,
+  properties: string[]
+): Promise<{ id: string; properties: Record<string, string | null> } | null> {
+  const token = await getAccessToken();
+  const url = new URL(
+    `https://api.hubapi.com/crm/v3/objects/deals/${encodeURIComponent(dealId)}`
+  );
+  url.searchParams.set("properties", properties.join(","));
+  const res = await fetch(url.toString(), {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (res.status === 404) return null;
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(
+      `HubSpot deal ${dealId} fetch failed (${res.status}): ${body.slice(0, 200)}`
+    );
+  }
+  const json = (await res.json()) as {
+    id: string;
+    properties?: Record<string, string | null>;
+  };
+  return { id: json.id, properties: json.properties ?? {} };
+}
+
 export async function fetchHubspotCompany(
   companyId: string,
   properties: string[] = ["name"]

@@ -35,6 +35,7 @@ import { newTodoId, type PersonalTodo } from "../personal-todos/types";
 import {
   fetchDealAssociatedCompanyIds,
   fetchHubspotCompany,
+  fetchHubspotDeal,
   listHubspotOwners,
   patchHubspotCompanyProperties,
   type HubspotOwner,
@@ -84,6 +85,135 @@ type AccountStatus = (typeof STATUS_VALUES)[number];
 const DRIVE_PARENT_FOLDER_ID =
   process.env.DRIVE_ASSIGN_PARENT_FOLDER_ID ??
   "1_8XXke1lzPqnw_qC0uzGp5hdDMbxJAHc";
+
+/** Deal-side fields copied onto the company. The third tuple slot is
+ *  the human-readable label used in the Slack summary so a CSM can
+ *  see what changed without grepping the HubSpot API names. The
+ *  `name` mapping handles "Primary Company Name" → company `name`,
+ *  the rest are same-name on both objects (admin must create them on
+ *  Company; until then the per-field PATCH fails gracefully). */
+const DEAL_TO_COMPANY_FIELDS: Array<{
+  dealProp: string;
+  companyProp: string;
+  label: string;
+  /** True → required (still soft-fails; just used to scope where the
+   *  "optional" Enablement Survey Link sits in the field list). */
+  required: boolean;
+}> = [
+  { dealProp: "primary_company_name", companyProp: "name", label: "Company name", required: true },
+  { dealProp: "touch_level", companyProp: "touch_level", label: "Touch level", required: true },
+  {
+    dealProp: "subscriber_tier_billing_cadence",
+    companyProp: "subscriber_tier_billing_cadence",
+    label: "Subscriber tier + billing cadence",
+    required: true,
+  },
+  { dealProp: "onboarding_package", companyProp: "onboarding_package", label: "Onboarding package", required: true },
+  { dealProp: "is_solutions_involved", companyProp: "is_solutions_involved", label: "Solutions involved", required: true },
+  { dealProp: "enablement_survey_link", companyProp: "enablement_survey_link", label: "Enablement survey link", required: false },
+];
+
+type TemplateVariant = "with_op" | "no_op";
+
+interface TransposeResult {
+  /** Number of fields successfully PATCHed onto the company. */
+  copied: number;
+  /** Fields the company already had a value for — left untouched. */
+  skipped: number;
+  /** Per-field failures with a short reason (HubSpot 400 body). */
+  failures: Array<{ label: string; reason: string }>;
+  /** The raw `onboarding_package` value off the deal (Yes / No / null).
+   *  Surfaced separately so the seed-template branch + Ashley-to-do
+   *  branch can read it without re-fetching. */
+  dealOnboardingPackage: string | null;
+}
+
+function isEmptyHubspotValue(v: string | null | undefined): boolean {
+  return v == null || v.trim() === "";
+}
+
+/** Pull the configured deal fields, read the same fields on the
+ *  company, and per-field PATCH the holes. Per-field so a missing
+ *  company-side property (admin hasn't created it yet) takes only
+ *  itself down. */
+async function runDealToCompanyTranspose(
+  dealId: string,
+  companyId: string
+): Promise<TransposeResult> {
+  const result: TransposeResult = {
+    copied: 0,
+    skipped: 0,
+    failures: [],
+    dealOnboardingPackage: null,
+  };
+  let deal: { properties: Record<string, string | null> } | null = null;
+  try {
+    deal = await fetchHubspotDeal(
+      dealId,
+      DEAL_TO_COMPANY_FIELDS.map((f) => f.dealProp)
+    );
+  } catch (e) {
+    result.failures.push({
+      label: "deal read",
+      reason: e instanceof Error ? e.message : String(e),
+    });
+    return result;
+  }
+  if (!deal) {
+    result.failures.push({
+      label: "deal read",
+      reason: `deal ${dealId} not found`,
+    });
+    return result;
+  }
+  result.dealOnboardingPackage = deal.properties.onboarding_package ?? null;
+
+  let company: { properties: Record<string, string | null> } | null = null;
+  try {
+    company = await fetchHubspotCompany(
+      companyId,
+      DEAL_TO_COMPANY_FIELDS.map((f) => f.companyProp)
+    );
+  } catch (e) {
+    result.failures.push({
+      label: "company read",
+      reason: e instanceof Error ? e.message : String(e),
+    });
+    return result;
+  }
+  if (!company) {
+    result.failures.push({
+      label: "company read",
+      reason: `company ${companyId} not found`,
+    });
+    return result;
+  }
+
+  for (const field of DEAL_TO_COMPANY_FIELDS) {
+    const dealVal = deal.properties[field.dealProp];
+    const companyVal = company.properties[field.companyProp];
+    if (isEmptyHubspotValue(dealVal)) continue;
+    if (!isEmptyHubspotValue(companyVal)) {
+      result.skipped++;
+      continue;
+    }
+    try {
+      await patchHubspotCompanyProperties(companyId, {
+        [field.companyProp]: dealVal,
+      });
+      result.copied++;
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      // Trim to keep the Slack summary scannable; full error still in
+      // Vercel logs via patchHubspotCompanyProperties' own throw site.
+      result.failures.push({
+        label: field.label,
+        reason: msg.length > 120 ? `${msg.slice(0, 120)}…` : msg,
+      });
+    }
+  }
+  return result;
+}
 
 /**
  * Resolve a CSM email to a Slack mention token (`<@U02ABC123>`) so
@@ -594,6 +724,25 @@ export const assignModalHandler: ViewSubmitHandler = async ({ payload }) => {
   }
   const hubspotOk = hubspotErrors.length === 0;
 
+  // ── Deal → Company field transpose (deal path only).
+  // Sales now populates touch_level / subscriber_tier_billing_cadence
+  // / onboarding_package / is_solutions_involved / enablement_survey_link
+  // on the deal itself; this block copies them onto the company so the
+  // company page (and the dashboard) carries the same context. Only
+  // fills holes — if the company already has a non-empty value we
+  // don't clobber it. Each field PATCHes individually so a missing
+  // company-side property (admin hasn't created it yet) doesn't kill
+  // the others.
+  let transposeResult: TransposeResult | null = null;
+  let dealOnboardingPackage: string | null = null;
+  if (hubspotOk && dealResolution) {
+    transposeResult = await runDealToCompanyTranspose(
+      dealResolution.dealId,
+      company.id
+    );
+    dealOnboardingPackage = transposeResult.dealOnboardingPackage;
+  }
+
   // ── Personal to-do sequence for the assigned CSM (gated on HubSpot).
   const todoErrors: string[] = [];
   let todoCount = 0;
@@ -631,6 +780,25 @@ export const assignModalHandler: ViewSubmitHandler = async ({ payload }) => {
           flow: v.status,
           slackUserId: payload.user.id,
         });
+        // When the deal carries Onboarding Package = Yes, prepend an
+        // immediate-surface "Schedule check-in with Ashley" item so
+        // the CSM books the pre-kickoff sync the day they're
+        // assigned. Kept separate from the existing day-1
+        // "(With-package) Internal sync" 3-person playbook item —
+        // that one's the sync itself; this is the CSM's own
+        // calendar-booking nudge.
+        const opYes =
+          (dealOnboardingPackage ?? "").trim().toLowerCase() === "yes";
+        if (opYes) {
+          todos.unshift(
+            buildAshleyCheckinTodo({
+              companyName,
+              hubspotCompanyId: company.id,
+              requesterEmail: requesterEmail || "a teammate",
+              slackUserId: payload.user.id,
+            })
+          );
+        }
         await applyTodoOps(
           targetUserKey,
           todos.map((todo) => ({ type: "add" as const, todo }))
@@ -658,6 +826,10 @@ export const assignModalHandler: ViewSubmitHandler = async ({ payload }) => {
          *  granted drive.readonly yet so the Slack summary can tell
          *  them to reconnect. */
         seed: SeedResult | { skipped_reason: string } | null;
+        /** Which template variant the seed pass used. Surfaced in
+         *  the Slack reply so it's obvious whether the OP or no-OP
+         *  kit shipped. Null when no seed attempted. */
+        seed_variant: TemplateVariant | null;
       }
     | { ok: false; error: string } = { ok: false, error: "skipped" };
 
@@ -688,16 +860,27 @@ export const assignModalHandler: ViewSubmitHandler = async ({ payload }) => {
         );
 
         // Template seeding — only when (1) a template ID is
-        // configured, (2) this is a brand-new folder (not an
-        // idempotent reuse), and (3) the requester has granted
-        // drive.readonly. The first two are hard checks; the
-        // third gets surfaced as a "reconnect Google" hint in the
-        // Slack summary so the rest of the assignment still ships
-        // when scope is missing.
+        // configured for the selected variant, (2) this is a brand-
+        // new folder (not an idempotent reuse), and (3) the
+        // requester has granted drive.readonly. Variant pick:
+        // dealOnboardingPackage === "Yes" → with-OP template;
+        // anything else (No / missing / company-triggered no-deal
+        // flow) → no-OP template, falling back to with-OP if no-OP
+        // isn't configured.
         const driveSettings = await loadSettings();
-        const templateId = (
+        const opTemplate = (
           driveSettings.am?.onboarding_drive_template_folder_id ?? ""
         ).trim();
+        const noOpTemplate = (
+          driveSettings.am?.onboarding_drive_template_folder_id_no_op ?? ""
+        ).trim();
+        const opYes =
+          (dealOnboardingPackage ?? "").trim().toLowerCase() === "yes";
+        const templateVariant: TemplateVariant = opYes ? "with_op" : "no_op";
+        const templateId = opYes
+          ? opTemplate
+          : noOpTemplate || opTemplate /* fallback when no-OP unset */;
+
         let seed: SeedResult | { skipped_reason: string } | null = null;
         if (templateId && folder.created) {
           if (
@@ -714,7 +897,8 @@ export const assignModalHandler: ViewSubmitHandler = async ({ payload }) => {
               seed = await copyDriveFolderContents(
                 requesterEmail,
                 templateId,
-                folder.id
+                folder.id,
+                { companyName }
               );
             } catch (e) {
               seed = {
@@ -732,6 +916,7 @@ export const assignModalHandler: ViewSubmitHandler = async ({ payload }) => {
           webViewLink: folder.webViewLink ?? folderUrl(folder.id),
           name: folder.name,
           seed,
+          seed_variant: seed ? templateVariant : null,
         };
       }
     } catch (e) {
@@ -763,6 +948,7 @@ export const assignModalHandler: ViewSubmitHandler = async ({ payload }) => {
       todoErrors,
       driveResult,
       dealResolution,
+      transposeResult,
     });
   }
 
@@ -1046,6 +1232,50 @@ function addDays(d: Date, days: number): Date {
   return next;
 }
 
+/** One-off "Schedule check-in with Ashley" to-do appended when the
+ *  deal's onboarding_package reads "Yes". Surfaces immediately
+ *  (offset 0, no surface_at) and is due 2 days out so the CSM
+ *  doesn't lose a week before booking the pre-kickoff sync.
+ *  Shares the same source_meta hubspot_company_id key as the rest
+ *  of the playbook batch, so the dedupe check that skips re-assigns
+ *  catches this item too. */
+function buildAshleyCheckinTodo(args: {
+  companyName: string;
+  hubspotCompanyId: string;
+  requesterEmail: string;
+  slackUserId: string;
+}): PersonalTodo {
+  const now = new Date();
+  const nowIso = now.toISOString();
+  const hubspotUrl =
+    hubspotCompanyUrl(args.hubspotCompanyId) ?? args.hubspotCompanyId;
+  return {
+    id: newTodoId(),
+    title: `${args.companyName} — Schedule check-in with Ashley prior to kickoff call`,
+    details:
+      `Auto-added because the deal carries Onboarding Package = Yes. ` +
+      `Book a quick check-in with Ashley before the customer kickoff ` +
+      `so the OP scope is aligned and pre-kickoff context is shared.\n\n` +
+      `Auto-scheduled via @bot assign by ${args.requesterEmail} for ${args.companyName}.\n` +
+      `HubSpot: ${hubspotUrl}`,
+    due_date: addDays(now, 2).toISOString().slice(0, 10),
+    // surface_at: null → visible immediately. Different from the
+    // day-1 "(With-package) Internal sync" item in the playbook,
+    // which surfaces tomorrow.
+    surface_at: null,
+    priority: null,
+    source: "slack_assign",
+    source_meta: {
+      slack_user_id: args.slackUserId,
+      hubspot_company_id: args.hubspotCompanyId,
+    },
+    completed_at: null,
+    remind_via_slack: true,
+    created_at: nowIso,
+    updated_at: nowIso,
+  };
+}
+
 // ─── Helpers ─────────────────────────────────────────────────────────
 
 async function postAssignmentSummary(args: {
@@ -1077,8 +1307,12 @@ async function postAssignmentSummary(args: {
          *  no template configured, or the folder was reused from a
          *  prior assignment. */
         seed: SeedResult | { skipped_reason: string } | null;
+        seed_variant: TemplateVariant | null;
       }
     | { ok: false; error: string };
+  /** Outcome of the deal→company field transpose pass. Null when the
+   *  flow was triggered with a company ID (no deal source). */
+  transposeResult?: TransposeResult | null;
   /** Non-null when the user pasted a deal URL/ID; surfaces a note so
    *  they can verify the right associated company was picked. */
   dealResolution?:
@@ -1119,6 +1353,28 @@ async function postAssignmentSummary(args: {
   } else {
     lines.push(`• ⚠ HubSpot: ${args.hubspotErrors.join(" · ")}`);
   }
+  if (args.transposeResult) {
+    const t = args.transposeResult;
+    const parts: string[] = [];
+    if (t.copied > 0) parts.push(`${t.copied} copied`);
+    if (t.skipped > 0) parts.push(`${t.skipped} already set`);
+    if (t.failures.length > 0) {
+      const first = t.failures
+        .slice(0, 3)
+        .map((f) => f.label)
+        .join(", ");
+      parts.push(
+        `${t.failures.length} failed (${first}${
+          t.failures.length > 3 ? "…" : ""
+        })`
+      );
+    }
+    if (parts.length === 0) {
+      lines.push("• Deal → Company transpose: nothing to copy.");
+    } else {
+      lines.push(`• Deal → Company transpose: ${parts.join(" · ")}.`);
+    }
+  }
   if (args.todoErrors.length === 0) {
     if (args.todoSkippedAsDuplicate) {
       lines.push(
@@ -1148,8 +1404,16 @@ async function postAssignmentSummary(args: {
       } else if (seed.copied === 0 && seed.skipped.length === 0) {
         lines.push("   • Template folder was empty — nothing to seed.");
       } else {
+        const variantLabel =
+          args.driveResult.seed_variant === "with_op"
+            ? "with-OP"
+            : args.driveResult.seed_variant === "no_op"
+              ? "no-OP"
+              : null;
         const partsParts: string[] = [
-          `${seed.copied} file${seed.copied === 1 ? "" : "s"} copied from template`,
+          `${seed.copied} file${seed.copied === 1 ? "" : "s"} copied from ${
+            variantLabel ? `${variantLabel} ` : ""
+          }template`,
         ];
         const failed = seed.skipped.filter(
           (s) => s.reason !== "subfolder (not recursed)"
