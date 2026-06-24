@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { runNewsSweep } from "@/lib/engines/news-sweep";
+import { filterCustomers, loadCustomers } from "@/lib/data/load-customers";
 
 export const dynamic = "force-dynamic";
 // 150 customers × ~3 RSS fetches × ~1-2s each, run 5 concurrent ⇒
@@ -25,6 +26,14 @@ export const maxDuration = 240;
  * Body (optional): `{ workspace_ids?: string[] }` — scope the sweep
  * to a subset. Useful for testing or for back-filling specific
  * customers without running the whole sweep.
+ *
+ * Query (optional): `?csm=<handle>` — scopes the sweep to the
+ * named CSM's book (via `customer_success_manager` on the customer
+ * book). When set, only workspaces owned by that CSM get refreshed.
+ * Used by the homepage "Refresh now" button so a CSM can warm their
+ * own book on demand without triggering a full-book sweep. When
+ * both `?csm` and `workspace_ids` are set, `workspace_ids` wins
+ * (the explicit subset is the most specific signal).
  */
 
 interface PostBody {
@@ -48,6 +57,9 @@ export async function POST(req: Request) {
   }
   const url = new URL(req.url);
   const dryRun = url.searchParams.get("dryRun") === "1";
+  const csmParam = (url.searchParams.get("csm") ?? "").trim();
+  const csmScope =
+    csmParam && csmParam.toLowerCase() !== "all" ? csmParam : null;
 
   let body: PostBody = {};
   if (req.headers.get("content-length")) {
@@ -57,11 +69,24 @@ export async function POST(req: Request) {
       // Tolerate malformed bodies — cron sends none; UI may send {}.
     }
   }
-  const workspaceIds = Array.isArray(body.workspace_ids)
+  let workspaceIds = Array.isArray(body.workspace_ids)
     ? body.workspace_ids.filter(
         (id): id is string => typeof id === "string" && id.length > 0
       )
     : undefined;
+
+  // Resolve ?csm=<handle> → workspace_ids server-side using the
+  // customer book. Explicit workspace_ids in the body always win;
+  // they're the most-specific signal (used by tests + the optional
+  // back-fill path). When neither is set we sweep the full book —
+  // that's the cron's mode.
+  if (!workspaceIds && csmScope) {
+    const all = await loadCustomers();
+    const scoped = filterCustomers(all, { csm: csmScope });
+    workspaceIds = scoped
+      .map((c) => c.workspace_id)
+      .filter((id): id is string => typeof id === "string" && id.length > 0);
+  }
 
   try {
     const result = await runNewsSweep({

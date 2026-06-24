@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { fmtDate } from "../format";
 import type {
   NewsCategory,
@@ -68,42 +68,95 @@ export function BookNewsPanel() {
   );
   const [days, setDays] = useState<7 | 30>(30);
   const [showAll, setShowAll] = useState(false);
+  // Refresh-now state. The sweep is multi-second (~30-60s for a
+  // 150-customer book even when scoped to one CSM); the button shows
+  // "Refreshing…" + a hint about expected time so it doesn't read
+  // as stuck. `refreshMessage` carries the post-run summary so the
+  // CSM can see what landed.
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshMessage, setRefreshMessage] = useState<string | null>(null);
+
+  /** Fetch /api/news/book for the URL-scoped CSM + the active days
+   *  filter. Used both on mount and after a successful Refresh-now
+   *  so the freshly-warmed cache shows up immediately. */
+  const fetchBook = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const csm = params.get("csm") ?? "all";
+      const url = new URL("/api/news/book", window.location.origin);
+      url.searchParams.set("csm", csm);
+      url.searchParams.set("days", String(days));
+      const r = await fetch(url.toString());
+      if (!r.ok) {
+        const j = (await r.json().catch(() => ({}))) as { error?: string };
+        throw new Error(j.error ?? `HTTP ${r.status}`);
+      }
+      const j = (await r.json()) as BookResponse;
+      setData(j);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Unknown");
+    } finally {
+      setLoading(false);
+    }
+  }, [days]);
 
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
-    setError(null);
-    // Read the CSM scope from the URL so this panel matches whatever
-    // the rest of the page is showing. No CSM param → team-wide.
-    const params = new URLSearchParams(window.location.search);
-    const csm = params.get("csm") ?? "all";
-    const url = new URL("/api/news/book", window.location.origin);
-    url.searchParams.set("csm", csm);
-    url.searchParams.set("days", String(days));
-    // Server respects the category filter, but we also re-apply
-    // client-side so toggling the chips doesn't round-trip.
-    fetch(url.toString())
-      .then(async (r) => {
-        if (!r.ok) {
-          const j = await r.json().catch(() => ({}));
-          throw new Error(j.error ?? `HTTP ${r.status}`);
-        }
-        return (await r.json()) as BookResponse;
-      })
-      .then((j) => {
-        if (cancelled) return;
-        setData(j);
-      })
-      .catch((e) => {
-        if (!cancelled) setError(e instanceof Error ? e.message : "Unknown");
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
+    void fetchBook().catch(() => {
+      if (cancelled) return;
+    });
     return () => {
       cancelled = true;
     };
-  }, [days]);
+  }, [fetchBook]);
+
+  /** POST /api/news/sweep?csm=<handle> to refresh the CSM's book on
+   *  demand, then re-fetch the book aggregator so the new headlines
+   *  show up without a page reload. Scoped to the URL-visible CSM
+   *  so a CSM viewing "all" gets the full team refresh, while a
+   *  CSM viewing their own scope only refreshes their own book. */
+  async function refreshNow() {
+    setRefreshing(true);
+    setRefreshMessage(null);
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const csm = params.get("csm") ?? "all";
+      const url = new URL("/api/news/sweep", window.location.origin);
+      url.searchParams.set("csm", csm);
+      const r = await fetch(url.toString(), { method: "POST" });
+      const j = (await r.json().catch(() => ({}))) as {
+        ok?: boolean;
+        processed?: number;
+        succeeded?: number;
+        failed?: number;
+        with_headlines?: number;
+        total_headlines?: number;
+        error?: string;
+      };
+      if (!r.ok || j.ok === false) {
+        throw new Error(j.error ?? `HTTP ${r.status}`);
+      }
+      const parts: string[] = [];
+      parts.push(`${j.succeeded ?? 0}/${j.processed ?? 0} customers refreshed`);
+      if ((j.with_headlines ?? 0) > 0) {
+        parts.push(`${j.with_headlines} with new headlines`);
+      }
+      if ((j.failed ?? 0) > 0) {
+        parts.push(`${j.failed} failed`);
+      }
+      setRefreshMessage(parts.join(" · "));
+      // Re-fetch so the panel reflects the freshly-warmed cache.
+      await fetchBook();
+    } catch (e) {
+      setRefreshMessage(
+        `Refresh failed: ${e instanceof Error ? e.message : "unknown"}`
+      );
+    } finally {
+      setRefreshing(false);
+    }
+  }
 
   const filteredHeadlines = useMemo(() => {
     if (!data) return [];
@@ -140,7 +193,19 @@ export function BookNewsPanel() {
             changes. Refreshed daily at 06:00 UTC.
           </p>
         </div>
+        <button
+          type="button"
+          onClick={() => void refreshNow()}
+          disabled={refreshing || loading}
+          className="px-3 py-1.5 border border-border-strong rounded-md text-xs hover:bg-canvas disabled:opacity-50 flex-shrink-0"
+          title="Re-pull Google News for every customer in your current CSM scope. Takes about a minute."
+        >
+          {refreshing ? "Refreshing… (~60s)" : "↻ Refresh now"}
+        </button>
       </div>
+      {refreshMessage ? (
+        <div className="mb-3 text-xs text-muted">{refreshMessage}</div>
+      ) : null}
 
       <div className="flex flex-wrap items-center gap-2 mb-4">
         {ALL_CATEGORIES.map((c) => {
