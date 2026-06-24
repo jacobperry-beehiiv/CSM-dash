@@ -135,6 +135,123 @@ export interface SeedResult {
 }
 
 /**
+ * List every subfolder directly under `parentFolderId`. Used by the
+ * migration-warmup form's customer picker — each customer has a
+ * folder under the shared CSM customer-folders parent, so listing
+ * those subfolders gives us the canonical "which customers exist"
+ * source (more authoritative than the Metabase snapshot, which
+ * lags HubSpot by hours).
+ *
+ * Requires drive.readonly (or drive.file, if the app created the
+ * folders, which is usually the case for @bot assign-generated
+ * folders). Returns trashed=false subfolders only, sorted by name.
+ */
+export async function listCustomerFolders(
+  requesterEmail: string,
+  parentFolderId: string
+): Promise<DriveFolderRef[]> {
+  const token = await getValidAccessTokenFor(requesterEmail);
+  const safe = parentFolderId.replace(/'/g, "\\'");
+  const q =
+    `'${safe}' in parents and ` +
+    `mimeType = 'application/vnd.google-apps.folder' and ` +
+    `trashed = false`;
+
+  const out: DriveFolderRef[] = [];
+  let pageToken: string | undefined;
+  do {
+    const url = new URL("https://www.googleapis.com/drive/v3/files");
+    url.searchParams.set("q", q);
+    url.searchParams.set("fields", "nextPageToken,files(id,name,webViewLink)");
+    url.searchParams.set("pageSize", "200");
+    url.searchParams.set("supportsAllDrives", "true");
+    url.searchParams.set("includeItemsFromAllDrives", "true");
+    url.searchParams.set("orderBy", "name");
+    if (pageToken) url.searchParams.set("pageToken", pageToken);
+    const res = await fetch(url.toString(), {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) {
+      const body = await res.text();
+      throw new Error(
+        `Drive folder list failed: ${res.status} ${body.slice(0, 400)}`
+      );
+    }
+    const json = (await res.json()) as {
+      files?: Array<{ id: string; name: string; webViewLink?: string }>;
+      nextPageToken?: string;
+    };
+    for (const f of json.files ?? []) {
+      out.push({
+        id: f.id,
+        name: f.name,
+        webViewLink: f.webViewLink ?? folderUrl(f.id),
+        created: false,
+      });
+    }
+    pageToken = json.nextPageToken;
+  } while (pageToken);
+  return out;
+}
+
+/**
+ * Create a fresh Google Sheet inside `parentFolderId` and return
+ * the new file's id + webViewLink. Uses the Drive `files.create`
+ * endpoint with the spreadsheet mimeType — Google creates the
+ * underlying Sheets document automatically.
+ *
+ * The app owns the resulting sheet (the calling CSM is the owner
+ * via their token), so the same `drive.file` scope grants write
+ * access via the Sheets API for `populateMigrationSheet`.
+ */
+export interface GoogleSheetRef {
+  id: string;
+  name: string;
+  webViewLink: string;
+}
+
+export async function createGoogleSheet(
+  requesterEmail: string,
+  parentFolderId: string,
+  name: string
+): Promise<GoogleSheetRef> {
+  const token = await getValidAccessTokenFor(requesterEmail);
+  const res = await fetch(
+    "https://www.googleapis.com/drive/v3/files?fields=id,name,webViewLink&supportsAllDrives=true",
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        name,
+        mimeType: "application/vnd.google-apps.spreadsheet",
+        parents: [parentFolderId],
+      }),
+    }
+  );
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(
+      `Drive sheet create failed: ${res.status} ${body.slice(0, 400)}`
+    );
+  }
+  const json = (await res.json()) as {
+    id: string;
+    name: string;
+    webViewLink?: string;
+  };
+  return {
+    id: json.id,
+    name: json.name,
+    webViewLink:
+      json.webViewLink ??
+      `https://docs.google.com/spreadsheets/d/${json.id}/edit`,
+  };
+}
+
+/**
  * Clone every top-level file from `sourceFolderId` into
  * `destFolderId`. Folders inside the template are NOT recursed in
  * v1 — they get skipped with a `subfolder (not recursed)` reason.
