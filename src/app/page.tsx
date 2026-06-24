@@ -10,6 +10,7 @@ import { fmtCurrency } from "@/components/format";
 import { TeamTasksPanel } from "@/components/team-tasks-panel";
 import { PersonalTodosPanel } from "@/components/personal-todos-panel";
 import { FeatureUpdatesPanel } from "@/components/feature-updates-panel";
+import { BookNewsPanel } from "@/components/home/book-news-panel";
 import type { Customer, Segment } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -85,6 +86,7 @@ export default async function MissionControl({
 
       <TeamTasksPanel />
       <PersonalTodosPanel />
+      <BookNewsPanel />
       <FeatureUpdatesPanel />
     </>
   );
