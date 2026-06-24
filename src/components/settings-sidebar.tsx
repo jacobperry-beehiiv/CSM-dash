@@ -52,6 +52,12 @@ const SECTIONS: Array<{ href: string; label: string; description: string }> = [
     description:
       "Connect Claude Code or Claude Desktop to the dashboard.",
   },
+  {
+    href: "/settings/personalize",
+    label: "Personalize",
+    description:
+      "Dashboard name, accent color, font, logo. CSMs with Gmail connected only.",
+  },
 ];
 
 export function SettingsSidebar() {
