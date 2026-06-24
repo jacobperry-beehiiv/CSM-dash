@@ -490,10 +490,29 @@ function TodoRow({ todo, onToggle, onPatch, onDelete, dim }: RowProps) {
   const sourceInfo = SOURCE_LABEL[todo.source] ?? SOURCE_LABEL.manual;
   const isDone = Boolean(todo.completed_at);
   // Fires the celebration overlay only on the not-done → done
-  // transition. Un-completing a row is intentionally quiet.
+  // transition. We DEFER the actual onToggle call until the
+  // animation finishes — otherwise completing a row would re-sort
+  // it into the "Completed" section (collapsed by default),
+  // unmounting the row mid-animation and killing the sweep before
+  // it played.
   const [celebrate, setCelebrate] = useState(false);
+  // Optimistic-done state: while celebrating, the checkbox shows
+  // done so the click feels instant even though the actual toggle
+  // is deferred until the animation finishes.
+  const visualDone = isDone || celebrate;
   function handleToggle() {
-    if (!isDone) setCelebrate(true);
+    if (isDone) {
+      // Un-toggling — fire immediately, no celebration.
+      onToggle();
+      return;
+    }
+    // Going to done — start the celebration, defer the toggle.
+    setCelebrate(true);
+  }
+  function finishCelebration() {
+    setCelebrate(false);
+    // Fire the actual completion now that the animation has
+    // played. The parent re-sorts the row into Completed.
     onToggle();
   }
   return (
@@ -502,8 +521,8 @@ function TodoRow({ todo, onToggle, onPatch, onDelete, dim }: RowProps) {
         dim ? "opacity-60" : ""
       }`}
     >
-      <TodoCelebration play={celebrate} onDone={() => setCelebrate(false)} />
-      <DoneCheckbox done={isDone} onToggle={handleToggle} />
+      <TodoCelebration play={celebrate} onDone={finishCelebration} />
+      <DoneCheckbox done={visualDone} onToggle={handleToggle} />
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 flex-wrap">
           <input
@@ -511,7 +530,7 @@ function TodoRow({ todo, onToggle, onPatch, onDelete, dim }: RowProps) {
             value={todo.title}
             onChange={(e) => onPatch({ title: e.target.value })}
             className={`flex-1 min-w-[160px] bg-transparent text-sm text-fg outline-none ${
-              isDone ? "line-through text-muted" : ""
+              visualDone ? "line-through text-muted" : ""
             }`}
           />
           {todo.priority ? (
