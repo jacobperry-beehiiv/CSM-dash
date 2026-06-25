@@ -3,9 +3,14 @@ import { auth } from "@/auth";
 import { getActiveEmail } from "@/lib/data/active-user";
 import {
   GmailReadScopeError,
+  lastEmailForCustomerBatch,
+  lastEmailForCustomerCached,
   lastEmailWithBatch,
   lastEmailWithCached,
+  type CustomerSignals,
 } from "@/lib/integrations/gmail-read";
+import { loadCustomers } from "@/lib/data/load-customers";
+import { customerEmailSignals } from "@/lib/data/customer-domains";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -66,6 +71,35 @@ export async function GET(req: Request) {
     );
   }
   try {
+    // Try the per-customer path first — match the target email
+    // against the customer book to find which customer (and
+    // therefore which contact set + domains) it belongs to. Fall
+    // back to the per-email path when there's no match (caller
+    // passed a bare email outside the book).
+    const customers = await loadCustomers();
+    const targetLc = target.toLowerCase();
+    const cust = customers.find(
+      (c) => (c.owner_email ?? "").toLowerCase() === targetLc
+    );
+    if (cust) {
+      const sig = customerEmailSignals(cust);
+      if (sig.emails.length > 0 || sig.domains.length > 0) {
+        const entry = await lastEmailForCustomerCached(
+          activeEmail,
+          { key: targetLc, emails: sig.emails, domains: sig.domains },
+          { forceFresh }
+        );
+        return NextResponse.json({
+          date: entry.date,
+          subject: entry.subject,
+          from: entry.from,
+          matched_email: entry.matched_email,
+          source: "gmail",
+          fetched_at: entry.fetched_at,
+          cached: entry.cached,
+        });
+      }
+    }
     const entry = await lastEmailWithCached(activeEmail, target, {
       forceFresh,
     });
@@ -136,9 +170,68 @@ export async function POST(req: Request) {
       processed: truncated.length,
       force_fresh: Boolean(body.forceFresh),
     });
-    const results = await lastEmailWithBatch(activeEmail, truncated, {
-      forceFresh: Boolean(body.forceFresh),
-    });
+    // Resolve each input email to its customer record so we can do
+    // a per-customer multi-contact query (catches conversations
+    // with anyone at the customer's company, not just the primary
+    // owner). Inputs that don't match a customer fall through to
+    // the legacy per-email path.
+    const customers = await loadCustomers();
+    const byOwner = new Map<string, (typeof customers)[number]>();
+    for (const c of customers) {
+      const e = c.owner_email?.trim().toLowerCase();
+      if (e) byOwner.set(e, c);
+    }
+    const customerSignals: CustomerSignals[] = [];
+    const fallbackEmails: string[] = [];
+    for (const raw of truncated) {
+      const lc = raw.trim().toLowerCase();
+      if (!lc) continue;
+      const c = byOwner.get(lc);
+      if (!c) {
+        fallbackEmails.push(lc);
+        continue;
+      }
+      const sig = customerEmailSignals(c);
+      if (sig.emails.length === 0 && sig.domains.length === 0) {
+        fallbackEmails.push(lc);
+        continue;
+      }
+      customerSignals.push({
+        key: lc,
+        emails: sig.emails,
+        domains: sig.domains,
+      });
+    }
+
+    const results: Record<
+      string,
+      {
+        date: string | null;
+        subject: string | null;
+        from: string | null;
+        matched_email?: string | null;
+        fetched_at: string;
+        cached: boolean;
+      }
+    > = {};
+    if (customerSignals.length > 0) {
+      const customerResults = await lastEmailForCustomerBatch(
+        activeEmail,
+        customerSignals,
+        { forceFresh: Boolean(body.forceFresh) }
+      );
+      for (const [k, v] of Object.entries(customerResults)) {
+        results[k] = v;
+      }
+    }
+    if (fallbackEmails.length > 0) {
+      const legacy = await lastEmailWithBatch(activeEmail, fallbackEmails, {
+        forceFresh: Boolean(body.forceFresh),
+      });
+      for (const [k, v] of Object.entries(legacy)) {
+        results[k] = v;
+      }
+    }
     return NextResponse.json({
       results,
       count: Object.keys(results).length,

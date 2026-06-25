@@ -56,6 +56,14 @@ export class GmailReadScopeError extends Error {
 // already-cached "today" entries from the v1 query get invalidated
 // instead of lingering for 6h.
 const CACHE_KEY_PREFIX = "csm:last-contact-gmail:v2:";
+// v3 (2026-06-25): per-customer cache keyed by the canonical
+// owner_email. Value now reflects "latest with ANY known contact at
+// this customer," derived from the customer's hubspot_contacts + a
+// domain-match clause for business domains. Patches the gap where
+// emails to non-primary contacts (or HubSpot-untracked teammates at
+// the same company) were invisible to the sweep. Bumping the prefix
+// forces a fresh sweep so old per-email-only entries don't linger.
+const CUSTOMER_CACHE_KEY_PREFIX = "csm:last-contact-gmail:v3:";
 const CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
 /** Cap on parallel Gmail calls inside one batch. Gmail's per-user
  *  quota is 250 req/sec; 8 in flight + ~250ms per call leaves plenty
@@ -406,6 +414,390 @@ export async function lastEmailWithBatch(
   }
   await Promise.all(
     Array.from({ length: Math.min(CONCURRENCY, misses.length) }, () => worker())
+  );
+  if (scopeError) throw scopeError;
+  return result;
+}
+
+// --------------------------------------------------------------------- //
+// Per-customer sweep — OR-matches every known contact + the customer's
+// business domain(s) so emails to non-primary contacts (and HubSpot-
+// untracked teammates) get surfaced. v3 cache, keyed by the canonical
+// customer email (owner_email).
+// --------------------------------------------------------------------- //
+
+export interface CustomerSignals {
+  /** Stable key for the cache row — the customer's canonical
+   *  email (owner_email or whatever the caller treats as
+   *  authoritative). When the caller has no owner_email, fall
+   *  back to the workspace_id with a `workspace:` prefix to keep
+   *  the keys distinguishable. */
+  key: string;
+  /** Specific emails to OR-match individually. Typically the union
+   *  of owner_email + every hubspot_contacts[].email. */
+  emails: string[];
+  /** Business domains to OR-match via `from:@dom OR to:@dom`. Empty
+   *  when every contact uses a free-email provider — see
+   *  customerEmailSignals() for the filtering rule. */
+  domains: string[];
+}
+
+export interface CustomerLastContactResult extends GmailLastContactResult {
+  /** Which email the most-recent message was with — informational
+   *  for the tooltip ("Last contact: david@bigcorp.com · 2d ago"). */
+  matched_email: string | null;
+}
+
+export interface CustomerLastContactBatchEntry extends CustomerLastContactResult {
+  cached: boolean;
+}
+
+function customerCacheKey(csmEmail: string, customerKey: string): string {
+  return (
+    CUSTOMER_CACHE_KEY_PREFIX +
+    csmEmail.trim().toLowerCase() +
+    ":" +
+    customerKey.trim().toLowerCase()
+  );
+}
+
+interface CustomerCachedEntry {
+  date: string | null;
+  subject: string | null;
+  from: string | null;
+  matched_email: string | null;
+  /** Snapshot of the signal set we queried against — used to bust
+   *  the cache when the contact list changes (a new HubSpot contact
+   *  shouldn't have to wait for the 6h TTL to be visible). */
+  signal_signature: string;
+  fetched_at: string;
+}
+
+/** Stable string for cache-invalidation comparisons. Same email +
+ *  domain set in any order produces the same signature. */
+function signalSignature(signals: CustomerSignals): string {
+  const e = [...signals.emails].sort();
+  const d = [...signals.domains].sort();
+  return JSON.stringify({ e, d });
+}
+
+async function readCustomerCache(
+  csmEmail: string,
+  signals: CustomerSignals
+): Promise<CustomerCachedEntry | null> {
+  const entry = await kvGet<Partial<CustomerCachedEntry>>(
+    customerCacheKey(csmEmail, signals.key)
+  );
+  if (!entry) return null;
+  const fetchedMs = Date.parse(entry.fetched_at ?? "");
+  if (!Number.isFinite(fetchedMs)) return null;
+  if (Date.now() - fetchedMs > CACHE_TTL_MS) return null;
+  // Bust if the signal set changed since the cache was written —
+  // a new HubSpot contact or domain is a real change and the user
+  // shouldn't wait out the 6h TTL.
+  const expected = signalSignature(signals);
+  if (entry.signal_signature && entry.signal_signature !== expected) {
+    return null;
+  }
+  return {
+    date: entry.date ?? null,
+    subject: entry.subject ?? null,
+    from: entry.from ?? null,
+    matched_email: entry.matched_email ?? null,
+    signal_signature: entry.signal_signature ?? expected,
+    fetched_at: entry.fetched_at as string,
+  };
+}
+
+async function writeCustomerCache(
+  csmEmail: string,
+  signals: CustomerSignals,
+  entry: Omit<CustomerCachedEntry, "signal_signature">
+): Promise<void> {
+  await kvSet(customerCacheKey(csmEmail, signals.key), {
+    ...entry,
+    signal_signature: signalSignature(signals),
+  });
+}
+
+/**
+ * Run one Gmail query that OR-matches every known signal for a
+ * customer — specific contact emails + business domains — and
+ * return the most-recent message.
+ *
+ * Builds a query like:
+ *   ((from:alice@bigcorp.com OR to:alice@bigcorp.com) OR
+ *    (from:bob@bigcorp.com OR to:bob@bigcorp.com) OR
+ *    (from:@bigcorp.com OR to:@bigcorp.com))
+ *   -in:drafts -in:chats ...
+ *
+ * The domain clause is the gap-filler — it catches conversations
+ * with anyone at the customer's company even when that person
+ * isn't in HubSpot yet.
+ */
+export async function lastEmailForCustomer(
+  csmEmail: string,
+  signals: CustomerSignals
+): Promise<CustomerLastContactResult> {
+  if (signals.emails.length === 0 && signals.domains.length === 0) {
+    return {
+      date: null,
+      subject: null,
+      from: null,
+      matched_email: null,
+      fetched_at: new Date().toISOString(),
+    };
+  }
+
+  const token = await getValidAccessTokenFor(csmEmail);
+  if (!token) {
+    throw new Error(
+      `No valid Gmail token for ${csmEmail}. Visit /settings/gmail to connect.`
+    );
+  }
+
+  function escapeForGmailQuery(s: string): string {
+    // Gmail rejects quotes + backslashes inside the search-operator
+    // value; lower-case for cache-key consistency.
+    return s.trim().toLowerCase().replace(/["\\]/g, "");
+  }
+
+  const emailClauses = signals.emails
+    .map((e) => escapeForGmailQuery(e))
+    .filter(Boolean)
+    .map((e) => `from:${e} OR to:${e}`);
+  const domainClauses = signals.domains
+    .map((d) => escapeForGmailQuery(d))
+    .filter(Boolean)
+    .map((d) => `from:@${d} OR to:@${d}`);
+
+  const unionClauses = [...emailClauses, ...domainClauses];
+  if (unionClauses.length === 0) {
+    return {
+      date: null,
+      subject: null,
+      from: null,
+      matched_email: null,
+      fetched_at: new Date().toISOString(),
+    };
+  }
+  const union = `(${unionClauses.map((c) => `(${c})`).join(" OR ")})`;
+  // Same noise filters as the per-email path (drafts, chats,
+  // categories, system senders) — keeps the two helpers consistent.
+  const q =
+    union +
+    ` -in:drafts -in:chats -in:scheduled` +
+    ` -category:promotions -category:social -category:updates -category:forums` +
+    ` -from:mailer-daemon -from:postmaster` +
+    ` -from:noreply -from:no-reply -from:notifications` +
+    ` -from:calendar-notification@google.com` +
+    ` -from:notifications@hubspot.com -from:notifications@github.com` +
+    ` -from:noreply@intercom.io -from:notify@intercom.io` +
+    ` -from:notifications@zapier.com`;
+
+  const listUrl =
+    `https://gmail.googleapis.com/gmail/v1/users/me/messages` +
+    `?q=${encodeURIComponent(q)}&maxResults=1`;
+
+  const listRes = await fetch(listUrl, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!listRes.ok) {
+    const body = await listRes.text().catch(() => "");
+    if (
+      listRes.status === 403 &&
+      /insufficient.*scope|metadata.*scope|read.*scope/i.test(body)
+    ) {
+      throw new GmailReadScopeError(
+        `Gmail rejected list call as insufficient scope: ${body.slice(0, 200)}`
+      );
+    }
+    throw new Error(
+      `Gmail messages.list failed (${listRes.status}): ${body.slice(0, 200)}`
+    );
+  }
+  const list = (await listRes.json()) as {
+    messages?: Array<{ id?: string }>;
+  };
+  const firstId = list.messages?.[0]?.id;
+  const fetched_at = new Date().toISOString();
+  if (!firstId) {
+    return {
+      date: null,
+      subject: null,
+      from: null,
+      matched_email: null,
+      fetched_at,
+    };
+  }
+
+  const getParams = new URLSearchParams({ format: "metadata" });
+  getParams.append("metadataHeaders", "Subject");
+  getParams.append("metadataHeaders", "From");
+  getParams.append("metadataHeaders", "To");
+  const getUrl =
+    `https://gmail.googleapis.com/gmail/v1/users/me/messages/` +
+    encodeURIComponent(firstId) +
+    `?${getParams.toString()}`;
+  const getRes = await fetch(getUrl, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!getRes.ok) {
+    const body = await getRes.text().catch(() => "");
+    throw new Error(
+      `Gmail messages.get failed (${getRes.status}): ${body.slice(0, 200)}`
+    );
+  }
+  const msg = (await getRes.json()) as {
+    internalDate?: string;
+    payload?: { headers?: Array<{ name?: string; value?: string }> };
+  };
+  let subject: string | null = null;
+  let from: string | null = null;
+  let to: string | null = null;
+  for (const h of msg.payload?.headers ?? []) {
+    const n = (h.name ?? "").toLowerCase();
+    if (n === "subject") subject = h.value ?? null;
+    else if (n === "from") from = h.value ?? null;
+    else if (n === "to") to = h.value ?? null;
+  }
+
+  // Figure out WHICH known contact the matched message was with.
+  // Walk the from/to headers and pick the first contact whose
+  // email appears in either. Falls back to null if Gmail's match
+  // came from a domain-only signal (typical when David Meltzer is
+  // at the customer's domain but isn't in HubSpot).
+  function pickMatchedEmail(): string | null {
+    const fromLc = (from ?? "").toLowerCase();
+    const toLc = (to ?? "").toLowerCase();
+    for (const e of signals.emails) {
+      if (fromLc.includes(e) || toLc.includes(e)) return e;
+    }
+    // Domain match — extract the customer-domain address from the
+    // from/to header so the tooltip still tells the CSM who it was.
+    const headers = `${fromLc} ${toLc}`;
+    for (const d of signals.domains) {
+      const re = new RegExp(`([a-z0-9._%+-]+@${d.replace(/\./g, "\\.")})`, "i");
+      const m = headers.match(re);
+      if (m) return m[1];
+    }
+    return null;
+  }
+
+  if (!msg.internalDate) {
+    return {
+      date: null,
+      subject,
+      from,
+      matched_email: pickMatchedEmail(),
+      fetched_at,
+    };
+  }
+  const ms = Number(msg.internalDate);
+  if (!Number.isFinite(ms)) {
+    return {
+      date: null,
+      subject,
+      from,
+      matched_email: pickMatchedEmail(),
+      fetched_at,
+    };
+  }
+  return {
+    date: new Date(ms).toISOString(),
+    subject,
+    from,
+    matched_email: pickMatchedEmail(),
+    fetched_at,
+  };
+}
+
+/** Cache-aware single-customer lookup. */
+export async function lastEmailForCustomerCached(
+  csmEmail: string,
+  signals: CustomerSignals,
+  opts?: { forceFresh?: boolean }
+): Promise<CustomerLastContactBatchEntry> {
+  if (!opts?.forceFresh) {
+    const cached = await readCustomerCache(csmEmail, signals);
+    if (cached) {
+      return {
+        date: cached.date,
+        subject: cached.subject,
+        from: cached.from,
+        matched_email: cached.matched_email,
+        fetched_at: cached.fetched_at,
+        cached: true,
+      };
+    }
+  }
+  const fresh = await lastEmailForCustomer(csmEmail, signals);
+  await writeCustomerCache(csmEmail, signals, {
+    date: fresh.date,
+    subject: fresh.subject,
+    from: fresh.from,
+    matched_email: fresh.matched_email,
+    fetched_at: fresh.fetched_at,
+  });
+  return {
+    date: fresh.date,
+    subject: fresh.subject,
+    from: fresh.from,
+    matched_email: fresh.matched_email,
+    fetched_at: fresh.fetched_at,
+    cached: false,
+  };
+}
+
+/**
+ * Batch wrapper for per-customer lookups. Returns one entry per
+ * customer keyed by `signals.key` (typically owner_email). Same
+ * concurrency + scope-error semantics as `lastEmailWithBatch`.
+ */
+export async function lastEmailForCustomerBatch(
+  csmEmail: string,
+  customers: CustomerSignals[],
+  opts?: { forceFresh?: boolean }
+): Promise<Record<string, CustomerLastContactBatchEntry>> {
+  const result: Record<string, CustomerLastContactBatchEntry> = {};
+  if (customers.length === 0) return result;
+
+  // Dedupe by key (customers with overlapping owner_emails / shared
+  // signal sets shouldn't run twice).
+  const seen = new Set<string>();
+  const work = customers.filter((c) => {
+    const k = c.key.trim().toLowerCase();
+    if (!k || seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+
+  let cursor = 0;
+  let scopeError: GmailReadScopeError | null = null;
+  async function worker(): Promise<void> {
+    while (true) {
+      const i = cursor++;
+      if (i >= work.length) return;
+      const c = work[i];
+      try {
+        const entry = await lastEmailForCustomerCached(csmEmail, c, opts);
+        result[c.key.trim().toLowerCase()] = entry;
+      } catch (e) {
+        if (e instanceof GmailReadScopeError) {
+          scopeError = e;
+          cursor = work.length;
+          return;
+        }
+        console.warn("[gmail-read] lastEmailForCustomer failed", {
+          csmEmail,
+          customerKey: c.key,
+          error: e instanceof Error ? e.message : String(e),
+        });
+      }
+    }
+  }
+  await Promise.all(
+    Array.from({ length: Math.min(CONCURRENCY, work.length) }, () => worker())
   );
   if (scopeError) throw scopeError;
   return result;
