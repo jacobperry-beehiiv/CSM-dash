@@ -13,6 +13,7 @@ import type {
 /** Resolve admin overrides → fully-populated knob values. Pure, sync.
  *  Used by `determineApproach`, `_buildWeeks`, `generateSchedule`. */
 function resolveKnobs(overrides?: MigrationOverrides) {
+  const maxWeeks = overrides?.max_weeks ?? DEFAULTS.max_weeks;
   return {
     openRateThreshold:
       overrides?.open_rate_conservative_threshold ??
@@ -28,7 +29,9 @@ function resolveKnobs(overrides?: MigrationOverrides) {
         overrides?.approach_multipliers?.aggressive ??
         DEFAULTS.approach_multipliers.aggressive,
     } satisfies Record<Approach, number>,
-    maxWeeks: overrides?.max_weeks ?? DEFAULTS.max_weeks,
+    maxWeeks,
+    /** Conservative-specific cap — falls back to the global. */
+    maxWeeksConservative: overrides?.max_weeks_conservative ?? maxWeeks,
   };
 }
 
@@ -305,7 +308,10 @@ function _buildWeeks(
 ): Week[] {
   const knobs = resolveKnobs(overrides);
   const multiplier = knobs.approachMultipliers[approach];
-  const maxWeeks = knobs.maxWeeks;
+  const maxWeeks =
+    approach === "conservative"
+      ? knobs.maxWeeksConservative
+      : knobs.maxWeeks;
   const biWeekly = spw === 0.5;
 
   const weeks: Week[] = [];

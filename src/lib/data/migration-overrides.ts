@@ -53,6 +53,14 @@ export async function saveMigrationOverrides(
   ) {
     clean.max_weeks = next.max_weeks;
   }
+  if (
+    typeof next.max_weeks_conservative === "number" &&
+    Number.isInteger(next.max_weeks_conservative) &&
+    next.max_weeks_conservative >= 4 &&
+    next.max_weeks_conservative <= 200
+  ) {
+    clean.max_weeks_conservative = next.max_weeks_conservative;
+  }
   await kvSet(KEY, clean);
   return clean;
 }

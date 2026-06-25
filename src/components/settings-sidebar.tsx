@@ -58,6 +58,12 @@ const SECTIONS: Array<{ href: string; label: string; description: string }> = [
     description:
       "Dashboard name, accent color, font, logo. CSMs with Gmail connected only.",
   },
+  {
+    href: "/settings/migration-warmup",
+    label: "Migration warm-up",
+    description:
+      "Open-rate threshold, batch-size percentages, and the per-approach max-week caps the schedule generator uses.",
+  },
 ];
 
 export function SettingsSidebar() {
