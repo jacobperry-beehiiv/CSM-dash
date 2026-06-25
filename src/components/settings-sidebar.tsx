@@ -64,6 +64,12 @@ const SECTIONS: Array<{ href: string; label: string; description: string }> = [
     description:
       "Open-rate threshold, batch-size percentages, and the per-approach max-week caps the schedule generator uses.",
   },
+  {
+    href: "/settings/team-mascots",
+    label: "Team mascots",
+    description:
+      "Upload pet photos for the header logo + to-do celebration rotation. Any CSM can add their own.",
+  },
 ];
 
 export function SettingsSidebar() {
