@@ -30,11 +30,22 @@ export interface MigrationOverrides {
    *  pacing. Reference default: 0.30. */
   open_rate_conservative_threshold?: number;
   /** Multipliers applied to per-batch sizes before cap enforcement.
-   *  Reference defaults: standard 1.0, conservative 0.75, aggressive 1.25. */
+   *  Reference defaults: standard 1.0, conservative 0.75, aggressive 1.25.
+   *  Displayed in the settings UI as percentages (75% etc) — the
+   *  storage stays a 0..N float so the engine math doesn't change. */
   approach_multipliers?: Partial<Record<Approach, number>>;
-  /** Safety bound: engine throws if a schedule would exceed this
-   *  many weeks. Reference default: 52. */
+  /** Global safety bound: engine throws if any schedule would exceed
+   *  this many weeks. Reference default: 52. Used as the cap for
+   *  standard / aggressive AND as the fallback when
+   *  `max_weeks_conservative` is unset. */
   max_weeks?: number;
+  /** Conservative-specific cap. Lets admins say "a conservative
+   *  schedule is allowed to add weeks, but never more than N" —
+   *  separate from the global trip-wire so a tighter cap on
+   *  conservative can be enforced without lowering it for the
+   *  standard / aggressive paths. Falls back to `max_weeks` when
+   *  unset. */
+  max_weeks_conservative?: number;
 }
 
 /** Hard-coded matches the bundled config.json — kept here so the
@@ -47,4 +58,7 @@ export const DEFAULTS = {
     aggressive: 1.25,
   } satisfies Record<Approach, number>,
   max_weeks: 52,
+  /** Default = same as the global max_weeks. The setting becomes
+   *  useful only when an admin sets it lower than the global. */
+  max_weeks_conservative: 52,
 };

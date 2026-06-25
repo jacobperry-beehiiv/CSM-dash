@@ -103,6 +103,10 @@ function ActiveSettingsCard({
   const mAgg =
     m.aggressive ?? DEFAULTS.approach_multipliers.aggressive;
   const mw = overrides.max_weeks ?? DEFAULTS.max_weeks;
+  const mwc = overrides.max_weeks_conservative ?? mw;
+  const mwcOverridden =
+    overrides.max_weeks_conservative !== undefined &&
+    overrides.max_weeks_conservative !== mw;
   return (
     <section className="bg-surface rounded-xl border border-border shadow-card p-4 text-xs">
       <div className="flex items-baseline justify-between gap-3 mb-2">
@@ -111,15 +115,19 @@ function ActiveSettingsCard({
         </h3>
         {viewerIsAdmin ? (
           <a
-            href="/admin/migration-warmup"
+            href="/settings/migration-warmup"
             className="text-[11px] text-accent hover:underline"
           >
             Edit ↗
           </a>
         ) : (
-          <span className="text-[11px] text-muted">
-            Tunable by super-admin
-          </span>
+          <a
+            href="/settings/migration-warmup"
+            className="text-[11px] text-accent hover:underline"
+            title="View-only — only super-admins can change these"
+          >
+            View ↗
+          </a>
         )}
       </div>
       <ul className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-1.5 text-muted">
@@ -131,22 +139,30 @@ function ActiveSettingsCard({
           {orOverridden ? <Overridden /> : null}
         </li>
         <li>
-          Max weeks (safety bound):{" "}
+          Max weeks (global):{" "}
           <span className="font-mono text-fg">{mw}</span>
           {overrides.max_weeks !== undefined &&
           overrides.max_weeks !== DEFAULTS.max_weeks ? (
             <Overridden />
           ) : null}
         </li>
+        <li>
+          Max weeks (conservative):{" "}
+          <span className="font-mono text-fg">{mwc}</span>
+          {mwcOverridden ? <Overridden /> : null}
+        </li>
         <li className="md:col-span-2">
-          Multipliers:{" "}
-          <span className="font-mono text-fg">standard {mStd}×</span> ·{" "}
+          Batch size %:{" "}
           <span className="font-mono text-fg">
-            conservative {mCon}×
+            standard {Math.round(mStd * 100)}%
           </span>{" "}
           ·{" "}
           <span className="font-mono text-fg">
-            aggressive {mAgg}×
+            conservative {Math.round(mCon * 100)}%
+          </span>{" "}
+          ·{" "}
+          <span className="font-mono text-fg">
+            aggressive {Math.round(mAgg * 100)}%
           </span>
         </li>
       </ul>
