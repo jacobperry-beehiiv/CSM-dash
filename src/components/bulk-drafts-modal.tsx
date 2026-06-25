@@ -230,6 +230,15 @@ export function BulkDraftsModal({
   const [expandedBodies, setExpandedBodies] = useState<Set<string>>(
     new Set()
   );
+  // Client-side BCC-combine mode. When on, every recipient across
+  // every draft gets folded into one synthetic draft with the union
+  // BCC'd. Sits alongside the existing server-built `bcc_batch`
+  // flag (Past Due Below-$3.5K) — that one is template-driven; this
+  // one is a per-batch override the user can toggle on top of any
+  // open modal. Per-customer merge tags fall back to the first
+  // draft's render (the body shows in Gmail compose before send, so
+  // the user can edit if needed).
+  const [combineBcc, setCombineBcc] = useState(false);
 
   function toggleBody(draftKey: string) {
     setExpandedBodies((prev) => {
@@ -385,6 +394,102 @@ export function BulkDraftsModal({
     [drafts, recipientSelection, selectedFrom]
   );
 
+  /**
+   * Synthetic single draft built from every recipient across every
+   * actionable draft. Only produced when the user has flipped on the
+   * "Combine into single BCC email" toggle. Returns null when the
+   * combine mode is off OR the batch is empty.
+   *
+   * Shape rules:
+   *   • TO  = sender's primary Gmail (or empty if not connected) —
+   *           Gmail expects a TO header; using the sender's own
+   *           address is the standard BCC-blast convention so the
+   *           sent message lands in their own inbox as a record.
+   *   • CC  = nothing. Per-draft CC's (e.g. Enterprise-CC-the-CSM)
+   *           don't generalize across customers; keeping CC empty
+   *           avoids leaking one customer's CSM onto another's BCC.
+   *   • BCC = union of every selected recipient across every draft
+   *           (deduped, case-insensitive).
+   *   • Subject + body = the first draft's live-rendered values.
+   *           Customer-specific merge tags will resolve to the
+   *           first customer; the user reviews + edits in Gmail
+   *           compose before send.
+   *
+   * Tracking + audit ids are unioned across the source drafts so
+   * lifecycle stamping covers every customer the BCC actually
+   * reached — same shape as the existing server-built bcc_batch
+   * flow.
+   */
+  const combinedDraft = useMemo(() => {
+    if (!combineBcc) return null;
+    if (actionableDrafts.length === 0) return null;
+    const allEmails: string[] = [];
+    const seen = new Set<string>();
+    const trackingIds: string[] = [];
+    const auditIds: string[] = [];
+    for (const d of actionableDrafts) {
+      // For server-built bcc_batch drafts the recipients live in
+      // d.bcc; for client-built drafts they live in the `to` after
+      // the user's recipient toggles. Combine handles both so a
+      // mixed batch (rare) still gets folded correctly.
+      const sources = d.bcc_batch
+        ? (d.bcc ?? "").split(",")
+        : d.to.split(",");
+      for (const raw of sources) {
+        const e = raw.trim();
+        if (!e) continue;
+        const k = e.toLowerCase();
+        if (seen.has(k)) continue;
+        seen.add(k);
+        allEmails.push(e);
+      }
+      if (d.tracking_ids?.length) trackingIds.push(...d.tracking_ids);
+      else if (d.tracking_id) trackingIds.push(d.tracking_id);
+      if (d.audit_workspace_ids?.length)
+        auditIds.push(...d.audit_workspace_ids);
+      else if (d.audit_workspace_id) auditIds.push(d.audit_workspace_id);
+    }
+    const first = actionableDrafts[0];
+    const toAddress = gmail?.email ?? "";
+    const bccString = allEmails.join(", ");
+    const draft: BulkDraft = {
+      customer_label: `BCC blast — ${allEmails.length} recipient${allEmails.length === 1 ? "" : "s"}`,
+      tracking_ids: trackingIds,
+      to: toAddress,
+      // No CC: per-draft CCs (e.g. Enterprise-CC-the-CSM) don't
+      // generalize across customers; keeping CC empty avoids
+      // leaking one customer's CSM onto another's BCC.
+      cc: undefined,
+      bcc: bccString,
+      subject: first.subject,
+      body_text: first.body_text,
+      body_html: first.body_html,
+      compose_url: buildGmailComposeUrl(
+        toAddress,
+        first.subject,
+        first.body_text,
+        undefined,
+        bccString
+      ),
+      // Empty: the synthetic draft doesn't surface a per-recipient
+      // picker — recipients have already been chosen in their
+      // source drafts.
+      recipients: [],
+      from: selectedFrom || undefined,
+      bcc_batch: true,
+      audit_workspace_ids: auditIds.length > 0 ? auditIds : undefined,
+      audit_label: first.audit_label,
+    };
+    return draft;
+  }, [combineBcc, actionableDrafts, gmail?.email, selectedFrom]);
+
+  /** The list the action buttons + draft preview render from.
+   *  Either the original per-customer batch OR the single combined
+   *  draft, depending on the toggle. */
+  const finalDrafts: BulkDraft[] = combinedDraft
+    ? [combinedDraft]
+    : actionableDrafts;
+
   // Lazy-load Gmail connection status when the modal mounts
   useEffect(() => {
     let cancelled = false;
@@ -442,7 +547,7 @@ export function BulkDraftsModal({
   function openAll() {
     let opened = 0;
     const handed: string[] = [];
-    for (const d of actionableDrafts) {
+    for (const d of finalDrafts) {
       const w = window.open(d.compose_url, "_blank", "noopener,noreferrer");
       if (w) {
         opened++;
@@ -459,7 +564,7 @@ export function BulkDraftsModal({
 
   function downloadCsv() {
     const header = ["email", "subject", "body"].join(",");
-    const lines = actionableDrafts.map((d) =>
+    const lines = finalDrafts.map((d) =>
       [csvEscape(d.to), csvEscape(d.subject), csvEscape(d.body_text)].join(",")
     );
     const ts = new Date().toISOString().slice(0, 10);
@@ -471,15 +576,16 @@ export function BulkDraftsModal({
   }
 
   async function createGmailDrafts() {
-    if (actionableDrafts.length === 0) return;
+    if (finalDrafts.length === 0) return;
     setGmailBusy(true);
     setGmailMessage(null);
     console.log("[bulk-drafts] Submit", {
-      count: actionableDrafts.length,
-      with_cc: actionableDrafts.filter((d) => d.cc).length,
-      with_bcc: actionableDrafts.filter((d) => d.bcc).length,
-      with_from_alias: actionableDrafts.filter((d) => d.from).length,
-      with_tracking_id: actionableDrafts.filter((d) => d.tracking_id)
+      count: finalDrafts.length,
+      combineBcc,
+      with_cc: finalDrafts.filter((d) => d.cc).length,
+      with_bcc: finalDrafts.filter((d) => d.bcc).length,
+      with_from_alias: finalDrafts.filter((d) => d.from).length,
+      with_tracking_id: finalDrafts.filter((d) => d.tracking_id)
         .length,
     });
     try {
@@ -487,7 +593,7 @@ export function BulkDraftsModal({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          drafts: actionableDrafts.map((d) => ({
+          drafts: finalDrafts.map((d) => ({
             to: d.to,
             // CC/BCC ride through to Gmail API drafts too so the
             // Enterprise-CC behavior + future BCC flows match what the
@@ -575,7 +681,7 @@ export function BulkDraftsModal({
       if (Array.isArray(j.succeeded_tracking_ids)) {
         handed = j.succeeded_tracking_ids;
       } else {
-        handed = actionableDrafts.flatMap((d) =>
+        handed = finalDrafts.flatMap((d) =>
           d.tracking_ids?.length
             ? d.tracking_ids
             : d.tracking_id
@@ -707,16 +813,43 @@ export function BulkDraftsModal({
         </div>
 
         <div className="px-4 py-3 border-b border-border bg-canvas space-y-2">
+          {/* Toggle: fold the whole batch into one BCC blast. Lives
+           *  above the action buttons so the user sees what they're
+           *  about to do before clicking. The action-button labels
+           *  reflect the active mode (1 BCC blast vs. N per-customer
+           *  drafts). */}
+          {actionableDrafts.length > 1 ? (
+            <label className="flex items-start gap-2 text-xs text-fg cursor-pointer">
+              <input
+                type="checkbox"
+                checked={combineBcc}
+                onChange={(e) => setCombineBcc(e.target.checked)}
+                className="mt-0.5 h-3.5 w-3.5 rounded border-border-strong cursor-pointer"
+              />
+              <span>
+                <strong className="text-fg">Combine into one BCC email</strong>
+                <span className="text-muted">
+                  {" "}— fold every selected recipient across {actionableDrafts.length}{" "}
+                  drafts into a single email with everyone BCC&rsquo;d.
+                  Customer-specific merge tags will resolve to the
+                  first customer; review the body in Gmail compose
+                  before sending.
+                </span>
+              </span>
+            </label>
+          ) : null}
           <div className="flex flex-wrap items-center gap-2">
             {gmail?.connected ? (
               <button
                 onClick={createGmailDrafts}
-                disabled={loading || actionableDrafts.length === 0 || gmailBusy}
+                disabled={loading || finalDrafts.length === 0 || gmailBusy}
                 className="px-3 py-1.5 bg-accent text-accent-fg rounded-md text-sm font-medium hover:bg-accent-hover disabled:opacity-50"
               >
                 {gmailBusy
                   ? "Creating drafts…"
-                  : `📥 Create ${actionableDrafts.length} drafts in ${gmail.email ?? "Gmail"}`}
+                  : combinedDraft
+                    ? `📥 Create 1 BCC draft in ${gmail.email ?? "Gmail"}`
+                    : `📥 Create ${finalDrafts.length} drafts in ${gmail.email ?? "Gmail"}`}
               </button>
             ) : (
               <a
@@ -729,7 +862,7 @@ export function BulkDraftsModal({
             )}
             <button
               onClick={downloadCsv}
-              disabled={loading || actionableDrafts.length === 0}
+              disabled={loading || finalDrafts.length === 0}
               className="px-3 py-1.5 border border-border-strong rounded-md text-sm hover:bg-canvas disabled:opacity-50"
               title="Download a CSV of every draft (email/subject/body) for use with mail-merge tools like YAMM."
             >
@@ -737,10 +870,10 @@ export function BulkDraftsModal({
             </button>
             <button
               onClick={openAll}
-              disabled={loading || actionableDrafts.length === 0}
+              disabled={loading || finalDrafts.length === 0}
               className="px-3 py-1.5 border border-border-strong rounded-md text-sm hover:bg-canvas disabled:opacity-50"
             >
-              Open all in Gmail tabs
+              {combinedDraft ? "Open BCC draft in Gmail" : "Open all in Gmail tabs"}
             </button>
           </div>
           <div className="flex flex-wrap items-center gap-3 text-xs text-muted">
@@ -771,7 +904,12 @@ export function BulkDraftsModal({
           {drafts.length === 0 && !loading ? (
             <p className="p-4 text-sm text-muted">No drafts to show.</p>
           ) : null}
-          {drafts.map((d) => {
+          {/* In combine mode, render only the synthetic single draft —
+           *  the per-customer rows would just confuse the picture
+           *  ("which one is the modal actually going to send?"). The
+           *  source drafts are still in `drafts` so flipping the toggle
+           *  off restores the per-customer view. */}
+          {(combinedDraft ? [combinedDraft] : drafts).map((d) => {
             const draftKey = d.compose_url;
             const sel = recipientSelection[draftKey] ?? new Set();
             const liveToStr = liveTo(d);
