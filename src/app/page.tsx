@@ -6,11 +6,13 @@ import {
   resolveCsmFilter,
 } from "@/lib/data/load-customers";
 import { auth } from "@/auth";
+import { isCsmTeamMember } from "@/lib/auth/csm-team";
 import { fmtCurrency } from "@/components/format";
 import { TeamTasksPanel } from "@/components/team-tasks-panel";
 import { PersonalTodosPanel } from "@/components/personal-todos-panel";
 import { FeatureUpdatesPanel } from "@/components/feature-updates-panel";
 import { BookNewsPanel } from "@/components/home/book-news-panel";
+import { PortfolioHeading } from "@/components/portfolio-heading";
 import type { Customer, Segment } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -40,10 +42,11 @@ export default async function MissionControl({
   // surface in the subtitle text.
   let csm: string | null = null;
 
+  const session = await auth();
+  const viewerEmail = session?.user?.email ?? null;
   try {
     const all = await loadCustomers();
-    const session = await auth();
-    csm = resolveCsmFilter(sp.csm, all, session?.user?.email);
+    csm = resolveCsmFilter(sp.csm, all, viewerEmail);
     book = filterCustomers(all, { csm, segment });
     entCount = book.filter(isEnterprise).length;
     nonEntCount = book.length - entCount;
@@ -52,13 +55,15 @@ export default async function MissionControl({
   }
 
   const totalArr = book.reduce((s, c) => s + c.arr, 0);
+  // CSM team members get the Sherlock-themed heading where the
+  // detective dog visually replaces "Port" in "Portfolio". Non-CSM
+  // viewers (admins, sales, demo accounts) see the standard label.
+  const viewerIsCsmTeam = await isCsmTeamMember(viewerEmail);
 
   return (
     <>
       <div className="mb-10">
-        <h1 className="text-[40px] leading-[1.1] font-semibold text-fg tracking-tight">
-          Portfolio overview
-        </h1>
+        <PortfolioHeading isCsmTeam={viewerIsCsmTeam} />
         <p className="text-[15px] text-muted mt-3">
           Data from{" "}
           <code className="bg-surface-2 px-1.5 py-0.5 rounded text-fg font-mono text-[13px]">
