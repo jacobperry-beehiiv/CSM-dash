@@ -7,6 +7,7 @@ import {
 } from "@/lib/integrations/google-drive";
 import { populateMigrationSheet } from "@/lib/integrations/google-sheets-migration";
 import { buildPlan } from "@/lib/engines/migration-warmup/engine";
+import { loadMigrationOverrides } from "@/lib/data/migration-overrides";
 import type {
   ListInput,
   MigrationPlan,
@@ -112,9 +113,14 @@ export async function POST(req: Request) {
     structure: body.structure === "nls" ? "nls" : "separate",
   };
 
+  // Load admin overrides (open-rate threshold, multipliers, max_weeks).
+  // Pure-function engine never reads the KV — we resolve here + thread
+  // the merged knobs in, so engine tests stay deterministic.
+  const overrides = await loadMigrationOverrides();
+
   let plan: MigrationPlan;
   try {
-    plan = buildPlan(planInput);
+    plan = buildPlan(planInput, overrides);
   } catch (e) {
     return NextResponse.json(
       { error: e instanceof Error ? e.message : "Plan failed" },

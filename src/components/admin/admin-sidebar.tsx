@@ -15,6 +15,12 @@ const SECTIONS: Array<{ href: string; label: string; description: string }> = [
     label: "Team to-dos",
     description: "Every CSM's personal to-do list — view, edit, audit.",
   },
+  {
+    href: "/admin/migration-warmup",
+    label: "Migration warm-up",
+    description:
+      "Tune the open-rate threshold, approach multipliers, and safety bound that drive the generated schedule.",
+  },
 ];
 
 /** Sidebar nav for /admin/* — mirrors SettingsSidebar's pattern.

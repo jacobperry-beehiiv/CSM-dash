@@ -51,32 +51,43 @@ export async function GET() {
   ]);
   const today = todayYmdUtc();
 
-  // Build a lookup: email → CSM handle. userKey is `email:<lowered>`
-  // by convention (see userKeyFromEmail in personal-todos/identity.ts);
-  // strip the prefix to recover the email, then look up the handle.
+  // userKey is the lowercased CSM email — same convention as
+  // userKeyFromEmail() in personal-todos/identity.ts. Both the
+  // dashboard (NextAuth session email) and the Slack webhook
+  // (slack id → email via the resolution chain) write to that
+  // shape, so it's the single source of truth.
+  //
+  // The customer book gives us:
+  //   • the canonical set of CSM emails (filter — anything else is
+  //     a non-CSM whose todo bucket exists by mistake; see #N below)
+  //   • email → CSM handle (display label "Jacob_Perry" → "Jacob Perry")
+  const csmEmails = new Set<string>();
   const emailToHandle = new Map<string, string>();
   for (const c of customers) {
-    if (c.customer_success_manager_email && c.customer_success_manager) {
-      emailToHandle.set(
-        c.customer_success_manager_email.toLowerCase(),
-        c.customer_success_manager
-      );
+    const e = c.customer_success_manager_email?.trim().toLowerCase();
+    if (!e) continue;
+    csmEmails.add(e);
+    if (c.customer_success_manager) {
+      emailToHandle.set(e, c.customer_success_manager);
     }
   }
 
-  // Collect every userKey we know about — both ones with existing
-  // todos AND every CSM in the book (even if they have zero todos
-  // yet). That way an admin can add a fresh todo for a CSM whose
-  // slice doesn't exist yet.
+  // Collect userKeys from:
+  //   1. Existing todo buckets in KV.
+  //   2. Every CSM in the book (so an admin can seed a fresh todo
+  //      for a CSM whose slice doesn't exist yet).
+  // Both sources contribute bare-email keys — Set dedupes them.
+  // We then filter to csmEmails, dropping todo buckets that
+  // accumulated for non-CSMs (Tyler, Kanishka, etc.). Their
+  // existing rows remain in KV (no data loss); they're just hidden
+  // from the admin display. Future Slack writes are blocked at the
+  // resolver (see identity.ts).
   const userKeys = new Set<string>(Object.keys(state.by_user));
-  for (const c of customers) {
-    if (c.customer_success_manager_email) {
-      userKeys.add(`email:${c.customer_success_manager_email.toLowerCase()}`);
-    }
-  }
+  for (const e of csmEmails) userKeys.add(e);
 
   const users: UserSummary[] = [];
   for (const userKey of userKeys) {
+    if (!csmEmails.has(userKey)) continue; // skip non-CSM buckets
     const todos = state.by_user[userKey]?.todos ?? [];
     let openCount = 0;
     let scheduledCount = 0;
@@ -92,14 +103,10 @@ export async function GET() {
         openCount++;
       }
     }
-    const email = userKey.startsWith("email:")
-      ? userKey.slice("email:".length)
-      : null;
-    const handle = email ? emailToHandle.get(email) ?? null : null;
     users.push({
       userKey,
-      csm_handle: handle,
-      email,
+      csm_handle: emailToHandle.get(userKey) ?? null,
+      email: userKey,
       open_count: openCount,
       scheduled_count: scheduledCount,
       completed_count: completedCount,
