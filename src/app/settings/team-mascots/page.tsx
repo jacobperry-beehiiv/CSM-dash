@@ -42,6 +42,14 @@ export default function TeamMascotsPage() {
   // successful delete looked silent if the list happened to be
   // long enough to push it off-screen.
   const [removingId, setRemovingId] = useState<string | null>(null);
+  // Inline two-step confirm. window.confirm() turned out to be
+  // silently suppressed in some Vercel-hosted browser contexts —
+  // the click would fire, the dialog never appeared, the falsy
+  // return ate the delete with zero feedback. This drives the
+  // first/second-click pattern instead.
+  const [pendingConfirmId, setPendingConfirmId] = useState<string | null>(
+    null
+  );
 
   const load = async () => {
     setLoading(true);
@@ -107,10 +115,10 @@ export default function TeamMascotsPage() {
   }
 
   async function remove(m: TeamMascot) {
-    if (!window.confirm(`Remove "${m.label}" from the rotation?`)) return;
     setError(null);
     setMessage(null);
     setRemovingId(m.id);
+    setPendingConfirmId(null);
     try {
       const r = await fetch(
         `/api/team-mascots?id=${encodeURIComponent(m.id)}`,
@@ -273,14 +281,37 @@ export default function TeamMascotsPage() {
                     {m.added_by ?? "—"} ·{" "}
                     {(m.size_bytes / 1024).toFixed(0)} KB
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => void remove(m)}
-                    disabled={removingId !== null}
-                    className="px-2 py-1 mt-1 text-[11px] border border-border-strong rounded-md bg-surface hover:bg-red-50 hover:text-red-700 hover:border-red-300 dark:hover:bg-red-500/10 dark:hover:text-red-300 dark:hover:border-red-500/40 disabled:opacity-50 transition-colors"
-                  >
-                    {removingId === m.id ? "Removing…" : "Remove"}
-                  </button>
+                  {removingId === m.id ? (
+                    <span className="px-2 py-1 mt-1 inline-block text-[11px] text-muted">
+                      Removing…
+                    </span>
+                  ) : pendingConfirmId === m.id ? (
+                    <div className="mt-1 flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => void remove(m)}
+                        className="px-2 py-1 text-[11px] border border-red-300 dark:border-red-500/40 rounded-md bg-red-50 dark:bg-red-500/10 text-red-700 dark:text-red-300 font-medium hover:bg-red-100 dark:hover:bg-red-500/20"
+                      >
+                        Confirm
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setPendingConfirmId(null)}
+                        className="px-2 py-1 text-[11px] border border-border-strong rounded-md bg-surface hover:bg-canvas"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setPendingConfirmId(m.id)}
+                      disabled={removingId !== null}
+                      className="px-2 py-1 mt-1 text-[11px] border border-border-strong rounded-md bg-surface hover:bg-red-50 hover:text-red-700 hover:border-red-300 dark:hover:bg-red-500/10 dark:hover:text-red-300 dark:hover:border-red-500/40 disabled:opacity-50 transition-colors"
+                    >
+                      Remove
+                    </button>
+                  )}
                 </div>
               </li>
             ))}
