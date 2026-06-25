@@ -13,6 +13,7 @@ import { PersonalTodosPanel } from "@/components/personal-todos-panel";
 import { FeatureUpdatesPanel } from "@/components/feature-updates-panel";
 import { BookNewsPanel } from "@/components/home/book-news-panel";
 import { PortfolioHeading } from "@/components/portfolio-heading";
+import { loadActiveCsmDogs } from "@/lib/branding/csm-dogs";
 import type { Customer, Segment } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -55,15 +56,20 @@ export default async function MissionControl({
   }
 
   const totalArr = book.reduce((s, c) => s + c.arr, 0);
-  // CSM team members get the Sherlock-themed heading where the
-  // detective dog visually replaces "Port" in "Portfolio". Non-CSM
+  // CSM team members get a mascot-themed heading where the random
+  // team pet image visually replaces "Port" in "Portfolio". Non-CSM
   // viewers (admins, sales, demo accounts) see the standard label.
   const viewerIsCsmTeam = await isCsmTeamMember(viewerEmail);
+  const mascots = viewerIsCsmTeam ? await loadActiveCsmDogs() : [];
+  const headingMascot =
+    mascots.length > 0
+      ? mascots[Math.floor(Math.random() * mascots.length)]
+      : null;
 
   return (
     <>
       <div className="mb-10">
-        <PortfolioHeading isCsmTeam={viewerIsCsmTeam} />
+        <PortfolioHeading mascot={headingMascot} />
         <p className="text-[15px] text-muted mt-3">
           Data from{" "}
           <code className="bg-surface-2 px-1.5 py-0.5 rounded text-fg font-mono text-[13px]">

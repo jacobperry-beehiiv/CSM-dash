@@ -13,6 +13,7 @@
     "run:at-risk": "tsx --env-file-if-exists=.env.local scripts/run-at-risk.ts"
   },
   "dependencies": {
+    "@vercel/blob": "^2.4.1",
     "fast-xml-parser": "^5.9.3",
     "jsonwebtoken": "^9.0.3",
     "next": "16.2.2",

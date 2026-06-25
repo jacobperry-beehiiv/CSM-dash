@@ -1,33 +1,47 @@
+import { loadTeamMascots } from "../data/team-mascots";
+
 /**
- * Registry of CSM-team header dog icons.
+ * Registry of CSM-team mascot icons that cycle through the
+ * header logo + the to-do celebration overlay.
  *
- * Each entry is the public-asset path of an image that should
- * appear in place of the beehiiv mark in the header for viewers
- * who are part of the CSM team. The layout picks one at random
- * per request, so a full page reload cycles through them.
+ * Two sources of mascots:
  *
- * To add a new dog: drop the image into `public/` (matching the
- * existing csm-team-dog.png pattern — these aren't tracked in git
- * because they're uploaded out-of-band per deploy target) and
- * append its path here.
+ *   1. **Bundled defaults** — the two PNGs every CSM-on-Vercel
+ *      deployment is expected to have under /public. Used as the
+ *      starter set when nobody's uploaded a custom mascot yet.
  *
- * `alt` doubles as a hover tooltip via `title=` on the rendered
- * <img>. It's also the screen-reader label so keep it short.
+ *   2. **Uploaded via /settings/team-mascots** — public Vercel
+ *      Blob URLs stored in KV. Any CSM team member can upload
+ *      their own pet; the new mascot enters the rotation
+ *      immediately for everyone.
+ *
+ * Mode rule: once the team has uploaded at least one mascot, the
+ * uploaded set takes over entirely. The defaults come back only if
+ * the uploaded set is empty. This avoids the awkward "I deleted my
+ * mascot and Sherlock came back" surprise — the team chooses.
  */
 export interface CsmDog {
   src: string;
   alt: string;
 }
 
-export const CSM_DOGS: CsmDog[] = [
+export const DEFAULT_CSM_DOGS: CsmDog[] = [
   { src: "/csm-team-dog.png", alt: "Detective dog" },
   { src: "/csm-team-dog-bee.png", alt: "Bee dog" },
 ];
 
-/** Returns a random entry. Called once per request from the
- *  server-side layout — no client-side randomness means no
- *  hydration mismatch. */
-export function pickRandomCsmDog(): CsmDog {
-  const idx = Math.floor(Math.random() * CSM_DOGS.length);
-  return CSM_DOGS[idx] ?? CSM_DOGS[0];
+/** Server-side: resolve the active mascot list. Reads KV for the
+ *  uploaded set; falls back to the bundled defaults when empty. */
+export async function loadActiveCsmDogs(): Promise<CsmDog[]> {
+  const uploaded = await loadTeamMascots();
+  if (uploaded.length === 0) return DEFAULT_CSM_DOGS;
+  return uploaded.map((m) => ({ src: m.url, alt: m.label || "Team mascot" }));
+}
+
+/** Pick a random entry from the resolved active list. Server-only
+ *  so there's no client-side randomness → no hydration mismatch. */
+export async function pickRandomCsmDog(): Promise<CsmDog> {
+  const list = await loadActiveCsmDogs();
+  const idx = Math.floor(Math.random() * list.length);
+  return list[idx] ?? list[0] ?? DEFAULT_CSM_DOGS[0];
 }

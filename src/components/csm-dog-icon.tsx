@@ -1,29 +1,43 @@
+"use client";
+
+import { useState } from "react";
+import { useRandomMascot } from "./mascots-provider";
+
 /**
- * CSM-team-only dog icon used in the to-do celebration sweep.
+ * CSM-team-only mascot icon used in the to-do celebration sweep.
  *
- * The image itself lives at `public/csm-team-dog.png` so it's
- * served as a static asset; just an `<img>` ref keeps the
- * component simple and avoids the Next/Image runtime overhead for
- * a 32-48px decoration. The `next/image` optimization isn't worth
- * it at this size.
+ * Picks a random entry from the active mascot list on every mount,
+ * so completing several to-dos in a row surfaces different team
+ * pets. The list comes from MascotsProvider (server-resolved once
+ * per request).
  *
- * Falls back to a transparent box if the asset is missing — the
- * celebration sweep still plays, just without the dog. That keeps
- * the dashboard from rendering a broken-image icon on a fresh
- * deploy where the asset hasn't been uploaded yet.
+ * Falls back to the bundled detective-dog PNG when the provider
+ * surfaces no mascots — keeps a fresh deploy from rendering a
+ * broken-image glyph during the celebration.
+ *
+ * On image error: hide the element (matches the historical
+ * behavior of this component). The celebration sweep still plays;
+ * the dog just doesn't appear.
  */
 export function CsmDogIcon({ className }: { className?: string }) {
+  const mascot = useRandomMascot();
+  const [failed, setFailed] = useState(false);
+  // `mascot` may be null when no mascots are uploaded AND we're
+  // a non-CSM viewer (the provider was passed an empty list at the
+  // server boundary). Render nothing in that case rather than
+  // falling back to the default — non-CSM viewers shouldn't see
+  // mascots at all.
+  if (!mascot || failed) {
+    return null;
+  }
   return (
     // eslint-disable-next-line @next/next/no-img-element
     <img
-      src="/csm-team-dog.png"
-      alt=""
+      src={mascot.src}
+      alt={mascot.alt}
       aria-hidden="true"
       className={className}
-      // Hide the broken-image glyph if the asset is missing.
-      onError={(e) => {
-        (e.target as HTMLImageElement).style.visibility = "hidden";
-      }}
+      onError={() => setFailed(true)}
     />
   );
 }
