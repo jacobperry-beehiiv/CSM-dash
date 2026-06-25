@@ -3,9 +3,12 @@ import { auth } from "@/auth";
 import { getActiveEmail } from "@/lib/data/active-user";
 import {
   GmailReadScopeError,
+  lastEmailForCustomerBatch,
   lastEmailWithBatch,
+  type CustomerSignals,
 } from "@/lib/integrations/gmail-read";
 import { filterCustomers, loadCustomers } from "@/lib/data/load-customers";
+import { customerEmailSignals } from "@/lib/data/customer-domains";
 
 export const dynamic = "force-dynamic";
 // 8-way concurrent fanout in lastEmailWithBatch × ~250ms per Gmail
@@ -81,33 +84,43 @@ export async function POST(req: Request) {
     }
   }
 
-  let emails: string[];
   let customersInScope = 0;
+  let signals: CustomerSignals[] = [];
+  let explicitEmails: string[] | null = null;
   if (Array.isArray(body.emails) && body.emails.length > 0) {
-    // Explicit override — client already has a curated list.
-    emails = body.emails.filter(
+    // Explicit override — the client handed us a curated list. We
+    // can't derive per-customer signals here (no customer context
+    // for each email), so fall back to the legacy per-email path
+    // for these. The sweep gap fix only kicks in when the route
+    // resolves the scope server-side.
+    explicitEmails = body.emails.filter(
       (e): e is string => typeof e === "string" && e.trim().length > 0
     );
-    customersInScope = emails.length;
+    customersInScope = explicitEmails.length;
   } else {
-    // Resolve scope server-side via the customer book.
+    // Resolve scope server-side via the customer book. For each
+    // customer in scope, derive the full signal set (owner_email +
+    // every hubspot_contacts[].email + business domains) so the
+    // Gmail query catches conversations with anyone at the company
+    // — not just the recorded primary contact.
     const all = await loadCustomers();
     const scoped = filterCustomers(all, { csm: csmScope });
     customersInScope = scoped.length;
-    emails = scoped
-      .map((c) => c.owner_email)
-      .filter((e): e is string => typeof e === "string" && e.trim().length > 0);
+    for (const c of scoped) {
+      const s = customerEmailSignals(c);
+      if (s.emails.length === 0 && s.domains.length === 0) continue;
+      // Cache key prefers owner_email (stable, what the read path
+      // looks up) and falls back to workspace_id when missing.
+      const key =
+        c.owner_email?.trim().toLowerCase() ||
+        (c.workspace_id ? `workspace:${c.workspace_id}` : null);
+      if (!key) continue;
+      signals.push({ key, emails: s.emails, domains: s.domains });
+    }
   }
 
-  // Dedupe + cap at the soft limit. lastEmailWithBatch also dedupes
-  // internally, but capping here keeps the response counts honest.
-  const unique = Array.from(
-    new Set(emails.map((e) => e.trim().toLowerCase()).filter(Boolean))
-  );
-  const truncated = unique.length > MAX_EMAILS;
-  const targets = unique.slice(0, MAX_EMAILS);
-
-  if (targets.length === 0) {
+  const totalKnown = signals.length + (explicitEmails?.length ?? 0);
+  if (totalKnown === 0) {
     return NextResponse.json({
       ok: true,
       processed: 0,
@@ -117,36 +130,50 @@ export async function POST(req: Request) {
       unique_emails: 0,
       truncated: false,
       generated_at: new Date().toISOString(),
-      message: "No owner emails to refresh in the active scope.",
+      message: "No customers with known contacts in the active scope.",
     });
   }
+
+  // Cap on processed customers per request — same shape as the old
+  // per-email cap, now applied per-customer (one Gmail query each).
+  const truncated = signals.length > MAX_EMAILS;
+  signals = signals.slice(0, MAX_EMAILS);
 
   try {
     console.log("[last-contact/gmail/refresh-book]", {
       activeEmail,
       csm: csmScope ?? "(all)",
       customers_in_scope: customersInScope,
-      unique_emails: unique.length,
-      processing: targets.length,
+      processing_customers: signals.length,
+      processing_explicit: explicitEmails?.length ?? 0,
       truncated,
     });
-    const results = await lastEmailWithBatch(activeEmail, targets, {
-      forceFresh: true,
-    });
-    // lastEmailWithBatch returns one entry per target it actually got
-    // a result for — failures (Gmail throws non-scope errors per
-    // email) silently drop. Compute the failure count as the
-    // delta. The helper itself logs the per-email error in the
-    // worker fallback.
-    const succeeded = Object.keys(results).length;
-    const failed = targets.length - succeeded;
+    let succeeded = 0;
+    let attempted = 0;
+    if (signals.length > 0) {
+      const results = await lastEmailForCustomerBatch(activeEmail, signals, {
+        forceFresh: true,
+      });
+      attempted += signals.length;
+      succeeded += Object.keys(results).length;
+    }
+    if (explicitEmails && explicitEmails.length > 0) {
+      // Legacy path — explicit per-email refresh. No domain match.
+      const legacyTargets = explicitEmails.slice(0, MAX_EMAILS);
+      const results = await lastEmailWithBatch(activeEmail, legacyTargets, {
+        forceFresh: true,
+      });
+      attempted += legacyTargets.length;
+      succeeded += Object.keys(results).length;
+    }
+    const failed = attempted - succeeded;
     return NextResponse.json({
       ok: true,
-      processed: targets.length,
+      processed: attempted,
       succeeded,
       failed,
       customers_in_scope: customersInScope,
-      unique_emails: unique.length,
+      unique_emails: attempted,
       truncated,
       generated_at: new Date().toISOString(),
     });
