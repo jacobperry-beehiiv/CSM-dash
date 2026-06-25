@@ -36,6 +36,12 @@ export default function TeamMascotsPage() {
   const [message, setMessage] = useState<string | null>(null);
   const [label, setLabel] = useState("");
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  // Per-row delete spinner so the user sees something happen on
+  // click even when the response is fast. Previously the only
+  // feedback lived in the upload section (a long scroll up) so a
+  // successful delete looked silent if the list happened to be
+  // long enough to push it off-screen.
+  const [removingId, setRemovingId] = useState<string | null>(null);
 
   const load = async () => {
     setLoading(true);
@@ -104,7 +110,7 @@ export default function TeamMascotsPage() {
     if (!window.confirm(`Remove "${m.label}" from the rotation?`)) return;
     setError(null);
     setMessage(null);
-    setBusy(true);
+    setRemovingId(m.id);
     try {
       const r = await fetch(
         `/api/team-mascots?id=${encodeURIComponent(m.id)}`,
@@ -115,11 +121,16 @@ export default function TeamMascotsPage() {
         throw new Error(j.error ?? `HTTP ${r.status}`);
       }
       setMessage(`Removed ${m.label}.`);
+      // Optimistic — drop the mascot from local state immediately
+      // so the UI doesn't appear stuck while load() round-trips.
+      setMascots((prev) => (prev ? prev.filter((x) => x.id !== m.id) : prev));
+      // Then reconcile with the server in case anyone else's tab
+      // is also editing the list.
       await load();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Delete failed");
     } finally {
-      setBusy(false);
+      setRemovingId(null);
     }
   }
 
@@ -216,6 +227,19 @@ export default function TeamMascotsPage() {
             </span>
           ) : null}
         </h3>
+        {/* Mirror the status pane here too — the upload-section copy
+         *  scrolls out of view once the rotation list grows, leaving
+         *  remove failures invisible. */}
+        {message ? (
+          <div className="text-xs text-emerald-700 dark:text-emerald-300 mb-3">
+            {message}
+          </div>
+        ) : null}
+        {error ? (
+          <div className="text-xs text-red-700 dark:text-red-300 mb-3">
+            Delete failed: {error}
+          </div>
+        ) : null}
         {loading ? (
           <div className="text-xs text-muted">Loading…</div>
         ) : !mascots || mascots.length === 0 ? (
@@ -252,10 +276,10 @@ export default function TeamMascotsPage() {
                   <button
                     type="button"
                     onClick={() => void remove(m)}
-                    disabled={busy}
-                    className="text-[11px] text-muted hover:text-red-700 dark:hover:text-red-300 underline disabled:opacity-50"
+                    disabled={removingId !== null}
+                    className="px-2 py-1 mt-1 text-[11px] border border-border-strong rounded-md bg-surface hover:bg-red-50 hover:text-red-700 hover:border-red-300 dark:hover:bg-red-500/10 dark:hover:text-red-300 dark:hover:border-red-500/40 disabled:opacity-50 transition-colors"
                   >
-                    remove
+                    {removingId === m.id ? "Removing…" : "Remove"}
                   </button>
                 </div>
               </li>
