@@ -195,6 +195,11 @@ export interface AtRiskRunResult {
   excluded: number;
   accounts: AtRiskAccount[];
   generated_at: string;
+  /** Threshold (in days) the server used when computing Flag H.
+   *  Passed down so the client can re-evaluate the "stale activity"
+   *  decision against the Gmail-merged Last contacted date — the
+   *  server only has HubSpot's view; the client has Gmail on top. */
+  threshold_days_no_contact: number;
 }
 
 export function recommendedAction(flags: RiskFlag[]): string {
@@ -357,5 +362,6 @@ export async function runAtRiskCheck(
     excluded,
     accounts: results,
     generated_at: now.toISOString(),
+    threshold_days_no_contact: settings.thresholds.days_no_contact_short,
   };
 }
