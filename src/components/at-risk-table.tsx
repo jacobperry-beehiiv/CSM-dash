@@ -66,9 +66,9 @@ const FLAG_META: Array<{ code: RiskFlagCode; label: string; description: string 
   },
   {
     code: "H",
-    label: "Stale HubSpot activity (45d+)",
+    label: "Stale activity (45d+)",
     description:
-      "No HubSpot-tracked email / call / note activity across any contact at this company in 45+ days",
+      "No HubSpot OR Gmail-tracked activity across any contact at this company in 45+ days. Re-evaluated client-side against the Last contacted column, so a row whose HubSpot activity is old but whose Gmail thread is fresh isn't flagged.",
   },
   {
     code: "D",
@@ -93,6 +93,10 @@ interface RunResult {
   excluded: number;
   accounts: AtRiskAccount[];
   generated_at: string;
+  /** Threshold (days) for Flag H — passed from the server so the
+   *  client can re-evaluate against the Gmail-merged Last contacted
+   *  column. */
+  threshold_days_no_contact: number;
 }
 
 const FLAG_COLORS: Record<string, string> = {
@@ -234,20 +238,76 @@ export function AtRiskTable({
     });
   }
 
+  // Re-evaluate Flag H (the "Stale activity" flag) against the
+  // Gmail-merged Last contacted date the table actually displays.
+  // The server computes H using HubSpot data only (no per-CSM
+  // token available there); the client has the Gmail overlay
+  // loaded by `useGmailLastContact`, so a row whose HubSpot
+  // activity is stale but whose Gmail thread is fresh should NOT
+  // be flagged — that's exactly the "filter on the Last contacted
+  // column" semantics the panel needs.
+  const thresholdDays = data.threshold_days_no_contact;
+  const accountsWithGmailAwareH = useMemo(() => {
+    return data.accounts.map((a) => {
+      const gmailDate = gmailDateFor(a.customer);
+      // If the Gmail hook hasn't returned for this row yet, leave
+      // the server-side flags alone — the table will re-render once
+      // the hook lands.
+      if (gmailDate === undefined && !gmail.dateMap[a.customer.owner_email?.toLowerCase() ?? ""]) {
+        return a;
+      }
+      const resolved = lastContacted(a.customer, { gmailDate });
+      const lastMs = resolved.date ? new Date(resolved.date).getTime() : null;
+      const nowMs = Date.now();
+      const daysSince =
+        lastMs !== null && Number.isFinite(lastMs)
+          ? Math.floor((nowMs - lastMs) / (24 * 60 * 60 * 1000))
+          : null;
+      const shouldFlag =
+        daysSince === null || daysSince >= thresholdDays;
+      const hadH = a.flags.some((f) => f.code === "H");
+      if (shouldFlag === hadH) return a; // no change
+      if (shouldFlag) {
+        // Server didn't flag (HubSpot fresh) but the merged-with-
+        // Gmail view says stale → add H. (Rare — usually means
+        // HubSpot's rollup overshot, e.g. a stale auto-import.)
+        const newH: RiskFlag = {
+          code: "H",
+          label:
+            daysSince === null
+              ? "No recent activity"
+              : `Stale activity (${daysSince}d)`,
+          detail:
+            daysSince === null
+              ? "No HubSpot or Gmail-tracked activity recorded for this account."
+              : `Last contacted ${daysSince} days ago across HubSpot + Gmail (threshold ${thresholdDays}d).`,
+        };
+        return { ...a, flags: [...a.flags, newH] };
+      }
+      // Server flagged H based on HubSpot, but the Gmail-merged
+      // date is fresh enough — strip it.
+      return { ...a, flags: a.flags.filter((f) => f.code !== "H") };
+    });
+    // gmail.dateMap is the load-bearing dep — gmailDateFor is a
+    // stable callback bound to it. Including the callback would
+    // recompute on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data.accounts, gmail.dateMap, thresholdDays]);
+
   // Per-flag count across the whole result so the chip can show "(N)".
   // Independent of the active filter — always reflects the underlying data.
   const flagCounts = useMemo(() => {
     const counts: Record<string, number> = {};
-    for (const a of data.accounts) {
+    for (const a of accountsWithGmailAwareH) {
       for (const f of a.flags) {
         counts[f.code] = (counts[f.code] ?? 0) + 1;
       }
     }
     return counts;
-  }, [data.accounts]);
+  }, [accountsWithGmailAwareH]);
 
   const accounts = useMemo(() => {
-    let list = data.accounts;
+    let list = accountsWithGmailAwareH;
     if (search) {
       const q = search.toLowerCase();
       list = list.filter(({ customer: c }) => {
@@ -282,7 +342,7 @@ export function AtRiskTable({
       for (const code of pickedFlags) if (!codes.has(code)) return false;
       return true;
     });
-  }, [data.accounts, pickedFlags, combine, search, ws2pubs]);
+  }, [accountsWithGmailAwareH, pickedFlags, combine, search, ws2pubs]);
 
   const allKeys = useMemo(
     () =>
