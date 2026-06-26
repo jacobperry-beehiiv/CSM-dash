@@ -200,7 +200,7 @@ export function HubSpotContactLabelEditor({
           title={`Edit HubSpot association labels for ${contactName}`}
         >
           <span aria-hidden="true">✎</span>
-          {currentLabels.length === 0 ? "Add labels" : "Edit labels"}
+          Edit labels
         </button>
       )}
       {editing ? (
