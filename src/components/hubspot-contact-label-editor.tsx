@@ -134,6 +134,19 @@ export function HubSpotContactLabelEditor({
 
   return (
     <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
+      {/* Implicit-but-shown system label — every contact we surface
+       *  passed the typeId === 2 ("Contact with Primary Company")
+       *  filter in the sync, so the chip is true-by-construction.
+       *  Surfaced explicitly so the dashboard reads the same as
+       *  HubSpot's own contact panel, which shows this chip on
+       *  every association. Read-only — HUBSPOT_DEFINED labels
+       *  can't be toggled by users. */}
+      <span
+        className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium border bg-surface-2 dark:bg-canvas/40 border-border text-muted"
+        title="HubSpot system label: every contact shown here is associated as Primary Company in HubSpot"
+      >
+        Contact with primary company
+      </span>
       {currentLabels.map((label) => (
         <span
           key={label}
