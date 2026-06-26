@@ -227,13 +227,6 @@ export interface PersonalTodosSettings {
    *  this message" when reacted with. Default `white_check_mark` (✅).
    *  Admins can swap to e.g. `pushpin` (📌) or a custom workspace emoji. */
   trigger_emoji?: string;
-  /** Kill switch for the reaction → todo flow. When false (the new
-   *  default after the bot-posted-message celebration-noise incident),
-   *  every `reaction_added` event short-circuits before todo creation
-   *  or DM. Slash commands + DM commands + @bot mentions are
-   *  unaffected — only the reaction surface. Flip back on from
-   *  /settings/slack once we have a confident scope. */
-  reactions_enabled?: boolean;
 }
 
 export const DEFAULT_TODO_TRIGGER_EMOJI = "white_check_mark";
@@ -443,10 +436,6 @@ export const DEFAULTS: SettingsShape = {
   },
   personal_todos: {
     trigger_emoji: DEFAULT_TODO_TRIGGER_EMOJI,
-    // Default OFF — the reaction surface was generating noise DMs and
-    // phantom todos for teammates celebrating with :slay-party:.
-    // Re-enable from /settings/slack when scoped correctly.
-    reactions_enabled: false,
   },
 };
 

@@ -756,18 +756,6 @@ export default function SlackSettingsPage() {
             },
           }))
         }
-        reactionsEnabled={
-          settings.personal_todos?.reactions_enabled === true
-        }
-        onReactionsEnabledChange={(next) =>
-          setSettings((prev) => ({
-            ...prev,
-            personal_todos: {
-              ...(prev.personal_todos ?? {}),
-              reactions_enabled: next,
-            },
-          }))
-        }
       />
 
       <div className="flex items-center gap-2">
@@ -793,13 +781,9 @@ export default function SlackSettingsPage() {
 function SlackInboundSection({
   triggerEmoji,
   onTriggerEmojiChange,
-  reactionsEnabled,
-  onReactionsEnabledChange,
 }: {
   triggerEmoji: string;
   onTriggerEmojiChange: (next: string) => void;
-  reactionsEnabled: boolean;
-  onReactionsEnabledChange: (next: boolean) => void;
 }) {
   const dashUrl =
     process.env.NEXT_PUBLIC_DASHBOARD_URL ?? "https://csm-dash.vercel.app";
@@ -1015,45 +999,21 @@ function SlackInboundSection({
       </div>
 
       <div className="border-t border-border pt-3 space-y-1">
-        <label className="flex items-start gap-2 cursor-pointer">
-          <input
-            type="checkbox"
-            checked={reactionsEnabled}
-            onChange={(e) => onReactionsEnabledChange(e.target.checked)}
-            className="mt-0.5 h-4 w-4 cursor-pointer"
-          />
-          <div>
-            <span className="text-xs font-medium text-fg block">
-              Enable reaction → to-do
-            </span>
-            <p className="text-xs text-muted">
-              Off by default. When off, reacting to a message in Slack does
-              nothing — slash commands, DMs, and @bot mentions are unaffected.
-              Turn on when you're confident the trigger emoji won't collide
-              with celebration reactions on bot-posted to-do reminders.
-            </p>
-          </div>
-        </label>
-      </div>
-
-      <div className="border-t border-border pt-3 space-y-1">
         <label className="text-xs font-medium text-fg block">
           Reaction emoji
         </label>
         <p className="text-xs text-muted">
           Slack emoji name (no colons) that triggers «create a to-do from
-          this message» when the toggle above is on. Default{" "}
-          <code className="font-mono">white_check_mark</code> (✅). Try{" "}
-          <code className="font-mono">pushpin</code> or a custom workspace
-          emoji if ✅ collides with other team norms.
+          this message». Default <code className="font-mono">white_check_mark</code>{" "}
+          (✅). Try <code className="font-mono">pushpin</code> or a custom
+          workspace emoji if ✅ collides with other team norms.
         </p>
         <input
           type="text"
           value={triggerEmoji}
           onChange={(e) => onTriggerEmojiChange(e.target.value.trim())}
           placeholder={DEFAULT_TODO_TRIGGER_EMOJI}
-          disabled={!reactionsEnabled}
-          className="px-2 py-1 text-sm font-mono border border-border-strong rounded-md bg-surface text-fg w-full max-w-xs disabled:opacity-50"
+          className="px-2 py-1 text-sm font-mono border border-border-strong rounded-md bg-surface text-fg w-full max-w-xs"
         />
       </div>
     </section>
