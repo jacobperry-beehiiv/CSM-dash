@@ -226,3 +226,24 @@ h1, h2, h3, h4, h5, h6 {
 .todo-done-pop {
   animation: todo-done-pop 280ms cubic-bezier(0.34, 1.56, 0.64, 1);
 }
+
+/* Hide the WebKit spinner buttons (the ▲▼ controls Safari/Chrome
+ * render on the right of <input type="date">). They step the date
+ * by whatever segment is focused — usually the month — and clicking
+ * them dismisses the picker dropdown, so editing a to-do's due /
+ * surface date with the calendar open becomes a one-shot footgun.
+ * Hiding them forces all date navigation through the calendar
+ * dropdown itself. */
+input[type="date"]::-webkit-inner-spin-button,
+input[type="date"]::-webkit-outer-spin-button,
+input[type="datetime-local"]::-webkit-inner-spin-button,
+input[type="datetime-local"]::-webkit-outer-spin-button,
+input[type="month"]::-webkit-inner-spin-button,
+input[type="month"]::-webkit-outer-spin-button,
+input[type="time"]::-webkit-inner-spin-button,
+input[type="time"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  appearance: none;
+  margin: 0;
+  display: none;
+}
