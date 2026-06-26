@@ -809,6 +809,16 @@ async function handleReactionAdded(
     return;
   }
   const settings = await loadSettings();
+  // Master kill switch for the reaction → todo surface. Defaults
+  // OFF after the bot-posted-message celebration-noise incident.
+  // Flip back on from /settings/slack when needed.
+  if (settings.personal_todos?.reactions_enabled !== true) {
+    console.log(
+      "[slack-webhook] Reaction → todo surface disabled in settings — ignored",
+      { reactor: event.user, reaction: event.reaction }
+    );
+    return;
+  }
   const triggerEmoji =
     settings.personal_todos?.trigger_emoji ?? DEFAULT_TODO_TRIGGER_EMOJI;
   if (event.reaction !== triggerEmoji) {
