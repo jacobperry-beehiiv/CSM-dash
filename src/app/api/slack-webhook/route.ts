@@ -39,6 +39,7 @@ import {
   type UrlVerification,
 } from "@/lib/integrations/slack-inbound";
 import { DEFAULT_TODO_TRIGGER_EMOJI } from "@/lib/data/settings-types";
+import { isCsmTeamMember } from "@/lib/auth/csm-team";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 15;
@@ -861,19 +862,30 @@ async function handleReactionAdded(
 
   const resolved = await resolveUserKeyForSlackId(event.user);
   if (!resolved.userKey) {
-    console.warn("[slack-webhook] Reactor couldn't be resolved", {
+    // Silent drop. Non-CSM-team Slack users have no userKey mapping
+    // — sending them a "couldn't match your ID" DM creates noise for
+    // people who weren't trying to use the bot in the first place
+    // (they're reacting in a public channel where the bot lives, not
+    // intending to onboard).
+    console.warn("[slack-webhook] Reactor couldn't be resolved — silent drop", {
       slack_user_id: event.user,
       reason: resolved.reason,
     });
-    await ephemeralDm(
-      event.user,
-      `I couldn't match your Slack ID (${event.user}) — ${
-        resolved.reason ?? "no mapping found"
-      }. Ask Jacob to look at /settings/slack → CSM Slack IDs.`
-    );
     return;
   }
   const userKey = resolved.userKey;
+  // Gate on CSM-team membership. Slack reactions in shared channels
+  // come from anyone the bot can see — engineers, AEs, support —
+  // and we don't want every cross-team teammate to pick up a phantom
+  // to-do + DM when they use the trigger emoji as a generic ack.
+  const reactorEmail = userKeyFromEmailToEmail(userKey);
+  if (!(await isCsmTeamMember(reactorEmail))) {
+    console.log(
+      "[slack-webhook] Reactor not on CSM team — skipping todo + DM",
+      { slack_user_id: event.user, email: reactorEmail }
+    );
+    return;
+  }
 
   // Fetch the message text + permalink. Both calls go to Slack with the
   // bot token; the bot must be a member of the channel for
