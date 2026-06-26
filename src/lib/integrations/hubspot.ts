@@ -1726,19 +1726,29 @@ export async function createHubspotCompanyNote(
 export async function setContactCompanyLabels(
   companyId: string,
   contactId: string,
-  labelTypeIds: number[]
+  labelTypeIds: number[],
+  opts: { includePrimary?: boolean } = {}
 ): Promise<void> {
   const token = await getAccessToken();
-  // Always include the primary-company association typeId so the
-  // contact stays linked to the company after the PUT. Dedupe so a
-  // caller that accidentally includes it doesn't double-write.
-  const seen = new Set<number>([PRIMARY_COMPANY_ASSOC_TYPE_ID]);
-  const inputs: Array<{ associationCategory: string; associationTypeId: number }> = [
-    {
+  // `includePrimary` defaults true so existing callers (which weren't
+  // passing the flag) keep behavior: every PUT re-includes the
+  // primary-association typeId so the contact stays linked.
+  //
+  // When false, the caller is intentionally unsetting primary. HubSpot
+  // accepts a v4 PUT with USER_DEFINED labels only and treats the
+  // contact-company association as non-primary going forward. Our
+  // sync filters by primary, so the contact drops out of the dashboard
+  // on the next refresh.
+  const includePrimary = opts.includePrimary ?? true;
+  const seen = new Set<number>();
+  const inputs: Array<{ associationCategory: string; associationTypeId: number }> = [];
+  if (includePrimary) {
+    inputs.push({
       associationCategory: "HUBSPOT_DEFINED",
       associationTypeId: PRIMARY_COMPANY_ASSOC_TYPE_ID,
-    },
-  ];
+    });
+    seen.add(PRIMARY_COMPANY_ASSOC_TYPE_ID);
+  }
   for (const id of labelTypeIds) {
     if (seen.has(id)) continue;
     seen.add(id);

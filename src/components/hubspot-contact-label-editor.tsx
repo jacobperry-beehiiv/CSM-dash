@@ -37,13 +37,23 @@ export function HubSpotContactLabelEditor({
   const [currentLabels, setCurrentLabels] = useState<string[]>(
     initialLabels ?? []
   );
+  // Primary association is implicit-true for every contact we surface
+  // (the sync filter), but the picker lets a CSM intentionally
+  // unset it — that detaches the contact from the company as a
+  // primary association in HubSpot. We track the post-save state
+  // separately from the picker draft so we can render a "removed"
+  // signal in place of the chip without removing the row itself
+  // until the sync catches up.
+  const [primarySet, setPrimarySet] = useState(true);
   const [editing, setEditing] = useState(false);
   const [schema, setSchema] = useState<AssociationLabel[] | null>(null);
   const [draftLabels, setDraftLabels] = useState<Set<string>>(
     new Set(initialLabels ?? [])
   );
+  const [draftPrimary, setDraftPrimary] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [confirmRemovePrimary, setConfirmRemovePrimary] = useState(false);
 
   // Lazy-load the schema the first time the editor opens. Once
   // fetched it stays in component state for the lifetime of the
@@ -78,12 +88,15 @@ export function HubSpotContactLabelEditor({
 
   function openEditor() {
     setDraftLabels(new Set(currentLabels));
+    setDraftPrimary(primarySet);
+    setConfirmRemovePrimary(false);
     setError(null);
     setEditing(true);
   }
 
   function cancel() {
     setEditing(false);
+    setConfirmRemovePrimary(false);
     setError(null);
   }
 
@@ -96,21 +109,35 @@ export function HubSpotContactLabelEditor({
     });
   }
 
+  function attemptSave() {
+    // Unticking Primary is a destructive HubSpot change — gate it
+    // behind a second click so a CSM doesn't accidentally detach a
+    // contact from a company while they were really after a
+    // user-label change.
+    if (primarySet && !draftPrimary && !confirmRemovePrimary) {
+      setConfirmRemovePrimary(true);
+      return;
+    }
+    void save();
+  }
+
   async function save() {
     setBusy(true);
     setError(null);
     const labels = Array.from(draftLabels);
+    const primary = draftPrimary;
     try {
       const r = await fetch(
         `/api/customers/${encodeURIComponent(workspaceId)}/contacts/${encodeURIComponent(contactId)}/labels`,
         {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ labels }),
+          body: JSON.stringify({ labels, primary }),
         }
       );
       const j = (await r.json().catch(() => ({}))) as {
         labels?: string[];
+        primary?: boolean;
         error?: string;
         known?: string[];
       };
@@ -118,7 +145,9 @@ export function HubSpotContactLabelEditor({
         throw new Error(j.error ?? `HTTP ${r.status}`);
       }
       setCurrentLabels(j.labels ?? labels);
+      setPrimarySet(j.primary ?? primary);
       setEditing(false);
+      setConfirmRemovePrimary(false);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Save failed");
     } finally {
@@ -134,19 +163,26 @@ export function HubSpotContactLabelEditor({
 
   return (
     <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
-      {/* Implicit-but-shown system label — every contact we surface
-       *  passed the typeId === 2 ("Contact with Primary Company")
-       *  filter in the sync, so the chip is true-by-construction.
-       *  Surfaced explicitly so the dashboard reads the same as
-       *  HubSpot's own contact panel, which shows this chip on
-       *  every association. Read-only — HUBSPOT_DEFINED labels
-       *  can't be toggled by users. */}
-      <span
-        className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium border bg-surface-2 dark:bg-canvas/40 border-border text-muted"
-        title="HubSpot system label: every contact shown here is associated as Primary Company in HubSpot"
-      >
-        Contact with primary company
-      </span>
+      {/* Primary-company system chip. Editable via the picker, but
+       *  shown statically when not in edit mode so the dashboard
+       *  reads the same as HubSpot's own contact panel. After a
+       *  removal, render a struck-through "removed" variant until
+       *  the next sync drops the contact off this customer. */}
+      {primarySet ? (
+        <span
+          className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium border bg-surface-2 dark:bg-canvas/40 border-border text-muted"
+          title="HubSpot system label: this contact is associated as Primary Company in HubSpot. Click 'Edit labels' to remove."
+        >
+          Contact with primary company
+        </span>
+      ) : (
+        <span
+          className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium border border-red-300 dark:border-red-500/40 bg-red-50 dark:bg-red-500/10 text-red-800 dark:text-red-200 line-through decoration-red-400"
+          title="Primary Company association removed in HubSpot. Contact drops off this customer on the next sync."
+        >
+          Contact with primary company
+        </span>
+      )}
       {currentLabels.map((label) => (
         <span
           key={label}
@@ -172,8 +208,33 @@ export function HubSpotContactLabelEditor({
           {schema === null && !error ? (
             <div className="text-[11px] text-muted">Loading labels…</div>
           ) : null}
+          {/* Primary Company sits above the USER_DEFINED labels with
+           *  a divider — it's structurally different (system label,
+           *  destructive to remove) so visually separating it makes
+           *  the intent of the checkbox unambiguous. */}
+          <div className="flex flex-wrap items-center gap-1.5">
+            <label
+              className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium border cursor-pointer transition ${
+                draftPrimary
+                  ? "bg-surface-2 border-border text-fg"
+                  : "bg-red-50 dark:bg-red-500/10 border-red-300 dark:border-red-500/40 text-red-900 dark:text-red-200"
+              }`}
+              title="HubSpot system label. Unticking removes the contact's primary association with this company."
+            >
+              <input
+                type="checkbox"
+                checked={draftPrimary}
+                onChange={() => {
+                  setDraftPrimary((v) => !v);
+                  setConfirmRemovePrimary(false);
+                }}
+                className="h-3 w-3 cursor-pointer"
+              />
+              Contact with primary company
+            </label>
+          </div>
           {pickable.length > 0 ? (
-            <div className="flex flex-wrap gap-1.5">
+            <div className="flex flex-wrap gap-1.5 pt-1 border-t border-border/60">
               {pickable.map((l) => {
                 const checked = draftLabels.has(l.label);
                 return (
@@ -197,6 +258,13 @@ export function HubSpotContactLabelEditor({
               })}
             </div>
           ) : null}
+          {confirmRemovePrimary ? (
+            <div className="text-[11px] text-red-800 dark:text-red-200 bg-red-50 dark:bg-red-500/10 border border-red-300 dark:border-red-500/40 rounded p-1.5">
+              Removing the primary association will detach {contactName} from
+              this company in HubSpot. They'll drop off this customer on the
+              next sync. Click <strong>Confirm remove</strong> to proceed.
+            </div>
+          ) : null}
           {error ? (
             <div className="text-[11px] text-red-700 dark:text-red-300">
               {error}
@@ -205,11 +273,19 @@ export function HubSpotContactLabelEditor({
           <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={() => void save()}
+              onClick={attemptSave}
               disabled={busy}
-              className="px-2 py-0.5 text-[11px] bg-accent text-accent-fg rounded-md hover:bg-accent-hover disabled:opacity-50"
+              className={`px-2 py-0.5 text-[11px] rounded-md disabled:opacity-50 ${
+                confirmRemovePrimary
+                  ? "bg-red-600 text-white hover:bg-red-700"
+                  : "bg-accent text-accent-fg hover:bg-accent-hover"
+              }`}
             >
-              {busy ? "Saving…" : "Save"}
+              {busy
+                ? "Saving…"
+                : confirmRemovePrimary
+                ? "Confirm remove"
+                : "Save"}
             </button>
             <button
               type="button"
