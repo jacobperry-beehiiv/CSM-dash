@@ -34,6 +34,11 @@ export const dynamic = "force-dynamic";
 
 interface PutBody {
   labels?: string[];
+  /** Default true. Pass false to remove the contact's primary-company
+   *  association with this company in HubSpot. Contact will no longer
+   *  surface on this customer in the dashboard after the next sync /
+   *  resync. */
+  primary?: boolean;
 }
 
 export async function PUT(
@@ -73,6 +78,9 @@ export async function PUT(
       { status: 400 }
     );
   }
+  // Default true — when omitted, callers want existing semantics
+  // (always keep the contact as Primary on this company).
+  const primary = body.primary !== false;
 
   // Resolve customer + contact to get the HubSpot company id (we
   // need the company side of the association to PUT).
@@ -128,7 +136,8 @@ export async function PUT(
     await setContactCompanyLabels(
       customer.hubspot_company_id,
       contactId,
-      resolved
+      resolved,
+      { includePrimary: primary }
     );
   } catch (e) {
     return NextResponse.json(
@@ -142,13 +151,16 @@ export async function PUT(
   // Audit log — non-fatal if it fails.
   const contactName = contact.name ?? contact.email ?? `contact ${contactId}`;
   const labelSummary = labels.length === 0 ? "(none)" : labels.join(", ");
+  const primarySuffix = primary
+    ? ""
+    : " — removed Primary Company association (contact will drop off this customer on next sync)";
   await appendActionLog([
     {
       workspace_id: workspaceId,
-      text: `Updated ${contactName}'s HubSpot labels → ${labelSummary}`,
+      text: `Updated ${contactName}'s HubSpot labels → ${labelSummary}${primarySuffix}`,
       created_by: email,
       action_kind: "hubspot_labels_update",
-      metadata: { contact_id: contactId, labels },
+      metadata: { contact_id: contactId, labels, primary },
     },
   ]);
 
@@ -156,5 +168,6 @@ export async function PUT(
     ok: true,
     contact_id: contactId,
     labels,
+    primary,
   });
 }

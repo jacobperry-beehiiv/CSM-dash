@@ -70,6 +70,25 @@ export async function POST(req: Request) {
   const rawBody = await req.text();
   const contentType = req.headers.get("content-type") ?? "";
 
+  // ── Drop Slack retries ────────────────────────────────────────────
+  // Slack retries any inbound when our response misses the 3s budget,
+  // up to 3 times. The assign flow (Drive folder create + template
+  // copy + HubSpot PATCH + Slack thread post) reliably blows past 3s
+  // for new accounts, which led to the same assignment running twice
+  // and posting two near-identical thread replies. Our handlers are
+  // NOT idempotent — re-running the assign duplicates to-dos and
+  // re-posts. Ack the retry with 200 so Slack stops, and skip the
+  // body. The original run is still in flight (or already done) and
+  // owns the user-visible side effects.
+  const retryNum = req.headers.get("x-slack-retry-num");
+  if (retryNum) {
+    console.warn("[slack-webhook] Slack retry — dropping", {
+      retry_num: retryNum,
+      retry_reason: req.headers.get("x-slack-retry-reason"),
+    });
+    return NextResponse.json({ ok: true, dropped: "retry" });
+  }
+
   // ── URL verification handshake — short-circuit BEFORE auth ────────
   // Slack POSTs `{type: "url_verification", challenge: "..."}` when an
   // admin first configures the Event Subscriptions request URL. We
