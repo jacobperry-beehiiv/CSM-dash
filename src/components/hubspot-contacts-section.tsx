@@ -97,21 +97,28 @@ function HubSpotContactItems({
                 contactName={c.name ?? c.email ?? `contact ${c.id}`}
                 initialLabels={c.labels ?? []}
               />
-            ) : (c.labels ?? []).length > 0 ? (
+            ) : (
               // Read-only fallback for callers that didn't supply a
-              // workspaceId — render the chips without the editor.
-              <div className="flex flex-wrap gap-1 mt-1">
+              // workspaceId (e.g. the standalone /account page). Same
+              // chip shape as the editor minus the edit button.
+              <div className="flex flex-wrap items-center gap-1.5 mt-1">
+                <span
+                  className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium border bg-surface-2 dark:bg-canvas/40 border-border text-muted"
+                  title="HubSpot system label: every contact shown here is associated as Primary Company in HubSpot"
+                >
+                  Contact with primary company
+                </span>
                 {(c.labels ?? []).map((label) => (
                   <span
                     key={label}
-                    className="inline-flex items-center px-1.5 py-0 rounded text-[10px] font-medium border bg-canvas border-border text-fg"
+                    className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium border bg-indigo-50 dark:bg-indigo-500/10 border-indigo-200 dark:border-indigo-500/40 text-indigo-900 dark:text-indigo-200"
                     title={`HubSpot association label: ${label}`}
                   >
                     {label}
                   </span>
                 ))}
               </div>
-            ) : null}
+            )}
           </div>
           {c.last_activity_at ? (
             <div
