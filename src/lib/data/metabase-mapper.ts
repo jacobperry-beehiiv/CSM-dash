@@ -83,6 +83,8 @@ export function metabaseRowToCustomer(
       (row.property_notes_last_contacted as string | null) ?? null,
     property_agency_talent:
       (row.property_agency_talent as string | null) ?? null,
+    property_customer_folder:
+      (row.property_customer_folder as string | null) ?? null,
     next_invoice: (row.next_invoice as string | null) ?? null,
     have_started_t4_recommendations:
       (row.have_started_t4_recommendations as boolean | null) ?? null,

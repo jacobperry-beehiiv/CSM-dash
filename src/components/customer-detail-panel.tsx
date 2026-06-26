@@ -125,6 +125,28 @@ export function CustomerDetailPanel({
             workspaceId={c.workspace_id ?? null}
             hasStripeId={Boolean(c.stripe_customer_id)}
           />
+          {/* Drive folder shortcut — surfaces the URL HubSpot stores
+           *  on the company's "Customer Folder" property so a CSM
+           *  doesn't have to bounce through HubSpot to open the
+           *  shared workspace. Populated automatically by the
+           *  @bot assign flow when it creates the folder; can also
+           *  be edited by hand in HubSpot. */}
+          {c.property_customer_folder ? (
+            <>
+              <span className="text-subtle">·</span>
+              <a
+                href={c.property_customer_folder}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-medium rounded-full border border-emerald-300 bg-emerald-50 text-emerald-900 hover:bg-emerald-100 dark:border-emerald-500/40 dark:bg-emerald-500/10 dark:text-emerald-200 dark:hover:bg-emerald-500/20"
+                title="Open the customer's shared Drive folder (HubSpot property: Customer Folder)"
+              >
+                <span aria-hidden>📁</span>
+                Drive folder
+                <span aria-hidden>↗</span>
+              </a>
+            </>
+          ) : null}
         </div>
       ) : null}
 
