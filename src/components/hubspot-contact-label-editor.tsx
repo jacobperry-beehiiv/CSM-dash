@@ -133,11 +133,11 @@ export function HubSpotContactLabelEditor({
     schema?.filter((l) => l.category === "USER_DEFINED") ?? [];
 
   return (
-    <div className="flex flex-wrap items-center gap-1 mt-1">
+    <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
       {currentLabels.map((label) => (
         <span
           key={label}
-          className="inline-flex items-center px-1.5 py-0 rounded text-[10px] font-medium border bg-canvas border-border text-fg"
+          className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium border bg-indigo-50 dark:bg-indigo-500/10 border-indigo-200 dark:border-indigo-500/40 text-indigo-900 dark:text-indigo-200"
           title={`HubSpot association label: ${label}`}
         >
           {label}
@@ -147,10 +147,11 @@ export function HubSpotContactLabelEditor({
         <button
           type="button"
           onClick={openEditor}
-          className="text-[10px] text-muted hover:text-fg underline"
-          title={`Edit labels for ${contactName}`}
+          className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-medium border border-border-strong rounded-full text-fg bg-surface hover:bg-accent hover:text-accent-fg hover:border-accent transition-colors"
+          title={`Edit HubSpot association labels for ${contactName}`}
         >
-          {currentLabels.length === 0 ? "+ add labels" : "edit"}
+          <span aria-hidden="true">✎</span>
+          {currentLabels.length === 0 ? "Add labels" : "Edit labels"}
         </button>
       )}
       {editing ? (
