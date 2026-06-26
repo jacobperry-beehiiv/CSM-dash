@@ -1,6 +1,7 @@
 import type { HubSpotContactRef } from "@/lib/types";
 import { fmtDate } from "./format";
 import { CollapsibleSection } from "./collapsible-section";
+import { HubSpotContactLabelEditor } from "./hubspot-contact-label-editor";
 
 /**
  * Renders the list of contacts whose HubSpot "Contact with Primary Company"
@@ -18,8 +19,14 @@ import { CollapsibleSection } from "./collapsible-section";
  */
 export function HubSpotContactsList({
   contacts,
+  workspaceId,
 }: {
   contacts: HubSpotContactRef[] | null | undefined;
+  /** When provided, each contact row renders an inline label
+   *  editor that PUTs to the workspace's labels endpoint. Omit to
+   *  render read-only (e.g. on the standalone /account page where
+   *  we don't have a workspace_id route param). */
+  workspaceId?: string | null;
 }) {
   if (!contacts || contacts.length === 0) return null;
 
@@ -29,7 +36,7 @@ export function HubSpotContactsList({
         HubSpot contacts at this company ({contacts.length})
       </p>
       <ul className="divide-y divide-border/60">
-        <HubSpotContactItems contacts={contacts} />
+        <HubSpotContactItems contacts={contacts} workspaceId={workspaceId} />
       </ul>
     </div>
   );
@@ -37,8 +44,10 @@ export function HubSpotContactsList({
 
 export function HubSpotContactsSection({
   contacts,
+  workspaceId,
 }: {
   contacts: HubSpotContactRef[] | null | undefined;
+  workspaceId?: string | null;
 }) {
   if (!contacts || contacts.length === 0) return null;
 
@@ -47,13 +56,19 @@ export function HubSpotContactsSection({
       title={`HubSpot contacts at this company (${contacts.length})`}
     >
       <ul className="divide-y divide-border">
-        <HubSpotContactItems contacts={contacts} />
+        <HubSpotContactItems contacts={contacts} workspaceId={workspaceId} />
       </ul>
     </CollapsibleSection>
   );
 }
 
-function HubSpotContactItems({ contacts }: { contacts: HubSpotContactRef[] }) {
+function HubSpotContactItems({
+  contacts,
+  workspaceId,
+}: {
+  contacts: HubSpotContactRef[];
+  workspaceId?: string | null;
+}) {
   return (
     <>
       {contacts.map((c) => (
@@ -74,6 +89,28 @@ function HubSpotContactItems({ contacts }: { contacts: HubSpotContactRef[] }) {
               >
                 {c.email}
               </a>
+            ) : null}
+            {workspaceId ? (
+              <HubSpotContactLabelEditor
+                workspaceId={workspaceId}
+                contactId={c.id}
+                contactName={c.name ?? c.email ?? `contact ${c.id}`}
+                initialLabels={c.labels ?? []}
+              />
+            ) : (c.labels ?? []).length > 0 ? (
+              // Read-only fallback for callers that didn't supply a
+              // workspaceId — render the chips without the editor.
+              <div className="flex flex-wrap gap-1 mt-1">
+                {(c.labels ?? []).map((label) => (
+                  <span
+                    key={label}
+                    className="inline-flex items-center px-1.5 py-0 rounded text-[10px] font-medium border bg-canvas border-border text-fg"
+                    title={`HubSpot association label: ${label}`}
+                  >
+                    {label}
+                  </span>
+                ))}
+              </div>
             ) : null}
           </div>
           {c.last_activity_at ? (

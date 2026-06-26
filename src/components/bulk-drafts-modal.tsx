@@ -7,6 +7,11 @@ export interface BulkDraftRecipient {
   name: string | null;
   /** True for the customer's owner_email (default-checked). */
   default: boolean;
+  /** HubSpot association labels for this contact at this customer
+   *  ("Main Contact", "Decision Maker", "Champion", etc.). Empty
+   *  for the owner-only entry + for HubSpot contacts that don't
+   *  carry any USER_DEFINED labels. */
+  labels?: string[];
 }
 
 export interface RerenderContext {
@@ -239,6 +244,13 @@ export function BulkDraftsModal({
   // draft's render (the body shows in Gmail compose before send, so
   // the user can edit if needed).
   const [combineBcc, setCombineBcc] = useState(false);
+  // Quick-include-by-label state. Each entry is a HubSpot
+  // association label active across the batch. Activating a label
+  // ticks every recipient (across every draft) whose contact
+  // carries that label; deactivating un-ticks them UNLESS another
+  // active label keeps them in or the recipient is the owner
+  // (default-checked). Owners stay default-checked regardless.
+  const [activeLabels, setActiveLabels] = useState<Set<string>>(new Set());
 
   function toggleBody(draftKey: string) {
     setExpandedBodies((prev) => {
@@ -489,6 +501,59 @@ export function BulkDraftsModal({
   const finalDrafts: BulkDraft[] = combinedDraft
     ? [combinedDraft]
     : actionableDrafts;
+
+  /** Union of every HubSpot association label seen across every
+   *  contact in the current batch. Sorted for stable button order.
+   *  Empty when no contact in the batch carries any label, in which
+   *  case the Quick-include toolbar hides itself entirely. */
+  const allLabelsInBatch = useMemo(() => {
+    const s = new Set<string>();
+    for (const d of actionableDrafts) {
+      for (const r of d.recipients) {
+        for (const label of r.labels ?? []) {
+          if (label) s.add(label);
+        }
+      }
+    }
+    return Array.from(s).sort();
+  }, [actionableDrafts]);
+
+  /** Toggle a label active/inactive. Activating ticks every
+   *  recipient whose contact carries that label across every draft;
+   *  deactivating unticks them UNLESS another active label still
+   *  applies. Owners (default-checked) are never auto-unticked. */
+  function toggleLabel(label: string) {
+    const wasActive = activeLabels.has(label);
+    const nextActive = new Set(activeLabels);
+    if (wasActive) nextActive.delete(label);
+    else nextActive.add(label);
+    setActiveLabels(nextActive);
+
+    setRecipientSelection((sel) => {
+      const out = { ...sel };
+      for (const d of actionableDrafts) {
+        const draftSel = new Set(out[d.compose_url] ?? []);
+        for (const r of d.recipients) {
+          const labels = r.labels ?? [];
+          if (!labels.includes(label)) continue;
+          if (wasActive) {
+            // Deactivating — drop the recipient only if no OTHER
+            // active label still applies + they're not the owner.
+            const stillMatched = labels.some(
+              (l) => l !== label && nextActive.has(l)
+            );
+            if (!stillMatched && !r.default) {
+              draftSel.delete(r.email.toLowerCase());
+            }
+          } else {
+            draftSel.add(r.email.toLowerCase());
+          }
+        }
+        out[d.compose_url] = draftSel;
+      }
+      return out;
+    });
+  }
 
   // Lazy-load Gmail connection status when the modal mounts
   useEffect(() => {
@@ -813,6 +878,37 @@ export function BulkDraftsModal({
         </div>
 
         <div className="px-4 py-3 border-b border-border bg-canvas space-y-2">
+          {/* Quick include by HubSpot association label. Visible only
+           *  when at least one contact in the batch carries a label
+           *  (otherwise the toolbar would be empty + noisy). Each
+           *  button toggles: activating ticks every contact across
+           *  every draft that carries the label; deactivating un-
+           *  ticks them unless they're the owner or another active
+           *  label still applies. Per-row pickers still work as
+           *  manual overrides after a quick-include. */}
+          {allLabelsInBatch.length > 0 ? (
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="text-[11px] text-muted">Quick include:</span>
+              {allLabelsInBatch.map((label) => {
+                const active = activeLabels.has(label);
+                return (
+                  <button
+                    key={label}
+                    type="button"
+                    onClick={() => toggleLabel(label)}
+                    className={`px-2 py-0.5 text-[11px] rounded-md border transition ${
+                      active
+                        ? "bg-accent text-accent-fg border-accent"
+                        : "bg-surface text-fg border-border-strong hover:bg-canvas"
+                    }`}
+                    title={`Tick every contact with the "${label}" HubSpot association label across all drafts.`}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
+          ) : null}
           {/* Toggle: fold the whole batch into one BCC blast. Lives
            *  above the action buttons so the user sees what they're
            *  about to do before clicking. The action-button labels
@@ -1037,6 +1133,15 @@ export function BulkDraftsModal({
                                   owner
                                 </span>
                               ) : null}
+                              {(r.labels ?? []).map((label) => (
+                                <span
+                                  key={label}
+                                  className="ml-1 inline-flex items-center px-1.5 py-0 rounded text-[9px] font-medium border bg-canvas border-border text-fg"
+                                  title={`HubSpot association label: ${label}`}
+                                >
+                                  {label}
+                                </span>
+                              ))}
                             </span>
                           </label>
                         </li>
