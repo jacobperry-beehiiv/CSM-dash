@@ -371,6 +371,93 @@ export async function fetchLastActivity(
   return result;
 }
 
+/**
+ * Wider activity-batch fetch for the "Resync from HubSpot" path.
+ *
+ * Returns the same per-company contacts + activity rollup that
+ * `fetchLastActivity` produces, plus the company's `customer_folder`
+ * property (the Drive folder URL set by the @bot assign flow / the
+ * detail-panel pill). One extra v3 batch call beyond what
+ * `fetchLastActivity` already does — small enough to bolt on without
+ * rewriting the main path.
+ *
+ * Keeps `fetchLastActivity` untouched so the daily sync's behavior
+ * doesn't drift; this helper is only used by the live-resync
+ * endpoint.
+ */
+export interface HubspotOverlayActivity extends CompanyActivity {
+  /** HubSpot company-level `customer_folder` property (Drive folder
+   *  URL). Null when unset on the company. */
+  customer_folder: string | null;
+}
+
+export async function fetchHubspotOverlayBatch(
+  companyIds: string[]
+): Promise<Map<string, HubspotOverlayActivity>> {
+  const activity = await fetchLastActivity(companyIds);
+  const token = await getAccessToken();
+  const customerFolders = new Map<string, string | null>();
+
+  const unique = [...new Set(companyIds.filter(Boolean))];
+  for (let i = 0; i < unique.length; i += BATCH_SIZE) {
+    const slice = unique.slice(i, i + BATCH_SIZE);
+    if (i > 0) await sleep(INTER_BATCH_DELAY_MS);
+    let res: Response;
+    try {
+      res = await fetch(COMPANY_BATCH_ENDPOINT, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          properties: ["customer_folder"],
+          inputs: slice.map((id) => ({ id })),
+        }),
+      });
+    } catch (e) {
+      console.error(
+        `[hubspot] customer_folder batch ${i / BATCH_SIZE} network error:`,
+        e instanceof Error ? e.message : e
+      );
+      continue;
+    }
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      console.error(
+        `[hubspot] customer_folder batch ${i / BATCH_SIZE} HTTP ${res.status}: ${body.slice(0, 200)}`
+      );
+      continue;
+    }
+    const json = (await res.json()) as {
+      results?: Array<{
+        id: string;
+        properties: Record<string, string | null>;
+      }>;
+    };
+    for (const c of json.results ?? []) {
+      const val = c.properties?.customer_folder;
+      customerFolders.set(c.id, typeof val === "string" && val.length > 0 ? val : null);
+    }
+  }
+
+  const merged = new Map<string, HubspotOverlayActivity>();
+  const allIds = new Set<string>([
+    ...activity.keys(),
+    ...customerFolders.keys(),
+  ]);
+  for (const id of allIds) {
+    const a = activity.get(id);
+    merged.set(id, {
+      last_activity_at: a?.last_activity_at ?? null,
+      source: a?.source ?? null,
+      contacts: a?.contacts ?? [],
+      customer_folder: customerFolders.get(id) ?? null,
+    });
+  }
+  return merged;
+}
+
 interface RawContactReadResponse {
   status: "COMPLETE" | "PENDING";
   results: Array<{

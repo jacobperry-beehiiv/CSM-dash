@@ -3,6 +3,7 @@ import type { Customer, DataSource, Segment } from "../types";
 import { loadCustomersFromSnapshot, snapshotMetadata } from "./snapshot-loader";
 import { metabaseRowToCustomer } from "./metabase-mapper";
 import { applyOverride, loadOverrides } from "./customer-overrides";
+import { loadHubspotOverlay, mergeOverlayInto } from "./hubspot-overlay";
 import { TEST_CUSTOMER } from "./test-customer";
 import { isDemoMode } from "../demo/mode";
 import { buildDemoCustomers } from "../demo/customer-fixture";
@@ -123,13 +124,21 @@ export async function loadCustomers(): Promise<Customer[]> {
   if (isDemoMode()) {
     return buildDemoCustomers(new Date());
   }
-  const raw = await loadRawCustomers();
-  const overrides = await loadOverrides();
+  const [raw, overrides, hubspotOverlay] = await Promise.all([
+    loadRawCustomers(),
+    loadOverrides(),
+    // Live HubSpot overlay populated by /api/customers/refresh-hubspot
+    // when a CSM clicks "Resync from HubSpot". Empty when nothing's
+    // been refreshed yet — merge is a no-op. The bulk-read happens
+    // once per page render; rows merge per-workspace inside.
+    loadHubspotOverlay(),
+  ]);
   // Append the synthetic test workspace after overrides — it's not in the
   // Metabase snapshot, so applyOverride() would no-op on it anyway, and
   // keeping it outside the override loop guarantees its placeholder
   // values can't be accidentally mutated.
-  return [...raw.map((c) => applyOverride(c, overrides)), TEST_CUSTOMER];
+  const withOverrides = raw.map((c) => applyOverride(c, overrides));
+  return [...mergeOverlayInto(withOverrides, hubspotOverlay), TEST_CUSTOMER];
 }
 
 /** Bust the loadCustomers raw cache — only useful for snapshot rotation. */

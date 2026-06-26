@@ -1,7 +1,7 @@
 "use client";
 
 import { Fragment, useCallback, useMemo, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import type { Customer, CustomerWithMetrics } from "@/lib/types";
 import { StatusBadge } from "./status-badge";
 import { RiskLevelChip } from "./risk-level-chip";
@@ -111,6 +111,60 @@ export function CustomerTable({
 }) {
   const viewerEmail = useViewerEmail();
   const router = useRouter();
+  const searchParams = useSearchParams();
+  // Resync-from-HubSpot state. Button POSTs to
+  // /api/customers/refresh-hubspot scoped to the current CSM filter;
+  // writes a per-workspace overlay that loadCustomers() merges on
+  // top of the encrypted snapshot. router.refresh() after success
+  // pulls the new values into every server-rendered surface.
+  const [resyncBusy, setResyncBusy] = useState(false);
+  const [resyncMessage, setResyncMessage] = useState<string | null>(null);
+  async function resyncFromHubspot() {
+    setResyncBusy(true);
+    setResyncMessage(null);
+    try {
+      const csmScope = searchParams.get("csm");
+      const url = new URL(
+        "/api/customers/refresh-hubspot",
+        window.location.origin
+      );
+      if (csmScope) url.searchParams.set("csm", csmScope);
+      const r = await fetch(url.toString(), { method: "POST" });
+      const j = (await r.json().catch(() => ({}))) as {
+        ok?: boolean;
+        processed?: number;
+        updated?: number;
+        no_hubspot_company_id?: number;
+        errors?: Array<{ workspace_id: string; reason: string }>;
+        truncated?: boolean;
+        error?: string;
+      };
+      if (!r.ok || j.ok === false) {
+        throw new Error(j.error ?? `HTTP ${r.status}`);
+      }
+      const parts: string[] = [];
+      parts.push(`${j.updated ?? 0} updated`);
+      if ((j.no_hubspot_company_id ?? 0) > 0)
+        parts.push(`${j.no_hubspot_company_id} no HubSpot link`);
+      if ((j.errors?.length ?? 0) > 0) {
+        parts.push(`${j.errors!.length} HubSpot misses`);
+      }
+      if (j.truncated)
+        parts.push(`(truncated — re-run for the rest)`);
+      setResyncMessage(
+        `Resynced ${j.processed ?? 0} customer${j.processed === 1 ? "" : "s"} from HubSpot — ${parts.join(", ")}.`
+      );
+      // Re-render so the merged overlay surfaces in every cell.
+      router.refresh();
+    } catch (e) {
+      setResyncMessage(
+        `Resync failed: ${e instanceof Error ? e.message : "unknown"}`
+      );
+    } finally {
+      setResyncBusy(false);
+      setTimeout(() => setResyncMessage(null), 12_000);
+    }
+  }
 
   // Per-table column visibility (localStorage-backed). Company is
   // required so the column picker never offers to hide it. Everything
@@ -755,12 +809,29 @@ export function CustomerTable({
           {bulkMessage}
         </div>
       ) : null}
-      {/* "Columns ▾" picker — right-aligned above the table so it
-       *  doesn't crowd the filter chips above. Hidden columns
-       *  disappear from the DOM and their width is redistributed to
-       *  the remaining ones (so hiding "Last send" gives Company /
-       *  Engagement / CSM noticeably more breathing room). */}
-      <div className="flex justify-end mb-2">
+      {resyncMessage ? (
+        <div className="text-xs text-muted bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-200 dark:border-emerald-500/30 rounded-md px-3 py-2 mb-3">
+          {resyncMessage}
+        </div>
+      ) : null}
+      {/* "Columns ▾" picker + the "Resync from HubSpot" pill —
+       *  right-aligned above the table. Resync hits HubSpot live
+       *  for every customer in the current CSM scope + writes a
+       *  per-workspace overlay loadCustomers() merges over the
+       *  snapshot. Useful when a CSM has just edited labels /
+       *  contacts / the Customer Folder property in HubSpot and
+       *  wants the change visible without waiting for the next
+       *  daily sync. */}
+      <div className="flex justify-end items-center gap-2 mb-2">
+        <button
+          type="button"
+          onClick={() => void resyncFromHubspot()}
+          disabled={resyncBusy}
+          className="px-3 py-1 text-xs border border-border-strong rounded-md bg-surface hover:bg-surface-2 disabled:opacity-50"
+          title="Pull every customer's contacts + Customer Folder URL fresh from HubSpot. ~10s for a 150-customer book."
+        >
+          {resyncBusy ? "Resyncing…" : "↻ Resync from HubSpot"}
+        </button>
         <ColumnPicker state={columns} align="right" />
       </div>
       <div className="rounded-xl border border-border bg-surface shadow-card">
