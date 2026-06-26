@@ -58,6 +58,12 @@ export interface Customer {
   property_csm_owner_change_date?: string | null;
   property_notes_last_contacted?: string | null;
   property_agency_talent?: string | null;
+  /** HubSpot company-level "Customer Folder" property — the
+   *  Drive folder URL Sales / CSM ops keeps as the canonical
+   *  shared workspace for this account. Populated by the
+   *  @bot assign flow when it creates the folder, then read from
+   *  the customer book by the dashboard's detail-panel header. */
+  property_customer_folder?: string | null;
   next_invoice?: string | null;
   have_started_t4_recommendations?: boolean | null;
   completed_t4_recommendations?: boolean | null;

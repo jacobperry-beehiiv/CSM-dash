@@ -830,6 +830,14 @@ export const assignModalHandler: ViewSubmitHandler = async ({ payload }) => {
          *  the Slack reply so it's obvious whether the OP or no-OP
          *  kit shipped. Null when no seed attempted. */
         seed_variant: TemplateVariant | null;
+        /** Soft-failure indicator for the post-create PATCH that
+         *  writes the URL back into the company's "Customer Folder"
+         *  HubSpot property. Folder is still real + Slack still
+         *  posts the URL — this just means HubSpot didn't accept
+         *  the property write (custom prop missing, perm mismatch,
+         *  etc.). Surfaced in the Slack thread reply so an admin
+         *  knows to backfill manually. */
+        hubspot_property_error?: string;
       }
     | { ok: false; error: string } = { ok: false, error: "skipped" };
 
@@ -918,6 +926,26 @@ export const assignModalHandler: ViewSubmitHandler = async ({ payload }) => {
           seed,
           seed_variant: seed ? templateVariant : null,
         };
+
+        // Mirror the folder URL onto the HubSpot company's
+        // "Customer Folder" property so it shows up on the company
+        // record + flows through into the next dashboard sync. Best-
+        // effort: if HubSpot rejects the write (custom property
+        // missing, perm mismatch, etc.) we don't fail the whole
+        // assign — the folder still exists in Drive + Slack still
+        // posts the URL. The error gets surfaced inside driveResult
+        // so the Slack thread reply can mention it.
+        try {
+          await patchHubspotCompanyProperties(company.id, {
+            customer_folder: driveResult.webViewLink,
+          });
+        } catch (e) {
+          driveResult = {
+            ...driveResult,
+            hubspot_property_error:
+              e instanceof Error ? e.message : String(e),
+          };
+        }
       }
     } catch (e) {
       driveResult = { ok: false, error: e instanceof Error ? e.message : String(e) };
@@ -1308,6 +1336,11 @@ async function postAssignmentSummary(args: {
          *  prior assignment. */
         seed: SeedResult | { skipped_reason: string } | null;
         seed_variant: TemplateVariant | null;
+        /** Soft-failure indicator for the post-create HubSpot
+         *  "Customer Folder" property write. See the submission
+         *  handler comment for the rationale; rendered in the
+         *  thread reply only when set. */
+        hubspot_property_error?: string;
       }
     | { ok: false; error: string };
   /** Outcome of the deal→company field transpose pass. Null when the
@@ -1438,6 +1471,15 @@ async function postAssignmentSummary(args: {
         }
         lines.push(`   • Seeded: ${partsParts.join(" · ")}`);
       }
+    }
+    // HubSpot "Customer Folder" property write status. Silent on
+    // success (the URL appears on the company record + flows
+    // through into the next dashboard sync); surface only when
+    // the write failed so an admin knows to backfill by hand.
+    if (args.driveResult.hubspot_property_error) {
+      lines.push(
+        `   ⚠ Customer Folder property: ${args.driveResult.hubspot_property_error}`
+      );
     }
   } else {
     lines.push(`• ⚠ Drive: ${args.driveResult.error}`);
