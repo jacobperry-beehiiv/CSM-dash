@@ -173,6 +173,12 @@ export interface HubSpotContact {
   job_title: string | null;
   last_activity_at: string | null;
   is_primary: boolean;
+  /** USER_DEFINED association labels HubSpot has assigned to the
+   *  contact-company association we matched. Per-relationship, not
+   *  per-contact: the same contact at a different company can have
+   *  different labels. Optional so pre-feature snapshots degrade
+   *  to an empty array on read. */
+  labels?: string[];
 }
 
 export interface CompanyActivity {
@@ -253,7 +259,16 @@ export async function fetchLastActivity(
   // Uses the v4 associations batch endpoint, filtered to typeId 2 ("Contact
   // with Primary Company") so we surface only contacts that HubSpot considers
   // primarily attached to this company (not random associations).
+  //
+  // While we're walking the response we also capture USER_DEFINED
+  // association labels per (companyId, contactId) — these are the
+  // human-readable roles HubSpot admins assign on the association
+  // ("Main Contact", "Decision Maker", "Champion", "Billing", etc.)
+  // and are what powers the dashboard's "BCC by label" + the
+  // detail-panel label editor. Labels are per-relationship: the same
+  // contact at a different company may carry a different set.
   const companyToContactIds = new Map<string, string[]>();
+  const companyToContactLabels = new Map<string, Map<string, string[]>>();
   for (let i = 0; i < unique.length; i += BATCH_SIZE) {
     const slice = unique.slice(i, i + BATCH_SIZE);
     if (i > 0) await sleep(INTER_BATCH_DELAY_MS);
@@ -284,14 +299,36 @@ export async function fetchLastActivity(
     }
     const json = (await res.json()) as AssociationBatchReadResponse;
     for (const row of json.results ?? []) {
-      const ids = row.to
-        .filter((t) =>
-          t.associationTypes.some(
-            (a) => a.typeId === PRIMARY_COMPANY_ASSOC_TYPE_ID
+      const ids: string[] = [];
+      const labelMap = new Map<string, string[]>();
+      for (const t of row.to) {
+        // Only surface contacts whose PRIMARY company is this one —
+        // matches the historical filter. Random secondary
+        // associations don't go into the contact list.
+        const isPrimary = t.associationTypes.some(
+          (a) => a.typeId === PRIMARY_COMPANY_ASSOC_TYPE_ID
+        );
+        if (!isPrimary) continue;
+        const contactId = String(t.toObjectId);
+        ids.push(contactId);
+        // Pluck USER_DEFINED labels (HubSpot admin-created roles).
+        // HUBSPOT_DEFINED entries include the primary-association
+        // typeId itself + canned types — skip those; what's left
+        // is the human-readable "Decision Maker"-style label set.
+        const labels = t.associationTypes
+          .filter(
+            (a) =>
+              a.category === "USER_DEFINED" &&
+              typeof a.label === "string" &&
+              a.label.trim().length > 0
           )
-        )
-        .map((t) => String(t.toObjectId));
-      if (ids.length > 0) companyToContactIds.set(row.from.id, ids);
+          .map((a) => a.label!.trim());
+        if (labels.length > 0) labelMap.set(contactId, labels);
+      }
+      if (ids.length > 0) {
+        companyToContactIds.set(row.from.id, ids);
+        companyToContactLabels.set(row.from.id, labelMap);
+      }
     }
   }
 
@@ -308,9 +345,18 @@ export async function fetchLastActivity(
         slot = { last_activity_at: null, source: null };
         result.set(companyId, slot);
       }
-      const contacts: HubSpotContact[] = ids
-        .map((id) => contactById.get(id))
-        .filter((c): c is HubSpotContact => Boolean(c));
+      // Labels are per (company, contact) association, so clone the
+      // hydrated contact before stamping — the same contact at two
+      // different companies could otherwise share a mutable labels
+      // array, leaking one company's labels onto the other.
+      const labelsForCompany = companyToContactLabels.get(companyId);
+      const contacts: HubSpotContact[] = [];
+      for (const id of ids) {
+        const base = contactById.get(id);
+        if (!base) continue;
+        const labels = labelsForCompany?.get(id) ?? [];
+        contacts.push({ ...base, labels });
+      }
       // Sort: most-recently-active first, falling back to alphabetical.
       contacts.sort((a, b) => {
         const at = a.last_activity_at ? Date.parse(a.last_activity_at) : 0;
@@ -1574,4 +1620,61 @@ export async function createHubspotCompanyNote(
     throw new Error("HubSpot note create returned no id");
   }
   return { id: j.id };
+}
+
+/**
+ * Replace the full set of association labels on a single
+ * contact-company relationship.
+ *
+ * HubSpot's v4 PUT semantics: the body's `associationTypeIds` array
+ * REPLACES the existing set on that pair. So we must always re-
+ * include the primary-association typeId — otherwise we'd
+ * effectively orphan the contact from the company. The caller
+ * passes only the USER_DEFINED label typeIds; this helper adds
+ * the PRIMARY guard.
+ *
+ * Throws on HubSpot 4xx/5xx with the response body trimmed.
+ * Callers catch + surface the message to the UI.
+ */
+export async function setContactCompanyLabels(
+  companyId: string,
+  contactId: string,
+  labelTypeIds: number[]
+): Promise<void> {
+  const token = await getAccessToken();
+  // Always include the primary-company association typeId so the
+  // contact stays linked to the company after the PUT. Dedupe so a
+  // caller that accidentally includes it doesn't double-write.
+  const seen = new Set<number>([PRIMARY_COMPANY_ASSOC_TYPE_ID]);
+  const inputs: Array<{ associationCategory: string; associationTypeId: number }> = [
+    {
+      associationCategory: "HUBSPOT_DEFINED",
+      associationTypeId: PRIMARY_COMPANY_ASSOC_TYPE_ID,
+    },
+  ];
+  for (const id of labelTypeIds) {
+    if (seen.has(id)) continue;
+    seen.add(id);
+    inputs.push({
+      associationCategory: "USER_DEFINED",
+      associationTypeId: id,
+    });
+  }
+  const url =
+    `https://api.hubapi.com/crm/v4/objects/companies/${encodeURIComponent(companyId)}` +
+    `/associations/contacts/${encodeURIComponent(contactId)}`;
+  const res = await fetch(url, {
+    method: "PUT",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(inputs),
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(
+      `HubSpot set-association-labels failed (${res.status}): ${body.slice(0, 300)}`
+    );
+  }
 }

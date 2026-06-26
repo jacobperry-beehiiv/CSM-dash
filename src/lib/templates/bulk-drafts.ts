@@ -157,7 +157,9 @@ export function buildBulkDrafts(input: BuildBulkDraftsInput): BulkDraft[] {
 
     // Owner gets the default check; every HubSpot contact whose
     // primary associated company is this customer becomes an
-    // available recipient. Dedupe by lowercased email.
+    // available recipient. Dedupe by lowercased email. Carry the
+    // HubSpot association labels through so the modal can render
+    // per-contact chips + the Quick-include-by-label toolbar.
     const ownerEmail = c.owner_email;
     const seen = new Set<string>([ownerEmail.toLowerCase()]);
     const recipients: BulkDraft["recipients"] = [
@@ -165,6 +167,7 @@ export function buildBulkDrafts(input: BuildBulkDraftsInput): BulkDraft[] {
         email: ownerEmail,
         name: c.property_main_contact ?? null,
         default: true,
+        labels: [],
       },
     ];
     for (const contact of c.hubspot_contacts ?? []) {
@@ -176,6 +179,7 @@ export function buildBulkDrafts(input: BuildBulkDraftsInput): BulkDraft[] {
         email: contact.email,
         name: contact.name,
         default: false,
+        labels: contact.labels ?? [],
       });
     }
 

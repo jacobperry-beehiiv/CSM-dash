@@ -113,6 +113,12 @@ export interface HubSpotContactRef {
   job_title: string | null;
   last_activity_at: string | null;
   is_primary: boolean;
+  /** Association labels on the contact-company relationship in
+   *  HubSpot ("Main Contact", "Decision Maker", "Champion", etc.).
+   *  Configurable per-portal; what's present here is whatever the
+   *  HubSpot admin has set up + assigned. Optional so pre-feature
+   *  snapshot rows degrade to an empty array everywhere. */
+  labels?: string[] | null;
 }
 
 export interface CustomerWithMetrics extends Customer {

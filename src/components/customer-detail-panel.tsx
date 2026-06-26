@@ -336,7 +336,10 @@ export function CustomerDetailPanel({
            *  snapshot. The component is a "use client" island; the
            *  rest of the panel can stay server-rendered. */}
           <Row label="CSM" value={<CsmRefreshRow customer={c} />} />
-          <HubSpotContactsList contacts={c.hubspot_contacts} />
+          <HubSpotContactsList
+            contacts={c.hubspot_contacts}
+            workspaceId={c.workspace_id ?? null}
+          />
         </Section>
       </div>
 
