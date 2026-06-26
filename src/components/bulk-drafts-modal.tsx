@@ -1136,7 +1136,7 @@ export function BulkDraftsModal({
                               {(r.labels ?? []).map((label) => (
                                 <span
                                   key={label}
-                                  className="ml-1 inline-flex items-center px-1.5 py-0 rounded text-[9px] font-medium border bg-canvas border-border text-fg"
+                                  className="ml-1 inline-flex items-center px-1.5 py-0 rounded-full text-[10px] font-medium border bg-indigo-50 dark:bg-indigo-500/10 border-indigo-200 dark:border-indigo-500/40 text-indigo-900 dark:text-indigo-200"
                                   title={`HubSpot association label: ${label}`}
                                 >
                                   {label}
