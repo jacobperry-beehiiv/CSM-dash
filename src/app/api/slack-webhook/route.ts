@@ -821,6 +821,24 @@ async function handleReactionAdded(
     );
     return;
   }
+  // Skip when the reacted-to message was posted by the bot itself
+  // (to-do reminders, assignment summaries, etc.). Teammates use the
+  // trigger reaction on those as a celebration emoji — "nice, you got
+  // it done" — so adding it to the reactor's own to-do list and
+  // DM'ing them an ack would be wrong.
+  const botId = await getBotUserId();
+  if (botId && event.item_user && event.item_user === botId) {
+    console.log(
+      "[slack-webhook] Reaction on bot-posted message — skipping (celebration, not save)",
+      {
+        reactor: event.user,
+        item_user: event.item_user,
+        channel: event.item.channel,
+        ts: event.item.ts,
+      }
+    );
+    return;
+  }
   console.log(
     "[slack-webhook] Trigger reaction matched, processing",
     {
