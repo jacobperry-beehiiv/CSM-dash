@@ -6,7 +6,15 @@ import {
   loadAssociationLabels,
   resolveLabelTypeIds,
 } from "@/lib/data/hubspot-association-labels";
-import { setContactCompanyLabels } from "@/lib/integrations/hubspot";
+import {
+  fetchHubspotOverlayBatch,
+  setContactCompanyLabels,
+} from "@/lib/integrations/hubspot";
+import {
+  loadHubspotOverlay,
+  saveHubspotOverlay,
+  type HubSpotOverlayRow,
+} from "@/lib/data/hubspot-overlay";
 import { appendActionLog } from "@/lib/data/customer-signals";
 
 export const dynamic = "force-dynamic";
@@ -24,12 +32,11 @@ export const dynamic = "force-dynamic";
  * Side effects beyond the HubSpot write:
  *   • Logs an action_log entry against the customer's Notes feed
  *     so there's a paper trail of who changed what.
- *
- * NOT side-effect: the in-memory customer snapshot. Updating the
- * snapshot from a request handler would mean the next page-load
- * still sees stale labels until the daily sync runs — which is
- * confusing. The client refreshes its own row after the request
- * lands (response includes the canonical new labels).
+ *   • Refreshes the read-side HubSpot overlay for this company so
+ *     the new labels appear on the next page render without the
+ *     CSM having to click "Resync from HubSpot". Best-effort — a
+ *     failed overlay refresh doesn't roll back the HubSpot write,
+ *     it just means the snapshot lags until the daily sync.
  */
 
 interface PutBody {
@@ -145,6 +152,34 @@ export async function PUT(
         error: e instanceof Error ? e.message : "HubSpot write failed",
       },
       { status: 502 }
+    );
+  }
+
+  // Refresh the read-side overlay for this company so the new
+  // labels show up on the next page render without the CSM having
+  // to click "Resync from HubSpot". Best-effort — the HubSpot write
+  // is already durable; this just shortens the visible-to-stale gap
+  // from "until next daily sync" to "next render".
+  try {
+    const result = await fetchHubspotOverlayBatch([customer.hubspot_company_id]);
+    const row = result.get(customer.hubspot_company_id);
+    if (row) {
+      const overlay = await loadHubspotOverlay();
+      const overlayRow: HubSpotOverlayRow = {
+        hubspot_contacts: row.contacts ?? null,
+        last_activity_at: row.last_activity_at ?? null,
+        last_activity_source: row.source ?? null,
+        property_customer_folder: row.customer_folder ?? null,
+        fetched_at: new Date().toISOString(),
+      };
+      overlay.rows[workspaceId] = overlayRow;
+      overlay.fetched_at = new Date().toISOString();
+      await saveHubspotOverlay(overlay);
+    }
+  } catch (e) {
+    console.warn(
+      "[labels] HubSpot overlay refresh failed after label write — dashboard will lag until next sync",
+      { workspace_id: workspaceId, error: e instanceof Error ? e.message : e }
     );
   }
 
