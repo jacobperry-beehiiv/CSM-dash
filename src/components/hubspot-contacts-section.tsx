@@ -1,7 +1,7 @@
 import type { HubSpotContactRef } from "@/lib/types";
 import { fmtDate } from "./format";
 import { CollapsibleSection } from "./collapsible-section";
-import { HubSpotContactLabelEditor } from "./hubspot-contact-label-editor";
+import { HubSpotContactsEditableList } from "./hubspot-contacts-editable-list";
 
 /**
  * Renders the list of contacts whose HubSpot "Contact with Primary Company"
@@ -35,9 +35,16 @@ export function HubSpotContactsList({
       <p className="text-xs uppercase tracking-wide font-medium text-muted mb-2">
         HubSpot contacts at this company ({contacts.length})
       </p>
-      <ul className="divide-y divide-border/60">
-        <HubSpotContactItems contacts={contacts} workspaceId={workspaceId} />
-      </ul>
+      {workspaceId ? (
+        <HubSpotContactsEditableList
+          contacts={contacts}
+          workspaceId={workspaceId}
+        />
+      ) : (
+        <ul className="divide-y divide-border/60">
+          <ReadOnlyContactItems contacts={contacts} />
+        </ul>
+      )}
     </div>
   );
 }
@@ -55,20 +62,24 @@ export function HubSpotContactsSection({
     <CollapsibleSection
       title={`HubSpot contacts at this company (${contacts.length})`}
     >
-      <ul className="divide-y divide-border">
-        <HubSpotContactItems contacts={contacts} workspaceId={workspaceId} />
-      </ul>
+      {workspaceId ? (
+        <HubSpotContactsEditableList
+          contacts={contacts}
+          workspaceId={workspaceId}
+        />
+      ) : (
+        <ul className="divide-y divide-border">
+          <ReadOnlyContactItems contacts={contacts} />
+        </ul>
+      )}
     </CollapsibleSection>
   );
 }
 
-function HubSpotContactItems({
-  contacts,
-  workspaceId,
-}: {
-  contacts: HubSpotContactRef[];
-  workspaceId?: string | null;
-}) {
+/** Read-only contact rows for surfaces that didn't supply a
+ *  workspaceId (e.g. the standalone /account page). Same chip shape
+ *  as the editor minus interactivity. */
+function ReadOnlyContactItems({ contacts }: { contacts: HubSpotContactRef[] }) {
   return (
     <>
       {contacts.map((c) => (
@@ -90,35 +101,23 @@ function HubSpotContactItems({
                 {c.email}
               </a>
             ) : null}
-            {workspaceId ? (
-              <HubSpotContactLabelEditor
-                workspaceId={workspaceId}
-                contactId={c.id}
-                contactName={c.name ?? c.email ?? `contact ${c.id}`}
-                initialLabels={c.labels ?? []}
-              />
-            ) : (
-              // Read-only fallback for callers that didn't supply a
-              // workspaceId (e.g. the standalone /account page). Same
-              // chip shape as the editor minus the edit button.
-              <div className="flex flex-wrap items-center gap-1.5 mt-1">
+            <div className="flex flex-wrap items-center gap-1.5 mt-1">
+              <span
+                className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium border bg-surface-2 dark:bg-canvas/40 border-border text-muted"
+                title="HubSpot system label: every contact shown here is associated as Primary Company in HubSpot"
+              >
+                Contact with primary company
+              </span>
+              {(c.labels ?? []).map((label) => (
                 <span
-                  className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium border bg-surface-2 dark:bg-canvas/40 border-border text-muted"
-                  title="HubSpot system label: every contact shown here is associated as Primary Company in HubSpot"
+                  key={label}
+                  className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium border bg-indigo-50 dark:bg-indigo-500/10 border-indigo-200 dark:border-indigo-500/40 text-indigo-900 dark:text-indigo-200"
+                  title={`HubSpot association label: ${label}`}
                 >
-                  Contact with primary company
+                  {label}
                 </span>
-                {(c.labels ?? []).map((label) => (
-                  <span
-                    key={label}
-                    className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium border bg-indigo-50 dark:bg-indigo-500/10 border-indigo-200 dark:border-indigo-500/40 text-indigo-900 dark:text-indigo-200"
-                    title={`HubSpot association label: ${label}`}
-                  >
-                    {label}
-                  </span>
-                ))}
-              </div>
-            )}
+              ))}
+            </div>
           </div>
           {c.last_activity_at ? (
             <div
