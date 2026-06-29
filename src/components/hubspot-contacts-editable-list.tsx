@@ -29,21 +29,28 @@ interface BulkResult {
 export function HubSpotContactsEditableList({ contacts, workspaceId }: Props) {
   // Tracks contact IDs whose labels we've cleared in this session;
   // overrides the snapshot value on render so the chips disappear
-  // immediately without waiting for the parent to refetch.
+  // immediately without waiting for the parent to refetch. When the
+  // bulk action also detached primary, the row is still in the list
+  // (snapshot lag) but renders the struck-through Primary chip via
+  // the per-row editor's `key` reset.
   const [cleared, setCleared] = useState<Set<string>>(new Set());
+  const [detached, setDetached] = useState<Set<string>>(new Set());
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
-  const [confirming, setConfirming] = useState(false);
+  // Two-step confirm tracked per-action so toggling between them
+  // doesn't fire the wrong destructive op.
+  const [confirming, setConfirming] = useState<
+    null | "clear" | "detach"
+  >(null);
   const [message, setMessage] = useState<string | null>(null);
 
-  // Contacts that actually have USER_DEFINED labels right now —
-  // selecting one without labels would just be a no-op API call.
+  // Every contact is selectable — even ones with only the system
+  // Primary chip, since the CSM might want to bulk-detach them from
+  // the company. Already-cleared rows drop out of the selection so
+  // the master checkbox stays meaningful.
   const selectable = useMemo(
-    () =>
-      contacts.filter(
-        (c) => !cleared.has(c.id) && (c.labels ?? []).length > 0
-      ),
-    [contacts, cleared]
+    () => contacts.filter((c) => !detached.has(c.id)),
+    [contacts, detached]
   );
 
   const allSelected =
@@ -57,7 +64,7 @@ export function HubSpotContactsEditableList({ contacts, workspaceId }: Props) {
       return next;
     });
     setMessage(null);
-    setConfirming(false);
+    setConfirming(null);
   }
 
   function toggleAll() {
@@ -67,23 +74,27 @@ export function HubSpotContactsEditableList({ contacts, workspaceId }: Props) {
       setSelected(new Set(selectable.map((c) => c.id)));
     }
     setMessage(null);
-    setConfirming(false);
+    setConfirming(null);
   }
 
-  function attemptClear() {
+  function attemptAction(kind: "clear" | "detach") {
     if (selected.size === 0) return;
-    if (!confirming) {
-      setConfirming(true);
+    if (confirming !== kind) {
+      setConfirming(kind);
       return;
     }
-    void clearLabels();
+    void runBulk(kind);
   }
 
-  async function clearLabels(): Promise<void> {
+  async function runBulk(kind: "clear" | "detach"): Promise<void> {
     setBusy(true);
     setMessage(null);
     const ids = [...selected];
     const result: BulkResult = { ok: 0, failed: [] };
+    const body =
+      kind === "detach"
+        ? { labels: [], primary: false }
+        : { labels: [], primary: true };
     // Fan out concurrently — typical contact lists are 5-20 so we
     // don't bother with a concurrency cap. The endpoint already
     // refreshes the overlay per-call (PR #83), which is wasteful
@@ -99,7 +110,7 @@ export function HubSpotContactsEditableList({ contacts, workspaceId }: Props) {
             {
               method: "PUT",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ labels: [], primary: true }),
+              body: JSON.stringify(body),
             }
           );
           if (!r.ok) {
@@ -128,16 +139,28 @@ export function HubSpotContactsEditableList({ contacts, workspaceId }: Props) {
       }
       return next;
     });
+    if (kind === "detach") {
+      setDetached((prev) => {
+        const next = new Set(prev);
+        for (const id of ids) {
+          if (!result.failed.find((f) => f.contact_id === id)) {
+            next.add(id);
+          }
+        }
+        return next;
+      });
+    }
     setSelected(new Set());
-    setConfirming(false);
+    setConfirming(null);
     setBusy(false);
+    const verb = kind === "detach" ? "Detached" : "Cleared labels on";
     if (result.failed.length === 0) {
       setMessage(
-        `Cleared labels on ${result.ok} contact${result.ok === 1 ? "" : "s"}.`
+        `${verb} ${result.ok} contact${result.ok === 1 ? "" : "s"}.`
       );
     } else {
       setMessage(
-        `Cleared ${result.ok}; ${result.failed.length} failed (${result.failed
+        `${verb} ${result.ok}; ${result.failed.length} failed (${result.failed
           .map((f) => f.error)
           .slice(0, 2)
           .join("; ")}${result.failed.length > 2 ? "…" : ""}).`
@@ -147,79 +170,94 @@ export function HubSpotContactsEditableList({ contacts, workspaceId }: Props) {
 
   return (
     <div>
-      {selectable.length > 0 ? (
-        <div className="flex flex-wrap items-center gap-2 mb-2 text-[11px]">
-          <label className="inline-flex items-center gap-1 cursor-pointer text-muted hover:text-fg">
-            <input
-              type="checkbox"
-              checked={allSelected}
-              onChange={toggleAll}
-              className="h-3 w-3 cursor-pointer"
-            />
-            Select all with labels ({selectable.length})
-          </label>
-          <span className="text-subtle">·</span>
-          <span className="text-muted">
-            {selected.size} selected
-          </span>
-          {selected.size > 0 ? (
-            <>
+      <div className="flex flex-wrap items-center gap-2 mb-2 text-[11px]">
+        <label className="inline-flex items-center gap-1 cursor-pointer text-muted hover:text-fg">
+          <input
+            type="checkbox"
+            checked={allSelected}
+            onChange={toggleAll}
+            className="h-3 w-3 cursor-pointer"
+          />
+          Select all ({selectable.length})
+        </label>
+        <span className="text-subtle">·</span>
+        <span className="text-muted">{selected.size} selected</span>
+        {selected.size > 0 ? (
+          <>
+            <button
+              type="button"
+              onClick={() => attemptAction("clear")}
+              disabled={busy}
+              className={`px-2 py-0.5 rounded-md font-medium border disabled:opacity-50 ${
+                confirming === "clear"
+                  ? "bg-amber-600 text-white border-amber-600 hover:bg-amber-700"
+                  : "bg-surface text-fg border-border-strong hover:bg-canvas"
+              }`}
+              title="Removes USER_DEFINED labels on every selected contact. Primary association stays intact."
+            >
+              {busy && confirming === "clear"
+                ? "Clearing…"
+                : confirming === "clear"
+                ? `Confirm clear (${selected.size})`
+                : "Clear labels"}
+            </button>
+            <button
+              type="button"
+              onClick={() => attemptAction("detach")}
+              disabled={busy}
+              className={`px-2 py-0.5 rounded-md font-medium border disabled:opacity-50 ${
+                confirming === "detach"
+                  ? "bg-red-600 text-white border-red-600 hover:bg-red-700"
+                  : "bg-surface text-fg border-border-strong hover:bg-canvas"
+              }`}
+              title="Removes USER_DEFINED labels AND the Primary Company association. Selected contacts drop off this customer on next sync."
+            >
+              {busy && confirming === "detach"
+                ? "Detaching…"
+                : confirming === "detach"
+                ? `Confirm detach (${selected.size})`
+                : "Remove from this company"}
+            </button>
+            {confirming && !busy ? (
               <button
                 type="button"
-                onClick={attemptClear}
-                disabled={busy}
-                className={`px-2 py-0.5 rounded-md font-medium border disabled:opacity-50 ${
-                  confirming
-                    ? "bg-red-600 text-white border-red-600 hover:bg-red-700"
-                    : "bg-surface text-fg border-border-strong hover:bg-canvas"
-                }`}
+                onClick={() => {
+                  setConfirming(null);
+                  setMessage(null);
+                }}
+                className="text-muted hover:text-fg"
               >
-                {busy
-                  ? "Clearing…"
-                  : confirming
-                  ? `Confirm clear (${selected.size})`
-                  : "Clear labels on selected"}
+                Cancel
               </button>
-              {confirming && !busy ? (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setConfirming(false);
-                    setMessage(null);
-                  }}
-                  className="text-muted hover:text-fg"
-                >
-                  Cancel
-                </button>
-              ) : null}
-            </>
-          ) : null}
-          {message ? (
-            <span className="text-muted basis-full">{message}</span>
-          ) : null}
-        </div>
-      ) : null}
+            ) : null}
+          </>
+        ) : null}
+        {message ? (
+          <span className="text-muted basis-full">{message}</span>
+        ) : null}
+      </div>
       <ul className="divide-y divide-border/60">
         {contacts.map((c) => {
           const liveLabels = cleared.has(c.id) ? [] : c.labels ?? [];
-          const hasLabels = liveLabels.length > 0;
+          const wasDetached = detached.has(c.id);
           return (
             <li key={c.id} className="py-2.5 flex items-start gap-3 text-sm">
-              {/* Per-row checkbox. Disabled (and hidden via opacity)
-                * when the contact has nothing to clear — saves a CSM
-                * from selecting rows the bulk action wouldn't touch. */}
+              {/* Per-row checkbox. Every row is selectable — even
+                * primary-only contacts, since the bulk-detach action
+                * needs to reach them. Already-detached rows render
+                * the box disabled so a CSM doesn't repeat the op. */}
               <input
                 type="checkbox"
-                disabled={!hasLabels || busy}
+                disabled={wasDetached || busy}
                 checked={selected.has(c.id)}
                 onChange={() => toggle(c.id)}
                 className={`mt-1.5 h-3 w-3 cursor-pointer ${
-                  hasLabels ? "" : "opacity-25 cursor-not-allowed"
+                  wasDetached ? "opacity-25 cursor-not-allowed" : ""
                 }`}
                 title={
-                  hasLabels
-                    ? "Select for bulk label-clear"
-                    : "No labels to clear"
+                  wasDetached
+                    ? "Already detached — drops off on next sync"
+                    : "Select for bulk action"
                 }
               />
               <div className="flex-1 min-w-0">
@@ -242,7 +280,7 @@ export function HubSpotContactsEditableList({ contacts, workspaceId }: Props) {
                   </a>
                 ) : null}
                 <HubSpotContactLabelEditor
-                  key={`${c.id}::${liveLabels.join("|")}`}
+                  key={`${c.id}::${liveLabels.join("|")}::${wasDetached ? "d" : "p"}`}
                   workspaceId={workspaceId}
                   contactId={c.id}
                   contactName={c.name ?? c.email ?? `contact ${c.id}`}
