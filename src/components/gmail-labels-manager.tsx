@@ -36,6 +36,10 @@ interface ApiState {
   last_full_scan: string | null;
   labels: GmailLabel[];
   labels_error: string | null;
+  /** True when the active user's stored Google token carries
+   *  gmail.modify. When false, the dashboard skips the label-list
+   *  call entirely and the banner directs to re-consent. */
+  has_modify_scope: boolean;
 }
 
 const EMPTY_STATE: ApiState = {
@@ -43,6 +47,7 @@ const EMPTY_STATE: ApiState = {
   last_full_scan: null,
   labels: [],
   labels_error: null,
+  has_modify_scope: true,
 };
 
 export function GmailLabelsManager({ customers }: Props) {
@@ -239,7 +244,8 @@ export function GmailLabelsManager({ customers }: Props) {
   }, [customers, state.mapping]);
 
   const needsReconsent =
-    Boolean(state.labels_error) && state.labels.length === 0;
+    !state.has_modify_scope ||
+    (Boolean(state.labels_error) && state.labels.length === 0);
 
   return (
     <div className="space-y-4">

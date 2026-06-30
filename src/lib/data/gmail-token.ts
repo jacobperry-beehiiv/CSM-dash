@@ -67,6 +67,27 @@ export async function listConnectedEmails(): Promise<string[]> {
   return Object.keys(all).sort();
 }
 
+/**
+ * Returns true when the stored token for `email` carries the given
+ * OAuth scope. Used to gate features that require a stricter scope
+ * than `gmail.compose` (the original install) — `gmail.modify` for
+ * label application on drafts, etc.
+ *
+ * Scope strings live as a space-separated list per Google's spec;
+ * matched against the full URL form
+ * (`https://www.googleapis.com/auth/gmail.modify`) so a partial
+ * substring like "gmail.modify" inside another scope ID can't
+ * false-positive.
+ */
+export async function hasGmailScope(
+  email: string | null | undefined,
+  scope: string
+): Promise<boolean> {
+  const token = await loadTokenFor(email ?? null);
+  if (!token?.scope) return false;
+  return token.scope.split(/\s+/).includes(scope);
+}
+
 const CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
 const CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
 

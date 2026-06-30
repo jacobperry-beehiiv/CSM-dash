@@ -11,6 +11,9 @@ import {
   type LabelMappingSource,
 } from "@/lib/data/gmail-customer-labels";
 import { listGmailLabels, type GmailLabel } from "@/lib/integrations/gmail-labels";
+import { hasGmailScope } from "@/lib/data/gmail-token";
+
+const GMAIL_MODIFY_SCOPE = "https://www.googleapis.com/auth/gmail.modify";
 
 export const dynamic = "force-dynamic";
 
@@ -54,21 +57,30 @@ export async function GET() {
   const blob = await loadCustomerLabels();
   const book = getCsmLabelBook(blob, email);
   // Gmail label list is what the dropdown picker renders against.
-  // Soft-fail when the CSM hasn't re-consented for gmail.modify —
-  // the picker UI degrades to "Re-consent required" without
-  // breaking the page render.
+  // Fast-path the scope check: if gmail.modify isn't on the token,
+  // skip the Gmail API call entirely and tell the client to render
+  // its re-consent banner. (Without this, the API call would 403 or
+  // — worse — succeed silently with the wrong scope set; the
+  // explicit check is faster + clearer.)
+  const has_modify_scope = await hasGmailScope(email, GMAIL_MODIFY_SCOPE);
   let labels: GmailLabel[] = [];
   let labels_error: string | null = null;
-  try {
-    labels = await listGmailLabels(email);
-  } catch (e) {
-    labels_error = e instanceof Error ? e.message : "unknown";
+  if (has_modify_scope) {
+    try {
+      labels = await listGmailLabels(email);
+    } catch (e) {
+      labels_error = e instanceof Error ? e.message : "unknown";
+    }
+  } else {
+    labels_error =
+      "gmail.modify scope not granted — re-connect Google at /settings/gmail to enable customer labels on drafts.";
   }
   return NextResponse.json({
     mapping: book.rows,
     last_full_scan: book.last_full_scan ?? null,
     labels: labels.filter((l) => l.type === "user"),
     labels_error,
+    has_modify_scope,
   });
 }
 
