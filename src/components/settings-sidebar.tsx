@@ -72,12 +72,20 @@ const SECTIONS: Array<{ href: string; label: string; description: string }> = [
   },
 ];
 
-export function SettingsSidebar() {
+export function SettingsSidebar({
+  extras = [],
+}: {
+  /** Additional sections to surface beneath the static SECTIONS list.
+   *  Computed server-side (e.g. by the layout reading a feature flag)
+   *  so flag-gated nav entries don't leak to non-allowlist users. */
+  extras?: Array<{ href: string; label: string; description: string }>;
+} = {}) {
   const pathname = usePathname();
+  const allSections = [...SECTIONS, ...extras];
   return (
     <aside className="md:w-56 md:shrink-0">
       <nav className="flex md:flex-col gap-1 overflow-x-auto md:overflow-visible">
-        {SECTIONS.map((s) => {
+        {allSections.map((s) => {
           const active = pathname.startsWith(s.href);
           return (
             <Link

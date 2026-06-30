@@ -32,6 +32,13 @@ const CORE_SCOPES = [
   // granted, folder creation still works — only the template seed
   // step short-circuits.
   "https://www.googleapis.com/auth/drive.readonly",
+  // gmail.modify lets us (a) list the CSM's labels for the customer-
+  // label-mapping settings page and (b) attach labelIds to drafts so
+  // each draft lands under the right customer label in Gmail. Until a
+  // CSM reconsents with this scope, gmail-draft-labels gracefully
+  // no-ops (drafts still create, just unlabeled) and the settings
+  // page surfaces a "Re-grant Gmail access" banner.
+  "https://www.googleapis.com/auth/gmail.modify",
 ];
 
 /** Optional scope added later for alias auto-discovery. Has to be

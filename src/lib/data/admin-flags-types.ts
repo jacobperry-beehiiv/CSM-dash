@@ -11,7 +11,7 @@
  *  panel. Adding a new flag = append here + extend the UI in
  *  /admin/flags/page.tsx + read it via `isFeatureEnabledFor` at the
  *  feature's gate point. */
-export type FeatureId = "personalization";
+export type FeatureId = "personalization" | "gmail-draft-labels";
 
 /** Per-feature gate state. Defaults to "unrestricted" — everyone who
  *  passes the feature's own eligibility check (e.g. CSM with Gmail
@@ -51,6 +51,14 @@ export const FEATURE_METADATA: ReadonlyArray<FeatureMetadata> = [
     eligibility_note:
       "Even when unrestricted, only CSMs with Gmail connected can personalize. Restricting narrows further to the listed emails.",
   },
+  {
+    id: "gmail-draft-labels",
+    label: "Gmail customer labels on drafts",
+    description:
+      "Auto-apply each CSM's existing Gmail customer label to bulk drafts the dashboard creates. Configurable at /settings/gmail-labels.",
+    eligibility_note:
+      "Requires the gmail.modify scope. Users who haven't re-consented after the scope upgrade see a banner and unlabeled drafts until they re-auth.",
+  },
 ];
 
 /** Safe defaults — every feature ships unrestricted. New flags
@@ -59,6 +67,12 @@ export const FEATURE_METADATA: ReadonlyArray<FeatureMetadata> = [
 export const DEFAULT_FLAGS: AdminFlags = {
   features: {
     personalization: { restricted: false, allowed_emails: [] },
+    // Ships dark — only Jacob sees the settings page + gets labeled
+    // drafts until /admin/flags flips this to unrestricted.
+    "gmail-draft-labels": {
+      restricted: true,
+      allowed_emails: ["jacob.perry@beehiiv.com"],
+    },
   },
 };
 
@@ -77,11 +91,15 @@ export function applyGate(
   email: string | null | undefined
 ): boolean {
   if (!email) return false;
-  const gate = flags?.features?.[featureId];
-  if (!gate) {
-    // No gate config → fall back to the default (unrestricted = true).
-    return DEFAULT_FLAGS.features[featureId]?.restricted === false;
-  }
+  // Fall back to the entire DEFAULT_FLAGS gate when KV has no entry —
+  // not just the `restricted` flag — so a flag defaulted to
+  // `{restricted: true, allowed_emails: [...]}` still honors its
+  // allowlist before any admin writes anything to KV. (Previously
+  // the fallback only checked `restricted`, so a default-allowlisted
+  // user couldn't see their own feature until an admin saved the
+  // flags page.)
+  const gate = flags?.features?.[featureId] ?? DEFAULT_FLAGS.features[featureId];
+  if (!gate) return false;
   if (!gate.restricted) return true;
   const target = email.trim().toLowerCase();
   return gate.allowed_emails.some((e) => e.trim().toLowerCase() === target);
