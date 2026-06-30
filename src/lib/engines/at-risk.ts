@@ -1,5 +1,5 @@
 import { loadCustomers } from "../data/load-customers";
-import { loadResolutions } from "../data/flag-resolutions";
+import { loadResolutions, pruneResolutions } from "../data/flag-resolutions";
 import { loadSettings, reRaisePeriodMs } from "../data/settings";
 import { lastContacted, subUtilFraction } from "../customer-helpers";
 import type {
@@ -286,6 +286,16 @@ export async function runAtRiskCheck(
   }
 
   const results: AtRiskAccount[] = [];
+  // Collect (workspace_id, flag_code) pairs whose resolution has aged
+  // past the re-raise period. We delete them in a single batched KV
+  // write after the loop so the next render sees a clean slate — the
+  // checkbox in flag-resolution-checkboxes.tsx is driven by record
+  // existence, so without this purge a resurfaced row would render
+  // with its boxes still ticked against a stale resolution.
+  const expiredResolutions: Array<{
+    workspaceId: string;
+    flagCode: RiskFlagCode;
+  }> = [];
 
   for (const c of candidates) {
     const flags: RiskFlag[] = [];
@@ -327,13 +337,22 @@ export async function runAtRiskCheck(
 
     // Filter out resolved flags (CSM has marked "reached out about this").
     // Resolutions auto-expire per /settings — once aged out, the flag
-    // re-raises so the CSM revisits the account.
+    // re-raises so the CSM revisits the account. While filtering, note
+    // any resolutions that exist-but-aged-out for batched purge below.
     const resolvedForCustomer = c.workspace_id
       ? resolutions[c.workspace_id] ?? {}
       : {};
-    const liveFlags = flags.filter(
-      (f) => !isResolutionActive(f.code, resolvedForCustomer[f.code]?.resolved_at)
-    );
+    const liveFlags = flags.filter((f) => {
+      const resolvedAt = resolvedForCustomer[f.code]?.resolved_at;
+      const active = isResolutionActive(f.code, resolvedAt);
+      if (!active && resolvedAt && c.workspace_id) {
+        expiredResolutions.push({
+          workspaceId: c.workspace_id,
+          flagCode: f.code,
+        });
+      }
+      return !active;
+    });
     if (liveFlags.length === 0) continue;
     flags.length = 0;
     flags.push(...liveFlags);
@@ -352,6 +371,15 @@ export async function runAtRiskCheck(
       priority_score: priorityScore(flags, c.arr),
       recommended_action: recommendedAction(flags),
     });
+  }
+
+  // Garbage-collect resolutions whose re-raise period elapsed. Single
+  // KV write regardless of pair count, idempotent, and best-effort —
+  // a failed write doesn't change the response (the live filter above
+  // already excluded them from `flags`). Next render's resolution
+  // checkboxes will read clean state for resurfaced workspaces.
+  if (expiredResolutions.length > 0) {
+    await pruneResolutions(expiredResolutions);
   }
 
   results.sort((a, b) => b.priority_score - a.priority_score);
