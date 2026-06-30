@@ -1,11 +1,26 @@
 import { Suspense } from "react";
+import { auth } from "@/auth";
 import { SettingsSidebar } from "@/components/settings-sidebar";
+import { isFeatureEnabledFor } from "@/lib/auth/feature-flags";
 
-export default function SettingsLayout({
+export default async function SettingsLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
+  const session = await auth();
+  const email = session?.user?.email ?? null;
+  // Flag-gated nav entries are computed server-side so the sidebar
+  // never renders a link the viewer can't reach.
+  const extras: Array<{ href: string; label: string; description: string }> = [];
+  if (await isFeatureEnabledFor("gmail-draft-labels", email)) {
+    extras.push({
+      href: "/settings/gmail-labels",
+      label: "Gmail customer labels",
+      description:
+        "Map each customer in your book to the Gmail label you already use, so dashboard drafts auto-tag in your inbox.",
+    });
+  }
   return (
     <>
       <div className="mb-6">
@@ -17,7 +32,7 @@ export default function SettingsLayout({
       </div>
       <div className="flex flex-col md:flex-row gap-6">
         <Suspense fallback={<div className="md:w-56 md:shrink-0" />}>
-          <SettingsSidebar />
+          <SettingsSidebar extras={extras} />
         </Suspense>
         <div className="flex-1 min-w-0">{children}</div>
       </div>

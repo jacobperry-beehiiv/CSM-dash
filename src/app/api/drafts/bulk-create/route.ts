@@ -2,6 +2,11 @@ import { NextResponse } from "next/server";
 import { createGmailDraftFor } from "@/lib/integrations/gmail-api";
 import { getActiveEmail } from "@/lib/data/active-user";
 import { appendActionLog } from "@/lib/data/customer-signals";
+import { isFeatureEnabledFor } from "@/lib/auth/feature-flags";
+import {
+  buildLabelLookup,
+  loadCustomerLabels,
+} from "@/lib/data/gmail-customer-labels";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -102,9 +107,22 @@ export async function POST(req: Request) {
       with_tracking_id: body.drafts.filter((d) => d.tracking_id).length,
     });
 
+    // Per-customer Gmail label lookup, gated by `gmail-draft-labels`.
+    // When the flag is on AND the active user has a mapping in KV, we
+    // attach the customer's labelId to every draft created for that
+    // customer. Off → empty lookup, drafts land unlabeled.
+    let customerLabels: Map<string, { label_id: string; label_name: string | null }> = new Map();
+    if (await isFeatureEnabledFor("gmail-draft-labels", activeEmail)) {
+      const blob = await loadCustomerLabels();
+      customerLabels = buildLabelLookup(blob, activeEmail);
+    }
+
     let created = 0;
     let failed = 0;
     let alias_fallbacks = 0;
+    let labels_applied = 0;
+    let labels_attempted = 0;
+    const label_errors: Array<{ workspace_id: string; error: string }> = [];
     const errors: Array<{
       to: string;
       tracking_id?: string;
@@ -117,17 +135,43 @@ export async function POST(req: Request) {
     let i = 0;
     for (const d of body.drafts) {
       i++;
+      // Resolve a Gmail label for this draft. Single-customer drafts
+      // use audit_workspace_id; BCC-batch drafts (multi-customer)
+      // cover several workspaces so we don't apply a label at all —
+      // attaching one customer's label to a multi-customer thread
+      // would be wrong. Falls through to no labelIds when the lookup
+      // is empty (flag off, no mapping, or BCC batch).
+      const singleWorkspaceId =
+        d.audit_workspace_ids && d.audit_workspace_ids.length > 0
+          ? null
+          : d.audit_workspace_id;
+      const mapped = singleWorkspaceId
+        ? customerLabels.get(singleWorkspaceId)
+        : undefined;
+      const draftLabelIds = mapped ? [mapped.label_id] : undefined;
+      if (draftLabelIds) labels_attempted++;
       try {
-        const r = await createGmailDraftFor(activeEmail, {
-          to: d.to,
-          cc: d.cc,
-          bcc: d.bcc,
-          subject: d.subject,
-          body_html: d.body_html,
-          from_email: d.from,
-        });
+        const r = await createGmailDraftFor(
+          activeEmail,
+          {
+            to: d.to,
+            cc: d.cc,
+            bcc: d.bcc,
+            subject: d.subject,
+            body_html: d.body_html,
+            from_email: d.from,
+          },
+          { labelIds: draftLabelIds }
+        );
         ids.push(r.id);
         created++;
+        if (r.label_applied) labels_applied++;
+        if (draftLabelIds && !r.label_applied && r.label_error && singleWorkspaceId) {
+          label_errors.push({
+            workspace_id: singleWorkspaceId,
+            error: r.label_error,
+          });
+        }
         if (d.tracking_ids?.length) {
           succeeded_tracking_ids.push(...d.tracking_ids);
         } else if (d.tracking_id) {
@@ -161,16 +205,27 @@ export async function POST(req: Request) {
             }
           );
           try {
-            const r = await createGmailDraftFor(activeEmail, {
-              to: d.to,
-              cc: d.cc,
-              bcc: d.bcc,
-              subject: d.subject,
-              body_html: d.body_html,
-            });
+            const r = await createGmailDraftFor(
+              activeEmail,
+              {
+                to: d.to,
+                cc: d.cc,
+                bcc: d.bcc,
+                subject: d.subject,
+                body_html: d.body_html,
+              },
+              { labelIds: draftLabelIds }
+            );
             ids.push(r.id);
             created++;
             alias_fallbacks++;
+            if (r.label_applied) labels_applied++;
+            if (draftLabelIds && !r.label_applied && r.label_error && singleWorkspaceId) {
+              label_errors.push({
+                workspace_id: singleWorkspaceId,
+                error: r.label_error,
+              });
+            }
             if (d.tracking_ids?.length) {
               succeeded_tracking_ids.push(...d.tracking_ids);
             } else if (d.tracking_id) {
@@ -278,6 +333,9 @@ export async function POST(req: Request) {
       ids,
       created_in: activeEmail,
       alias_fallbacks,
+      labels_attempted,
+      labels_applied,
+      label_errors: label_errors.slice(0, 10),
       succeeded_tracking_ids,
       failed_tracking_ids,
       errors: errors.slice(0, 10),

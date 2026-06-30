@@ -63,10 +63,20 @@ function base64UrlEncode(s: string): string {
     .replace(/=+$/g, "");
 }
 
+export interface DraftCreateResult {
+  id: string;
+  /** True when we asked Gmail to apply labelIds AND it accepted them.
+   *  Stays false (with `label_error` populated) when label application
+   *  failed but the draft still landed via the fallback retry. */
+  label_applied: boolean;
+  label_error?: string;
+}
+
 export async function createGmailDraftFor(
   fromEmail: string,
-  draft: DraftInput
-): Promise<{ id: string }> {
+  draft: DraftInput,
+  opts: { labelIds?: string[] } = {}
+): Promise<DraftCreateResult> {
   const token = await getValidAccessTokenFor(fromEmail);
   // `From:` is `from_email` (a verified send-as alias) when set, else
   // the authenticated account. Auth still flows through the
@@ -84,21 +94,43 @@ export async function createGmailDraftFor(
     })
   );
 
-  const res = await fetch(
-    "https://gmail.googleapis.com/gmail/v1/users/me/drafts",
-    {
+  const labelIds =
+    opts.labelIds && opts.labelIds.length > 0 ? opts.labelIds : null;
+
+  async function doCreate(includeLabels: boolean): Promise<Response> {
+    return fetch("https://gmail.googleapis.com/gmail/v1/users/me/drafts", {
       method: "POST",
       headers: {
         Authorization: `Bearer ${token}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ message: { raw } }),
-    }
-  );
+      body: JSON.stringify({
+        message: {
+          raw,
+          ...(includeLabels && labelIds ? { labelIds } : {}),
+        },
+      }),
+    });
+  }
+
+  // First attempt: with labels if any. Gmail rejects stale labelIds
+  // with 400 — fall back to a label-less retry so the draft itself
+  // still creates. The caller gets `label_applied: false` plus the
+  // error reason so the UI can surface it.
+  let res = await doCreate(Boolean(labelIds));
+  let labelError: string | undefined;
+  if (labelIds && !res.ok && (res.status === 400 || res.status === 404)) {
+    labelError = await res.text().catch(() => "label rejected");
+    res = await doCreate(false);
+  }
   if (!res.ok) {
     const txt = await res.text();
     throw new Error(`Gmail API ${res.status}: ${txt.slice(0, 300)}`);
   }
   const j = (await res.json()) as { id: string };
-  return { id: j.id };
+  return {
+    id: j.id,
+    label_applied: Boolean(labelIds) && !labelError,
+    label_error: labelError ? labelError.slice(0, 200) : undefined,
+  };
 }
