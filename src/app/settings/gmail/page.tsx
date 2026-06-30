@@ -43,6 +43,12 @@ function GmailSettingsInner() {
   const [aliasesError, setAliasesError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  // Inline two-step confirm for the disconnect buttons. window.confirm()
+  // is silently suppressed in the Vercel-hosted browser context, same as
+  // the mascot remove / template delete / Primary Company removal flows.
+  const [confirming, setConfirming] = useState<null | "signout" | "forget">(
+    null
+  );
   const justConnected = params.get("gmail_connected") === "1";
   const errParam = params.get("gmail_error");
 
@@ -81,11 +87,16 @@ function GmailSettingsInner() {
     refresh();
   }, []);
 
+  function attemptDisconnect(everywhere: boolean) {
+    const kind = everywhere ? "forget" : "signout";
+    if (confirming !== kind) {
+      setConfirming(kind);
+      return;
+    }
+    void disconnect(everywhere);
+  }
+
   async function disconnect(everywhere: boolean) {
-    const msg = everywhere
-      ? "Forget this Gmail connection completely (revoke from disk)? Drafts already created will not be removed. The same CSM can re-connect later via OAuth."
-      : "Sign out of this browser? The Gmail token stays on disk so you (or another CSM on a different browser) can switch back to it without re-authenticating.";
-    if (!confirm(msg)) return;
     setBusy(true);
     setMessage(null);
     try {
@@ -97,6 +108,7 @@ function GmailSettingsInner() {
       setMessage(everywhere ? "Disconnected and forgot token." : "Signed out.");
     } finally {
       setBusy(false);
+      setConfirming(null);
     }
   }
 
@@ -176,20 +188,45 @@ function GmailSettingsInner() {
                 Connect a different account
               </a>
               <button
-                onClick={() => disconnect(false)}
+                onClick={() => attemptDisconnect(false)}
                 disabled={busy}
-                className="px-3 py-1.5 border border-border-strong rounded-md text-sm hover:bg-canvas disabled:opacity-50"
+                className={`px-3 py-1.5 rounded-md text-sm border disabled:opacity-50 ${
+                  confirming === "signout"
+                    ? "bg-amber-600 text-white border-amber-600 hover:bg-amber-700"
+                    : "border-border-strong hover:bg-canvas"
+                }`}
               >
-                Sign out of this browser
+                {busy && confirming === "signout"
+                  ? "Signing out…"
+                  : confirming === "signout"
+                  ? "Confirm sign out"
+                  : "Sign out of this browser"}
               </button>
               <button
-                onClick={() => disconnect(true)}
+                onClick={() => attemptDisconnect(true)}
                 disabled={busy}
-                className="px-3 py-1.5 border border-red-300 text-red-700 rounded-md text-sm hover:bg-red-50 dark:bg-red-500/10 disabled:opacity-50"
+                className={`px-3 py-1.5 rounded-md text-sm border disabled:opacity-50 ${
+                  confirming === "forget"
+                    ? "bg-red-600 text-white border-red-600 hover:bg-red-700"
+                    : "border-red-300 text-red-700 hover:bg-red-50 dark:bg-red-500/10"
+                }`}
                 title="Removes the token from disk so it can no longer be used to create drafts."
               >
-                Disconnect &amp; forget
+                {busy && confirming === "forget"
+                  ? "Forgetting…"
+                  : confirming === "forget"
+                  ? "Confirm disconnect & forget"
+                  : "Disconnect & forget"}
               </button>
+              {confirming && !busy ? (
+                <button
+                  type="button"
+                  onClick={() => setConfirming(null)}
+                  className="px-2 py-1.5 text-sm text-muted hover:text-fg"
+                >
+                  Cancel
+                </button>
+              ) : null}
             </div>
           </div>
         ) : (
