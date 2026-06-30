@@ -71,6 +71,11 @@ export function TemplateEditor({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showMergeMenu, setShowMergeMenu] = useState(false);
+  // Two-step inline confirm for delete. window.confirm() is silently
+  // suppressed by some embedded / Vercel-hosted browser contexts, so
+  // the first click flips this on and surfaces a "Confirm delete"
+  // button; the second click fires the DELETE request.
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [ladder, setLadder] = useState<EnterpriseTier[]>([]);
   // Send-as aliases discovered on the connected Gmail account. Loaded
   // lazily on mount; soft-fails to [] so the editor still works
@@ -206,9 +211,17 @@ export function TemplateEditor({
     }
   }
 
+  function attemptRemove() {
+    if (!initial) return;
+    if (!confirmingDelete) {
+      setConfirmingDelete(true);
+      return;
+    }
+    void remove();
+  }
+
   async function remove() {
     if (!initial) return;
-    if (!confirm(`Delete template "${initial.label}"?`)) return;
     setBusy(true);
     try {
       const res = await fetch(
@@ -221,6 +234,7 @@ export function TemplateEditor({
       setError(e instanceof Error ? e.message : "Unknown error");
     } finally {
       setBusy(false);
+      setConfirmingDelete(false);
     }
   }
 
@@ -427,13 +441,33 @@ export function TemplateEditor({
             Cancel
           </button>
           {initial && onDeleted ? (
-            <button
-              onClick={remove}
-              disabled={busy}
-              className="ml-auto px-3 py-1.5 border border-red-300 text-red-700 rounded-md text-sm hover:bg-red-50 dark:bg-red-500/10 disabled:opacity-50"
-            >
-              Delete
-            </button>
+            <div className="ml-auto flex items-center gap-2">
+              {confirmingDelete && !busy ? (
+                <button
+                  type="button"
+                  onClick={() => setConfirmingDelete(false)}
+                  className="px-2 py-1.5 text-sm text-muted hover:text-fg"
+                >
+                  Cancel
+                </button>
+              ) : null}
+              <button
+                type="button"
+                onClick={attemptRemove}
+                disabled={busy}
+                className={`px-3 py-1.5 rounded-md text-sm border disabled:opacity-50 ${
+                  confirmingDelete
+                    ? "bg-red-600 text-white border-red-600 hover:bg-red-700"
+                    : "border-red-300 text-red-700 hover:bg-red-50 dark:bg-red-500/10"
+                }`}
+              >
+                {busy
+                  ? "Deleting…"
+                  : confirmingDelete
+                  ? `Confirm delete "${initial.label}"`
+                  : "Delete"}
+              </button>
+            </div>
           ) : null}
         </div>
       </div>
