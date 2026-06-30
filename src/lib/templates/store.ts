@@ -23,6 +23,12 @@ export {
 import { templateTeam, type StoredTemplate, type TemplateTeam } from "./types";
 
 const KEY = "templates";
+// Tombstones: starter template IDs an admin has explicitly deleted.
+// `listTemplates`'s backfill consults this so deleted starters don't
+// auto-resurrect on the next read. Stored as a separate KV row so
+// the template list's shape (`StoredTemplate[]`) doesn't need a
+// migration.
+const TOMBSTONES_KEY = "templates:deleted-starters";
 
 function nowIso() {
   return new Date().toISOString();
@@ -175,11 +181,27 @@ const STARTER_TEMPLATES: StoredTemplate[] = [
   },
 ];
 
-let cache: StoredTemplate[] | null = null;
+// NOTE: deliberately no module-level cache. Vercel runs multiple warm
+// isolates; an in-memory cache populated on isolate A is invisible
+// to isolate B, so a successful delete on A would still serve the
+// deleted template from B until B's cache happened to refresh. We
+// always re-read from KV — same pattern as flag-resolutions /
+// customer-overrides. The hot-path cost is ~one extra Postgres
+// round-trip per request, which is fine for a settings surface.
 
 async function persist(list: StoredTemplate[]) {
   await kvSet(KEY, list);
-  cache = list;
+}
+
+async function loadTombstones(): Promise<Set<string>> {
+  const stored = await kvGet<string[]>(TOMBSTONES_KEY);
+  return new Set(stored ?? []);
+}
+
+async function addTombstone(id: string): Promise<void> {
+  const existing = (await kvGet<string[]>(TOMBSTONES_KEY)) ?? [];
+  if (existing.includes(id)) return;
+  await kvSet(TOMBSTONES_KEY, [...existing, id]);
 }
 
 function normalizeTemplate(t: StoredTemplate): StoredTemplate {
@@ -191,24 +213,32 @@ function normalizeTemplate(t: StoredTemplate): StoredTemplate {
 }
 
 export async function listTemplates(): Promise<StoredTemplate[]> {
-  if (cache) return cache;
-  const stored = await kvGet<StoredTemplate[]>(KEY);
+  const [stored, tombstones] = await Promise.all([
+    kvGet<StoredTemplate[]>(KEY),
+    loadTombstones(),
+  ]);
   if (stored) {
     // Backfill any seed templates that weren't stored yet — covers
     // existing installs picking up newly-added defaults without
-    // overwriting user edits to the templates that DO exist.
+    // overwriting user edits to the templates that DO exist. EXCEPT
+    // starters an admin has explicitly deleted — those stay gone
+    // (their id is in the tombstones list).
     const present = new Set(stored.map((t) => t.id));
-    const missing = STARTER_TEMPLATES.filter((t) => !present.has(t.id));
+    const missing = STARTER_TEMPLATES.filter(
+      (t) => !present.has(t.id) && !tombstones.has(t.id)
+    );
     const merged = [...stored, ...missing].map(normalizeTemplate);
     if (missing.length > 0) {
       await persist(merged);
-    } else {
-      cache = merged;
     }
-  } else {
-    await persist(STARTER_TEMPLATES);
+    return merged;
   }
-  return cache!;
+  // First-ever read on a fresh install — seed starters, except any
+  // already in tombstones (paranoia: tombstones outliving an
+  // accidental KV wipe shouldn't resurrect deleted defaults).
+  const seed = STARTER_TEMPLATES.filter((t) => !tombstones.has(t.id));
+  await persist(seed);
+  return seed;
 }
 
 export async function getTemplate(id: string): Promise<StoredTemplate | null> {
@@ -312,6 +342,11 @@ export async function deleteTemplate(id: string): Promise<boolean> {
   if (idx === -1) return false;
   list.splice(idx, 1);
   await persist(list);
+  // If this id matches a starter template, tombstone it so the next
+  // listTemplates() backfill doesn't resurrect it.
+  if (STARTER_TEMPLATES.some((t) => t.id === id)) {
+    await addTombstone(id);
+  }
   return true;
 }
 
