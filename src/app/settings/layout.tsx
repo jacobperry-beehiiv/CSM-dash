@@ -21,6 +21,14 @@ export default async function SettingsLayout({
         "Map each customer in your book to the Gmail label you already use, so dashboard drafts auto-tag in your inbox.",
     });
   }
+  if (await isFeatureEnabledFor("sybill-ingest", email)) {
+    extras.push({
+      href: "/settings/sybill",
+      label: "Sybill action items",
+      description:
+        "Sync action items from your recent Sybill call-recap emails into your personal to-do list.",
+    });
+  }
   return (
     <>
       <div className="mb-6">
