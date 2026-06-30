@@ -7,6 +7,9 @@ import {
   buildLabelLookup,
   loadCustomerLabels,
 } from "@/lib/data/gmail-customer-labels";
+import { hasGmailScope } from "@/lib/data/gmail-token";
+
+const GMAIL_MODIFY_SCOPE = "https://www.googleapis.com/auth/gmail.modify";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -111,10 +114,27 @@ export async function POST(req: Request) {
     // When the flag is on AND the active user has a mapping in KV, we
     // attach the customer's labelId to every draft created for that
     // customer. Off → empty lookup, drafts land unlabeled.
+    //
+    // Extra gate: `gmail.modify` scope. Gmail accepts `labelIds` on
+    // drafts.create only with the modify scope — under compose-only it
+    // SILENTLY drops them (no error), which would make drafts land
+    // unlabeled while the API response claims label_applied. Detect
+    // the missing scope upfront and skip the whole label path so the
+    // response can surface a clear "re-consent needed" reason.
     let customerLabels: Map<string, { label_id: string; label_name: string | null }> = new Map();
+    let labels_skipped_reason: string | null = null;
     if (await isFeatureEnabledFor("gmail-draft-labels", activeEmail)) {
-      const blob = await loadCustomerLabels();
-      customerLabels = buildLabelLookup(blob, activeEmail);
+      if (await hasGmailScope(activeEmail, GMAIL_MODIFY_SCOPE)) {
+        const blob = await loadCustomerLabels();
+        customerLabels = buildLabelLookup(blob, activeEmail);
+      } else {
+        labels_skipped_reason =
+          "gmail.modify scope not granted — re-connect Google at /settings/gmail to enable customer labels on drafts.";
+        console.warn(
+          "[drafts/bulk-create] gmail-draft-labels flag on but gmail.modify scope missing — skipping label attach",
+          { activeEmail }
+        );
+      }
     }
 
     let created = 0;
@@ -335,6 +355,7 @@ export async function POST(req: Request) {
       alias_fallbacks,
       labels_attempted,
       labels_applied,
+      labels_skipped_reason,
       label_errors: label_errors.slice(0, 10),
       succeeded_tracking_ids,
       failed_tracking_ids,
