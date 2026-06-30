@@ -132,6 +132,7 @@ export function FeatureRequestsPanel() {
       commentFollowUp?: {
         slack: { sent: boolean; reason?: string };
         todo: { added: boolean; reason?: string };
+        prior_commenters: { attempted: number; sent: number };
       } | null;
     }> => {
       try {
@@ -149,6 +150,7 @@ export function FeatureRequestsPanel() {
           comment_follow_up?: {
             slack: { sent: boolean; reason?: string };
             todo: { added: boolean; reason?: string };
+            prior_commenters: { attempted: number; sent: number };
           } | null;
         };
         setRequests(json.requests);
@@ -332,10 +334,16 @@ export function FeatureRequestsPanel() {
         if (commentFollowUp.todo.added) {
           bits.push("added to their to-do list");
         }
-        if (
+        if (commentFollowUp.prior_commenters.sent > 0) {
+          const n = commentFollowUp.prior_commenters.sent;
+          bits.push(
+            `${n} prior commenter${n === 1 ? "" : "s"} pinged in Slack`
+          );
+        }
+        const ownRequest =
           commentFollowUp.slack.reason === "commenter is the submitter" ||
-          commentFollowUp.todo.reason === "commenter is the submitter"
-        ) {
+          commentFollowUp.todo.reason === "commenter is the submitter";
+        if (ownRequest && commentFollowUp.prior_commenters.sent === 0) {
           setCommentFeedback(
             "Comment posted on your own request (no Slack ping or to-do)."
           );
@@ -398,24 +406,41 @@ export function FeatureRequestsPanel() {
     );
   }, [teamScoped]);
 
+  // Default view hides shipped items so the active backlog isn't
+  // padded with finished work. They're still reachable via the
+  // Status filter dropdown (which lists every status with its own
+  // count). When a CSM explicitly filters to "Shipped" the visible
+  // list IS shipped items, so we honor that without re-hiding them.
   const sortedRequests = useMemo(() => {
-    if (!statusFilter) return teamScoped;
-    return teamScoped.filter((r) => r.status === statusFilter);
+    if (statusFilter) return teamScoped.filter((r) => r.status === statusFilter);
+    return teamScoped.filter((r) => r.status !== "shipped");
   }, [teamScoped, statusFilter]);
 
   const listFiltered =
     teamFilter !== "all" || Boolean(statusFilter);
-  const openCount = sortedRequests.filter((r) => r.status === "open").length;
-  const inProgressCount = sortedRequests.filter(
+  // Header counts intentionally exclude shipped — once a request is
+  // marked shipped it drops out of the "what's the team working on?"
+  // headline. Scoped to the active team filter so the count matches
+  // the list the user is looking at.
+  const liveBacklog = useMemo(
+    () => teamScoped.filter((r) => r.status !== "shipped"),
+    [teamScoped]
+  );
+  const openCount = liveBacklog.filter((r) => r.status === "open").length;
+  const inProgressCount = liveBacklog.filter(
     (r) => r.status === "in_progress"
   ).length;
-  const shippedCount = sortedRequests.filter(
-    (r) => r.status === "shipped"
-  ).length;
-  // Filter-tab counts: total per team across statuses so the tab
-  // labels read as a meaningful "how big is each backlog" cue.
-  const csmTotal = allSorted.filter((r) => (r.team ?? "csm") === "csm").length;
-  const amTotal = allSorted.filter((r) => (r.team ?? "csm") === "am").length;
+  // Team-tab counts: open + in_progress backlog only, so "CSM 12 /
+  // AM 4" tells you what's live for each team, not lifetime volume.
+  const liveByTeam = (team: FeatureRequestTeam) =>
+    allSorted.filter(
+      (r) =>
+        (r.team ?? "csm") === team &&
+        r.status !== "shipped"
+    ).length;
+  const csmTotal = liveByTeam("csm");
+  const amTotal = liveByTeam("am");
+  const allTotal = allSorted.filter((r) => r.status !== "shipped").length;
 
   return (
     <div className="bg-surface border border-border rounded-xl shadow-card overflow-hidden">
@@ -426,12 +451,13 @@ export function FeatureRequestsPanel() {
           </h2>
           <p className="text-xs text-muted mt-0.5">
             Submit a request, vote on others, drag-rank the queue.
-            Comment on a row to DM the requester in Slack.
+            Comments DM the requester + anyone who's already
+            commented. Shipped items drop out of the list — filter
+            to <em>Shipped</em> to revisit them.
           </p>
         </div>
         <div className="ml-auto text-[12px] text-muted">
-          {openCount} open · {inProgressCount} in progress · {shippedCount}{" "}
-          shipped
+          {openCount} open · {inProgressCount} in progress
         </div>
       </header>
 
@@ -554,7 +580,7 @@ export function FeatureRequestsPanel() {
       <div className="px-5 py-2 bg-canvas/20 border-b border-border flex items-center gap-1">
         {(
           [
-            { key: "all", label: "All", count: allSorted.length },
+            { key: "all", label: "All", count: allTotal },
             { key: "csm", label: "CSM", count: csmTotal },
             { key: "am", label: "AM", count: amTotal },
           ] as Array<{
