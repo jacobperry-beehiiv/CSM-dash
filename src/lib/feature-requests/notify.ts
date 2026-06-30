@@ -22,9 +22,26 @@ export interface CommentTodoResult {
   reason?: string;
 }
 
+export interface PriorCommenterPing {
+  email: string;
+  sent: boolean;
+  reason?: string;
+}
+
+export interface PriorCommenterNotifyResult {
+  /** Number of distinct prior commenters we tried to ping. */
+  attempted: number;
+  /** Number of DMs that successfully landed. */
+  sent: number;
+  /** Per-recipient detail for UI feedback / debugging. Skipped when
+   *  `attempted === 0`. */
+  pings: PriorCommenterPing[];
+}
+
 export interface CommentFollowUpResult {
   slack: CommentNotifyResult;
   todo: CommentTodoResult;
+  prior_commenters: PriorCommenterNotifyResult;
 }
 
 function humanizeEmail(email: string): string {
@@ -290,6 +307,116 @@ export async function notifySubmitterOfComment(args: {
   }
 }
 
+/** Slack DM every prior commenter on a feature request when a new
+ *  comment lands — so anyone who's already weighed in stays in the
+ *  loop. Excludes the current commenter and the submitter (who's
+ *  notified via the separate submitter path).
+ *
+ *  Lookup goes Slack-first (`users.lookupByEmail` — works for anyone
+ *  whose @beehiiv.com email matches a Slack user, not just mapped
+ *  CSMs). Unresolvable participants are noted in the result so the
+ *  UI can surface "couldn't DM X" without dropping the comment. */
+export async function notifyPriorCommentersOfComment(args: {
+  request: FeatureRequest;
+  comment: FeatureRequestComment;
+}): Promise<PriorCommenterNotifyResult> {
+  const submitterEmail = args.request.submitter_email?.trim().toLowerCase();
+  const currentAuthor = args.comment.author_email?.trim().toLowerCase();
+  // De-dupe by author_email — a participant who commented N times
+  // only gets one DM. Skip the current commenter (would self-notify)
+  // and the submitter (handled by notifySubmitterOfComment).
+  const recipients = new Map<string, string>(); // email → name
+  for (const c of args.request.comments ?? []) {
+    const email = c.author_email?.trim().toLowerCase();
+    if (!email) continue;
+    if (email === currentAuthor) continue;
+    if (email === submitterEmail) continue;
+    if (recipients.has(email)) continue;
+    recipients.set(email, c.author_name?.trim() || humanizeEmail(email));
+  }
+  if (recipients.size === 0) {
+    return { attempted: 0, sent: 0, pings: [] };
+  }
+  if (!process.env.SLACK_BOT_TOKEN) {
+    return {
+      attempted: recipients.size,
+      sent: 0,
+      pings: [...recipients.keys()].map((email) => ({
+        email,
+        sent: false,
+        reason: "SLACK_BOT_TOKEN not configured",
+      })),
+    };
+  }
+
+  const settings = await loadSettings();
+  const notifyPref = resolveSlackNotificationPref(
+    settings,
+    "feature_request_comment"
+  );
+  if (!notifyPref.enabled) {
+    return {
+      attempted: recipients.size,
+      sent: 0,
+      pings: [...recipients.keys()].map((email) => ({
+        email,
+        sent: false,
+        reason: "feature_request_comment notifications disabled in settings",
+      })),
+    };
+  }
+
+  const dashUrl =
+    process.env.NEXT_PUBLIC_DASHBOARD_URL ?? "https://csm-dash.vercel.app/";
+  const boardUrl = `${dashUrl.replace(/\/$/, "")}/feature-requests`;
+  const author =
+    args.comment.author_name?.trim() ||
+    humanizeEmail(args.comment.author_email);
+
+  // Fan out — Slack ID lookup + DM in parallel per recipient. Each
+  // result is captured independently so one failure doesn't drop
+  // the rest.
+  const pings = await Promise.all(
+    [...recipients.entries()].map(async ([email]): Promise<PriorCommenterPing> => {
+      const slackId = await lookupSlackUserByEmail(email);
+      if (!slackId) {
+        return {
+          email,
+          sent: false,
+          reason: "no Slack user found for this email",
+        };
+      }
+      const lines = [
+        `<@${slackId}> :speech_balloon: *New comment on a feature request you commented on*`,
+        "",
+        `*Request:* ${excerpt(args.request.description)}`,
+        "",
+        `*${author}* replied:`,
+        `> ${args.comment.body.trim().split("\n").join("\n> ")}`,
+        "",
+        `<${boardUrl}|Open the feature-requests board ↗>`,
+      ];
+      try {
+        await slackDm(slackId, lines.join("\n"));
+        return { email, sent: true };
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : "unknown error";
+        console.error(
+          "[feature-requests] prior-commenter DM failed",
+          { email, slackId, error: msg }
+        );
+        return { email, sent: false, reason: msg };
+      }
+    })
+  );
+
+  return {
+    attempted: recipients.size,
+    sent: pings.filter((p) => p.sent).length,
+    pings,
+  };
+}
+
 /** Slack DM + personal todo for the requester when someone else
  *  comments. Each step is best-effort — a Slack failure doesn't
  *  block the todo, and vice versa. */
@@ -297,9 +424,10 @@ export async function followUpSubmitterOnComment(args: {
   request: FeatureRequest;
   comment: FeatureRequestComment;
 }): Promise<CommentFollowUpResult> {
-  const [slack, todo] = await Promise.all([
+  const [slack, todo, prior_commenters] = await Promise.all([
     notifySubmitterOfComment(args),
     addSubmitterTodoForComment(args),
+    notifyPriorCommentersOfComment(args),
   ]);
-  return { slack, todo };
+  return { slack, todo, prior_commenters };
 }
