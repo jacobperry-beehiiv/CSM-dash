@@ -64,6 +64,13 @@ export async function listGmailLabels(csmEmail: string): Promise<GmailLabel[]> {
       type: l.type === "system" ? "system" : "user",
     });
   }
+  // Alphabetize so the picker dropdown is scannable. Case-insensitive,
+  // locale-aware so nested labels like "Customers/AcmeCo" group near
+  // their parent. Gmail returns labels in creation order otherwise,
+  // which is unusable for a 100+-label account.
+  out.sort((a, b) =>
+    a.name.localeCompare(b.name, undefined, { sensitivity: "base" })
+  );
   return out;
 }
 
