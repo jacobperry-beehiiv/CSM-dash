@@ -23,6 +23,7 @@ import {
   buildAssignButtonBlocks,
   openAssignModal,
 } from "@/lib/integrations/slack-assign";
+import { acquireDedupLock } from "@/lib/integrations/slack-dedup";
 import {
   newTodoId,
   type PersonalTodo,
@@ -573,7 +574,31 @@ async function handleViewSubmission(
   console.log("[slack-webhook] View submission received", {
     callback_id: payload.view.callback_id,
     user_id: payload.user.id,
+    view_id: payload.view.id,
   });
+  // Idempotency: same `view.id` → same modal opening → same submit.
+  // Drops the second copy of a user double-submit or any Slack
+  // retry/replay that didn't carry x-slack-retry-num. The first
+  // submission still runs to completion; the second returns a clean
+  // ACK with no side effects.
+  const lock = await acquireDedupLock(`view-submission:${payload.view.id}`, {
+    callback_id: payload.view.callback_id,
+    user_id: payload.user.id,
+  });
+  if (!lock.acquired) {
+    console.warn(
+      "[slack-webhook] View submission already processed — dropping duplicate",
+      {
+        callback_id: payload.view.callback_id,
+        view_id: payload.view.id,
+        original_at: lock.first_seen_at,
+        age_ms: lock.age_ms,
+      }
+    );
+    // Close the modal silently — return an empty ack. Slack treats
+    // an empty 200 as "submission accepted, modal closes."
+    return NextResponse.json({});
+  }
   const resolved = await resolveUserKeyForSlackId(payload.user.id);
   if (!resolved.userKey) {
     console.warn(
