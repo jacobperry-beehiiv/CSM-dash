@@ -28,7 +28,18 @@ export interface MappableDashboardField {
   description: string;
   type: "string" | "enum" | "rich_text";
   edited_in: string;
+  /** Static enum values. Use when the option list is hardcoded in the
+   *  dashboard (e.g. risk_level Red/Yellow/Light Green/Green that we
+   *  treat as a fixed taxonomy). */
   enum_values?: string[];
+  /** Dynamic enum source. When set, the editor fetches the option
+   *  list from HubSpot's property schema at mount via
+   *  `/api/hubspot/property-options` and uses those instead of
+   *  `enum_values`. Use for properties whose option list is managed
+   *  by admins in HubSpot — keeps the picker in sync without
+   *  hand-mirroring a list that drifts. */
+  hubspot_enum_property?: string;
+  hubspot_enum_object?: "companies" | "contacts";
 }
 
 export const MAPPABLE_DASHBOARD_FIELDS: MappableDashboardField[] = [
@@ -102,9 +113,18 @@ export const MAPPABLE_DASHBOARD_FIELDS: MappableDashboardField[] = [
     id: "property_customer_goals",
     label: "Customer goals",
     description:
-      "Headline goal for the account (e.g., \"Growth\", \"Engagement\", \"Monetization\"). HubSpot is canonical today; push-enabling makes the field editable from the dash.",
-    type: "string",
+      "Headline goal for the account. Option list is managed in HubSpot — the editor pulls it live so the picker matches what HubSpot will accept on push.",
+    type: "enum",
     edited_in: "Customer detail panel → Status section",
+    // The actual HubSpot property name backing the option list. The
+    // editor calls /api/hubspot/property-options?object=companies&
+    // property=customer_goals at mount to load the live options. If
+    // HubSpot's property is named differently in your portal, the
+    // mapping in /settings/hubspot-fields handles the dashboard-id
+    // → hubspot-property translation at WRITE time; this is for the
+    // READ-the-option-list path.
+    hubspot_enum_property: "customer_goals",
+    hubspot_enum_object: "companies",
   },
   {
     id: "property_customer_goals_detail",

@@ -61,6 +61,15 @@ export function MappedFieldEditor({
     kind: "ok" | "err";
     text: string;
   } | null>(null);
+  // HubSpot-sourced enum options, when the field def declares one.
+  // Loaded lazily on first edit-open so the panel render doesn't block
+  // on the property-options endpoint for every editor on the page.
+  const [hubspotOptions, setHubspotOptions] = useState<
+    Array<{ label: string; value: string }> | null
+  >(null);
+  const [hubspotOptionsError, setHubspotOptionsError] = useState<string | null>(
+    null
+  );
 
   // Single fetch per mount. The dashboard renders this editor inline
   // alongside ~5 other fields on the customer detail panel — each
@@ -94,6 +103,52 @@ export function MappedFieldEditor({
   useEffect(() => {
     if (!editing) setDraft(currentValue ?? "");
   }, [currentValue, editing]);
+
+  // Fetch HubSpot enum options the first time the user opens the
+  // editor (and only when the field declares hubspot_enum_property).
+  // Deliberately lazy: most editors on the panel never get opened, so
+  // we shouldn't fire one fetch per editor at mount.
+  useEffect(() => {
+    if (!editing) return;
+    if (!fieldDef.hubspot_enum_property) return;
+    if (hubspotOptions !== null) return;
+    let cancelled = false;
+    const params = new URLSearchParams({
+      object: fieldDef.hubspot_enum_object ?? "companies",
+      property: fieldDef.hubspot_enum_property,
+    });
+    fetch(`/api/hubspot/property-options?${params.toString()}`, {
+      cache: "no-store",
+    })
+      .then(async (r) => {
+        const j = (await r.json().catch(() => ({}))) as {
+          options?: Array<{ label: string; value: string }>;
+          error?: string;
+        };
+        if (cancelled) return;
+        if (!r.ok || !Array.isArray(j.options)) {
+          setHubspotOptionsError(j.error ?? `HTTP ${r.status}`);
+          setHubspotOptions([]);
+          return;
+        }
+        setHubspotOptions(j.options.map((o) => ({ label: o.label, value: o.value })));
+      })
+      .catch((e) => {
+        if (cancelled) return;
+        setHubspotOptionsError(
+          e instanceof Error ? e.message : "Failed to load options"
+        );
+        setHubspotOptions([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    editing,
+    fieldDef.hubspot_enum_property,
+    fieldDef.hubspot_enum_object,
+    hubspotOptions,
+  ]);
 
   const direction = mapping?.direction ?? "off";
   const editable =
@@ -183,20 +238,57 @@ export function MappedFieldEditor({
   if (editing) {
     return (
       <div className="space-y-1">
-        {fieldDef.type === "enum" && fieldDef.enum_values ? (
-          <select
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            disabled={saving}
-            className="px-2 py-1 text-sm border border-border-strong rounded-md bg-surface text-fg"
-          >
-            <option value="">— None —</option>
-            {fieldDef.enum_values.map((v) => (
-              <option key={v} value={v}>
-                {v}
-              </option>
-            ))}
-          </select>
+        {fieldDef.type === "enum" ? (
+          (() => {
+            // Pick the option source: HubSpot-fetched options win
+            // when the field declares one; static enum_values are
+            // the fallback for fields where the dashboard owns the
+            // taxonomy (risk_level, etc.).
+            const sourcedFromHubspot = Boolean(fieldDef.hubspot_enum_property);
+            const options = sourcedFromHubspot
+              ? hubspotOptions ?? []
+              : (fieldDef.enum_values ?? []).map((v) => ({ label: v, value: v }));
+            const loading = sourcedFromHubspot && hubspotOptions === null;
+            // If the persisted value isn't in the option list (e.g.
+            // HubSpot renamed an option mid-flight), still render it
+            // as the selected entry so the user doesn't see a
+            // mismatched "— None —" placeholder for a value that
+            // actually exists.
+            const draftInOptions = options.some((o) => o.value === draft);
+            return (
+              <>
+                <select
+                  value={draft}
+                  onChange={(e) => setDraft(e.target.value)}
+                  disabled={saving || loading}
+                  className="px-2 py-1 text-sm border border-border-strong rounded-md bg-surface text-fg"
+                >
+                  <option value="">— None —</option>
+                  {!draftInOptions && draft ? (
+                    <option value={draft}>{draft} (legacy)</option>
+                  ) : null}
+                  {options.map((o) => (
+                    <option key={o.value} value={o.value}>
+                      {o.label}
+                    </option>
+                  ))}
+                </select>
+                {loading ? (
+                  <span className="ml-2 text-[11px] text-subtle">
+                    Loading options from HubSpot…
+                  </span>
+                ) : null}
+                {hubspotOptionsError ? (
+                  <span
+                    className="ml-2 text-[11px] text-amber-700 dark:text-amber-300"
+                    title={hubspotOptionsError}
+                  >
+                    ⚠ Couldn&rsquo;t load HubSpot options ({hubspotOptionsError.slice(0, 40)}…)
+                  </span>
+                ) : null}
+              </>
+            );
+          })()
         ) : fieldDef.type === "rich_text" ? (
           <textarea
             value={draft}
