@@ -124,23 +124,29 @@ export async function POST() {
       continue;
     }
 
-    const detailsParts: string[] = [
-      `Call recap: ${recap.title}`,
-    ];
-    if (recap.contact_hint) detailsParts.push(`Contact: ${recap.contact_hint}`);
-    if (recap.call_url) detailsParts.push(`\nView call: ${recap.call_url}`);
-    const details = detailsParts.join("\n");
+    // Base context block shared across every to-do we create from
+    // this recap — call title, contact, and the Sybill deep link.
+    // Per-item description gets appended on top of this so the
+    // detail block reads "meeting context + specific action."
+    const contextParts: string[] = [`Call recap: ${recap.title}`];
+    if (recap.contact_hint) contextParts.push(`Contact: ${recap.contact_hint}`);
+    if (recap.call_url) contextParts.push(`View call: ${recap.call_url}`);
+    const contextBlock = contextParts.join("\n");
 
     const todos: PersonalTodo[] = recap.action_items.map((item) => {
-      const titleRaw = item.text;
+      const titleRaw = item.title;
       const title =
         titleRaw.length > TITLE_MAX_LEN
           ? `${titleRaw.slice(0, TITLE_MAX_LEN - 1)}…`
           : titleRaw;
+      const detailsSections: string[] = [];
+      if (item.details) detailsSections.push(item.details);
+      if (item.owner) detailsSections.push(`Sybill-attributed to: ${item.owner}`);
+      detailsSections.push(contextBlock);
       return {
         id: newTodoId(),
         title,
-        details,
+        details: detailsSections.join("\n\n"),
         due_date: null,
         surface_at: null,
         priority: null,
