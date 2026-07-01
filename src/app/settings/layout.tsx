@@ -21,12 +21,12 @@ export default async function SettingsLayout({
         "Map each customer in your book to the Gmail label you already use, so dashboard drafts auto-tag in your inbox.",
     });
   }
-  if (await isFeatureEnabledFor("sybill-ingest", email)) {
+  if (await isFeatureEnabledFor("customer-folders-sweep", email)) {
     extras.push({
-      href: "/settings/sybill",
-      label: "Sybill action items",
+      href: "/settings/customer-folders",
+      label: "Customer folders sweep",
       description:
-        "Sync action items from your recent Sybill call-recap emails into your personal to-do list.",
+        "Scan the shared Drive parent, match folders to customers, and backfill HubSpot's customer_folder property.",
     });
   }
   return (

@@ -125,28 +125,40 @@ export function CustomerDetailPanel({
             workspaceId={c.workspace_id ?? null}
             hasStripeId={Boolean(c.stripe_customer_id)}
           />
-          {/* Drive folder shortcut — surfaces the URL HubSpot stores
-           *  on the company's "Customer Folder" property so a CSM
-           *  doesn't have to bounce through HubSpot to open the
-           *  shared workspace. Populated automatically by the
-           *  @bot assign flow when it creates the folder; can also
-           *  be edited by hand in HubSpot. */}
-          {c.property_customer_folder ? (
-            <>
-              <span className="text-subtle">·</span>
-              <a
-                href={c.property_customer_folder}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-medium rounded-full border border-emerald-300 bg-emerald-50 text-emerald-900 hover:bg-emerald-100 dark:border-emerald-500/40 dark:bg-emerald-500/10 dark:text-emerald-200 dark:hover:bg-emerald-500/20"
-                title="Open the customer's shared Drive folder (HubSpot property: Customer Folder)"
-              >
-                <span aria-hidden>📁</span>
-                Drive folder
-                <span aria-hidden>↗</span>
-              </a>
-            </>
-          ) : null}
+          {/* Drive folder shortcut. Auto-populated by @bot assign when
+           *  it creates the folder; also editable inline (delegates to
+           *  MappedFieldEditor, which pushes to HubSpot's customer_folder
+           *  property when the field mapping's direction is push/both).
+           *  Read-only renderer preserves the emerald pill affordance
+           *  so the top strip still reads as "quick-link" not "form
+           *  field." */}
+          <span className="text-subtle">·</span>
+          <MappedFieldEditor
+            fieldDef={MAPPABLE_DASHBOARD_FIELDS.find(
+              (f) => f.id === "property_customer_folder"
+            )!}
+            currentValue={c.property_customer_folder}
+            workspaceId={c.workspace_id}
+            renderReadOnly={(value) =>
+              value ? (
+                <a
+                  href={value}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-medium rounded-full border border-emerald-300 bg-emerald-50 text-emerald-900 hover:bg-emerald-100 dark:border-emerald-500/40 dark:bg-emerald-500/10 dark:text-emerald-200 dark:hover:bg-emerald-500/20"
+                  title="Open the customer's shared Drive folder (HubSpot property: Customer Folder)"
+                >
+                  <span aria-hidden>📁</span>
+                  Drive folder
+                  <span aria-hidden>↗</span>
+                </a>
+              ) : (
+                <span className="text-[11px] text-subtle italic">
+                  No Drive folder linked
+                </span>
+              )
+            }
+          />
         </div>
       ) : null}
 
