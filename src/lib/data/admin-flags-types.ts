@@ -14,7 +14,8 @@
 export type FeatureId =
   | "personalization"
   | "gmail-draft-labels"
-  | "customer-folders-sweep";
+  | "customer-folders-sweep"
+  | "sybill-ingest";
 
 /** Per-feature gate state. Defaults to "unrestricted" — everyone who
  *  passes the feature's own eligibility check (e.g. CSM with Gmail
@@ -70,6 +71,14 @@ export const FEATURE_METADATA: ReadonlyArray<FeatureMetadata> = [
     eligibility_note:
       "Uses the acting CSM's Drive token (drive.readonly). Only fills BLANK customer_folder fields — existing values are always preserved.",
   },
+  {
+    id: "sybill-ingest",
+    label: "Sybill action-item ingest",
+    description:
+      "Pulls call-recap action items from each CSM's Gmail (sender: @sybill.ai) and creates personal to-dos. Manual sync only — button lives at /settings/sybill.",
+    eligibility_note:
+      "Requires the existing gmail.readonly scope (already granted). The sweep only walks the viewer's own inbox; no cross-CSM lookups.",
+  },
 ];
 
 /** Safe defaults — every feature ships unrestricted. New flags
@@ -88,6 +97,12 @@ export const DEFAULT_FLAGS: AdminFlags = {
     // sweep, approve matches, and apply. Flip via /admin/flags once
     // the initial backfill's done if the sweep becomes a routine.
     "customer-folders-sweep": {
+      restricted: true,
+      allowed_emails: ["jacob.perry@beehiiv.com"],
+    },
+    // Ships dark — manual button. Flip via /admin/flags once the
+    // parser holds up on real Sybill mail across CSMs.
+    "sybill-ingest": {
       restricted: true,
       allowed_emails: ["jacob.perry@beehiiv.com"],
     },
