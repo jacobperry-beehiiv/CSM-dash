@@ -802,3 +802,177 @@ export async function lastEmailForCustomerBatch(
   if (scopeError) throw scopeError;
   return result;
 }
+
+// ─── Full-body message fetch ────────────────────────────────────── //
+//
+// The other helpers in this file call gmail.users.messages.get with
+// format=metadata because last-contact only needs headers. The
+// Sybill ingest path (and future similar email parsers) needs the
+// rendered body — both HTML and plain-text are common — so this
+// helper does the format=full variant + walks the MIME tree.
+//
+// Gmail returns message bodies base64url-encoded. multipart messages
+// nest the actual content one or two levels deep under `payload.parts`;
+// we walk recursively, decoding the first text/html and text/plain
+// parts we find. Returns the raw decoded strings plus Gmail's
+// `snippet` as a fallback for parsers that only need a preview.
+// ──────────────────────────────────────────────────────────────────── //
+
+export interface GmailMessageBody {
+  html: string | null;
+  text: string | null;
+  /** Gmail's auto-extracted preview. Always populated when the
+   *  message exists; useful when html/text decoding fails. */
+  snippet: string | null;
+  /** Subject header — convenient since parsers usually need it too. */
+  subject: string | null;
+  /** From header. */
+  from: string | null;
+  /** ISO of Gmail's internalDate. */
+  internal_date: string | null;
+}
+
+function base64UrlDecode(s: string): string | null {
+  try {
+    // Gmail's base64url: '-' / '_' replace '+' / '/' and padding is
+    // stripped. Restore for Buffer to consume.
+    const pad = s.length % 4 === 0 ? "" : "=".repeat(4 - (s.length % 4));
+    const b64 = s.replace(/-/g, "+").replace(/_/g, "/") + pad;
+    return Buffer.from(b64, "base64").toString("utf8");
+  } catch {
+    return null;
+  }
+}
+
+interface GmailMessagePart {
+  mimeType?: string;
+  body?: { data?: string; size?: number };
+  parts?: GmailMessagePart[];
+  headers?: Array<{ name?: string; value?: string }>;
+}
+
+/** Walk the MIME tree picking the first text/html and text/plain parts.
+ *  Gmail nests multipart/alternative inside multipart/mixed for
+ *  emails with attachments, so the recursion is mandatory. */
+function pickBodyParts(part: GmailMessagePart | undefined): {
+  html: string | null;
+  text: string | null;
+} {
+  let html: string | null = null;
+  let text: string | null = null;
+  function walk(p: GmailMessagePart | undefined): void {
+    if (!p) return;
+    const mime = (p.mimeType ?? "").toLowerCase();
+    const data = p.body?.data;
+    if (mime === "text/html" && !html && typeof data === "string") {
+      html = base64UrlDecode(data);
+    } else if (mime === "text/plain" && !text && typeof data === "string") {
+      text = base64UrlDecode(data);
+    }
+    for (const child of p.parts ?? []) walk(child);
+  }
+  walk(part);
+  return { html, text };
+}
+
+/**
+ * Pull a single Gmail message in full. Pairs the body with the
+ * Subject / From headers and Gmail's snippet so parsers don't need
+ * a second metadata round-trip.
+ *
+ * Throws `GmailReadScopeError` when the token lacks gmail.readonly
+ * (same error type as the other helpers in this file so the
+ * "Reconnect Gmail" banner path triggers consistently).
+ */
+export async function fetchMessageBody(
+  csmEmail: string,
+  messageId: string
+): Promise<GmailMessageBody> {
+  const token = await getValidAccessTokenFor(csmEmail);
+  const url =
+    `https://gmail.googleapis.com/gmail/v1/users/me/messages/` +
+    encodeURIComponent(messageId) +
+    `?format=full`;
+  const res = await fetch(url, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (res.status === 401 || res.status === 403) {
+    const body = await res.text().catch(() => "");
+    throw new GmailReadScopeError(
+      `Gmail messages.get ${res.status}: ${body.slice(0, 200)}`
+    );
+  }
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(
+      `Gmail messages.get failed (${res.status}): ${body.slice(0, 200)}`
+    );
+  }
+  const msg = (await res.json()) as {
+    snippet?: string;
+    internalDate?: string;
+    payload?: GmailMessagePart;
+  };
+  const { html, text } = pickBodyParts(msg.payload);
+  let subject: string | null = null;
+  let from: string | null = null;
+  for (const h of msg.payload?.headers ?? []) {
+    const name = (h.name ?? "").toLowerCase();
+    if (name === "subject" && typeof h.value === "string") subject = h.value;
+    else if (name === "from" && typeof h.value === "string") from = h.value;
+  }
+  let internal_date: string | null = null;
+  if (msg.internalDate) {
+    const ms = Number(msg.internalDate);
+    if (Number.isFinite(ms)) internal_date = new Date(ms).toISOString();
+  }
+  return {
+    html,
+    text,
+    snippet: typeof msg.snippet === "string" ? msg.snippet : null,
+    subject,
+    from,
+    internal_date,
+  };
+}
+
+/**
+ * Thin wrapper around `users.messages.list` for the Sybill ingest
+ * path. Returns just the message IDs matching `query`, capped at
+ * `maxResults`. Other callers use lastEmailWith / lastEmailForCustomer
+ * which build a richer query internally; this exposes the raw search
+ * primitive so the Sybill sweep can pass `from:@sybill.ai newer_than:30d`.
+ */
+export async function listMessageIds(
+  csmEmail: string,
+  query: string,
+  maxResults = 50
+): Promise<string[]> {
+  const token = await getValidAccessTokenFor(csmEmail);
+  const params = new URLSearchParams({
+    q: query,
+    maxResults: String(maxResults),
+  });
+  const res = await fetch(
+    `https://gmail.googleapis.com/gmail/v1/users/me/messages?${params.toString()}`,
+    { headers: { Authorization: `Bearer ${token}` } }
+  );
+  if (res.status === 401 || res.status === 403) {
+    const body = await res.text().catch(() => "");
+    throw new GmailReadScopeError(
+      `Gmail messages.list ${res.status}: ${body.slice(0, 200)}`
+    );
+  }
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(
+      `Gmail messages.list failed (${res.status}): ${body.slice(0, 200)}`
+    );
+  }
+  const j = (await res.json()) as { messages?: Array<{ id?: string }> };
+  const out: string[] = [];
+  for (const m of j.messages ?? []) {
+    if (typeof m.id === "string" && m.id) out.push(m.id);
+  }
+  return out;
+}

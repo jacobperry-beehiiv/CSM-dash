@@ -25,7 +25,13 @@ export type TodoSource =
    *  Used as a dedupe key: a re-run of `@bot assign` for the same
    *  HubSpot company on the same CSM is detected by looking up todos
    *  with this source + matching source_meta.hubspot_company_id. */
-  | "slack_assign";
+  | "slack_assign"
+  /** Parsed from a Sybill call-recap email (sender: @sybill.ai). One
+   *  to-do per action-item bullet; source_meta carries the Gmail
+   *  message id + call URL for traceability. Dedup happens upstream
+   *  in sybill-ingest-state (Gmail message_id → processed timestamp)
+   *  so we don't need a unique-key check at the store layer. */
+  | "sybill_callrecap";
 
 /** Slack-side provenance carried on rows created from Slack. Filled in
  *  by the inbound webhook so the UI can render a "↗ View in Slack"
@@ -52,6 +58,13 @@ export interface SlackSourceMeta {
    *  field untouched. */
   admin_acted_by?: string;
   admin_acted_at?: string;
+  /** For source === "sybill_callrecap": Gmail message id the action
+   *  item came from. Lets the panel link "↗ View call recap" back to
+   *  the source email if we want to surface that later. */
+  gmail_message_id?: string;
+  /** Sybill's deep link to the call recording / transcript, parsed
+   *  out of the recap email when present. */
+  sybill_call_url?: string;
 }
 
 export interface PersonalTodo {

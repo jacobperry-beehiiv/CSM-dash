@@ -11,7 +11,10 @@
  *  panel. Adding a new flag = append here + extend the UI in
  *  /admin/flags/page.tsx + read it via `isFeatureEnabledFor` at the
  *  feature's gate point. */
-export type FeatureId = "personalization" | "gmail-draft-labels";
+export type FeatureId =
+  | "personalization"
+  | "gmail-draft-labels"
+  | "sybill-ingest";
 
 /** Per-feature gate state. Defaults to "unrestricted" — everyone who
  *  passes the feature's own eligibility check (e.g. CSM with Gmail
@@ -59,6 +62,14 @@ export const FEATURE_METADATA: ReadonlyArray<FeatureMetadata> = [
     eligibility_note:
       "Requires the gmail.modify scope. Users who haven't re-consented after the scope upgrade see a banner and unlabeled drafts until they re-auth.",
   },
+  {
+    id: "sybill-ingest",
+    label: "Sybill action-item ingest",
+    description:
+      "Pulls call-recap action items from each CSM's Gmail (sender: @sybill.ai) and creates personal to-dos. Manual sync only — button lives at /settings/sybill.",
+    eligibility_note:
+      "Requires the existing gmail.readonly scope (already granted). The sweep only walks the viewer's own inbox; no cross-CSM lookups.",
+  },
 ];
 
 /** Safe defaults — every feature ships unrestricted. New flags
@@ -70,6 +81,12 @@ export const DEFAULT_FLAGS: AdminFlags = {
     // Ships dark — only Jacob sees the settings page + gets labeled
     // drafts until /admin/flags flips this to unrestricted.
     "gmail-draft-labels": {
+      restricted: true,
+      allowed_emails: ["jacob.perry@beehiiv.com"],
+    },
+    // Ships dark — same posture as gmail-draft-labels. Flip via
+    // /admin/flags once the parser holds up on real Sybill mail.
+    "sybill-ingest": {
       restricted: true,
       allowed_emails: ["jacob.perry@beehiiv.com"],
     },
