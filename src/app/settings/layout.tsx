@@ -21,6 +21,14 @@ export default async function SettingsLayout({
         "Map each customer in your book to the Gmail label you already use, so dashboard drafts auto-tag in your inbox.",
     });
   }
+  if (await isFeatureEnabledFor("customer-folders-sweep", email)) {
+    extras.push({
+      href: "/settings/customer-folders",
+      label: "Customer folders sweep",
+      description:
+        "Scan the shared Drive parent, match folders to customers, and backfill HubSpot's customer_folder property.",
+    });
+  }
   return (
     <>
       <div className="mb-6">

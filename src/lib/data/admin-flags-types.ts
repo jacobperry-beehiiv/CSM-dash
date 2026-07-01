@@ -11,7 +11,10 @@
  *  panel. Adding a new flag = append here + extend the UI in
  *  /admin/flags/page.tsx + read it via `isFeatureEnabledFor` at the
  *  feature's gate point. */
-export type FeatureId = "personalization" | "gmail-draft-labels";
+export type FeatureId =
+  | "personalization"
+  | "gmail-draft-labels"
+  | "customer-folders-sweep";
 
 /** Per-feature gate state. Defaults to "unrestricted" — everyone who
  *  passes the feature's own eligibility check (e.g. CSM with Gmail
@@ -59,6 +62,14 @@ export const FEATURE_METADATA: ReadonlyArray<FeatureMetadata> = [
     eligibility_note:
       "Requires the gmail.modify scope. Users who haven't re-consented after the scope upgrade see a banner and unlabeled drafts until they re-auth.",
   },
+  {
+    id: "customer-folders-sweep",
+    label: "Drive → HubSpot customer-folder sweep",
+    description:
+      "Scans the shared Drive parent folder, fuzzy-matches child folders to customers, and (after admin review) writes the folder URL into HubSpot's customer_folder property. Lives at /settings/customer-folders.",
+    eligibility_note:
+      "Uses the acting CSM's Drive token (drive.readonly). Only fills BLANK customer_folder fields — existing values are always preserved.",
+  },
 ];
 
 /** Safe defaults — every feature ships unrestricted. New flags
@@ -70,6 +81,13 @@ export const DEFAULT_FLAGS: AdminFlags = {
     // Ships dark — only Jacob sees the settings page + gets labeled
     // drafts until /admin/flags flips this to unrestricted.
     "gmail-draft-labels": {
+      restricted: true,
+      allowed_emails: ["jacob.perry@beehiiv.com"],
+    },
+    // Ships dark — one-off review + backfill tool. Admins run the
+    // sweep, approve matches, and apply. Flip via /admin/flags once
+    // the initial backfill's done if the sweep becomes a routine.
+    "customer-folders-sweep": {
       restricted: true,
       allowed_emails: ["jacob.perry@beehiiv.com"],
     },

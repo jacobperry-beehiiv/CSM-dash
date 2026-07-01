@@ -395,3 +395,90 @@ async function findFolderByName(
     webViewLink: hit.webViewLink ?? folderUrl(hit.id),
   };
 }
+
+/**
+ * List every non-trashed folder whose parent is `parentId`. Used by
+ * the customer-folders sweep: scans the shared "Customer Folders"
+ * Drive folder and matches child folders to customers in the book.
+ *
+ * Requires `drive.readonly` scope. `drive.file` alone won't do —
+ * it only surfaces files the app itself created, but the customer
+ * folders in the parent were created out-of-band by CSMs long before
+ * this dashboard existed. We throw a clear error on missing scope
+ * so callers can point users at /settings/gmail to reconnect.
+ *
+ * Paginates via `pageToken` until Drive stops returning one. Caps
+ * at MAX_PAGES so a runaway shared drive can't hang the request;
+ * hit the cap and we return what we've got with a `truncated` flag.
+ */
+const LIST_MAX_PAGES = 20;
+const LIST_PAGE_SIZE = 200;
+
+export interface DriveChildFolder {
+  id: string;
+  name: string;
+  webViewLink: string;
+}
+
+export interface ListChildFoldersResult {
+  folders: DriveChildFolder[];
+  truncated: boolean;
+}
+
+export async function listChildFolders(
+  requesterEmail: string,
+  parentId: string
+): Promise<ListChildFoldersResult> {
+  if (!(await hasDriveAccess(requesterEmail, { requireReadonly: true }))) {
+    throw new Error(
+      `${requesterEmail} hasn't granted the drive.readonly scope. Visit /settings/gmail and reconnect Google — the sweep needs to enumerate folders the app didn't create.`
+    );
+  }
+  const token = await getValidAccessTokenFor(requesterEmail);
+  const q =
+    `'${parentId}' in parents and ` +
+    `mimeType = 'application/vnd.google-apps.folder' and ` +
+    `trashed = false`;
+  const folders: DriveChildFolder[] = [];
+  let pageToken: string | undefined;
+  let pages = 0;
+  let truncated = false;
+  do {
+    pages++;
+    const url = new URL("https://www.googleapis.com/drive/v3/files");
+    url.searchParams.set("q", q);
+    url.searchParams.set("fields", "nextPageToken,files(id,name,webViewLink)");
+    url.searchParams.set("pageSize", String(LIST_PAGE_SIZE));
+    url.searchParams.set("orderBy", "name");
+    url.searchParams.set("supportsAllDrives", "true");
+    url.searchParams.set("includeItemsFromAllDrives", "true");
+    if (pageToken) url.searchParams.set("pageToken", pageToken);
+    const res = await fetch(url.toString(), {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      throw new Error(
+        `Drive listChildFolders failed (${res.status}): ${body.slice(0, 200)}`
+      );
+    }
+    const json = (await res.json()) as {
+      files?: Array<{ id?: string; name?: string; webViewLink?: string }>;
+      nextPageToken?: string;
+    };
+    for (const f of json.files ?? []) {
+      if (!f.id || !f.name) continue;
+      folders.push({
+        id: f.id,
+        name: f.name,
+        webViewLink: f.webViewLink ?? folderUrl(f.id),
+      });
+    }
+    pageToken = json.nextPageToken;
+    if (pages >= LIST_MAX_PAGES && pageToken) {
+      truncated = true;
+      break;
+    }
+  } while (pageToken);
+  return { folders, truncated };
+}

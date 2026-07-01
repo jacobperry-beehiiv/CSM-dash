@@ -142,6 +142,14 @@ export const MAPPABLE_DASHBOARD_FIELDS: MappableDashboardField[] = [
     type: "string",
     edited_in: "Customer detail panel → Contact section",
   },
+  {
+    id: "property_customer_folder",
+    label: "Customer Drive folder",
+    description:
+      "URL of the customer's Google Drive folder (auto-populated by @bot assign; also editable here). Enable push-direction to write CSM edits back to HubSpot's customer_folder property.",
+    type: "string",
+    edited_in: "Customer detail panel → top metadata strip",
+  },
 ];
 
 export const DASHBOARD_FIELD_TO_CUSTOMER_KEY: Record<string, string> = {
@@ -155,4 +163,5 @@ export const DASHBOARD_FIELD_TO_CUSTOMER_KEY: Record<string, string> = {
   property_customer_goals: "property_customer_goals",
   property_customer_goals_detail: "property_customer_goals_detail",
   property_main_contact: "property_main_contact",
+  property_customer_folder: "property_customer_folder",
 };
