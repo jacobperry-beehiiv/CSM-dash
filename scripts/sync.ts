@@ -19,6 +19,7 @@ import path from "node:path";
 
 import { runSavedQuestion } from "../src/lib/metabase";
 import { encryptSnapshot } from "../src/lib/data/snapshot-crypto";
+import { readSnapshot } from "../src/lib/data/snapshot-loader";
 import { writeCohortSnapshot } from "../src/lib/data/cohort-snapshots";
 import { writeDeliverabilitySnapshot } from "../src/lib/data/deliverability-snapshot";
 import { fetchDeliverabilityPosts } from "../src/lib/engines/deliverability";
@@ -349,6 +350,60 @@ async function main() {
     row_count: rows.length,
     rows,
   };
+
+  // ─── ARR sanity check ─────────────────────────────────────────────
+  // On the 1st of a new month, cohort_analysis.internal_profitwell in
+  // Metabase lags into the new month by several hours. q10600's SQL
+  // filters strictly on `where month = date_trunc('month', current_date)`,
+  // so during that window every row's mrr joins null and arr
+  // computes to 0. Committing that snapshot would wipe ARR on every
+  // page of the live dashboard until the next successful sync.
+  //
+  // Refuse the write when incoming rows sum to 0 ARR AND the existing
+  // snapshot on disk has a non-zero total — a strong signal we're
+  // catching a bad Metabase state rather than a legitimate empty book.
+  // `SYNC_ALLOW_ZERO_ARR=1` overrides the check for the rare case
+  // where 0 ARR is actually correct (test fixture, first-ever sync).
+  const incomingArr = rows.reduce(
+    (s, r) => s + (typeof r.arr === "number" ? r.arr : Number(r.arr) || 0),
+    0
+  );
+  if (incomingArr === 0 && process.env.SYNC_ALLOW_ZERO_ARR !== "1") {
+    let previousArr = 0;
+    try {
+      const previous = await readSnapshot();
+      previousArr = (previous.rows ?? []).reduce(
+        (s: number, r: Record<string, unknown>) =>
+          s +
+          (typeof r.arr === "number" ? r.arr : Number(r.arr as unknown) || 0),
+        0
+      );
+    } catch (e) {
+      console.error(
+        `[sync] Couldn't read previous snapshot for ARR sanity check — ` +
+          `letting the write proceed since there's no baseline to compare against:`,
+        e instanceof Error ? e.message : e
+      );
+    }
+    if (previousArr > 0) {
+      console.error(
+        `[sync] REFUSING TO WRITE SNAPSHOT: incoming total ARR is $0 ` +
+          `across ${rows.length} rows, but previous snapshot totals ` +
+          `$${previousArr.toLocaleString()}. This is almost always a ` +
+          `Metabase data-freshness issue (typically cohort_analysis.` +
+          `internal_profitwell hasn't rolled into the current month yet). ` +
+          `The existing snapshot stays live so the dashboard doesn't ` +
+          `flatten to $0. Retry the sync once Profitwell catches up, or ` +
+          `set SYNC_ALLOW_ZERO_ARR=1 to override.`
+      );
+      process.exit(1);
+    }
+    console.error(
+      `[sync] Incoming ARR is $0 and previous snapshot ARR was $0 too — ` +
+        `letting the write proceed (fresh install or intentionally-empty book).`
+    );
+  }
+
   const json = JSON.stringify(payload);
 
   const outPath = usePlaintext ? PLAINTEXT_PATH : ENCRYPTED_PATH;
