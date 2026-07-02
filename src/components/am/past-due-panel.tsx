@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import type { PastDueRow } from "@/lib/engines/am-cohorts";
 import {
   pastDueMonth,
@@ -26,6 +26,10 @@ import { ReviewStateCell } from "./review-state-cell";
 import { PingSelectedButton } from "./ping-selected-button";
 import { BulkReviewStateActions } from "./bulk-review-state-actions";
 import { CustomerDetailPanel } from "../customer-detail-panel";
+import {
+  FeatureUtilizationFilter,
+  type WorkspaceFeatureMatcher,
+} from "../feature-utilization-filter";
 import {
   needsReview,
   type ReviewState,
@@ -193,6 +197,17 @@ const SUBTAB_LABELS: Record<PastDueSubtab, string> = {
 
 export function PastDuePanel({ rows, csms, totalSourceRows }: Props) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  // Feature-usage chip filter — past-due rows are keyed by
+  // customer_id (Stripe), so we resolve to workspace_id through the
+  // customer book below before running the matcher.
+  const [featureMatcher, setFeatureMatcher] =
+    useState<WorkspaceFeatureMatcher | null>(null);
+  const onFeatureFilterChange = useCallback(
+    (matcher: WorkspaceFeatureMatcher | null) => {
+      setFeatureMatcher(() => matcher);
+    },
+    []
+  );
   const [settings, setSettings] = useState<SettingsShape | null>(null);
   const [composeOpen, setComposeOpen] = useState(false);
   const [outreachMap, setOutreachMap] = useState<PastDueOutreachMap>({});
@@ -328,6 +343,22 @@ export function PastDuePanel({ rows, csms, totalSourceRows }: Props) {
     }
     return m;
   }, [customerBook]);
+
+  /** Workspace-id set for the Feature usage chip filter's Postgres
+   *  batch. Past-due rows carry a Stripe customer id, not a
+   *  workspace_id — so we resolve through the customer book. Rows
+   *  that don't resolve (unbooked accounts) get skipped for the
+   *  batch fetch and read as "no features used" in the matcher,
+   *  which is the correct default. */
+  const featureWorkspaceIds = useMemo(() => {
+    const ids: string[] = [];
+    for (const r of rows) {
+      if (!r.customer_id) continue;
+      const ws = customerByStripeId.get(r.customer_id)?.workspace_id;
+      if (ws) ids.push(ws);
+    }
+    return ids;
+  }, [rows, customerByStripeId]);
 
   // Publication-index drives the workspace/publication-ID search
   // affordance. Lazily loaded once per tab session — soft-fails to
@@ -469,6 +500,18 @@ export function PastDuePanel({ rows, csms, totalSourceRows }: Props) {
         return ws ? needsReview(reviewStates[ws], "past_due") : true;
       });
     }
+    // Feature-usage chip filter — resolve each row to its workspace
+    // id via the book and pass through the matcher. Rows without a
+    // resolvable workspace_id fall through to the matcher's null
+    // branch (reads as "no features used").
+    if (featureMatcher) {
+      next = next.filter((r) => {
+        const ws = r.customer_id
+          ? customerByStripeId.get(r.customer_id)?.workspace_id ?? null
+          : null;
+        return featureMatcher(ws);
+      });
+    }
     return next;
   }, [
     subtab,
@@ -480,6 +523,7 @@ export function PastDuePanel({ rows, csms, totalSourceRows }: Props) {
     needsReviewFilter,
     reviewStates,
     customerByStripeId,
+    featureMatcher,
   ]);
 
   /** Workspace-id set derived from the user's current selection.
@@ -570,6 +614,13 @@ export function PastDuePanel({ rows, csms, totalSourceRows }: Props) {
 
   return (
     <>
+      <div className="mb-4">
+        <FeatureUtilizationFilter
+          workspaceIds={featureWorkspaceIds}
+          onFilterChange={onFeatureFilterChange}
+          totalRowCount={rows.length}
+        />
+      </div>
       <FilterBar>
         <SearchInput
           value={search}

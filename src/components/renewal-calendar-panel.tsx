@@ -5,6 +5,10 @@ import type { Customer } from "@/lib/types";
 import { fmtCurrency, fmtDate } from "./format";
 import { OutreachModal } from "./outreach-modal";
 import { CustomerDetailPanel } from "./customer-detail-panel";
+import {
+  FeatureUtilizationFilter,
+  type WorkspaceFeatureMatcher,
+} from "./feature-utilization-filter";
 import { RiskLevelChip } from "./risk-level-chip";
 import { RowActions } from "./row-actions";
 import { FilterBar, SearchInput, SelectFilter } from "./filters";
@@ -96,6 +100,22 @@ export function RenewalCalendarPanel({ customers, csms }: Props) {
   const [outreachFor, setOutreachFor] = useState<Customer | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  // Feature-usage chip filter — matches the shared AM / CSM pattern.
+  const [featureMatcher, setFeatureMatcher] =
+    useState<WorkspaceFeatureMatcher | null>(null);
+  const onFeatureFilterChange = useCallback(
+    (matcher: WorkspaceFeatureMatcher | null) => {
+      setFeatureMatcher(() => matcher);
+    },
+    []
+  );
+  const featureWorkspaceIds = useMemo(
+    () =>
+      customers
+        .map((c) => c.workspace_id)
+        .filter((id): id is string => Boolean(id)),
+    [customers]
+  );
   // Cadence filter — same dropdown as RenewalPanel, defaults to
   // annual (the dominant renewal motion). "" → all cadences.
   const [intervalFilter, setIntervalFilter] = useState<string>("annual");
@@ -362,6 +382,9 @@ export function RenewalCalendarPanel({ customers, csms }: Props) {
         list = list.filter((c) => lifecycleStage(c) === lifecycleFilter);
       }
     }
+    if (featureMatcher) {
+      list = list.filter((c) => featureMatcher(c.workspace_id));
+    }
     // For each customer, surface whichever of (prior renewal, next
     // renewal) falls in the picked month — never both, since the same
     // customer's prior and next dates are always at least a full
@@ -403,6 +426,7 @@ export function RenewalCalendarPanel({ customers, csms }: Props) {
     lifecycleFilter,
     overrides,
     month,
+    featureMatcher,
   ]);
 
   const visibleRows = useMemo(
@@ -499,6 +523,11 @@ export function RenewalCalendarPanel({ customers, csms }: Props) {
 
   return (
     <div className="space-y-4">
+      <FeatureUtilizationFilter
+        workspaceIds={featureWorkspaceIds}
+        onFilterChange={onFeatureFilterChange}
+        totalRowCount={customers.length}
+      />
       {filterStrip}
 
       {/* Softened data caveat — surfaced only when viewing a past

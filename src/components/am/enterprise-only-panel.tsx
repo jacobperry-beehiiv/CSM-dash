@@ -11,6 +11,10 @@ import { OutreachModal } from "../outreach-modal";
 import { BucketSection } from "./bucket-section";
 import { BulkEmailLauncher } from "./bulk-email-launcher";
 import { CustomerDetailPanel } from "../customer-detail-panel";
+import {
+  FeatureUtilizationFilter,
+  type WorkspaceFeatureMatcher,
+} from "../feature-utilization-filter";
 import { ReviewStateCell } from "./review-state-cell";
 import { BulkReviewStateActions } from "./bulk-review-state-actions";
 import { CopyPubIdsButton } from "./copy-pub-ids-button";
@@ -92,6 +96,24 @@ function priceLabel(c: Customer): string {
 
 export function EnterpriseOnlyPanel({ rows, csms }: Props) {
   const [outreachFor, setOutreachFor] = useState<Customer | null>(null);
+  // Feature-usage chip filter — matches the At-Risk / Customer table
+  // pattern. Runs against each row's workspace_id inside the bucket
+  // memo below.
+  const [featureMatcher, setFeatureMatcher] =
+    useState<WorkspaceFeatureMatcher | null>(null);
+  const onFeatureFilterChange = useCallback(
+    (matcher: WorkspaceFeatureMatcher | null) => {
+      setFeatureMatcher(() => matcher);
+    },
+    []
+  );
+  const featureWorkspaceIds = useMemo(
+    () =>
+      rows
+        .map((c) => c.workspace_id)
+        .filter((id): id is string => Boolean(id)),
+    [rows]
+  );
   // Bulk-select state — keyed on workspace_id (the row's stable id).
   // Mirrors the past-due-panel pattern so all AM tabs feel the same.
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -242,7 +264,10 @@ export function EnterpriseOnlyPanel({ rows, csms }: Props) {
   }, [reloadOutreach]);
 
   const buckets = useMemo(() => {
-    const filteredByOutreach = rows.filter((c) => {
+    const filteredByFeature = featureMatcher
+      ? rows.filter((c) => featureMatcher(c.workspace_id))
+      : rows;
+    const filteredByOutreach = filteredByFeature.filter((c) => {
       if (outreachFilter !== "has" && outreachFilter !== "none") return true;
       const touched = Boolean(
         c.workspace_id && outreachMap[c.workspace_id]?.last_outreach_at
@@ -278,6 +303,7 @@ export function EnterpriseOnlyPanel({ rows, csms }: Props) {
     needsReviewFilter,
     reviewFilter,
     reviewStates,
+    featureMatcher,
   ]);
 
   const visibleRows = useMemo(
@@ -350,6 +376,13 @@ export function EnterpriseOnlyPanel({ rows, csms }: Props) {
 
   return (
     <>
+      <div className="mb-4">
+        <FeatureUtilizationFilter
+          workspaceIds={featureWorkspaceIds}
+          onFilterChange={onFeatureFilterChange}
+          totalRowCount={rows.length}
+        />
+      </div>
       <div className="flex items-center gap-3 mb-4 text-sm">
         <span className="text-xs text-muted">Filter:</span>
         <CsmSelector csms={csms} />
