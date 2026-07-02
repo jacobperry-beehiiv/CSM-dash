@@ -15,7 +15,8 @@ export type FeatureId =
   | "personalization"
   | "gmail-draft-labels"
   | "customer-folders-sweep"
-  | "sybill-ingest";
+  | "sybill-ingest"
+  | "wins-opportunities";
 
 /** Per-feature gate state. Defaults to "unrestricted" — everyone who
  *  passes the feature's own eligibility check (e.g. CSM with Gmail
@@ -79,6 +80,14 @@ export const FEATURE_METADATA: ReadonlyArray<FeatureMetadata> = [
     eligibility_note:
       "Requires the existing gmail.readonly scope (already granted). The sweep only walks the viewer's own inbox; no cross-CSM lookups.",
   },
+  {
+    id: "wins-opportunities",
+    label: "Wins & Opportunities dashboard tab",
+    description:
+      "Detects overlooked customer wins (verified CTOR records, open streaks, quality growth, deliverability streaks) via a daily cron, cross-checks against at-risk flags to suppress celebrations of struggling accounts, and surfaces the read-only list on /csm?tab=wins.",
+    eligibility_note:
+      "Detection endpoint honors the same allowlist — the daily cron will skip work for CSMs whose accounts aren't visible to any user with the flag on.",
+  },
 ];
 
 /** Safe defaults — every feature ships unrestricted. New flags
@@ -103,6 +112,13 @@ export const DEFAULT_FLAGS: AdminFlags = {
     // Ships dark — manual button. Flip via /admin/flags once the
     // parser holds up on real Sybill mail across CSMs.
     "sybill-ingest": {
+      restricted: true,
+      allowed_emails: ["jacob.perry@beehiiv.com"],
+    },
+    // Ships dark — Phase 1 (detection + suppression + read-only list).
+    // Validate detection quality on Jacob's book before opening to
+    // Hayden or the wider Enterprise CSM team.
+    "wins-opportunities": {
       restricted: true,
       allowed_emails: ["jacob.perry@beehiiv.com"],
     },

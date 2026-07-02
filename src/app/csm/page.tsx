@@ -20,12 +20,15 @@ import { DeliverabilityBanner } from "@/components/deliverability-banner";
 import { DeliverabilityLoading } from "@/components/deliverability-loading";
 import { QbrChartsTab } from "@/components/qbr-charts/qbr-charts-tab";
 import type { WorkspaceOption } from "@/components/qbr-charts/workspace-picker";
+import { WinsList } from "@/components/wins-list";
 import { isAdmin } from "@/lib/auth/admin";
+import { isFeatureEnabledFor } from "@/lib/auth/feature-flags";
+import { loadWinsBlob } from "@/lib/data/wins-store";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
-const TABS = [
+const BASE_TABS = [
   { id: "book", label: "All assigned" },
   { id: "deliverability", label: "Deliverability" },
   { id: "at-risk", label: "At-risk" },
@@ -96,12 +99,23 @@ export default async function CsmPage({
   // first load (?csm= absent), null when they pick "All CSMs"
   // (?csm=all). See lib/data/load-customers.ts → resolveCsmFilter.
   let csm: string | null = null;
+  const session = await auth();
+  const viewerEmail = session?.user?.email ?? null;
+  // Wins tab is flag-gated so the daily detection cron isn't wasted
+  // for CSMs who can't see the surface. Compute up-front so both the
+  // tab strip and the tab body branch off the same value.
+  const winsEnabled = await isFeatureEnabledFor(
+    "wins-opportunities",
+    viewerEmail
+  );
+  const TABS = winsEnabled
+    ? [...BASE_TABS, { id: "wins", label: "Wins & Opportunities" }]
+    : BASE_TABS;
 
   try {
     const all = await loadCustomers();
     csms = uniqueCsms(all);
-    const session = await auth();
-    csm = resolveCsmFilter(sp.csm, all, session?.user?.email);
+    csm = resolveCsmFilter(sp.csm, all, viewerEmail);
     const book = filterCustomers(all, { csm, segment });
 
     if (tab === "book") {
@@ -123,7 +137,7 @@ export default async function CsmPage({
       // Workspace dropdown defaults to the viewer's CSM scope; admins
       // get a "show all" toggle. Pass the deduped book + admin flag —
       // /api/qbr-charts/chart-spec runs on demand from the client.
-      const admin = isAdmin(session?.user?.email);
+      const admin = isAdmin(viewerEmail);
       const wsOptions: WorkspaceOption[] = [];
       const seen = new Set<string>();
       for (const c of all) {
@@ -142,6 +156,23 @@ export default async function CsmPage({
           isAdmin={admin}
         />
       );
+    } else if (tab === "wins") {
+      if (!winsEnabled) {
+        body = (
+          <div className="text-sm text-muted italic">
+            Wins & Opportunities isn&apos;t enabled for this account yet.
+          </div>
+        );
+      } else {
+        const blob = await loadWinsBlob();
+        body = (
+          <WinsList
+            blob={blob}
+            csmName={csm}
+            isAdmin={isAdmin(viewerEmail)}
+          />
+        );
+      }
     } else {
       body = (
         <div className="text-sm text-muted">Unknown tab: {tab}</div>

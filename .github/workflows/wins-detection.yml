@@ -1,0 +1,65 @@
+name: wins-detection
+
+# Runs the Wins & Opportunities Phase 1 detection engine every
+# morning. Fetches per-post metrics for the CSM book over a
+# 120-day window, applies the rule catalog, cross-checks against
+# at-risk, and writes candidate wins to KV.
+#
+# The endpoint is idempotent: same day + same rule + same account
+# hashes to the same win_id, so re-runs update in place rather
+# than creating duplicates. Terminal statuses (dismissed / sent /
+# approved) are preserved through re-runs.
+#
+# Required repo secrets:
+#   • CRON_SECRET    — bearer; same value as the Vercel env var
+#   • DASHBOARD_URL  — root URL, no trailing slash
+#
+# Triggers:
+#   • daily at 05:15 UTC (before Hayden / Jacob's day so fresh
+#     candidates are ready first thing).
+#   • manually via "Run workflow".
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "15 5 * * *"
+
+jobs:
+  detect:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify required secrets are set
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          DASHBOARD_URL: ${{ secrets.DASHBOARD_URL }}
+        run: |
+          missing=()
+          for v in CRON_SECRET DASHBOARD_URL; do
+            if [ -z "${!v}" ]; then
+              missing+=("$v")
+            fi
+          done
+          if [ "${#missing[@]}" -ne 0 ]; then
+            echo "::error::Missing required repo secret(s): ${missing[*]}"
+            exit 1
+          fi
+          echo "All required secrets present."
+
+      - name: POST /api/wins/detect
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          DASHBOARD_URL: ${{ secrets.DASHBOARD_URL }}
+        run: |
+          set -e
+          response=$(curl -sS -w "\n%{http_code}" -X POST \
+            -H "Authorization: Bearer ${CRON_SECRET}" \
+            -H "Content-Type: application/json" \
+            "${DASHBOARD_URL}/api/wins/detect")
+          body=$(echo "$response" | sed '$d')
+          code=$(echo "$response" | tail -n1)
+          echo "HTTP $code"
+          echo "$body"
+          if [ "$code" != "200" ]; then
+            echo "::error::Wins detection failed with HTTP $code"
+            exit 1
+          fi
