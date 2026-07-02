@@ -14,6 +14,10 @@ import { ReviewStateCell } from "./review-state-cell";
 import { CopyPubIdsButton } from "./copy-pub-ids-button";
 import { CustomerDetailPanel } from "../customer-detail-panel";
 import {
+  FeatureUtilizationFilter,
+  type WorkspaceFeatureMatcher,
+} from "../feature-utilization-filter";
+import {
   needsReview,
   type ReviewState,
   type ReviewStatesMap,
@@ -110,6 +114,24 @@ function priceLabel(r: ApproachingEntRow): string {
 
 export function ApproachingEnterprisePanel({ rows }: Props) {
   const [search, setSearch] = useState("");
+  // Feature-usage chip filter — matches the At-Risk / Customer table
+  // pattern. Emits a matcher over workspace_id (== organization_id
+  // for q13268 rows) that we apply during bucketing below.
+  const [featureMatcher, setFeatureMatcher] =
+    useState<WorkspaceFeatureMatcher | null>(null);
+  const onFeatureFilterChange = useCallback(
+    (matcher: WorkspaceFeatureMatcher | null) => {
+      setFeatureMatcher(() => matcher);
+    },
+    []
+  );
+  const featureWorkspaceIds = useMemo(
+    () =>
+      rows
+        .map((r) => r.organization_id)
+        .filter((id): id is string => Boolean(id)),
+    [rows]
+  );
   // Bulk-select state mirrors past-due-panel: row keys in a Set.
   // Row key is organization_id with a stable fallback so rows without
   // an id still de-dupe predictably across re-renders.
@@ -228,6 +250,7 @@ export function ApproachingEnterprisePanel({ rows }: Props) {
       .filter((r) => {
         const p = pctNum(r);
         if (p == null || p < 80) return false;
+        if (featureMatcher && !featureMatcher(r.organization_id)) return false;
         // Review-state filter takes precedence — when set, it's a
         // specific value (needs_review / reach_out / skip / done)
         // and overrides the broader needs_review=1 hint.
@@ -284,6 +307,7 @@ export function ApproachingEnterprisePanel({ rows }: Props) {
     needsReviewFilter,
     reviewFilter,
     reviewStates,
+    featureMatcher,
   ]);
 
   const totalAtOrAboveFloor = rows.filter((r) => {
@@ -314,6 +338,13 @@ export function ApproachingEnterprisePanel({ rows }: Props) {
 
   return (
     <>
+      <div className="mb-4">
+        <FeatureUtilizationFilter
+          workspaceIds={featureWorkspaceIds}
+          onFilterChange={onFeatureFilterChange}
+          totalRowCount={rows.length}
+        />
+      </div>
       <div className="flex flex-wrap items-center gap-2 mb-4">
         <SearchInput
           value={search}

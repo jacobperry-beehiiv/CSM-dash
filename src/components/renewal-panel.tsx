@@ -5,6 +5,10 @@ import type { Customer } from "@/lib/types";
 import { fmtCurrency, fmtDate, daysUntil } from "./format";
 import { OutreachModal } from "./outreach-modal";
 import { CustomerDetailPanel } from "./customer-detail-panel";
+import {
+  FeatureUtilizationFilter,
+  type WorkspaceFeatureMatcher,
+} from "./feature-utilization-filter";
 import { RiskLevelChip } from "./risk-level-chip";
 import { RowActions } from "./row-actions";
 import { FilterBar, SearchInput, SelectFilter } from "./filters";
@@ -188,6 +192,23 @@ const BUCKETS: Bucket[] = [
 export function RenewalPanel({ customers, csms }: Props) {
   const [outreachFor, setOutreachFor] = useState<Customer | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  // Feature-usage chip filter — matches the /csm and other AM
+  // panels' shared pattern.
+  const [featureMatcher, setFeatureMatcher] =
+    useState<WorkspaceFeatureMatcher | null>(null);
+  const onFeatureFilterChange = useCallback(
+    (matcher: WorkspaceFeatureMatcher | null) => {
+      setFeatureMatcher(() => matcher);
+    },
+    []
+  );
+  const featureWorkspaceIds = useMemo(
+    () =>
+      customers
+        .map((c) => c.workspace_id)
+        .filter((id): id is string => Boolean(id)),
+    [customers]
+  );
   // Bulk-select — keyed on rowKey() so select-all survives re-renders.
   const [selected, setSelected] = useState<Set<string>>(new Set());
   // Default to "annual" — the Renewals motion is fundamentally about
@@ -454,6 +475,9 @@ export function RenewalPanel({ customers, csms }: Props) {
         list = list.filter((c) => lifecycleStage(c) === lifecycleFilter);
       }
     }
+    if (featureMatcher) {
+      list = list.filter((c) => featureMatcher(c.workspace_id));
+    }
     return list;
   }, [
     customers,
@@ -464,6 +488,7 @@ export function RenewalPanel({ customers, csms }: Props) {
     reviewStates,
     lifecycleFilter,
     overrides,
+    featureMatcher,
   ]);
 
   const buckets = useMemo(() => {
@@ -553,6 +578,11 @@ export function RenewalPanel({ customers, csms }: Props) {
 
   return (
     <div className="space-y-6">
+      <FeatureUtilizationFilter
+        workspaceIds={featureWorkspaceIds}
+        onFilterChange={onFeatureFilterChange}
+        totalRowCount={customers.length}
+      />
       {cadencePicker}
 
       <div className="flex flex-wrap items-center gap-2">

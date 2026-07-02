@@ -13,7 +13,10 @@ import { MetricCards } from "./metric-cards";
 import { OutreachModal } from "./outreach-modal";
 import { CustomerDetailPanel } from "./customer-detail-panel";
 import { RowActions } from "./row-actions";
-import { FeatureUtilizationFilter } from "./feature-utilization-filter";
+import {
+  FeatureUtilizationFilter,
+  type WorkspaceFeatureMatcher,
+} from "./feature-utilization-filter";
 import { fmtCurrency, fmtDate, fmtNumber, daysUntil } from "./format";
 import { featureCounts } from "@/lib/features";
 import {
@@ -204,9 +207,8 @@ export function CustomerTable({
   // empty/"All" option leaves both showing. Synced to the URL so the
   // viewer can deep-link a status-scoped view.
   const [statusFilter, setStatusFilter] = useUrlSearch("status");
-  const [featurePredicate, setFeaturePredicate] = useState<
-    ((c: Customer) => boolean) | null
-  >(null);
+  const [featureMatcher, setFeatureMatcher] =
+    useState<WorkspaceFeatureMatcher | null>(null);
   const [outreachFor, setOutreachFor] = useState<Customer | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -227,10 +229,18 @@ export function CustomerTable({
   const [bulkError, setBulkError] = useState<string | null>(null);
 
   const onFeatureFilterChange = useCallback(
-    (predicate: ((c: Customer) => boolean) | null) => {
-      setFeaturePredicate(() => predicate);
+    (matcher: WorkspaceFeatureMatcher | null) => {
+      setFeatureMatcher(() => matcher);
     },
     []
+  );
+
+  const featureWorkspaceIds = useMemo(
+    () =>
+      initialCustomers
+        .map((c) => c.workspace_id)
+        .filter((id): id is string => Boolean(id)),
+    [initialCustomers]
   );
 
   // Publication-index for the search input. Lazy + cached so the page
@@ -269,8 +279,8 @@ export function CustomerTable({
         return pubs.some((p) => p.toLowerCase().includes(q));
       });
     }
-    if (featurePredicate) {
-      list = list.filter(featurePredicate);
+    if (featureMatcher) {
+      list = list.filter((c) => featureMatcher(c.workspace_id));
     }
     if (statusFilter) {
       const target = statusFilter.toLowerCase();
@@ -300,7 +310,7 @@ export function CustomerTable({
   }, [
     initialCustomers,
     search,
-    featurePredicate,
+    featureMatcher,
     statusFilter,
     sortKey,
     sortDir,
@@ -340,7 +350,7 @@ export function CustomerTable({
   // ─── Bulk-draft helpers ────────────────────────────────────────────
   /** Pick the template id auto-aligned with whichever filter is active. */
   function autoTemplateId(): string {
-    if (featurePredicate) return "feature-not-using";
+    if (featureMatcher) return "feature-not-using";
     return "general-checkin";
   }
 
@@ -750,7 +760,7 @@ export function CustomerTable({
 
       <div className="space-y-3 mb-4">
         <FeatureUtilizationFilter
-          customers={initialCustomers}
+          workspaceIds={featureWorkspaceIds}
           onFilterChange={onFeatureFilterChange}
         />
       </div>
@@ -782,7 +792,7 @@ export function CustomerTable({
         <span className="text-xs text-muted ml-2">
           Template auto-pick:{" "}
           <code className="font-mono bg-surface border border-border px-1 rounded">
-            {featurePredicate ? "feature-not-using" : "general-checkin"}
+            {featureMatcher ? "feature-not-using" : "general-checkin"}
           </code>
         </span>
         <div className="flex-1" />

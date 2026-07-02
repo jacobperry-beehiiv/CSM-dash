@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import type { Customer } from "@/lib/types";
 import {
   FEATURE_BATCH_KEYS,
   FEATURE_BATCH_LABELS,
@@ -10,30 +9,48 @@ import {
 } from "@/lib/engines/feature-utilization-batch";
 import { ChipMultiSelect } from "./filters/chip-multi-select";
 
+/** Predicate emitted by the filter — takes a row's workspace_id
+ *  (nullable to cover synthesized / off-book rows) and returns
+ *  whether it should stay in the visible list. `null` from
+ *  onFilterChange means "filter off, keep every row." */
+export type WorkspaceFeatureMatcher = (
+  workspaceId: string | null | undefined
+) => boolean;
+
 interface Props {
-  customers: Customer[];
-  /** Called whenever the filter changes. `null` clears the filter. */
-  onFilterChange: (predicate: ((c: Customer) => boolean) | null) => void;
+  /** Workspace IDs the filter should query feature usage for. Pass
+   *  the full unfiltered book's set — the predicate handles per-row
+   *  matching, and the batch endpoint dedupes + caches per isolate. */
+  workspaceIds: string[];
+  /** Called whenever the chip strip / mode / combine changes.
+   *  `null` clears the filter — callers should short-circuit and
+   *  return every row. */
+  onFilterChange: (matcher: WorkspaceFeatureMatcher | null) => void;
+  /** Total rows in the caller's list — used for the `N/total match`
+   *  hint in the strip header. Defaults to `workspaceIds.length`. */
+  totalRowCount?: number;
 }
 
 type Combine = "any" | "all";
 type Mode = "using" | "not_using";
 
 /**
- * Book-level feature filter, chip-strip UX.
+ * Book-level feature usage filter, chip-strip UX. Matches the At-Risk
+ * tab's flag-filter shape: an always-visible chip strip with per-
+ * feature counts, plus a Using / Not-using segmented toggle and an
+ * any / all combine mode.
  *
- * Matches the At-Risk tab's flag-filter pattern: an always-visible chip
- * strip with per-feature counts, plus a Using / Not-using segmented
- * toggle and an any / all combine mode. Clicking a chip toggles it on.
- * The batch fetch (one Postgres trip for every workspace_id in the
- * book) fires on mount so the chip counts show up without another
- * click. Cached in-process for the isolate lifetime.
- *
- * Predicate emission is on every input change — same contract as
- * before, so `customer-table.tsx` doesn't need to change how it
- * consumes this filter.
+ * Design intent: every table view in the app (Customer book, AM
+ * cohorts, Renewals) accepts the same predicate contract — a
+ * matcher over workspace_id — so each panel can drop this filter
+ * in with three lines of glue (a `workspaceIds` array, a matcher
+ * state variable, and a `.filter()` call in its rendered list).
  */
-export function FeatureUtilizationFilter({ customers, onFilterChange }: Props) {
+export function FeatureUtilizationFilter({
+  workspaceIds,
+  onFilterChange,
+  totalRowCount,
+}: Props) {
   const [picked, setPicked] = useState<Set<FeatureBatchKey>>(new Set());
   const [combine, setCombine] = useState<Combine>("any");
   const [mode, setMode] = useState<Mode>("not_using");
@@ -42,14 +59,18 @@ export function FeatureUtilizationFilter({ customers, onFilterChange }: Props) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Fetch on mount so chip counts populate without an extra click.
-  // Depends on customers.length so a swap of the book (e.g. CSM
-  // filter re-scoped the list) re-fetches against the new IDs.
+  // Stable key from the workspace-id set — swaps in a new fetch when
+  // the caller re-scopes (e.g. CSM filter narrowed the book). Reference
+  // equality of the workspaceIds array is unreliable across re-renders,
+  // so we hash the sorted contents to key the effect.
+  const workspaceIdsKey = useMemo(() => {
+    const dedup = Array.from(new Set(workspaceIds.filter(Boolean))).sort();
+    return dedup.join("|");
+  }, [workspaceIds]);
+
   useEffect(() => {
     let cancelled = false;
-    const ids = customers
-      .map((c) => c.workspace_id)
-      .filter((id): id is string => Boolean(id));
+    const ids = workspaceIdsKey ? workspaceIdsKey.split("|") : [];
     if (ids.length === 0) {
       setData({});
       return;
@@ -80,7 +101,7 @@ export function FeatureUtilizationFilter({ customers, onFilterChange }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [customers]);
+  }, [workspaceIdsKey]);
 
   function toggle(key: FeatureBatchKey) {
     setPicked((prev) => {
@@ -95,10 +116,9 @@ export function FeatureUtilizationFilter({ customers, onFilterChange }: Props) {
     setPicked(new Set());
   }
 
-  // Emit predicate whenever inputs change. Same semantics as before —
-  // "using" matches active-in-batch, "not_using" is the inverse. A
-  // customer missing from the batch (unenrolled / no workspace_id)
-  // reads as "no usage" so they show up in not_using mode.
+  // Emit predicate whenever inputs change. Absent-from-batch rows
+  // (no workspace_id, or workspace not in the queried set) read as
+  // "no usage" — visible only in `not_using` mode.
   useEffect(() => {
     if (picked.size === 0 || !data) {
       onFilterChange(null);
@@ -107,32 +127,28 @@ export function FeatureUtilizationFilter({ customers, onFilterChange }: Props) {
     const matchesMode = (active: boolean) =>
       mode === "using" ? active : !active;
 
-    onFilterChange((c: Customer) => {
-      if (!c.workspace_id) return mode === "not_using";
-      const row = data[c.workspace_id];
+    const matcher: WorkspaceFeatureMatcher = (workspaceId) => {
+      if (!workspaceId) return mode === "not_using";
+      const row = data[workspaceId];
       if (combine === "any") {
         for (const k of picked) if (matchesMode(Boolean(row?.[k]))) return true;
         return false;
       }
       for (const k of picked) if (!matchesMode(Boolean(row?.[k]))) return false;
       return true;
-    });
+    };
+    onFilterChange(matcher);
   }, [picked, combine, mode, data, onFilterChange]);
 
-  // Per-feature count — how many customers would match this ONE
-  // chip in the current mode. Drives the chip's little number badge.
+  // Chip counts — "if I picked ONLY this chip, how many rows would
+  // match?" Absent-from-batch rows count in `not_using` mode.
   const perFeatureCount = useMemo(() => {
     if (!data) return {} as Record<string, number>;
     const map = {} as Record<string, number>;
     for (const k of FEATURE_BATCH_KEYS) map[k] = 0;
-    for (const c of customers) {
-      if (!c.workspace_id) {
-        if (mode === "not_using") {
-          for (const k of FEATURE_BATCH_KEYS) map[k]++;
-        }
-        continue;
-      }
-      const row = data[c.workspace_id];
+    const ids = workspaceIdsKey ? workspaceIdsKey.split("|") : [];
+    for (const id of ids) {
+      const row = data[id];
       for (const k of FEATURE_BATCH_KEYS) {
         const active = Boolean(row?.[k]);
         if ((mode === "using" && active) || (mode === "not_using" && !active)) {
@@ -141,16 +157,17 @@ export function FeatureUtilizationFilter({ customers, onFilterChange }: Props) {
       }
     }
     return map;
-  }, [data, customers, mode]);
+  }, [data, workspaceIdsKey, mode]);
 
   const totalMatch = useMemo(() => {
     if (picked.size === 0 || !data) return null;
     const matchesMode = (active: boolean) =>
       mode === "using" ? active : !active;
+    const ids = workspaceIdsKey ? workspaceIdsKey.split("|") : [];
     let inAny = 0;
     let inAll = 0;
-    for (const c of customers) {
-      let hits = 0;
+    for (const id of ids) {
+      const row = data[id];
       const keys = [...picked];
       if (!c.workspace_id) {
         // Absent from the batch reads as inactive for every feature.
@@ -163,9 +180,10 @@ export function FeatureUtilizationFilter({ customers, onFilterChange }: Props) {
       if (hits === keys.length) inAll++;
     }
     return { inAny, inAll };
-  }, [picked, customers, data, mode]);
+  }, [picked, workspaceIdsKey, data, mode]);
 
   const modeLabel = mode === "using" ? "using" : "not using";
+  const totalDisplay = totalRowCount ?? (workspaceIdsKey ? workspaceIdsKey.split("|").length : 0);
 
   return (
     <div className="rounded-xl border border-border bg-surface shadow-card px-4 py-3 space-y-3">
@@ -235,7 +253,7 @@ export function FeatureUtilizationFilter({ customers, onFilterChange }: Props) {
               <strong className="text-fg tabular-nums">
                 {combine === "any" ? totalMatch.inAny : totalMatch.inAll}
               </strong>
-              /{customers.length} match
+              /{totalDisplay} match
             </>
           ) : (
             <span className="text-subtle">

@@ -196,9 +196,20 @@ export async function runFeatureUtilizationBatch(
   // shows the "no features detected" state in the UI.
   if (isDemoMode()) return {};
 
+  // Filter to real UUIDs before shipping to Postgres. loadCustomers()
+  // appends a synthetic TEST_CUSTOMER row whose workspace_id is the
+  // literal string "test-workspace" (not a UUID); the `organization_id`
+  // column is `uuid` and Postgres rejects the whole query when even
+  // one input can't parse. Same defense the deliverability engine
+  // uses on its Q1 scope.
+  const UUID_RE =
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const validIds = organizationIds.filter((id) => UUID_RE.test(id));
+  if (validIds.length === 0) return {};
+
   // Cache by the sorted-id signature so repeated filter-open requests are
   // free as long as the book hasn't changed.
-  const sorted = [...new Set(organizationIds)].sort();
+  const sorted = [...new Set(validIds)].sort();
   const key = sorted.join("|");
   const now = Date.now();
   if (cache && cache.ids === key && cache.expires > now) {
