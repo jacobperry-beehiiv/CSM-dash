@@ -169,9 +169,15 @@ export function FeatureUtilizationFilter({
     for (const id of ids) {
       const row = data[id];
       const keys = [...picked];
-      const hits = keys.filter((k) => matchesMode(Boolean(row?.[k])));
-      if (hits.length > 0) inAny++;
-      if (hits.length === keys.length) inAll++;
+      if (!c.workspace_id) {
+        // Absent from the batch reads as inactive for every feature.
+        hits = mode === "not_using" ? keys.length : 0;
+      } else {
+        const row = data[c.workspace_id];
+        for (const k of keys) if (matchesMode(Boolean(row?.[k]))) hits++;
+      }
+      if (hits > 0) inAny++;
+      if (hits === keys.length) inAll++;
     }
     return { inAny, inAll };
   }, [picked, workspaceIdsKey, data, mode]);
