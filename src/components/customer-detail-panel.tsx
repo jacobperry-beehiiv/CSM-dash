@@ -60,6 +60,13 @@ interface Props {
    *  surfaced under the date so a CSM can sanity-check that an OOO
    *  auto-reply or newsletter isn't the reason "today" appears. */
   gmailMatch?: { subject: string | null; from: string | null } | null;
+  /** Render the Feature utilization section already expanded. AM
+   *  panels (Approaching Enterprise, Past Due, Enterprise approaching
+   *  cap) pass true so the "what does this customer already use?"
+   *  context is in view immediately — that's the decision-driving
+   *  signal for whether to reach out and with what pitch. Everywhere
+   *  else keeps the default collapsed layout. */
+  defaultOpenFeatureUtilization?: boolean;
 }
 
 export function CustomerDetailPanel({
@@ -70,6 +77,7 @@ export function CustomerDetailPanel({
   onGmailRefresh,
   gmailScopeMissing,
   gmailMatch,
+  defaultOpenFeatureUtilization = false,
 }: Props) {
   return (
     <div className="space-y-4">
@@ -408,7 +416,10 @@ export function CustomerDetailPanel({
         <CustomerPaidSubsList workspaceId={c.workspace_id} />
       ) : null}
 
-      <FeatureUtilizationPanel workspaceId={c.workspace_id} />
+      <FeatureUtilizationPanel
+        workspaceId={c.workspace_id}
+        defaultOpen={defaultOpenFeatureUtilization}
+      />
 
       <AdGapSummary organizationId={c.workspace_id} />
 

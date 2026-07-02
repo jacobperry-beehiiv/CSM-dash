@@ -7,9 +7,18 @@ import { CollapsibleSection } from "./collapsible-section";
 
 interface Props {
   workspaceId: string | null | undefined;
+  /** Render the section already expanded. Default false — matches the
+   *  rest of the detail-panel sections which collapse until clicked.
+   *  AM cohort panels (Approaching Enterprise, Past Due, Enterprise
+   *  approaching cap) pass true so features are visible immediately
+   *  when a row expands — that context is what decides the pitch. */
+  defaultOpen?: boolean;
 }
 
-export function FeatureUtilizationPanel({ workspaceId }: Props) {
+export function FeatureUtilizationPanel({
+  workspaceId,
+  defaultOpen = false,
+}: Props) {
   const [data, setData] = useState<FeatureUtilization | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -68,6 +77,7 @@ export function FeatureUtilizationPanel({ workspaceId }: Props) {
   return (
     <CollapsibleSection
       title="Feature utilization"
+      defaultOpen={defaultOpen}
       trailing={
         <span className="text-[10px] text-subtle">
           live · {fmtDate(data.generated_at)}

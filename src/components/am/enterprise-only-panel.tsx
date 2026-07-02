@@ -775,7 +775,10 @@ export function EnterpriseOnlyPanel({ rows, csms }: Props) {
                     {isOpen ? (
                       <tr className="bg-blue-50/40 dark:bg-blue-500/10 border-b border-border">
                         <td colSpan={11} className="px-6 py-4">
-                          <CustomerDetailPanel customer={c} />
+                          <CustomerDetailPanel
+                            customer={c}
+                            defaultOpenFeatureUtilization
+                          />
                         </td>
                       </tr>
                     ) : null}

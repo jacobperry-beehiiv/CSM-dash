@@ -1295,7 +1295,10 @@ export function PastDuePanel({ rows, csms, totalSourceRows }: Props) {
                       {isOpen ? (
                         <tr className="bg-blue-50/40 dark:bg-blue-500/10 border-b border-border">
                           <td colSpan={9} className="px-6 py-4">
-                            <CustomerDetailPanel customer={resolvedCustomer} />
+                            <CustomerDetailPanel
+                              customer={resolvedCustomer}
+                              defaultOpenFeatureUtilization
+                            />
                             {!booked && !resolvedCustomer.workspace_id ? (
                               <p className="text-[11px] text-subtle italic mt-2">
                                 This account isn&rsquo;t in the customer
