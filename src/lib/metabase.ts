@@ -129,6 +129,23 @@ export async function runNativeQuery(
       database: databaseId,
       type: "native",
       native: { query },
+      // Bypass Metabase's userland row cap (default 2000) — silently
+      // truncating a server-side sync query gives us wrong data with
+      // no error. This flag disables the
+      // `add-default-userland-constraints?` middleware; the whole
+      // reason we call runNativeQuery from server code is that we
+      // want the full result set, not a paginated preview.
+      //
+      // Real-world impact of NOT setting this: the deliverability
+      // sync's Q1 (ORDER BY scheduled_at DESC over a 15-day window,
+      // ~10k rows/day across 317 orgs) got clipped to the first 2000
+      // rows of the freshest day, hiding every prior day's sends
+      // (including a Saturday incident on Hospitality Headline that
+      // was invisible to the dashboard for weeks).
+      middleware: {
+        "add-default-userland-constraints?": false,
+        "userland-query?": false,
+      },
     }),
   });
   const data = await res.json();
