@@ -182,10 +182,15 @@ function WinRow({ win, onDismissed }: WinRowProps) {
 interface WinsListProps {
   blob: WinsBlob;
   csmName: string | null;
-  isAdmin: boolean;
+  /** Retained for source-compat with the /csm > page.tsx caller,
+   *  but no longer gates the "Run detection now" button — the whole
+   *  panel is already behind the wins-opportunities feature flag,
+   *  and the underlying /api/wins/detect endpoint re-checks the flag
+   *  server-side. */
+  isAdmin?: boolean;
 }
 
-export function WinsList({ blob, csmName, isAdmin }: WinsListProps) {
+export function WinsList({ blob, csmName }: WinsListProps) {
   const router = useRouter();
   const [filter, setFilter] = useState<FilterChip>("all");
   const [dismissedIds, setDismissedIds] = useState<Set<string>>(new Set());
@@ -282,16 +287,14 @@ export function WinsList({ blob, csmName, isAdmin }: WinsListProps) {
             Ranking, curation, and outreach drafting ship in later phases.
           </p>
         </div>
-        {isAdmin ? (
-          <button
-            type="button"
-            onClick={runDetection}
-            disabled={running}
-            className="text-sm px-3 py-1.5 rounded-md border border-border bg-surface hover:bg-surface-2 disabled:opacity-60"
-          >
-            {running ? "Detecting…" : "Run detection now"}
-          </button>
-        ) : null}
+        <button
+          type="button"
+          onClick={runDetection}
+          disabled={running}
+          className="text-sm px-3 py-1.5 rounded-md border border-border bg-surface hover:bg-surface-2 disabled:opacity-60"
+        >
+          {running ? "Detecting…" : "Run detection now"}
+        </button>
       </div>
 
       {runResult ? (
