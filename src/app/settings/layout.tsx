@@ -37,6 +37,14 @@ export default async function SettingsLayout({
         "Sync action items from your recent Sybill call-recap emails into your personal to-do list.",
     });
   }
+  if (await isFeatureEnabledFor("wins-opportunities", email)) {
+    extras.push({
+      href: "/settings/wins",
+      label: "Wins detection thresholds",
+      description:
+        "Tune the per-rule thresholds the daily wins-detection engine scores against. Overrides layer over shipped defaults; blank fields fall through.",
+    });
+  }
   return (
     <>
       <div className="mb-6">

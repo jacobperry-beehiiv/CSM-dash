@@ -4,72 +4,29 @@ import type {
   WinConfidence,
   WinType,
 } from "../data/wins-types";
+import type { WinsConfig } from "../data/wins-config-types";
+import { DEFAULT_WINS_CONFIG } from "../data/wins-config-types";
 import type { PublicationMetrics, WeeklyBucket } from "./wins-metrics";
 
 /**
  * Phase 1 rule catalog. Four self-comparison rules from Hayden's
  * scope doc, Appendix A. Each rule is a pure function of the
- * publication's rollup — no HubSpot / Metabase / KV side effects.
- * The wins.ts engine wraps rule hits into full CandidateWin rows
- * (adds workspace_id, csm_name, detection_week, stable win_id).
+ * publication's rollup + the current WinsConfig — no HubSpot /
+ * Metabase / KV side effects. The wins.ts engine wraps rule hits
+ * into full CandidateWin rows (adds workspace_id, csm_name,
+ * detection_week, stable win_id).
  *
- * Thresholds live in WINS_CONFIG at the top of the file so tuning
- * doesn't require touching rule bodies. Once we validate detection
- * quality on Jacob's book, these become the initial defaults for
- * every CSM.
+ * Rule signatures accept an optional `config` param. Callers that
+ * don't pass one fall through to DEFAULT_WINS_CONFIG — same
+ * behavior as before this refactor. The engine passes the merged
+ * KV-override + defaults blob so admins can tune from /settings/wins
+ * without a deploy.
  */
 
-export const WINS_CONFIG = {
-  verified_ctor_record: {
-    /** Publication must have sent to at least this many subscribers on
-     *  the post claiming the record. Blocks small-list vanity spikes. */
-    min_delivered_on_record: 500,
-    /** Days back to consider when looking for prior CTOR values. */
-    lookback_days: 90,
-    /** How much the new record needs to beat the prior best by, in
-     *  absolute percentage points (0.005 = 0.5pp). Filters out ties
-     *  and dead-noise "records." */
-    min_beat_pp: 0.005,
-  },
-  verified_open_streak: {
-    /** Consecutive weeks that must be above the baseline for the
-     *  streak to qualify. */
-    min_streak_weeks: 3,
-    /** Number of prior weeks used to compute the trailing baseline. */
-    baseline_weeks: 12,
-    /** How much the streak weeks must beat the baseline by (absolute
-     *  percentage points of open rate). */
-    min_lift_pp: 0.02,
-    /** Each streak week needs at least this much sent volume. */
-    min_sends_per_week: 250,
-  },
-  quality_growth: {
-    /** Consecutive weeks over which engaged audience (delivered *
-     *  open_rate) must be trending up. */
-    min_weeks: 4,
-    /** Open rate must not have dropped below this fraction of the
-     *  first week's rate over the growth window — protects against
-     *  "we grew reach but engagement collapsed." */
-    min_open_rate_retention: 0.9,
-    /** Minimum end-of-window engaged audience — filters out
-     *  publications that grew from 100 to 150 engaged. */
-    min_engaged_end: 400,
-  },
-  deliverability_streak: {
-    /** Consecutive weeks the streak must hold. */
-    min_streak_weeks: 4,
-    /** Green-inbox threshold — delivery rate must be ≥ this every
-     *  streak week. */
-    min_delivery_rate: 0.97,
-    /** Guardrail: hard-bounce rate must stay below this every streak
-     *  week (spam-rate would be the ideal signal here but Phase 1
-     *  doesn't pull sendgrid_v1 — see the deliverability engine for
-     *  why that query is expensive). */
-    max_hard_bounce_rate: 0.005,
-    /** Each streak week needs at least this much sent volume. */
-    min_sends_per_week: 250,
-  },
-} as const;
+/** Historic export name — kept as a re-export of the module-level
+ *  defaults so downstream callers (tests, scripts) don't break. New
+ *  code should read DEFAULT_WINS_CONFIG from `lib/data/wins-config-types`. */
+export { DEFAULT_WINS_CONFIG as WINS_CONFIG };
 
 export interface RuleHit {
   win_type: WinType;
@@ -115,9 +72,10 @@ function completedWeeks(
 // against small-list noise via a `min_delivered_on_record` floor.
 export function ruleVerifiedCtorRecord(
   pub: PublicationMetrics,
-  now: Date = new Date()
+  now: Date = new Date(),
+  config: WinsConfig = DEFAULT_WINS_CONFIG
 ): RuleHit | null {
-  const cfg = WINS_CONFIG.verified_ctor_record;
+  const cfg = config.verified_ctor_record;
   const cutoffMs =
     Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()) -
     cfg.lookback_days * 86400000;
@@ -167,9 +125,10 @@ export function ruleVerifiedCtorRecord(
 // weeks that could easily beat a noisy baseline.
 export function ruleVerifiedOpenStreak(
   pub: PublicationMetrics,
-  now: Date = new Date()
+  now: Date = new Date(),
+  config: WinsConfig = DEFAULT_WINS_CONFIG
 ): RuleHit | null {
-  const cfg = WINS_CONFIG.verified_open_streak;
+  const cfg = config.verified_open_streak;
   const closed = completedWeeks(pub.weeklyBuckets, now);
   if (closed.length < cfg.min_streak_weeks + cfg.baseline_weeks) return null;
 
@@ -227,9 +186,10 @@ export function ruleVerifiedOpenStreak(
 // tighter signal than raw sends anyway.
 export function ruleQualityGrowth(
   pub: PublicationMetrics,
-  now: Date = new Date()
+  now: Date = new Date(),
+  config: WinsConfig = DEFAULT_WINS_CONFIG
 ): RuleHit | null {
-  const cfg = WINS_CONFIG.quality_growth;
+  const cfg = config.quality_growth;
   const closed = completedWeeks(pub.weeklyBuckets, now);
   if (closed.length < cfg.min_weeks) return null;
 
@@ -274,12 +234,16 @@ export function ruleQualityGrowth(
 // ─── Rule 4: deliverability_streak ────────────────────────────────
 // Fires when the most recent N complete weeks all posted a delivery
 // rate above `min_delivery_rate` with hard-bounces staying below
-// `max_hard_bounce_rate`. Standard "no news is great news" streak.
+// `max_hard_bounce_rate` AND open rate at/above `min_open_rate`.
+// The open-rate guard was added Phase 1 v2 after a sanity check on
+// Jacob's book showed 89% of publications matched without it —
+// turning the win into background noise.
 export function ruleDeliverabilityStreak(
   pub: PublicationMetrics,
-  now: Date = new Date()
+  now: Date = new Date(),
+  config: WinsConfig = DEFAULT_WINS_CONFIG
 ): RuleHit | null {
-  const cfg = WINS_CONFIG.deliverability_streak;
+  const cfg = config.deliverability_streak;
   const closed = completedWeeks(pub.weeklyBuckets, now);
   if (closed.length < cfg.min_streak_weeks) return null;
   const window = closed.slice(-cfg.min_streak_weeks);
@@ -289,19 +253,22 @@ export function ruleDeliverabilityStreak(
     if (w.delivery_rate < cfg.min_delivery_rate) return null;
     const hardBounceRate = w.sends > 0 ? w.hard_bounces / w.sends : 0;
     if (hardBounceRate > cfg.max_hard_bounce_rate) return null;
+    if (w.open_rate < cfg.min_open_rate) return null;
   }
 
   const avgDelivery =
     window.reduce((s, w) => s + w.delivery_rate, 0) / window.length;
+  const avgOpen =
+    window.reduce((s, w) => s + w.open_rate, 0) / window.length;
 
   return {
     win_type: "deliverability_streak",
     category: "consistency",
-    headline: `${cfg.min_streak_weeks} straight weeks of clean deliverability (avg ${pctString(avgDelivery, 2)}), no bounce spike`,
+    headline: `${cfg.min_streak_weeks} straight weeks of clean deliverability (avg ${pctString(avgDelivery, 2)}, ${pctString(avgOpen)} opens) — no bounce spike`,
     metric_value: avgDelivery,
     comparison_value: cfg.min_delivery_rate,
     comparison_basis: "self",
-    confidence: avgDelivery > 0.99 ? "high" : "medium",
+    confidence: avgDelivery > 0.995 ? "high" : "medium",
     mapped_opportunity:
       "Inbox is warm — a good window to nudge them on send frequency, or to launch a re-engagement flow they've been holding back on for deliverability reasons.",
     publication_id: pub.publication_id,
@@ -310,8 +277,12 @@ export function ruleDeliverabilityStreak(
 }
 
 /** Ordered list of rules the engine iterates over. Add new rules
- *  here — the engine treats null returns as "no hit" and moves on. */
-export const RULES: Array<(pub: PublicationMetrics, now?: Date) => RuleHit | null> = [
+ *  here — the engine treats null returns as "no hit" and moves on.
+ *  Rules accept an optional third `config` param for KV-override
+ *  support; when omitted they use DEFAULT_WINS_CONFIG. */
+export const RULES: Array<
+  (pub: PublicationMetrics, now?: Date, config?: WinsConfig) => RuleHit | null
+> = [
   ruleVerifiedCtorRecord,
   ruleVerifiedOpenStreak,
   ruleQualityGrowth,
