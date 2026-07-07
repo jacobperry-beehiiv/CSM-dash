@@ -3,6 +3,7 @@ import {
   accountRecentlySent,
   loadWinsBlob,
 } from "../data/wins-store";
+import { loadWinsConfig } from "../data/wins-config";
 import {
   isoWeekLabel,
   winIdFor,
@@ -74,6 +75,12 @@ export async function runWinsDetection(
   // Cadence-guard source: prior sent wins within the last 30 days.
   const priorBlob = await loadWinsBlob();
 
+  // Effective rule thresholds — DEFAULT_WINS_CONFIG with any KV
+  // overrides from /settings/wins merged on top. Loaded once per
+  // run and passed to every rule so admin threshold changes are in
+  // effect from the next detection cycle.
+  const winsConfig = await loadWinsConfig();
+
   const metrics = await fetchWinsMetrics({
     customers,
     lookbackDays: opts.lookbackDays,
@@ -108,7 +115,7 @@ export async function runWinsDetection(
     for (const pub of pubs) {
       scannedPublications++;
       for (const rule of RULES) {
-        const hit = rule(pub, now);
+        const hit = rule(pub, now, winsConfig);
         if (!hit) continue;
 
         const winId = winIdFor(workspaceId, hit.win_type, detectionWeek);
