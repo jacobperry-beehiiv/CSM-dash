@@ -1,4 +1,5 @@
 import NextAuth from "next-auth";
+import Credentials from "next-auth/providers/credentials";
 import Google from "next-auth/providers/google";
 
 /**
@@ -10,9 +11,56 @@ import Google from "next-auth/providers/google";
  * gmail.compose here; that lives on the separate per-CSM Gmail OAuth flow
  * under /api/auth/google/* so users see "Sign in" once and then opt in to
  * draft creation later via /settings/gmail.
+ *
+ * ─── Preview-build auth bypass ───────────────────────────────────
+ * Google OAuth doesn't support wildcards on redirect URIs and Vercel
+ * mints a fresh domain per commit, so straight-through Google sign-in
+ * on preview builds is a losing battle. When BOTH:
+ *   • VERCEL_ENV === "preview" (set automatically on preview builds)
+ *   • PREVIEW_AUTH_TOKEN is present in the environment
+ * we mount a second Credentials provider that trades the shared token
+ * for a stub session as PREVIEW_AUTH_EMAIL (falls back to Jacob's
+ * beehiiv account so book-of-business filters resolve to a real book).
+ *
+ * The token gates access — set it in Vercel → Project → Settings →
+ * Environment Variables, scoped to "Preview" only. Leave it OFF in
+ * Production so this code path can't ever authenticate a prod visitor.
  */
 
 const ALLOWED_DOMAIN = "@beehiiv.com";
+
+/** True on Vercel preview builds AND when the shared token is set.
+ *  Exported so /login can conditionally render the preview-login
+ *  form only when the bypass is actually going to authenticate. */
+export const previewAuthEnabled =
+  process.env.VERCEL_ENV === "preview" &&
+  Boolean(process.env.PREVIEW_AUTH_TOKEN);
+
+const PREVIEW_STUB_EMAIL =
+  process.env.PREVIEW_AUTH_EMAIL ?? "jacob.perry@beehiiv.com";
+
+const previewProvider = previewAuthEnabled
+  ? [
+      Credentials({
+        id: "preview",
+        name: "Preview build",
+        credentials: {
+          token: { label: "Preview token", type: "password" },
+        },
+        async authorize(credentials) {
+          const submitted =
+            typeof credentials?.token === "string" ? credentials.token : "";
+          if (!submitted) return null;
+          if (submitted !== process.env.PREVIEW_AUTH_TOKEN) return null;
+          return {
+            id: `preview-${PREVIEW_STUB_EMAIL}`,
+            email: PREVIEW_STUB_EMAIL,
+            name: PREVIEW_STUB_EMAIL.split("@")[0].replace(/[._]/g, " "),
+          };
+        },
+      }),
+    ]
+  : [];
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
   providers: [
@@ -31,13 +79,18 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         },
       },
     }),
+    ...previewProvider,
   ],
   pages: {
     signIn: "/login",
     error: "/login",
   },
   callbacks: {
-    async signIn({ profile }) {
+    async signIn({ profile, account }) {
+      // Preview credentials provider — bypasses the beehiiv-domain
+      // gate. authorize() already verified the shared token so the
+      // stub user is trusted by construction.
+      if (account?.provider === "preview") return true;
       const email = (profile?.email ?? "").toLowerCase();
       if (!email.endsWith(ALLOWED_DOMAIN)) {
         // NextAuth surfaces this as `?error=AccessDenied` on the sign-in page.
