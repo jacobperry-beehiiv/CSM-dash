@@ -19,6 +19,11 @@ import { HubSpotContactLabelEditor } from "./hubspot-contact-label-editor";
 interface Props {
   contacts: HubSpotContactRef[];
   workspaceId: string;
+  /** Account owner's email, threaded through from the customer
+   *  detail panel. When a contact row's email matches (case-
+   *  insensitive), we render an "Account owner" chip inline
+   *  instead of duplicating them as a synthetic top row. */
+  ownerEmail?: string | null;
 }
 
 interface BulkResult {
@@ -26,7 +31,12 @@ interface BulkResult {
   failed: Array<{ contact_id: string; error: string }>;
 }
 
-export function HubSpotContactsEditableList({ contacts, workspaceId }: Props) {
+export function HubSpotContactsEditableList({
+  contacts,
+  workspaceId,
+  ownerEmail,
+}: Props) {
+  const ownerLower = (ownerEmail ?? "").trim().toLowerCase();
   // Tracks contact IDs whose labels we've cleared in this session;
   // overrides the snapshot value on render so the chips disappear
   // immediately without waiting for the parent to refetch. When the
@@ -268,6 +278,23 @@ export function HubSpotContactsEditableList({ contacts, workspaceId }: Props) {
                   {c.job_title ? (
                     <span className="text-[11px] text-subtle">
                       {c.job_title}
+                    </span>
+                  ) : null}
+                  {ownerLower &&
+                  (c.email ?? "").trim().toLowerCase() === ownerLower ? (
+                    <span
+                      className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-medium border bg-blue-50 dark:bg-blue-500/10 border-blue-200 dark:border-blue-500/40 text-blue-900 dark:text-blue-200"
+                      title="q10600 owner_email — the workspace's Stripe billing contact / beehiiv owner."
+                    >
+                      Account owner
+                    </span>
+                  ) : null}
+                  {c.is_primary ? (
+                    <span
+                      className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-medium border bg-emerald-50 dark:bg-emerald-500/10 border-emerald-200 dark:border-emerald-500/40 text-emerald-900 dark:text-emerald-200"
+                      title="HubSpot association type = Contact with Primary Company"
+                    >
+                      Primary
                     </span>
                   ) : null}
                 </div>

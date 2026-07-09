@@ -255,10 +255,16 @@ export async function fetchLastActivity(
     }
   }
 
-  // Pass 2: fetch contacts whose primary associated company is one of these.
-  // Uses the v4 associations batch endpoint, filtered to typeId 2 ("Contact
-  // with Primary Company") so we surface only contacts that HubSpot considers
-  // primarily attached to this company (not random associations).
+  // Pass 2: fetch contacts associated with any of these companies.
+  //
+  // Previously we filtered to typeId 2 ("Contact with Primary Company")
+  // only — but that dropped every contact whose association type was
+  // anything other than the specific "Primary Company" label. HubSpot
+  // admins routinely attach real people to a company without setting
+  // that specific type (e.g. "Point of Contact", "Billing"), and those
+  // people were silently vanishing from the panel. Now we surface
+  // every associated contact and track which one HubSpot considers
+  // primary so the UI can badge them without gating visibility.
   //
   // While we're walking the response we also capture USER_DEFINED
   // association labels per (companyId, contactId) — these are the
@@ -269,6 +275,11 @@ export async function fetchLastActivity(
   // contact at a different company may carry a different set.
   const companyToContactIds = new Map<string, string[]>();
   const companyToContactLabels = new Map<string, Map<string, string[]>>();
+  // Per-company set of contactIds that HAVE the Primary Company
+  // association type. Used to stamp `is_primary` on the contact
+  // record so the UI can render a "Primary" badge without dropping
+  // the non-primary contacts from view.
+  const companyToPrimaryContactIds = new Map<string, Set<string>>();
   for (let i = 0; i < unique.length; i += BATCH_SIZE) {
     const slice = unique.slice(i, i + BATCH_SIZE);
     if (i > 0) await sleep(INTER_BATCH_DELAY_MS);
@@ -301,16 +312,17 @@ export async function fetchLastActivity(
     for (const row of json.results ?? []) {
       const ids: string[] = [];
       const labelMap = new Map<string, string[]>();
+      const primarySet = new Set<string>();
       for (const t of row.to) {
-        // Only surface contacts whose PRIMARY company is this one —
-        // matches the historical filter. Random secondary
-        // associations don't go into the contact list.
+        const contactId = String(t.toObjectId);
+        ids.push(contactId);
+        // Track which contacts have the Primary Company association
+        // type so the UI can badge them. Non-primary contacts stay
+        // in the list — dropping them was the bug this change fixes.
         const isPrimary = t.associationTypes.some(
           (a) => a.typeId === PRIMARY_COMPANY_ASSOC_TYPE_ID
         );
-        if (!isPrimary) continue;
-        const contactId = String(t.toObjectId);
-        ids.push(contactId);
+        if (isPrimary) primarySet.add(contactId);
         // Pluck USER_DEFINED labels (HubSpot admin-created roles).
         // HUBSPOT_DEFINED entries include the primary-association
         // typeId itself + canned types — skip those; what's left
@@ -328,6 +340,7 @@ export async function fetchLastActivity(
       if (ids.length > 0) {
         companyToContactIds.set(row.from.id, ids);
         companyToContactLabels.set(row.from.id, labelMap);
+        companyToPrimaryContactIds.set(row.from.id, primarySet);
       }
     }
   }
@@ -350,15 +363,26 @@ export async function fetchLastActivity(
       // different companies could otherwise share a mutable labels
       // array, leaking one company's labels onto the other.
       const labelsForCompany = companyToContactLabels.get(companyId);
+      const primaryIds = companyToPrimaryContactIds.get(companyId);
       const contacts: HubSpotContact[] = [];
       for (const id of ids) {
         const base = contactById.get(id);
         if (!base) continue;
         const labels = labelsForCompany?.get(id) ?? [];
-        contacts.push({ ...base, labels });
+        // is_primary was hard-coded false in the batch fetch; the
+        // Primary Company association we captured in Pass 2 is the
+        // reliable source. Stamp it here so the UI can badge without
+        // an extra lookup.
+        const is_primary = primaryIds?.has(id) ?? false;
+        contacts.push({ ...base, labels, is_primary });
       }
-      // Sort: most-recently-active first, falling back to alphabetical.
+      // Sort: primary contacts first, then most-recently-active,
+      // then alphabetical. Primary lands at the top so a CSM
+      // scanning the section sees the anchor person immediately —
+      // this used to be free (only primaries surfaced) but now
+      // we're mixing in non-primary associations.
       contacts.sort((a, b) => {
+        if (a.is_primary !== b.is_primary) return a.is_primary ? -1 : 1;
         const at = a.last_activity_at ? Date.parse(a.last_activity_at) : 0;
         const bt = b.last_activity_at ? Date.parse(b.last_activity_at) : 0;
         if (at !== bt) return bt - at;

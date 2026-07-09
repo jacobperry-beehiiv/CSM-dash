@@ -168,7 +168,11 @@ export default async function AccountPage({
         <CustomerSignalsSection signals={signals} />
       </div>
 
-      <HubSpotContactsSection contacts={c.hubspot_contacts} />
+      <HubSpotContactsSection
+        contacts={c.hubspot_contacts}
+        ownerEmail={c.owner_email}
+        ownerName={c.property_main_contact}
+      />
 
       {/* Publications list — every newsletter associated with this
        *  workspace, with subscriber counts and per-pub metabase deep
