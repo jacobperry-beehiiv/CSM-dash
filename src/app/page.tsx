@@ -7,6 +7,7 @@ import {
 } from "@/lib/data/load-customers";
 import { auth } from "@/auth";
 import { isCsmTeamMember } from "@/lib/auth/csm-team";
+import { isFeatureEnabledFor } from "@/lib/auth/feature-flags";
 import { fmtCurrency } from "@/components/format";
 import { TeamTasksPanel } from "@/components/team-tasks-panel";
 import { PersonalTodosPanel } from "@/components/personal-todos-panel";
@@ -61,6 +62,13 @@ export default async function MissionControl({
   // viewers (admins, sales, demo accounts) see the standard label.
   const viewerIsCsmTeam = await isCsmTeamMember(viewerEmail);
   const mascots = viewerIsCsmTeam ? await loadActiveCsmDogs() : [];
+  // Sybill sync used to live at /settings/sybill; moved into the
+  // personal todos panel behind the same feature flag so the sync
+  // affordance sits alongside the todos it produces.
+  const sybillIngestEnabled = await isFeatureEnabledFor(
+    "sybill-ingest",
+    viewerEmail
+  );
   const headingMascot =
     mascots.length > 0
       ? mascots[Math.floor(Math.random() * mascots.length)]
@@ -96,7 +104,7 @@ export default async function MissionControl({
       </div>
 
       <TeamTasksPanel />
-      <PersonalTodosPanel />
+      <PersonalTodosPanel sybillIngestEnabled={sybillIngestEnabled} />
       <BookNewsPanel viewerCsmHandle={csm} />
       <FeatureUpdatesPanel />
     </>
