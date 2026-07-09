@@ -21,7 +21,17 @@ import type {
  * and return [] unless the caller supplies a signal source.
  */
 
-const DAYS_NO_SEND = 10;
+/** Fallback "no send" threshold (days) used when a customer has
+ *  neither a CSM-set expected cadence override nor enough send history
+ *  (< 3 sends in the 120d lookback) for the daily sweep to infer one. */
+const DEFAULT_DAYS_NO_SEND = 10;
+/** Extra buffer added on top of the effective cadence before Flag A
+ *  fires. A monthly sender is expected every ~30d, so we hold off on
+ *  flagging until day 44 (30 + 14). Two-week tolerance was Jacob's
+ *  choice over the initial "cadence + 7d" recommendation — a monthly
+ *  cadence has enough day-of-week variance that a shorter buffer
+ *  produced too many "just late" false positives. */
+const CADENCE_TOLERANCE_DAYS = 14;
 const PCT_UNDER_TIER = 0.75;
 const ANNUAL_RENEWAL_WINDOW_DAYS = 90;
 
@@ -35,11 +45,48 @@ function parseDate(s: string | null | undefined): Date | null {
   return isNaN(d.getTime()) ? null : d;
 }
 
-// ─── Flag A: hasn't sent in 10+ days ────────────────────────────────
+// ─── Flag A: hasn't sent in longer than their cadence + 14d ─────────
 // Label intentionally specific ("No publishing") — kept distinct from
 // Flag B ("No login") because the two used to share the vague
 // "Dormant" / "Inactive" naming that left CSMs hovering for tooltips
 // to tell which signal had fired.
+//
+// Cadence-aware threshold: the fixed 10d floor was noisy for monthly
+// senders. Effective cadence = max(CSM override, inferred median, 10)
+// so a manual override can only relax, never tighten (a CSM saying
+// "they send monthly" shouldn't force flagging at 30d when the
+// snapshot says weekly). Then we add CADENCE_TOLERANCE_DAYS on top
+// so a normal day-of-week slip doesn't fire the flag.
+export function effectiveCadenceDays(c: Customer): {
+  cadence: number;
+  source: "override" | "inferred" | "default";
+} {
+  const override =
+    typeof c.expected_send_cadence_days === "number" &&
+    c.expected_send_cadence_days > 0
+      ? Math.floor(c.expected_send_cadence_days)
+      : null;
+  const inferred =
+    typeof c.inferred_cadence_days === "number" && c.inferred_cadence_days > 0
+      ? Math.floor(c.inferred_cadence_days)
+      : null;
+
+  // Pick the LARGEST of the three so a stale inferred cadence can't
+  // undercut a CSM's override AND vice-versa: this always relaxes the
+  // threshold rather than tightening it. Rationale: false negatives
+  // (missing a real dormancy) are recoverable — the CSM can flip a
+  // manual override or wait a week. False positives (flagging every
+  // monthly sender at 2 weeks) were the real problem.
+  const candidates: Array<{
+    value: number;
+    source: "override" | "inferred" | "default";
+  }> = [{ value: DEFAULT_DAYS_NO_SEND, source: "default" }];
+  if (inferred != null) candidates.push({ value: inferred, source: "inferred" });
+  if (override != null) candidates.push({ value: override, source: "override" });
+  candidates.sort((a, b) => b.value - a.value);
+  return { cadence: candidates[0].value, source: candidates[0].source };
+}
+
 export function flagA(c: Customer, now = new Date()): RiskFlag | null {
   const last = parseDate(c.last_send);
   if (!last) {
@@ -50,11 +97,21 @@ export function flagA(c: Customer, now = new Date()): RiskFlag | null {
     };
   }
   const days = daysBetween(last, now);
-  if (days >= DAYS_NO_SEND) {
+  const { cadence, source } = effectiveCadenceDays(c);
+  const threshold = cadence + CADENCE_TOLERANCE_DAYS;
+  if (days >= threshold) {
+    const sourceLabel =
+      source === "override"
+        ? "CSM-set expected cadence"
+        : source === "inferred"
+          ? `inferred cadence (${cadence}d)`
+          : "default threshold";
     return {
       code: "A",
       label: `No publishing (${days}d)`,
-      detail: `No send in ${days} days (last: ${last.toISOString().slice(0, 10)})`,
+      detail:
+        `No send in ${days} days (last: ${last.toISOString().slice(0, 10)}) — ` +
+        `threshold ${threshold}d = ${cadence}d ${sourceLabel} + ${CADENCE_TOLERANCE_DAYS}d tolerance.`,
     };
   }
   return null;

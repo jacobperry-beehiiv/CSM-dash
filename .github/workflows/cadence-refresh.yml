@@ -1,0 +1,61 @@
+name: cadence-refresh
+
+# Recomputes the per-workspace inferred send cadence used by Flag A's
+# "cadence + 14d tolerance" threshold. Runs daily; medians the last
+# 120 days of send dates from ClickHouse per workspace and stashes
+# the result in the send-cadence KV overlay so loadCustomers()
+# surfaces `inferred_cadence_days` on every render.
+#
+# Required repo secrets:
+#   • CRON_SECRET    — bearer; same value as the Vercel env var
+#   • DASHBOARD_URL  — root URL, no trailing slash
+#
+# Triggers:
+#   • daily at 04:45 UTC (before wins-detection at 05:15 so a fresh
+#     cadence value is available if a wins rule ever gates on it).
+#   • manually via "Run workflow".
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "45 4 * * *"
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify required secrets are set
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          DASHBOARD_URL: ${{ secrets.DASHBOARD_URL }}
+        run: |
+          missing=()
+          for v in CRON_SECRET DASHBOARD_URL; do
+            if [ -z "${!v}" ]; then
+              missing+=("$v")
+            fi
+          done
+          if [ "${#missing[@]}" -ne 0 ]; then
+            echo "::error::Missing required repo secret(s): ${missing[*]}"
+            exit 1
+          fi
+          echo "All required secrets present."
+
+      - name: POST /api/customers/refresh-cadence
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          DASHBOARD_URL: ${{ secrets.DASHBOARD_URL }}
+        run: |
+          set -e
+          response=$(curl -sS -w "\n%{http_code}" -X POST \
+            -H "Authorization: Bearer ${CRON_SECRET}" \
+            -H "Content-Type: application/json" \
+            "${DASHBOARD_URL}/api/customers/refresh-cadence")
+          body=$(echo "$response" | sed '$d')
+          code=$(echo "$response" | tail -n1)
+          echo "HTTP $code"
+          echo "$body"
+          if [ "$code" != "200" ]; then
+            echo "::error::Cadence refresh failed with HTTP $code"
+            exit 1
+          fi

@@ -110,6 +110,28 @@ export interface Customer {
    * conflicting IDs in the tooltip.
    */
   hubspot_link_warning?: string | null;
+
+  /**
+   * Median days between sends over the last ~120 days, computed by
+   * the daily send-cadence sweep from ClickHouse posts. Feeds Flag A
+   * so a monthly sender isn't flagged after 2 weeks: the threshold
+   * becomes `max(override, inferred, 10) + 14d`. Null when the
+   * lookback window has < 3 sends (fall back to the 10d default).
+   */
+  inferred_cadence_days?: number | null;
+  /** Timestamp the inferred cadence was last recomputed. Rendered on
+   *  the detail panel so a CSM can tell how fresh the value is. */
+  inferred_cadence_updated_at?: string | null;
+  /** Number of sends the median was computed from — surfaced in the
+   *  tooltip so a CSM can gauge confidence. */
+  inferred_cadence_sample_size?: number | null;
+  /**
+   * CSM-set override for the expected send cadence in days. When set,
+   * trumps `inferred_cadence_days` for Flag A's threshold. Rendered
+   * on the detail panel with an edit control so a CSM can pin the
+   * expected cadence for a newer customer with < 3 sends of history.
+   */
+  expected_send_cadence_days?: number | null;
 }
 
 export interface HubSpotContactRef {

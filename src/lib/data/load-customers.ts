@@ -4,6 +4,7 @@ import { loadCustomersFromSnapshot, snapshotMetadata } from "./snapshot-loader";
 import { metabaseRowToCustomer } from "./metabase-mapper";
 import { applyOverride, loadOverrides } from "./customer-overrides";
 import { loadHubspotOverlay, mergeOverlayInto } from "./hubspot-overlay";
+import { loadCadenceOverlay, mergeCadenceInto } from "./send-cadence";
 import { TEST_CUSTOMER } from "./test-customer";
 import { isDemoMode } from "../demo/mode";
 import { buildDemoCustomers } from "../demo/customer-fixture";
@@ -124,7 +125,7 @@ export async function loadCustomers(): Promise<Customer[]> {
   if (isDemoMode()) {
     return buildDemoCustomers(new Date());
   }
-  const [raw, overrides, hubspotOverlay] = await Promise.all([
+  const [raw, overrides, hubspotOverlay, cadenceOverlay] = await Promise.all([
     loadRawCustomers(),
     loadOverrides(),
     // Live HubSpot overlay populated by /api/customers/refresh-hubspot
@@ -132,13 +133,19 @@ export async function loadCustomers(): Promise<Customer[]> {
     // been refreshed yet — merge is a no-op. The bulk-read happens
     // once per page render; rows merge per-workspace inside.
     loadHubspotOverlay(),
+    // Per-workspace inferred send cadence — populated by the daily
+    // cadence sweep at /api/customers/refresh-cadence. Feeds Flag A's
+    // threshold so a monthly sender isn't flagged after 2 weeks.
+    loadCadenceOverlay(),
   ]);
   // Append the synthetic test workspace after overrides — it's not in the
   // Metabase snapshot, so applyOverride() would no-op on it anyway, and
   // keeping it outside the override loop guarantees its placeholder
   // values can't be accidentally mutated.
   const withOverrides = raw.map((c) => applyOverride(c, overrides));
-  return [...mergeOverlayInto(withOverrides, hubspotOverlay), TEST_CUSTOMER];
+  const withHubspot = mergeOverlayInto(withOverrides, hubspotOverlay);
+  const withCadence = mergeCadenceInto(withHubspot, cadenceOverlay);
+  return [...withCadence, TEST_CUSTOMER];
 }
 
 /** Bust the loadCustomers raw cache — only useful for snapshot rotation. */

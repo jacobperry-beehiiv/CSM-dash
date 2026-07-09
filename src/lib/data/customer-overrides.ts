@@ -67,6 +67,12 @@ export interface CustomerOverride {
   hubspot_link_source?: "stripe_id" | "email_fallback" | "none";
   hubspot_link_refreshed_at?: string;
   hubspot_link_refreshed_by?: string;
+  /** CSM-set override for the expected send cadence in days. Feeds
+   *  Flag A's threshold in place of the ClickHouse-inferred cadence
+   *  when set. Cleared by setting to null / undefined / empty. */
+  expected_send_cadence_days?: number;
+  expected_send_cadence_updated_at?: string;
+  expected_send_cadence_updated_by?: string;
 }
 
 export type OverrideMap = Record<string, CustomerOverride>;
@@ -123,6 +129,9 @@ export async function setOverride(
   applyField("hubspot_link_source");
   applyField("hubspot_link_refreshed_at");
   applyField("hubspot_link_refreshed_by");
+  applyField("expected_send_cadence_days");
+  applyField("expected_send_cadence_updated_at");
+  applyField("expected_send_cadence_updated_by");
   // field_overrides is a bag — patches MERGE with the existing bag
   // rather than replace it, so a single-field edit doesn't wipe out
   // every prior mapped-field override.
@@ -184,6 +193,13 @@ export function applyOverride(
       ov.hubspot_company_id ?? customer.hubspot_company_id,
     hubspot_link_source:
       ov.hubspot_link_source ?? customer.hubspot_link_source,
+    // Manual cadence override — surface on the customer row so Flag A
+    // and the detail panel both read it without the extra KV lookup.
+    // Overlay-inferred cadence stays on `inferred_cadence_days`;
+    // Flag A picks max(override, inferred, default) so the CSM's
+    // pinned value only relaxes the threshold, never tightens it.
+    expected_send_cadence_days:
+      ov.expected_send_cadence_days ?? customer.expected_send_cadence_days,
   };
   // Spread bag values onto the customer. Each entry's `value`
   // replaces the corresponding Customer field; null clears it. Type
