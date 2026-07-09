@@ -373,6 +373,8 @@ export function CustomerDetailPanel({
           <HubSpotContactsList
             contacts={c.hubspot_contacts}
             workspaceId={c.workspace_id ?? null}
+            ownerEmail={c.owner_email}
+            ownerName={c.property_main_contact}
           />
         </Section>
       </div>
