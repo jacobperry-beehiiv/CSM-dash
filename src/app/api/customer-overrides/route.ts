@@ -27,6 +27,11 @@ interface PostBody {
    *  null or empty string to clear. Audit fields are stamped from the
    *  session viewer's email. */
   lifecycle_stage?: string | null;
+  /** Manual expected send cadence in days. Feeds Flag A's threshold in
+   *  place of the ClickHouse-inferred cadence. Pass null / 0 / empty
+   *  to clear the override and fall back to inferred. Audit fields
+   *  are stamped from the session viewer's email. */
+  expected_send_cadence_days?: number | null;
 }
 
 export async function POST(req: Request) {
@@ -51,6 +56,20 @@ export async function POST(req: Request) {
         ? new Date().toISOString()
         : undefined;
       patch.lifecycle_stage_updated_by = trimmed
+        ? session?.user?.email?.toLowerCase() ?? undefined
+        : undefined;
+    }
+    if ("expected_send_cadence_days" in body) {
+      const raw = body.expected_send_cadence_days;
+      const value =
+        typeof raw === "number" && Number.isFinite(raw) && raw > 0
+          ? Math.floor(raw)
+          : null;
+      patch.expected_send_cadence_days = value ?? undefined;
+      patch.expected_send_cadence_updated_at = value
+        ? new Date().toISOString()
+        : undefined;
+      patch.expected_send_cadence_updated_by = value
         ? session?.user?.email?.toLowerCase() ?? undefined
         : undefined;
     }

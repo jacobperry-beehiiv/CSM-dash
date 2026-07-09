@@ -6,6 +6,7 @@ import { RiskLevelChip } from "./risk-level-chip";
 import { FeatureUtilizationPanel } from "./feature-utilization-panel";
 import { AdGapSummary } from "./ad-gap-summary";
 import { CadenceToggle } from "./cadence-toggle";
+import { SendCadenceEditor } from "./send-cadence-editor";
 import { HubSpotContactsList } from "./hubspot-contacts-section";
 import { CustomerPublicationsList } from "./customer-publications-list";
 import { CustomerPaidSubsList } from "./customer-paid-subs-list";
@@ -254,6 +255,21 @@ export function CustomerDetailPanel({
           <Row label="Renewal" value={fmtDate(c.renewal_date)} />
           <Row label="Next invoice" value={fmtDate(c.next_invoice ?? null)} />
           <Row label="Last send" value={fmtDate(c.last_send)} />
+          {c.workspace_id ? (
+            <Row
+              label="Send cadence"
+              block
+              value={
+                <SendCadenceEditor
+                  workspaceId={c.workspace_id}
+                  overrideDays={c.expected_send_cadence_days ?? null}
+                  inferredDays={c.inferred_cadence_days ?? null}
+                  inferredSampleSize={c.inferred_cadence_sample_size ?? null}
+                  inferredUpdatedAt={c.inferred_cadence_updated_at ?? null}
+                />
+              }
+            />
+          ) : null}
           <Row label="Last log in" value={fmtDate(c.last_log_in)} />
           <Row
             label="Last contacted"
