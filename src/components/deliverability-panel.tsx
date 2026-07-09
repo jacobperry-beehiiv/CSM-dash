@@ -831,7 +831,7 @@ export function DeliverabilityPanel({
                             groupMetricSeverity(group.alerts, "spam_rate")
                           )}
                         >
-                          {fmtRate(metrics.maxSpam * 100, 3)}%
+                          {fmtRate(metrics.maxSpam, 3)}
                         </span>
                       </td>
                       <td className="px-3 py-3 text-right tabular-nums hidden xl:table-cell">
@@ -1298,7 +1298,7 @@ function PublicationAlertRows({
               postMetricSeverity(alert, "spam_rate")
             )}
           >
-            {fmtRate(alert.post.spam_rate * 100, 3)}%
+            {fmtRate(alert.post.spam_rate, 3)}
           </span>
         </td>
         <td className="px-2 py-2 text-right tabular-nums hidden xl:table-cell w-[6%]">
