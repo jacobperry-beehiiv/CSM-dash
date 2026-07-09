@@ -16,6 +16,7 @@ import { RowActions } from "./row-actions";
 import { BulkEmailLauncher } from "./am/bulk-email-launcher";
 import { RiskLevelChip } from "./risk-level-chip";
 import { FlagResolutionCheckboxes } from "./flag-resolution-checkboxes";
+import { JulietFlagControl } from "./juliet-flag-control";
 import { ChipMultiSelect, FilterBar, FilterPanel, SearchInput, SegmentToggle } from "./filters";
 import { CsmSelector } from "./csm-selector";
 import { useUrlSearch } from "@/lib/hooks/use-url-search";
@@ -1224,6 +1225,11 @@ export function AtRiskTable({
                                   workspaceId={c.workspace_id}
                                   flags={a.flags}
                                 />
+                                {c.workspace_id ? (
+                                  <JulietFlagControl
+                                    workspaceId={c.workspace_id}
+                                  />
+                                ) : null}
                               </div>
                             }
                           />
