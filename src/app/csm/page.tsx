@@ -21,9 +21,11 @@ import { DeliverabilityLoading } from "@/components/deliverability-loading";
 import { QbrChartsTab } from "@/components/qbr-charts/qbr-charts-tab";
 import type { WorkspaceOption } from "@/components/qbr-charts/workspace-picker";
 import { WinsList } from "@/components/wins-list";
+import { JulietFlagList } from "@/components/juliet-flag-list";
 import { isAdmin } from "@/lib/auth/admin";
 import { isFeatureEnabledFor } from "@/lib/auth/feature-flags";
 import { loadWinsBlob } from "@/lib/data/wins-store";
+import { loadJulietFlags } from "@/lib/data/juliet-flags-store";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -32,6 +34,7 @@ const BASE_TABS = [
   { id: "book", label: "All assigned" },
   { id: "deliverability", label: "Deliverability" },
   { id: "at-risk", label: "At-risk" },
+  { id: "juliet", label: "Flagged for Juliet" },
   { id: "qbr-charts", label: "QBR Charts" },
 ];
 
@@ -156,6 +159,19 @@ export default async function CsmPage({
           isAdmin={admin}
         />
       );
+    } else if (tab === "juliet") {
+      // Team-wide queue — always show every flagged workspace,
+      // regardless of the ?csm filter, so Juliet (or anyone triaging)
+      // can see the full escalation surface without toggling the CSM
+      // dropdown. Uses the full `all` book (not the segment-filtered
+      // one) so a Growth-plan raise still surfaces when the current
+      // segment param is `enterprise`.
+      const flagMap = await loadJulietFlags();
+      const flaggedIds = new Set(Object.keys(flagMap));
+      const rows = all
+        .filter((c) => c.workspace_id && flaggedIds.has(c.workspace_id))
+        .map((c) => ({ customer: c, flag: flagMap[c.workspace_id as string] }));
+      body = <JulietFlagList rows={rows} />;
     } else if (tab === "wins") {
       if (!winsEnabled) {
         body = (
