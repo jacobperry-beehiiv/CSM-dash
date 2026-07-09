@@ -8,11 +8,12 @@ export const maxDuration = 30;
 /**
  * GET /api/customers/publications-index
  *
- * Returns a flat `{ publication_id → organization_id }` map of every
- * non-deleted publication in the platform. Used by the dashboard's
- * search inputs so a CSM/AM can paste a publication ID (or an
- * organization/workspace ID) into the search field and find the
- * matching company instantly — no need to know which kind of ID they
+ * Returns `{ publication_id → organization_id }` + `{ publication_id
+ * → publication_name }` maps of every non-deleted publication in the
+ * platform. Used by the dashboard's search inputs so a CSM/AM can
+ * paste a publication ID, an organization/workspace ID, OR type a
+ * publication name into the search field and find the matching
+ * company instantly — no need to know which kind of identifier they
  * have on hand.
  *
  * Volume: at beehiiv scale this is ~thousands to low-tens-of-thousands
@@ -35,6 +36,7 @@ export const maxDuration = 30;
 interface IndexRow {
   publication_id: string;
   organization_id: string;
+  publication_name: string | null;
 }
 
 export async function GET() {
@@ -56,13 +58,19 @@ export async function GET() {
     const MAX_PAGES = 50;
 
     const pub2ws: Record<string, string> = {};
+    // Names live in a parallel map (not smushed into pub2ws) so
+    // callers that don't care about names — the current at-risk /
+    // renewals filters — pay no cost, and consumers that DO want
+    // name search can opt in by iterating pub2name.
+    const pub2name: Record<string, string> = {};
     let pages = 0;
     for (let offset = 0; pages < MAX_PAGES; offset += PAGE_SIZE) {
       const rows = await runNativeQuery(
         DB.POSTGRES,
         `SELECT
-           id::text            AS publication_id,
-           organization_id::text AS organization_id
+           id::text              AS publication_id,
+           organization_id::text AS organization_id,
+           name                  AS publication_name
          FROM public.publications
          WHERE deleted_at IS NULL
            AND organization_id IS NOT NULL
@@ -77,6 +85,9 @@ export async function GET() {
           typeof r.organization_id === "string"
         ) {
           pub2ws[r.publication_id] = r.organization_id;
+          if (typeof r.publication_name === "string" && r.publication_name) {
+            pub2name[r.publication_id] = r.publication_name;
+          }
         }
       }
       // A short page (or empty page) means we've reached the tail —
@@ -90,7 +101,7 @@ export async function GET() {
     // tab-switch doesn't redo the query. Page-level state still wins
     // for in-session reuse — this just smooths the cold-load case.
     return NextResponse.json(
-      { pub2ws, count, pages },
+      { pub2ws, pub2name, count, pages },
       {
         headers: {
           "Cache-Control":
