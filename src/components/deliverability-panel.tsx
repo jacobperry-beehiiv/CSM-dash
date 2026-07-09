@@ -617,14 +617,15 @@ export function DeliverabilityPanel({
               <col className="w-8" />
               <col className="w-8" />
               <col className="w-[8%]" />
-              <col className="w-[18%]" />
-              <col className="w-[22%] hidden md:table-cell" />
+              <col className="w-[16%]" />
+              <col className="w-[20%] hidden md:table-cell" />
               <col className="w-[7%]" />
-              <col className="w-[7%]" />
-              <col className="w-[7%]" />
-              <col className="w-[7%] hidden xl:table-cell" />
-              <col className="w-[7%] hidden xl:table-cell" />
-              <col className="w-[10%] hidden lg:table-cell" />
+              <col className="w-[6%]" />
+              <col className="w-[6%]" />
+              <col className="w-[6%] hidden xl:table-cell" />
+              <col className="w-[6%] hidden xl:table-cell" />
+              <col className="w-[6%] hidden xl:table-cell" />
+              <col className="w-[9%] hidden lg:table-cell" />
               <col className="w-[7%]" />
             </colgroup>
             <thead className="bg-canvas">
@@ -662,6 +663,12 @@ export function DeliverabilityPanel({
                   title="Spam complaint rate"
                 >
                   Spam
+                </th>
+                <th
+                  className="px-3 py-3 font-medium text-muted text-right hidden xl:table-cell"
+                  title="Unsubscribe rate — flagged when audience fatigue is likely."
+                >
+                  Unsub
                 </th>
                 <th className="px-3 py-3 font-medium text-muted hidden lg:table-cell">
                   CSM
@@ -792,16 +799,49 @@ export function DeliverabilityPanel({
                         {fmtNumber(metrics.totalSent)}
                       </td>
                       <td className="px-3 py-3 text-right tabular-nums">
-                        {fmtPct(metrics.minDelivery * 100, 1)}
+                        <span
+                          className={metricSeverityClass(
+                            groupMetricSeverity(group.alerts, "delivery_rate")
+                          )}
+                        >
+                          {fmtPct(metrics.minDelivery * 100, 1)}
+                        </span>
                       </td>
                       <td className="px-3 py-3 text-right tabular-nums">
-                        {fmtPct(metrics.minOpen * 100, 1)}
+                        <span
+                          className={metricSeverityClass(
+                            groupMetricSeverity(group.alerts, "open_rate")
+                          )}
+                        >
+                          {fmtPct(metrics.minOpen * 100, 1)}
+                        </span>
                       </td>
                       <td className="px-3 py-3 text-right tabular-nums hidden xl:table-cell">
-                        {fmtPct(metrics.maxCtr * 100, 1)}
+                        <span
+                          className={metricSeverityClass(
+                            groupMetricSeverity(group.alerts, "ctr")
+                          )}
+                        >
+                          {fmtPct(metrics.maxCtr * 100, 1)}
+                        </span>
                       </td>
                       <td className="px-3 py-3 text-right tabular-nums hidden xl:table-cell">
-                        {fmtRate(metrics.maxSpam * 100, 3)}%
+                        <span
+                          className={metricSeverityClass(
+                            groupMetricSeverity(group.alerts, "spam_rate")
+                          )}
+                        >
+                          {fmtRate(metrics.maxSpam * 100, 3)}%
+                        </span>
+                      </td>
+                      <td className="px-3 py-3 text-right tabular-nums hidden xl:table-cell">
+                        <span
+                          className={metricSeverityClass(
+                            groupMetricSeverity(group.alerts, "unsub_rate")
+                          )}
+                        >
+                          {fmtPct(metrics.maxUnsub * 100, 2)}
+                        </span>
                       </td>
                       <td className="px-3 py-3 text-muted hidden lg:table-cell break-words">
                         {group.csm?.replace(/_/g, " ") ?? (
@@ -854,12 +894,72 @@ export function DeliverabilityPanel({
                     </tr>
                     {isWorkspaceOpen ? (
                       <tr className="border-b border-border bg-canvas/30">
-                        <td colSpan={12} className="px-3 py-2 pl-16 pr-4">
+                        <td colSpan={13} className="px-3 py-2 pl-16 pr-4">
                           <div className="ml-4 rounded-lg border border-border bg-surface shadow-sm overflow-hidden">
                             <div className="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted bg-canvas/60 border-b border-border/60">
                               Publications ({group.alerts.length})
                             </div>
                             <table className="w-full text-xs">
+                              {/* Column widths mirror the publication row
+                               *  <td>s below so the header labels sit
+                               *  directly over their values. Kept here
+                               *  (rather than the outer <colgroup>) so
+                               *  the inner grid stays independent of
+                               *  the workspace-row layout — those two
+                               *  used to share widths and drifted out
+                               *  of alignment as columns were added. */}
+                              <colgroup>
+                                <col className="w-8" />
+                                <col className="w-8" />
+                                <col className="w-[8%]" />
+                                <col className="w-[16%]" />
+                                <col className="w-[22%] hidden md:table-cell" />
+                                <col className="w-[7%]" />
+                                <col className="w-[6%]" />
+                                <col className="w-[6%]" />
+                                <col className="w-[6%] hidden xl:table-cell" />
+                                <col className="w-[6%] hidden xl:table-cell" />
+                                <col className="w-[6%] hidden xl:table-cell" />
+                                <col className="w-[9%] hidden lg:table-cell" />
+                                <col className="w-[7%]" />
+                              </colgroup>
+                              <thead className="bg-canvas/40 text-[10px] uppercase tracking-wider text-subtle">
+                                <tr>
+                                  <th className="px-2 py-1.5"></th>
+                                  <th className="px-2 py-1.5"></th>
+                                  <th className="px-2 py-1.5 text-left font-semibold">
+                                    Status
+                                  </th>
+                                  <th className="px-2 py-1.5 text-left font-semibold pl-5">
+                                    Publication
+                                  </th>
+                                  <th className="px-2 py-1.5 text-left font-semibold hidden md:table-cell">
+                                    Subject
+                                  </th>
+                                  <th className="px-2 py-1.5 text-right font-semibold">
+                                    Sent
+                                  </th>
+                                  <th className="px-2 py-1.5 text-right font-semibold">
+                                    Deliv
+                                  </th>
+                                  <th className="px-2 py-1.5 text-right font-semibold">
+                                    Open
+                                  </th>
+                                  <th className="px-2 py-1.5 text-right font-semibold hidden xl:table-cell">
+                                    CTR
+                                  </th>
+                                  <th className="px-2 py-1.5 text-right font-semibold hidden xl:table-cell">
+                                    Spam
+                                  </th>
+                                  <th className="px-2 py-1.5 text-right font-semibold hidden xl:table-cell">
+                                    Unsub
+                                  </th>
+                                  <th className="px-2 py-1.5 hidden lg:table-cell"></th>
+                                  <th className="px-2 py-1.5 text-right font-semibold">
+                                    Actions
+                                  </th>
+                                </tr>
+                              </thead>
                               <tbody>
                                 {group.alerts.map((alert) => (
                                   <PublicationAlertRows
@@ -987,6 +1087,7 @@ function aggregateWorkspaceMetrics(alerts: DeliverabilityAlert[]) {
       minOpen: 0,
       maxCtr: 0,
       maxSpam: 0,
+      maxUnsub: 0,
     };
   }
   return {
@@ -995,7 +1096,67 @@ function aggregateWorkspaceMetrics(alerts: DeliverabilityAlert[]) {
     minOpen: Math.min(...alerts.map((a) => a.post.open_rate)),
     maxCtr: Math.max(...alerts.map((a) => a.post.ctr)),
     maxSpam: Math.max(...alerts.map((a) => a.post.spam_rate)),
+    maxUnsub: Math.max(...alerts.map((a) => a.post.unsub_rate)),
   };
+}
+
+/** Which severity, if any, is a specific metric flagged at on this
+ *  single post? Cleared sends read as "no flag" — we want the cell
+ *  to render neutral again once the CSM has acknowledged. */
+type MetricKey =
+  | "delivery_rate"
+  | "open_rate"
+  | "ctr"
+  | "spam_rate"
+  | "unsub_rate"
+  | "hard_bounce_rate"
+  | "soft_bounce_rate";
+
+function postMetricSeverity(
+  alert: DeliverabilityAlert,
+  metric: MetricKey
+): "critical" | "warning" | null {
+  if (alert.cleared) return null;
+  let severity: "critical" | "warning" | null = null;
+  for (const flag of alert.flags) {
+    if (flag.metric !== metric) continue;
+    if (flag.severity === "critical") return "critical";
+    severity = "warning";
+  }
+  return severity;
+}
+
+/** Roll postMetricSeverity across every alert in a workspace group.
+ *  Used to color the aggregate value on the workspace header row —
+ *  if ANY publication in the group tripped this metric, the aggregate
+ *  cell picks up the highest severity found. */
+function groupMetricSeverity(
+  alerts: DeliverabilityAlert[],
+  metric: MetricKey
+): "critical" | "warning" | null {
+  let seen: "critical" | "warning" | null = null;
+  for (const a of alerts) {
+    const s = postMetricSeverity(a, metric);
+    if (s === "critical") return "critical";
+    if (s === "warning") seen = "warning";
+  }
+  return seen;
+}
+
+/** Tailwind classes for a metric-value cell keyed by severity.
+ *  `null` returns empty so we don't shift the layout for healthy
+ *  cells. Applied to the inline span wrapping the number — the <td>
+ *  keeps its `tabular-nums` for column alignment. */
+function metricSeverityClass(
+  severity: "critical" | "warning" | null
+): string {
+  if (severity === "critical") {
+    return "text-red-700 dark:text-red-300 font-semibold";
+  }
+  if (severity === "warning") {
+    return "text-amber-700 dark:text-amber-300 font-semibold";
+  }
+  return "";
 }
 
 function publicationAccent(
@@ -1106,19 +1267,50 @@ function PublicationAlertRows({
         <td className="px-2 py-2 text-right tabular-nums w-[7%]">
           {fmtNumber(alert.post.sent)}
         </td>
-        <td className="px-2 py-2 text-right tabular-nums w-[7%]">
-          {fmtPct(alert.post.delivery_rate * 100, 1)}
+        <td className="px-2 py-2 text-right tabular-nums w-[6%]">
+          <span
+            className={metricSeverityClass(
+              postMetricSeverity(alert, "delivery_rate")
+            )}
+          >
+            {fmtPct(alert.post.delivery_rate * 100, 1)}
+          </span>
         </td>
-        <td className="px-2 py-2 text-right tabular-nums w-[7%]">
-          {fmtPct(alert.post.open_rate * 100, 1)}
+        <td className="px-2 py-2 text-right tabular-nums w-[6%]">
+          <span
+            className={metricSeverityClass(
+              postMetricSeverity(alert, "open_rate")
+            )}
+          >
+            {fmtPct(alert.post.open_rate * 100, 1)}
+          </span>
         </td>
-        <td className="px-2 py-2 text-right tabular-nums hidden xl:table-cell w-[7%]">
-          {fmtPct(alert.post.ctr * 100, 1)}
+        <td className="px-2 py-2 text-right tabular-nums hidden xl:table-cell w-[6%]">
+          <span
+            className={metricSeverityClass(postMetricSeverity(alert, "ctr"))}
+          >
+            {fmtPct(alert.post.ctr * 100, 1)}
+          </span>
         </td>
-        <td className="px-2 py-2 text-right tabular-nums hidden xl:table-cell w-[7%]">
-          {fmtRate(alert.post.spam_rate * 100, 3)}%
+        <td className="px-2 py-2 text-right tabular-nums hidden xl:table-cell w-[6%]">
+          <span
+            className={metricSeverityClass(
+              postMetricSeverity(alert, "spam_rate")
+            )}
+          >
+            {fmtRate(alert.post.spam_rate * 100, 3)}%
+          </span>
         </td>
-        <td className="px-2 py-2 hidden lg:table-cell w-[10%]" />
+        <td className="px-2 py-2 text-right tabular-nums hidden xl:table-cell w-[6%]">
+          <span
+            className={metricSeverityClass(
+              postMetricSeverity(alert, "unsub_rate")
+            )}
+          >
+            {fmtPct(alert.post.unsub_rate * 100, 2)}
+          </span>
+        </td>
+        <td className="px-2 py-2 hidden lg:table-cell w-[9%]" />
         <td className="px-2 py-2 w-[7%]" onClick={(e) => e.stopPropagation()}>
           <div className="flex items-center gap-1 justify-end">
             {mbUrl ? (
@@ -1179,7 +1371,7 @@ function PublicationAlertRows({
       </tr>
       {expanded ? (
         <tr className="border-b border-border/60 bg-canvas/40">
-          <td colSpan={12} className="px-4 py-3 pl-8 border-l-[3px] border-l-border/80">
+          <td colSpan={13} className="px-4 py-3 pl-8 border-l-[3px] border-l-border/80">
             <DeliverabilityDetail alert={alert} />
           </td>
         </tr>
