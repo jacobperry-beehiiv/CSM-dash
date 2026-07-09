@@ -29,14 +29,6 @@ export default async function SettingsLayout({
         "Scan the shared Drive parent, match folders to customers, and backfill HubSpot's customer_folder property.",
     });
   }
-  if (await isFeatureEnabledFor("sybill-ingest", email)) {
-    extras.push({
-      href: "/settings/sybill",
-      label: "Sybill action items",
-      description:
-        "Sync action items from your recent Sybill call-recap emails into your personal to-do list.",
-    });
-  }
   if (await isFeatureEnabledFor("wins-opportunities", email)) {
     extras.push({
       href: "/settings/wins",

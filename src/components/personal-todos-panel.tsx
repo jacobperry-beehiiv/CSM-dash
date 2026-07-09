@@ -11,6 +11,7 @@ import {
 } from "@/lib/personal-todos/types";
 import { normalizeSlackText } from "@/lib/personal-todos/normalize-text";
 import { DoneCheckbox } from "./done-checkbox";
+import { SybillSyncControl } from "./sybill-sync-control";
 import { TodoCelebration } from "./todo-celebration";
 
 /**
@@ -88,7 +89,21 @@ function renderDetails(value: string | null): React.ReactNode {
   });
 }
 
-export function PersonalTodosPanel() {
+/** Props are all optional — the panel is used from the home page
+ *  as the CSM's personal list. New feature-flag-gated slots (like
+ *  the Sybill sync affordance) are opt-in, computed server-side in
+ *  page.tsx and passed down as booleans. */
+interface PersonalTodosPanelProps {
+  /** True when the viewer has the `sybill-ingest` feature flag on —
+   *  renders the SybillSyncControl inline above the composer so
+   *  syncing recap action items lives with the todos it creates,
+   *  not in a separate settings page. */
+  sybillIngestEnabled?: boolean;
+}
+
+export function PersonalTodosPanel({
+  sybillIngestEnabled = false,
+}: PersonalTodosPanelProps = {}) {
   const [todos, setTodos] = useState<PersonalTodo[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [savedAt, setSavedAt] = useState<string | null>(null);
@@ -341,6 +356,16 @@ export function PersonalTodosPanel() {
           ) : null}
         </div>
       </header>
+
+      {/* Sybill sync — moved here from /settings/sybill so the
+       *  affordance lives with the todos it creates. Behind the same
+       *  `sybill-ingest` feature flag; hidden entirely for CSMs who
+       *  don't have it. */}
+      {sybillIngestEnabled ? (
+        <div className="px-5 py-3 bg-canvas/20 border-b border-border">
+          <SybillSyncControl />
+        </div>
+      ) : null}
 
       {/* Composer */}
       <div className="px-5 py-3 bg-canvas/30 border-b border-border">
