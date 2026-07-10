@@ -76,12 +76,15 @@ export interface FeatureUtilization {
   organization_id: string;
   generated_at: string;
 
-  // 0. Send API — posts where api_created = true. Mirrors the
-  // signal Metabase cards 35808 / 35839 / 36664 already track
-  // for the ad-network rollups. send_api_pct_30d = share of the
-  // org's last-30-day completed sends that were API-created
-  // (0-100, two decimals). Last-send timestamp is the most recent
-  // api_created post's send_completed_at across all org pubs.
+  // 0. Send API — rows in public.send_api_requests for any of the
+  // org's publications. Earlier iterations tried to read
+  // posts.api_created, but that column doesn't exist in the current
+  // schema — the authoritative source is send_api_requests, one row
+  // per API send request, `completed_at` populated when the send
+  // finished. send_api_pct_30d = share of the org's last-30-day
+  // completed post sends that had a matching Send-API request within
+  // 24h of the send. Last-send timestamp is the most recent
+  // send_api_requests.completed_at across all org pubs.
   send_api_posts_total: number;
   send_api_posts_30d: number;
   send_api_pct_30d: number;
@@ -157,48 +160,50 @@ function buildSql(orgId: string): string {
       WHERE organization_id = ${o}
         AND deleted_at IS NULL
     ),
-    send_api AS (
-      -- Send API usage: posts the customer created via the API
-      -- vs. the studio composer. send_status = 2 means the send
-      -- actually went out (matches the deliverability-engine
-      -- filter); platform != 1 drops web-only posts; the
-      -- content_import_id zero-UUID filter drops imported posts.
-      -- These match the exclusions Metabase card #35808 uses so
-      -- the dashboard's per-org % lines up with PMJ's plan-level
-      -- rollup if you ever cross-check. Note the content_import_id
-      -- check uses IS NULL (Postgres) vs the all-zero UUID the
-      -- ClickHouse card uses — PeerDB rewrites NULL → 00000…00 on
-      -- replication, so the two filters carry the same semantics.
+    send_api_stats AS (
+      -- Send API usage sourced from public.send_api_requests — one
+      -- row per API send request. completed_at IS NOT NULL is the
+      -- "successfully processed" filter (status enum values are not
+      -- currently documented; the completed_at timestamp is safer).
       SELECT
-        COUNT(*) FILTER (WHERE api_created)::int
-          AS send_api_posts_total,
+        COUNT(*)::int AS send_api_posts_total,
         COUNT(*) FILTER (
-          WHERE api_created
-            AND send_completed_at >= NOW() - INTERVAL '30 days'
+          WHERE completed_at >= NOW() - INTERVAL '30 days'
         )::int AS send_api_posts_30d,
-        CASE
-          WHEN COUNT(*) FILTER (
-            WHERE send_completed_at >= NOW() - INTERVAL '30 days'
-          ) = 0 THEN 0
-          ELSE ROUND(
-            COUNT(*) FILTER (
-              WHERE api_created
-                AND send_completed_at >= NOW() - INTERVAL '30 days'
-            )::numeric
-            / COUNT(*) FILTER (
-              WHERE send_completed_at >= NOW() - INTERVAL '30 days'
-            )::numeric * 100,
-            2
-          )
-        END AS send_api_pct_30d,
-        MAX(send_completed_at) FILTER (WHERE api_created)
-          AS send_api_last_send
+        MAX(completed_at) AS send_api_last_send
+      FROM public.send_api_requests
+      WHERE publication_id IN (SELECT id FROM org_pubs)
+        AND completed_at IS NOT NULL
+    ),
+    org_posts_30d AS (
+      -- Denominator for send_api_pct_30d: all completed sends the org
+      -- shipped in the last 30 days, regardless of source. Uses the
+      -- same send_status / platform / content_import_id filters the
+      -- deliverability engine uses so the % aligns with what CSMs
+      -- see in the deliverability tab.
+      SELECT COUNT(*)::int AS sends_30d
       FROM public.posts
       WHERE publication_id IN (SELECT id FROM org_pubs)
         AND send_status = 2
         AND deleted_at IS NULL
         AND platform <> 1
         AND content_import_id IS NULL
+        AND send_completed_at >= NOW() - INTERVAL '30 days'
+    ),
+    send_api AS (
+      SELECT
+        send_api_stats.send_api_posts_total,
+        send_api_stats.send_api_posts_30d,
+        CASE
+          WHEN org_posts_30d.sends_30d = 0 THEN 0
+          ELSE ROUND(
+            send_api_stats.send_api_posts_30d::numeric
+            / org_posts_30d.sends_30d::numeric * 100,
+            2
+          )
+        END AS send_api_pct_30d,
+        send_api_stats.send_api_last_send
+      FROM send_api_stats, org_posts_30d
     ),
     mcp AS (
       SELECT

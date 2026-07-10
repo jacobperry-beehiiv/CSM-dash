@@ -45,19 +45,17 @@ function buildSql(orgIds: string[]): string {
         AND deleted_at IS NULL
     ),
     send_api AS (
-      -- Any completed (send_status=2) API-created post in the org's
-      -- publications. Same exclusions as the per-customer engine —
-      -- content_import_id IS NULL because Postgres stores non-imported
-      -- posts as NULL (PeerDB rewrites to a zero UUID downstream).
-      SELECT op.organization_id, COUNT(p.id) > 0 AS used
+      -- Send API usage: at least one completed request in
+      -- public.send_api_requests for any of the org's publications.
+      -- Note: earlier iterations queried public.posts.api_created,
+      -- but that column doesn't exist in the current schema — the
+      -- authoritative table is send_api_requests (one row per API
+      -- send request; completed_at populated when the send finished).
+      SELECT op.organization_id, COUNT(sar.id) > 0 AS used
       FROM org_pubs op
-      JOIN public.posts p
-        ON p.publication_id = op.publication_id
-       AND p.send_status = 2
-       AND p.api_created = TRUE
-       AND p.deleted_at IS NULL
-       AND p.platform <> 1
-       AND p.content_import_id IS NULL
+      JOIN public.send_api_requests sar
+        ON sar.publication_id = op.publication_id
+       AND sar.completed_at IS NOT NULL
       GROUP BY op.organization_id
     ),
     mcp AS (
