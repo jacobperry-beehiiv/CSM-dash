@@ -150,6 +150,16 @@ export const MAPPABLE_DASHBOARD_FIELDS: MappableDashboardField[] = [
     type: "string",
     edited_in: "Customer detail panel → top metadata strip",
   },
+  {
+    id: "company_engagement",
+    label: "Engagement",
+    description:
+      "Expected engagement / touch level for the customer (No / Low / Medium / High / Very High Touch, plus \"Downgrade\" and \"Churned\" states). Backed by HubSpot's company_engagement enum — option list loads live so admin changes to the taxonomy propagate without a code push.",
+    type: "enum",
+    edited_in: "Customer detail panel → Status section",
+    hubspot_enum_property: "company_engagement",
+    hubspot_enum_object: "companies",
+  },
 ];
 
 export const DASHBOARD_FIELD_TO_CUSTOMER_KEY: Record<string, string> = {
@@ -164,4 +174,5 @@ export const DASHBOARD_FIELD_TO_CUSTOMER_KEY: Record<string, string> = {
   property_customer_goals_detail: "property_customer_goals_detail",
   property_main_contact: "property_main_contact",
   property_customer_folder: "property_customer_folder",
+  company_engagement: "company_engagement",
 };

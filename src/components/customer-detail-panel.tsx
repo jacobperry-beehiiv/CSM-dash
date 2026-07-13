@@ -193,7 +193,18 @@ export function CustomerDetailPanel({
               />
             }
           />
-          <Row label="Engagement" value={c.company_engagement ?? "—"} />
+          <Row
+            label="Engagement"
+            value={
+              <MappedFieldEditor
+                fieldDef={MAPPABLE_DASHBOARD_FIELDS.find(
+                  (f) => f.id === "company_engagement"
+                )!}
+                currentValue={c.company_engagement}
+                workspaceId={c.workspace_id}
+              />
+            }
+          />
           <Row
             label="Risk level"
             value={
