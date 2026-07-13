@@ -1,3 +1,5 @@
+"use client";
+
 import type { Customer } from "@/lib/types";
 import type { JulietFlag } from "@/lib/data/juliet-flags-store";
 import { CustomerDetailPanel } from "./customer-detail-panel";
@@ -6,11 +8,17 @@ import { fmtCurrency, fmtDate } from "./format";
 import Link from "next/link";
 
 /**
- * Server-rendered "Flagged for Juliet" queue. Groups the flagged
- * workspaces (server-loaded from KV + joined with the customer book)
- * into per-customer cards, each with the full CustomerDetailPanel so
- * she gets ARR, dates, HubSpot contacts, publications, notes — the
- * same rich context every other detail-panel surface exposes.
+ * "Flagged for Juliet" queue view. Groups the flagged workspaces
+ * (loaded server-side in /csm page.tsx, passed in as `rows`) into
+ * per-customer cards, each with the full CustomerDetailPanel so
+ * Juliet gets ARR, dates, HubSpot contacts, publications, notes —
+ * the same rich context every other detail-panel surface exposes.
+ *
+ * Marked "use client" because CustomerDetailPanel passes function
+ * props (renderReadOnly) into MappedFieldEditor. Server → client
+ * function-prop hand-off isn't allowed in the RSC boundary, so this
+ * whole subtree needs to render on the client. The parent server
+ * component owns data loading; this view just presents it.
  *
  * Empty state renders a helpful nudge instead of a blank tab.
  *
