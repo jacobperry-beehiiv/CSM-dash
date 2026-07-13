@@ -146,6 +146,15 @@ export async function runNativeQuery(
         "add-default-userland-constraints?": false,
         "userland-query?": false,
       },
+      // Belt-and-suspenders: setting constraints: null on the request
+      // body is the documented Metabase escape hatch for the default
+      // 2000-row max-results cap. Some Metabase versions ignore the
+      // middleware flag above but honor this — production evidence
+      // showed the sync's deliverability snapshot still landing at
+      // exactly 2000 rows on 2026-07-10 despite the middleware bypass
+      // having been in place since PR #109. Setting both makes the
+      // bypass robust across versions.
+      constraints: null,
     }),
   });
   const data = await res.json();

@@ -90,7 +90,20 @@ async function fetchPosts(
   const orgInClause = orgIds
     .map((id) => `'${id.replace(/'/g, "''")}'`)
     .join(",");
-  const sql = `
+
+  // Per-day scoped query. Peak-day enterprise send volume runs
+  // ~3,000 posts (see 2026-07-07: 3,011 rows) — right at the edge of
+  // any 2000-row cap even with the middleware bypass supposedly on.
+  // Historical evidence (Branded Hospitality Media's 2026-07-04
+  // "Skin in the Game" send at 79% delivery invisible in the
+  // dashboard for a week) shows the middleware flag alone doesn't
+  // reliably bypass the truncation. Firing one query per calendar
+  // day inside the lookback window guarantees each response is
+  // below the cap, and the concatenation covers the full window.
+  //
+  // Same architectural pattern the publications-index endpoint
+  // already uses successfully at similar volume.
+  const buildDayQuery = (dayOffset: number): string => `
     SELECT DISTINCT
       toString(p.id) AS post_id,
       toString(pub.id) AS publication_id,
@@ -112,12 +125,37 @@ async function fetchPosts(
     WHERE o.id IN (${orgInClause})
       AND o.plan_id = 8
       AND p.send_status = 2
-      AND p.scheduled_at >= now() - INTERVAL ${lookbackDays} DAY
+      AND toDate(p.scheduled_at) = toDate(now()) - ${dayOffset}
       AND p.scheduled_at < toDate(now())
     ORDER BY p.scheduled_at DESC
   `;
-  const rows = (await runNativeQuery(DB.CLICKHOUSE_ADHOC, sql)) as unknown as Q1Row[];
-  return rows;
+
+  const out: Q1Row[] = [];
+  for (let dayOffset = 1; dayOffset <= lookbackDays; dayOffset++) {
+    try {
+      const rows = (await runNativeQuery(
+        DB.CLICKHOUSE_ADHOC,
+        buildDayQuery(dayOffset)
+      )) as unknown as Q1Row[];
+      if (rows.length >= 2000) {
+        // We've hit exactly the historical truncation ceiling — flag
+        // it loudly so a future spike day (>2000 sends) doesn't fail
+        // silently the way the 15-day-window version used to.
+        console.warn(
+          `[deliverability] fetchPosts day -${dayOffset} returned ${rows.length} rows — at/above 2000 cap; may need further per-day chunking (by post_id) if this reproduces.`
+        );
+      }
+      for (const r of rows) out.push(r);
+    } catch (e) {
+      // Per-day isolation — a single failed day shouldn't blackhole
+      // the whole 15-day window. Log and continue.
+      console.error(
+        `[deliverability] fetchPosts day -${dayOffset} failed:`,
+        e instanceof Error ? e.message : e
+      );
+    }
+  }
+  return out;
 }
 
 function toInClause(ids: string[]): string {
