@@ -60,10 +60,18 @@ interface SheetMeta {
  *   2. Adds extra sheets for the remaining tabs.
  *   3. Writes every cell value + formatting rule.
  */
+export interface WarmupTimingMeta {
+  /** YYYY-MM-DD start date the CSM typed on the form. */
+  warmupStartDate?: string;
+  /** YYYY-MM-DD projected end, computed server-side from the plan. */
+  projectedEndDate?: string;
+}
+
 export async function populateMigrationSheet(
   requesterEmail: string,
   sheetId: string,
-  plan: MigrationPlan
+  plan: MigrationPlan,
+  timing?: WarmupTimingMeta
 ): Promise<void> {
   const token = await getValidAccessTokenFor(requesterEmail);
 
@@ -92,7 +100,9 @@ export async function populateMigrationSheet(
      *  once a sheetId has been assigned. */
     build: (meta: SheetMeta) => SheetsRequest[];
   }> =
-    plan.structure === "nls" ? buildOptionBTabs(plan) : buildOptionATabs(plan);
+    plan.structure === "nls"
+      ? buildOptionBTabs(plan, timing)
+      : buildOptionATabs(plan, timing);
 
   // Step 3 — first batchUpdate: rename the default sheet + add
   // the rest. We need the response so we know the assigned
@@ -175,17 +185,25 @@ async function batchUpdate(
 // Option A — one tab per list (mirrors Python _build_option_a)
 // --------------------------------------------------------------------- //
 
-function buildOptionATabs(plan: MigrationPlan) {
+function buildOptionATabs(plan: MigrationPlan, timing?: WarmupTimingMeta) {
   return plan.schedules.map((s) => ({
     title: s.name,
-    build: (meta: SheetMeta) => buildListTab(meta, s),
+    build: (meta: SheetMeta) => buildListTab(meta, s, timing),
   }));
 }
 
-function buildListTab(meta: SheetMeta, s: ListSchedule): SheetsRequest[] {
+function buildListTab(
+  meta: SheetMeta,
+  s: ListSchedule,
+  timing?: WarmupTimingMeta
+): SheetsRequest[] {
   const requests: SheetsRequest[] = [];
 
-  // Info block — five rows in columns A/B.
+  // Info block — five rows in columns A/B, plus two smart-warming
+  // rows appended when the caller supplied start / projected-end
+  // dates. Keeping them at the bottom of the block preserves the
+  // Python-reference layout for CSMs who've built muscle memory
+  // around the original five rows.
   const infoRows: Array<[string, string | number]> = [
     ["Newsletter", s.name],
     ["List Size", s.subscribers],
@@ -193,6 +211,12 @@ function buildListTab(meta: SheetMeta, s: ListSchedule): SheetsRequest[] {
     ["Average Open Rate", s.open_rate === null ? "unknown" : `${Math.round(s.open_rate * 100)}%`],
     ["ETA to complete", s.eta],
   ];
+  if (timing?.warmupStartDate) {
+    infoRows.push(["Warmup started", timing.warmupStartDate]);
+  }
+  if (timing?.projectedEndDate) {
+    infoRows.push(["Projected end", timing.projectedEndDate]);
+  }
   for (let i = 0; i < infoRows.length; i++) {
     const [k, v] = infoRows[i];
     requests.push(...writeRow(meta.sheetId, i, [{ text: k, bold: true }, valueCell(v, k === "List Size")]));
@@ -258,31 +282,62 @@ function buildListTab(meta: SheetMeta, s: ListSchedule): SheetsRequest[] {
 // Option B — one tab per week (mirrors Python _build_option_b)
 // --------------------------------------------------------------------- //
 
-function buildOptionBTabs(plan: MigrationPlan) {
+function buildOptionBTabs(plan: MigrationPlan, timing?: WarmupTimingMeta) {
   const nWeeks = Math.max(...plan.schedules.map((s) => s.total_weeks));
   return Array.from({ length: nWeeks }, (_, idx) => {
     const wk = idx + 1;
     return {
       title: `NLs W${wk}`,
-      build: (meta: SheetMeta) => buildWeekTab(meta, plan, wk),
+      build: (meta: SheetMeta) => buildWeekTab(meta, plan, wk, timing),
     };
   });
 }
 
-function buildWeekTab(meta: SheetMeta, plan: MigrationPlan, wk: number): SheetsRequest[] {
+function buildWeekTab(
+  meta: SheetMeta,
+  plan: MigrationPlan,
+  wk: number,
+  timing?: WarmupTimingMeta
+): SheetsRequest[] {
   const requests: SheetsRequest[] = [];
+  let row = 0;
+
+  // Optional timing header — only on Week 1 to avoid noise on every
+  // tab. Two labelled rows in cols A/B matching the Option-A layout.
+  if (wk === 1 && (timing?.warmupStartDate || timing?.projectedEndDate)) {
+    if (timing?.warmupStartDate) {
+      requests.push(
+        ...writeRow(meta.sheetId, row, [
+          { text: "Warmup started", bold: true },
+          { text: timing.warmupStartDate },
+        ])
+      );
+      row += 1;
+    }
+    if (timing?.projectedEndDate) {
+      requests.push(
+        ...writeRow(meta.sheetId, row, [
+          { text: "Projected end", bold: true },
+          { text: timing.projectedEndDate },
+        ])
+      );
+      row += 1;
+    }
+    row += 1; // blank spacer
+  }
+
   // Summary header.
+  const summaryHeaderRow = row;
   requests.push(
-    ...writeRow(meta.sheetId, 0, [
+    ...writeRow(meta.sheetId, summaryHeaderRow, [
       { text: "List", bold: true },
       { text: "Size", bold: true },
       { text: "Cadence", bold: true },
       { text: "Complete this week?", bold: true },
     ])
   );
-  requests.push(rowFormatRequest(meta.sheetId, 0, weekColor(wk), true));
-
-  let row = 1;
+  requests.push(rowFormatRequest(meta.sheetId, summaryHeaderRow, weekColor(wk), true));
+  row = summaryHeaderRow + 1;
   for (const s of plan.schedules) {
     const w = s.weeks.find((w) => w.number === wk);
     const complete = w && w.cumulative === s.subscribers ? "Yes" : "No";

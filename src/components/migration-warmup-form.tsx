@@ -73,6 +73,13 @@ export function MigrationWarmupForm() {
 
   const [structure, setStructure] = useState<"separate" | "nls">("separate");
   const [rows, setRows] = useState<ListRow[]>([EMPTY_ROW]);
+  // Warmup start date — used by the result page to compute progress
+  // + projected end. Defaults to today's ISO date (UTC) so the CSM
+  // gets "day 0 of N" out of the box; they can back-date it if the
+  // ramp has already been in flight.
+  const [warmupStartDate, setWarmupStartDate] = useState<string>(() =>
+    new Date().toISOString().slice(0, 10)
+  );
 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -80,6 +87,7 @@ export function MigrationWarmupForm() {
     | {
         sheet: { id: string; name: string; webViewLink: string };
         plan: MigrationPlan;
+        warmupStartDate: string;
       }
     | null
   >(null);
@@ -160,6 +168,7 @@ export function MigrationWarmupForm() {
         manual_customer_name: selectedFolder ? null : manualCustomerName.trim(),
         structure,
         lists,
+        warmup_start_date: warmupStartDate,
       };
       const r = await fetch("/api/csm/migration-warmup", {
         method: "POST",
@@ -169,11 +178,16 @@ export function MigrationWarmupForm() {
       const j = (await r.json().catch(() => ({}))) as {
         sheet?: { id: string; name: string; webViewLink: string };
         plan?: MigrationPlan;
+        warmup_start_date?: string;
         error?: string;
       };
       if (!r.ok) throw new Error(j.error ?? `HTTP ${r.status}`);
       if (!j.sheet || !j.plan) throw new Error("Server returned no plan.");
-      setResult({ sheet: j.sheet, plan: j.plan });
+      setResult({
+        sheet: j.sheet,
+        plan: j.plan,
+        warmupStartDate: j.warmup_start_date ?? warmupStartDate,
+      });
     } catch (e) {
       setError(e instanceof Error ? e.message : "Unknown error");
     } finally {
@@ -191,6 +205,7 @@ export function MigrationWarmupForm() {
       <MigrationWarmupResult
         sheet={result.sheet}
         plan={result.plan}
+        warmupStartDate={result.warmupStartDate}
         onReset={() => {
           setResult(null);
           setRows([EMPTY_ROW]);
@@ -327,6 +342,25 @@ export function MigrationWarmupForm() {
             <span>Combined (NLs by week)</span>
           </label>
         </div>
+      </div>
+
+      {/* Warmup start date — feeds the progress panel on the result
+       *  page. Defaults to today; back-date it if the ramp is already
+       *  underway. */}
+      <div className="space-y-2">
+        <label className="block text-xs font-medium text-muted">
+          Warmup start date
+        </label>
+        <input
+          type="date"
+          value={warmupStartDate}
+          onChange={(e) => setWarmupStartDate(e.target.value)}
+          className="px-3 py-2 text-sm bg-canvas border border-border rounded-md focus:outline-none focus:ring-2 focus:ring-accent"
+        />
+        <p className="text-[11px] text-subtle">
+          Determines where the customer is on their ramp today and the
+          projected completion date. Defaults to today.
+        </p>
       </div>
 
       {/* List rows */}

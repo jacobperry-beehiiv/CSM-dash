@@ -1,6 +1,8 @@
 "use client";
 
 import type { MigrationPlan } from "@/lib/engines/migration-warmup/types";
+import { computeWarmupProgress } from "@/lib/engines/migration-warmup/progress";
+import { fmtDate } from "./format";
 
 /**
  * Inline render of a generated migration plan + a prominent
@@ -10,16 +12,25 @@ import type { MigrationPlan } from "@/lib/engines/migration-warmup/types";
  * Layout follows the Python tool's terminal pretty-print: one
  * card per list with the week-by-week batch table. CSMs use this
  * view to sanity-check the plan before sharing the sheet.
+ *
+ * Progress panel sits above the list cards — reads the warmup
+ * start date the CSM entered on the form, computes day N of Y +
+ * projected end via [[computeWarmupProgress]]. Purely derived; no
+ * KV, no persistence — recomputes on every render from the plan
+ * object we already have in hand.
  */
 export function MigrationWarmupResult({
   sheet,
   plan,
+  warmupStartDate,
   onReset,
 }: {
   sheet: { id: string; name: string; webViewLink: string };
   plan: MigrationPlan;
+  warmupStartDate: string;
   onReset: () => void;
 }) {
+  const progress = computeWarmupProgress(plan, warmupStartDate);
   return (
     <div className="space-y-5">
       <section className="bg-surface rounded-xl border border-border shadow-card p-5">
@@ -52,6 +63,8 @@ export function MigrationWarmupResult({
           </div>
         </div>
       </section>
+
+      <ProgressPanel progress={progress} />
 
       {plan.schedules.map((s) => (
         <section
@@ -109,5 +122,111 @@ export function MigrationWarmupResult({
         </section>
       ))}
     </div>
+  );
+}
+
+/**
+ * Smart-warming progress card. Three visual branches keyed by
+ * `progress.phase`:
+ *
+ *   • not_started — start_date is in the future, so no bar. Just
+ *     "Starts in N days" + projected end.
+ *   • in_progress — start / today / end row on top, progress bar
+ *     in the middle, week + days-remaining row below.
+ *   • complete — green pill + summary line.
+ */
+function ProgressPanel({
+  progress,
+}: {
+  progress: ReturnType<typeof computeWarmupProgress>;
+}) {
+  const startedLabel = fmtDate(progress.start_date);
+  const endLabel = fmtDate(progress.projected_end_date);
+
+  if (progress.total_days === 0) {
+    // Defensive — buildPlan usually produces at least one schedule.
+    return null;
+  }
+
+  if (progress.phase === "not_started") {
+    const daysUntil = Math.max(
+      1,
+      Math.round(
+        (new Date(`${progress.start_date}T00:00:00Z`).getTime() -
+          new Date(`${progress.today}T00:00:00Z`).getTime()) /
+          (1000 * 60 * 60 * 24)
+      )
+    );
+    return (
+      <section className="rounded-xl border border-border bg-surface shadow-card p-5">
+        <h3 className="text-sm font-semibold text-fg uppercase tracking-wide">
+          Smart warming
+        </h3>
+        <div className="mt-2 flex items-baseline gap-2 flex-wrap">
+          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border bg-blue-50 dark:bg-blue-500/10 border-blue-200 dark:border-blue-500/40 text-blue-900 dark:text-blue-200">
+            Starts in {daysUntil} day{daysUntil === 1 ? "" : "s"}
+          </span>
+          <span className="text-xs text-muted">
+            {startedLabel} → projected {endLabel} ·{" "}
+            {progress.total_weeks}-week ramp
+          </span>
+        </div>
+      </section>
+    );
+  }
+
+  if (progress.phase === "complete") {
+    return (
+      <section className="rounded-xl border border-emerald-200 dark:border-emerald-500/30 bg-emerald-50/50 dark:bg-emerald-500/5 shadow-card p-5">
+        <h3 className="text-sm font-semibold text-fg uppercase tracking-wide">
+          Smart warming
+        </h3>
+        <div className="mt-2 flex items-baseline gap-2 flex-wrap">
+          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border bg-emerald-100 dark:bg-emerald-500/20 border-emerald-300 dark:border-emerald-500/40 text-emerald-900 dark:text-emerald-200">
+            Ramp complete
+          </span>
+          <span className="text-xs text-muted">
+            {startedLabel} → {endLabel} · {progress.total_weeks}-week ramp
+          </span>
+        </div>
+      </section>
+    );
+  }
+
+  // in_progress
+  return (
+    <section className="rounded-xl border border-border bg-surface shadow-card p-5 space-y-3">
+      <div className="flex items-baseline justify-between gap-3 flex-wrap">
+        <h3 className="text-sm font-semibold text-fg uppercase tracking-wide">
+          Smart warming progress
+        </h3>
+        <span className="text-xs text-muted">
+          Started {startedLabel} · Projected end {endLabel}
+        </span>
+      </div>
+      <div>
+        <div className="h-3 rounded-full bg-canvas border border-border overflow-hidden">
+          <div
+            className="h-full bg-accent"
+            style={{ width: `${progress.progress_pct}%` }}
+            aria-label={`Progress ${progress.progress_pct}%`}
+          />
+        </div>
+        <div className="mt-2 flex items-baseline justify-between gap-3 flex-wrap text-xs">
+          <span className="text-fg">
+            Day <strong className="tabular-nums">{progress.days_elapsed}</strong> of{" "}
+            <strong className="tabular-nums">{progress.total_days}</strong>{" "}
+            <span className="text-muted">
+              ({progress.progress_pct}%) · Week {progress.current_week} of{" "}
+              {progress.total_weeks}
+            </span>
+          </span>
+          <span className="text-muted tabular-nums">
+            {progress.days_remaining} day
+            {progress.days_remaining === 1 ? "" : "s"} remaining
+          </span>
+        </div>
+      </div>
+    </section>
   );
 }
