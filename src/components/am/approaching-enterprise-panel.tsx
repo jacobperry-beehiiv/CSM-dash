@@ -407,11 +407,36 @@ export function ApproachingEnterprisePanel({ rows }: Props) {
         <div className="flex-1" />
         <BulkEmailLauncher
           customers={selectedRows
-            .map((r) =>
-              r.stripe_customer_id
-                ? customerByStripeId.get(r.stripe_customer_id)
-                : null
-            )
+            .map((r) => {
+              // Book lookup first — a customer already in q10600 has
+              // richer data (HubSpot contacts, main-contact string,
+              // etc.) than the raw q13268 row. When the book misses
+              // (q13268 is a superset), synthesize a Customer stub
+              // from the q13268 row so owner_email still drives a
+              // draft. Prior behavior filtered these rows out, which
+              // is why a "Select all" of 20 rows was producing only
+              // 2 drafts on a book with 18 un-booked workspaces.
+              const booked = r.stripe_customer_id
+                ? customerByStripeId.get(r.stripe_customer_id) ?? null
+                : null;
+              if (booked) return booked;
+              if (!r.owner_email) return null;
+              return synthesizeCustomer({
+                workspace_id:
+                  r.organization_id ??
+                  (r.stripe_customer_id
+                    ? stripe2ws[r.stripe_customer_id] ?? null
+                    : null),
+                workspace_name: r.workspace_name,
+                owner_email: r.owner_email,
+                owner_name: r.owner_name,
+                stripe_customer_id: r.stripe_customer_id,
+                stripe_plan: r.plan_name,
+                active_subs: r.total_subscriptions,
+                max_subscriptions: r.max_subscriptions,
+                interval: r.billing_interval,
+              });
+            })
             .filter((c): c is Customer => Boolean(c))}
           // Approaching → upsell — use the dedicated template if it
           // exists, fall back to general-checkin.
