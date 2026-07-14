@@ -653,59 +653,138 @@ export function BulkDraftsModal({
       with_tracking_id: finalDrafts.filter((d) => d.tracking_id)
         .length,
     });
+    // Chunked POST — Vercel serverless functions cap request bodies
+    // at ~4.5 MB at the edge (a limit no Next.js config touches). A
+    // 190-draft batch with pre-rendered HTML bodies + merge tags is
+    // enough to cross it; production hit a 413 mid-session on the
+    // third batch after two smaller ones succeeded. Firing many
+    // smaller sequential POSTs keeps every request comfortably below
+    // the ceiling regardless of body-length outliers.
+    //
+    // 40 drafts × ~25 KB body ≈ 1 MB — 5x safety margin. Adjust
+    // downward here (and via the "batch too large" error surface
+    // below) if the size distribution shifts.
+    const CHUNK_SIZE = 40;
+    const draftPayloads = finalDrafts.map((d) => ({
+      to: d.to,
+      // CC/BCC ride through to Gmail API drafts too so the
+      // Enterprise-CC behavior + future BCC flows match what the
+      // compose URL preview shows.
+      cc: d.cc,
+      bcc: d.bcc,
+      subject: d.subject,
+      body_html: d.body_html ?? d.body_text,
+      // Template-level send-as alias. Server validates against
+      // the user's verified aliases and falls back to the
+      // primary on mismatch so the draft still lands.
+      from: d.from,
+      // Stable per-customer identifier so the server can echo
+      // back which input drafts actually succeeded (we only
+      // stamp those as "touched" / "outreach logged"). Without
+      // this we'd over-stamp partial failures.
+      tracking_id: d.tracking_id,
+      tracking_ids: d.tracking_ids,
+      audit_workspace_id: d.audit_workspace_id,
+      audit_workspace_ids: d.audit_workspace_ids,
+      audit_label: d.audit_label,
+    }));
+    const chunks: (typeof draftPayloads)[] = [];
+    for (let i = 0; i < draftPayloads.length; i += CHUNK_SIZE) {
+      chunks.push(draftPayloads.slice(i, i + CHUNK_SIZE));
+    }
+
+    // Aggregate every chunk's response into a merged `j`-shape so
+    // the downstream code (message string, alias fallback tally,
+    // onDraftCreated echo-back) reads the same object it always
+    // did — no branching required past this loop.
+    const j: {
+      created: number;
+      failed: number;
+      created_in: string | null;
+      alias_fallbacks: number;
+      succeeded_tracking_ids: string[];
+      failed_tracking_ids: string[];
+      errors: Array<{ to: string; tracking_id?: string; error: string }>;
+    } = {
+      created: 0,
+      failed: 0,
+      created_in: null,
+      alias_fallbacks: 0,
+      succeeded_tracking_ids: [],
+      failed_tracking_ids: [],
+      errors: [],
+    };
+
     try {
-      const r = await fetch("/api/drafts/bulk-create", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          drafts: finalDrafts.map((d) => ({
-            to: d.to,
-            // CC/BCC ride through to Gmail API drafts too so the
-            // Enterprise-CC behavior + future BCC flows match what the
-            // compose URL preview shows.
-            cc: d.cc,
-            bcc: d.bcc,
-            subject: d.subject,
-            body_html: d.body_html ?? d.body_text,
-            // Template-level send-as alias. Server validates against
-            // the user's verified aliases and falls back to the
-            // primary on mismatch so the draft still lands.
-            from: d.from,
-            // Stable per-customer identifier so the server can echo
-            // back which input drafts actually succeeded (we only
-            // stamp those as "touched" / "outreach logged"). Without
-            // this we'd over-stamp partial failures.
-            tracking_id: d.tracking_id,
-            tracking_ids: d.tracking_ids,
-            audit_workspace_id: d.audit_workspace_id,
-            audit_workspace_ids: d.audit_workspace_ids,
-            audit_label: d.audit_label,
-          })),
-        }),
-      });
-      const j = (await r.json()) as {
-        created?: number;
-        failed?: number;
-        ids?: string[];
-        created_in?: string;
-        alias_fallbacks?: number;
-        succeeded_tracking_ids?: string[];
-        failed_tracking_ids?: string[];
-        errors?: Array<{
-          to: string;
-          tracking_id?: string;
-          error: string;
-        }>;
-        error?: string;
-      };
-      if (!r.ok) throw new Error(j.error ?? `HTTP ${r.status}`);
-      console.log("[bulk-drafts] Response", {
+      for (let idx = 0; idx < chunks.length; idx++) {
+        const chunk = chunks[idx];
+        if (chunks.length > 1) {
+          setGmailMessage(
+            `Sending batch ${idx + 1} of ${chunks.length} (${chunk.length} drafts)…`
+          );
+        }
+        console.log("[bulk-drafts] Chunk", {
+          batch: `${idx + 1}/${chunks.length}`,
+          count: chunk.length,
+        });
+        const r = await fetch("/api/drafts/bulk-create", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ drafts: chunk }),
+        });
+        if (!r.ok) {
+          // Distinguish edge-level failures (413 body-too-big, 502
+          // etc.) from JSON error responses, because Vercel's 413
+          // returns plain text — trying to `r.json()` on it blows
+          // up with "Unexpected token 'R'..." like production did.
+          const text = await r.text().catch(() => "");
+          const isTooLarge = r.status === 413;
+          const inferred = isTooLarge
+            ? `Batch too large (413) — lower CHUNK_SIZE below ${CHUNK_SIZE}.`
+            : `HTTP ${r.status}${text ? `: ${text.slice(0, 200)}` : ""}`;
+          console.error("[bulk-drafts] Chunk failed", {
+            batch: `${idx + 1}/${chunks.length}`,
+            status: r.status,
+            body: text.slice(0, 400),
+          });
+          j.failed += chunk.length;
+          j.errors.push({
+            to: `(batch ${idx + 1}/${chunks.length})`,
+            error: inferred,
+          });
+          // 413 means the chunk size is too big for this session's
+          // draft bodies — later chunks would 413 identically. Bail
+          // out; earlier chunks already landed drafts so we surface
+          // partial success rather than looping through futile POSTs.
+          if (isTooLarge) break;
+          continue;
+        }
+        const chunkJ = (await r.json()) as {
+          created?: number;
+          failed?: number;
+          created_in?: string;
+          alias_fallbacks?: number;
+          succeeded_tracking_ids?: string[];
+          failed_tracking_ids?: string[];
+          errors?: Array<{ to: string; tracking_id?: string; error: string }>;
+          error?: string;
+        };
+        j.created += chunkJ.created ?? 0;
+        j.failed += chunkJ.failed ?? 0;
+        j.alias_fallbacks += chunkJ.alias_fallbacks ?? 0;
+        j.succeeded_tracking_ids.push(...(chunkJ.succeeded_tracking_ids ?? []));
+        j.failed_tracking_ids.push(...(chunkJ.failed_tracking_ids ?? []));
+        j.errors.push(...(chunkJ.errors ?? []));
+        j.created_in ??= chunkJ.created_in ?? null;
+      }
+      console.log("[bulk-drafts] Merged", {
+        chunks: chunks.length,
         created: j.created,
         failed: j.failed,
         alias_fallbacks: j.alias_fallbacks,
-        succeeded_tracking_ids_count: j.succeeded_tracking_ids?.length ?? 0,
-        failed_tracking_ids_count: j.failed_tracking_ids?.length ?? 0,
-        first_errors: j.errors?.slice(0, 3) ?? [],
+        succeeded_tracking_ids_count: j.succeeded_tracking_ids.length,
+        failed_tracking_ids_count: j.failed_tracking_ids.length,
+        first_errors: j.errors.slice(0, 3),
       });
       const where = j.created_in ?? gmail?.email ?? "your Gmail";
       const fallbacks = j.alias_fallbacks ?? 0;
