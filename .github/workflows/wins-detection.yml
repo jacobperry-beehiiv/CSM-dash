@@ -32,9 +32,10 @@ jobs:
         env:
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
           DASHBOARD_URL: ${{ secrets.DASHBOARD_URL }}
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
         run: |
           missing=()
-          for v in CRON_SECRET DASHBOARD_URL; do
+          for v in CRON_SECRET DASHBOARD_URL VERCEL_AUTOMATION_BYPASS_SECRET; do
             if [ -z "${!v}" ]; then
               missing+=("$v")
             fi
@@ -49,10 +50,12 @@ jobs:
         env:
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
           DASHBOARD_URL: ${{ secrets.DASHBOARD_URL }}
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
         run: |
           set -e
           response=$(curl -sS -w "\n%{http_code}" -X POST \
             -H "Authorization: Bearer ${CRON_SECRET}" \
+            -H "x-vercel-protection-bypass: ${VERCEL_AUTOMATION_BYPASS_SECRET}" \
             -H "Content-Type: application/json" \
             "${DASHBOARD_URL}/api/wins/detect")
           body=$(echo "$response" | sed '$d')
