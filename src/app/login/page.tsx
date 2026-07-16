@@ -1,6 +1,6 @@
 import { Suspense } from "react";
 import { redirect } from "next/navigation";
-import { auth, signIn } from "@/auth";
+import { auth, previewAuthEnabled, signIn } from "@/auth";
 import { BeehiivLogo } from "@/components/beehiiv-logo";
 
 export const dynamic = "force-dynamic";
@@ -74,6 +74,44 @@ export default async function LoginPage({
             </button>
           </form>
         </Suspense>
+
+        {previewAuthEnabled ? (
+          <div className="pt-4 border-t border-border space-y-3">
+            <p className="text-xs text-muted">
+              <span className="inline-block px-1.5 py-0.5 rounded bg-amber-100 text-amber-900 dark:bg-amber-500/20 dark:text-amber-200 text-[10px] font-semibold uppercase tracking-wide mr-1">
+                Preview
+              </span>
+              Vercel preview build — Google OAuth can&rsquo;t issue against
+              the per-commit URL. Enter the shared preview token to sign
+              in as the stub CSM.
+            </p>
+            <form
+              action={async (formData) => {
+                "use server";
+                await signIn("preview", {
+                  token: formData.get("token"),
+                  redirectTo: callbackUrl,
+                });
+              }}
+              className="space-y-2"
+            >
+              <input
+                type="password"
+                name="token"
+                required
+                placeholder="Preview token"
+                autoComplete="off"
+                className="w-full px-3 py-2 border border-border-strong rounded-md bg-surface text-fg text-sm"
+              />
+              <button
+                type="submit"
+                className="w-full px-4 py-2 rounded-lg border border-border-strong bg-surface hover:bg-surface-2 text-fg text-sm font-medium"
+              >
+                Preview sign-in
+              </button>
+            </form>
+          </div>
+        ) : null}
 
         <p className="text-xs text-subtle text-center">
           Access is restricted to the <code className="font-mono">@beehiiv.com</code> domain.
