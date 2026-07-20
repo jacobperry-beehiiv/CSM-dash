@@ -42,6 +42,34 @@ jobs:
           fi
           echo "All required secrets present."
 
+      # TEMP DIAGNOSTIC — remove once the 307 mystery is resolved.
+      # Prints length + a short SHA-256 prefix of the bypass secret so
+      # we can compare against the Vercel-visible value without ever
+      # revealing the raw secret. GitHub Actions masks any string that
+      # matches the secret value; hashes and byte counts are neither
+      # the value nor substrings of it, so they print clean.
+      - name: Debug bypass secret shape
+        env:
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+          DASHBOARD_URL: ${{ secrets.DASHBOARD_URL }}
+        run: |
+          raw_len=$(printf '%s' "$VERCEL_AUTOMATION_BYPASS_SECRET" | wc -c | tr -d ' ')
+          trimmed=$(printf '%s' "$VERCEL_AUTOMATION_BYPASS_SECRET" \
+            | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+          trimmed_len=$(printf '%s' "$trimmed" | wc -c | tr -d ' ')
+          sha_prefix=$(printf '%s' "$VERCEL_AUTOMATION_BYPASS_SECRET" \
+            | shasum -a 256 | cut -c1-12)
+          echo "Bypass secret raw byte length: $raw_len (expected 32)"
+          echo "Bypass secret whitespace-trimmed byte length: $trimmed_len"
+          if [ "$raw_len" != "$trimmed_len" ]; then
+            echo "::warning::Bypass secret has surrounding whitespace \
+              ($((raw_len - trimmed_len)) extra bytes)"
+          fi
+          echo "Bypass secret SHA-256 (first 12 hex): $sha_prefix"
+          echo "(compare against: printf '%s' '<paste from Vercel>' | shasum -a 256 | cut -c1-12)"
+          url_len=$(printf '%s' "$DASHBOARD_URL" | wc -c | tr -d ' ')
+          echo "DASHBOARD_URL byte length: $url_len"
+
       - name: POST /api/customers/refresh-cadence
         env:
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
