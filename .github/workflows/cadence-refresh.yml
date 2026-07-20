@@ -77,7 +77,13 @@ jobs:
           VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
         run: |
           set -e
-          response=$(curl -sS -w "\n%{http_code}" -X POST \
+          # TEMP DIAGNOSTIC — dump response headers so we can see
+          # WHICH auth layer is redirecting. `-D /tmp/hdrs` writes
+          # the full response header block to a file; we then cat
+          # it after the body. Look for `location:` — if it points
+          # at a `vercel.com/sso-api...` URL, Deployment Protection
+          # is rejecting; if it's same-origin, it's app-level.
+          response=$(curl -sS -D /tmp/hdrs -w "\n%{http_code}" -X POST \
             -H "Authorization: Bearer ${CRON_SECRET}" \
             -H "x-vercel-protection-bypass: ${VERCEL_AUTOMATION_BYPASS_SECRET}" \
             -H "Content-Type: application/json" \
@@ -86,6 +92,9 @@ jobs:
           code=$(echo "$response" | tail -n1)
           echo "HTTP $code"
           echo "$body"
+          echo "=== Response headers ==="
+          cat /tmp/hdrs
+          echo "=== End headers ==="
           if [ "$code" != "200" ]; then
             echo "::error::Cadence refresh failed with HTTP $code"
             exit 1
