@@ -6,6 +6,7 @@ import { normalizeSlackText } from "@/lib/personal-todos/normalize-text";
 import { resolveUserKeyForSlackId as resolveIdentity } from "@/lib/personal-todos/identity";
 import {
   buildFindResultBlocks,
+  buildRenewalCandidateBlocks,
   buildStripeResultBlocks,
   buildTodoCreateView,
   dispatchViewSubmission,
@@ -15,9 +16,22 @@ import {
   handleFindShareAction,
   lookupSlashHandler,
   openSlackView,
+  RENEWAL_CONFIRM_ACTION_ID,
   SLASH_HANDLERS,
+  type RenewalConfirmActionValue,
   type ViewSubmissionPayload,
 } from "@/lib/integrations/slack-views";
+import { loadOverrides } from "@/lib/data/customer-overrides";
+import { nextRenewalDate } from "@/lib/renewals/date";
+import {
+  buildRenewalKickoffMessage,
+} from "@/lib/renewals/messages";
+import {
+  getRenewalThread,
+  saveRenewalThreadIfAbsent,
+  type RenewalThreadRecord,
+} from "@/lib/data/renewal-threads";
+import { appendActionLog } from "@/lib/data/customer-signals";
 import {
   ASSIGN_OPEN_BUTTON_ACTION_ID,
   buildAssignButtonBlocks,
@@ -561,11 +575,267 @@ async function handleBlockActions(
     return NextResponse.json({ ok: true });
   }
 
+  if (action.action_id === RENEWAL_CONFIRM_ACTION_ID) {
+    let parsed: RenewalConfirmActionValue | null = null;
+    try {
+      parsed = JSON.parse(action.value ?? "{}") as RenewalConfirmActionValue;
+    } catch {
+      console.warn(
+        "[slack-webhook] renewal_confirm: couldn't parse button value",
+        { raw: action.value }
+      );
+    }
+    if (!parsed?.workspace_id) {
+      return NextResponse.json({ ok: true });
+    }
+    await handleRenewalConfirmAction({
+      value: parsed,
+      responseUrl: typed.response_url ?? null,
+    });
+    return NextResponse.json({ ok: true });
+  }
+
   console.warn(
     "[slack-webhook] No handler registered for action_id",
     { action_id: action.action_id }
   );
   return NextResponse.json({ ok: true });
+}
+
+/**
+ * Confirm-button click from the `@normbot renewal` candidate picker.
+ * Loads the customer, posts (or re-links) the pricing thread in the
+ * configured Renewals Slack channel, persists the ts to
+ * `csm:renewal-threads:v1`, and replaces the ephemeral picker with a
+ * "here's your thread" confirmation.
+ *
+ * Idempotent: if a thread already exists for the workspace (auto-
+ * opened by the milestone engine at 90d, or opened by a teammate),
+ * we skip the kickoff post and just report the existing thread link
+ * so no duplicate kickoff message lands in the channel.
+ */
+async function handleRenewalConfirmAction(args: {
+  value: RenewalConfirmActionValue;
+  responseUrl: string | null;
+}): Promise<void> {
+  const { value, responseUrl } = args;
+  try {
+    const [customers, settings, overrides] = await Promise.all([
+      loadCustomers(),
+      loadSettings(),
+      loadOverrides(),
+    ]);
+    const customer = customers.find(
+      (c) => c.workspace_id === value.workspace_id
+    );
+    if (!customer) {
+      await replaceEphemeral(responseUrl, {
+        text:
+          ":warning: I couldn't find that workspace in the customer book anymore. " +
+          "Try `@normbot renewal <query>` again in a fresh thread — the book may have been re-synced since you saw the picker.",
+      });
+      return;
+    }
+    const channelId = settings.am?.renewals_slack_channel_id?.trim() ?? "";
+    if (!channelId) {
+      await replaceEphemeral(responseUrl, {
+        text:
+          ":warning: The Renewals Slack channel isn't configured yet. " +
+          "Set it at `/settings/slack → Renewals Slack channel`, then run the command again.",
+      });
+      return;
+    }
+    const renewalIso = nextRenewalDate(customer);
+    if (!renewalIso) {
+      await replaceEphemeral(responseUrl, {
+        text:
+          `:warning: *${customer.company_name ?? customer.workspace_name ?? "This customer"}* doesn't have a next-renewal date on file (no next_invoice or renewal_date). ` +
+          `Check the customer in the dashboard first — a valid renewal date is what the milestone engine's pings + pacing math run against.`,
+      });
+      return;
+    }
+    const stage =
+      overrides[value.workspace_id]?.lifecycle_stage?.trim() || null;
+
+    const existing = await getRenewalThread(value.workspace_id);
+    if (existing) {
+      await replaceEphemeral(responseUrl, {
+        text:
+          `:handshake: Pricing thread for *${customer.company_name ?? customer.workspace_name ?? "this customer"}* already exists — no duplicate kickoff posted.` +
+          buildThreadPermalink(existing.channel_id, existing.thread_ts),
+      });
+      return;
+    }
+
+    const opener = `<@${value.requester_slack_id}>`;
+    const kickoffText = buildRenewalKickoffMessage({
+      customer,
+      settings,
+      renewalIso,
+      lifecycleStage: stage,
+      openedByLine: `_(opened by ${opener} via \`@normbot renewal\`)_`,
+    });
+    const posted = await postSlackMessage({
+      channel: channelId,
+      text: kickoffText,
+    });
+    if (!posted.ok || !posted.ts) {
+      await replaceEphemeral(responseUrl, {
+        text:
+          `:warning: I couldn't post to the Renewals channel — Slack said \`${
+            posted.error ?? "unknown"
+          }\`. Confirm the bot user is a member of \`${channelId}\` and try again.`,
+      });
+      return;
+    }
+    const record: RenewalThreadRecord = {
+      channel_id: channelId,
+      thread_ts: posted.ts,
+      opened_by:
+        value.requester_slack_id ? `slack:${value.requester_slack_id}` : "manual",
+      opened_at: new Date().toISOString(),
+      origin: "manual",
+      kickoff_context: {
+        workspace_id: value.workspace_id,
+        workspace_name: customer.workspace_name ?? undefined,
+        lifecycle_stage: stage,
+        renewal_date: renewalIso,
+        arr: customer.arr ?? null,
+      },
+    };
+    await saveRenewalThreadIfAbsent(value.workspace_id, record);
+
+    // Audit trail on the customer's Notes timeline. Best-effort —
+    // never blocks the ephemeral update.
+    try {
+      await appendActionLog([
+        {
+          workspace_id: value.workspace_id,
+          text: "Renewal pricing thread opened",
+          created_by: `slack:${value.requester_slack_id}`,
+          action_kind: "renewal_thread_opened",
+          metadata: {
+            channel_id: channelId,
+            thread_ts: posted.ts,
+            renewal_date: renewalIso,
+            lifecycle_stage: stage,
+            source: "normbot_renewal",
+          },
+        },
+      ]);
+    } catch (e) {
+      console.warn("[slack-webhook] renewal_confirm appendActionLog failed", {
+        workspace_id: value.workspace_id,
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
+
+    await replaceEphemeral(responseUrl, {
+      text:
+        `:handshake: Pricing thread opened for *${customer.company_name ?? customer.workspace_name ?? "this customer"}*.` +
+        buildThreadPermalink(channelId, posted.ts),
+    });
+  } catch (e) {
+    console.error("[slack-webhook] renewal_confirm handler threw", {
+      workspace_id: value.workspace_id,
+      error: e instanceof Error ? e.message : String(e),
+    });
+    await replaceEphemeral(responseUrl, {
+      text:
+        `:warning: Something went wrong opening the pricing thread — ${
+          e instanceof Error ? e.message : "unknown error"
+        }.`,
+    });
+  }
+}
+
+/**
+ * Best-effort permalink for a channel + thread ts. Slack's archive
+ * URLs collapse the dot from the ts, so `1723486800.001200` becomes
+ * `p1723486800001200`. If the caller doesn't need a link (public
+ * channel, workspace URL unknown), returns an empty string so the
+ * template above stays clean.
+ */
+function buildThreadPermalink(channelId: string, ts: string): string {
+  if (!channelId || !ts) return "";
+  const workspace = (
+    process.env.SLACK_WORKSPACE_URL ?? "https://slack.com"
+  ).replace(/\/+$/, "");
+  const numeric = ts.replace(/\./g, "");
+  return `\n<${workspace}/archives/${channelId}/p${numeric}|Open thread ↗>`;
+}
+
+/**
+ * Post a top-level message (no thread_ts) to a channel. Thin wrapper
+ * around `chat.postMessage`; used by the renewal-confirm flow so we
+ * can capture the returned `ts` and stash it in KV.
+ */
+async function postSlackMessage(args: {
+  channel: string;
+  text?: string;
+  blocks?: Array<Record<string, unknown>>;
+}): Promise<{ ok: boolean; ts?: string; error?: string }> {
+  const token = process.env.SLACK_BOT_TOKEN;
+  if (!token) return { ok: false, error: "SLACK_BOT_TOKEN missing" };
+  try {
+    const res = await fetch("https://slack.com/api/chat.postMessage", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json; charset=utf-8",
+      },
+      body: JSON.stringify({
+        channel: args.channel,
+        text: args.text,
+        blocks: args.blocks,
+        unfurl_links: false,
+        unfurl_media: false,
+      }),
+    });
+    const j = (await res.json()) as {
+      ok: boolean;
+      error?: string;
+      ts?: string;
+    };
+    if (!j.ok) return { ok: false, error: j.error ?? "chat.postMessage failed" };
+    return { ok: true, ts: j.ts };
+  } catch (e) {
+    return {
+      ok: false,
+      error: e instanceof Error ? e.message : String(e),
+    };
+  }
+}
+
+/**
+ * Replace an ephemeral message via the Slack-provided response_url.
+ * Used by the renewal-confirm flow so the candidate picker gets
+ * swapped for a "here's your thread" confirmation — clean UX, no
+ * lingering buttons after the CSM commits. Silent no-op when the
+ * button click didn't carry a response_url.
+ */
+async function replaceEphemeral(
+  responseUrl: string | null,
+  body: { text?: string; blocks?: Array<Record<string, unknown>> }
+): Promise<void> {
+  if (!responseUrl) return;
+  try {
+    await fetch(responseUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json; charset=utf-8" },
+      body: JSON.stringify({
+        response_type: "ephemeral",
+        replace_original: true,
+        text: body.text,
+        blocks: body.blocks,
+      }),
+    });
+  } catch (e) {
+    console.warn(
+      "[slack-webhook] replaceEphemeral threw",
+      e instanceof Error ? e.message : e
+    );
+  }
 }
 
 async function handleViewSubmission(
@@ -1015,6 +1285,7 @@ async function handleAppMention(
         "Hi! I respond to these @-mention commands:\n" +
         "• `@bot find <query>` — search customers + publications, post results in this thread\n" +
         "• `@bot stripe <query>` — return a Stripe-dashboard link for the matching workspace(s)\n" +
+        "• `@bot renewal <query>` — pick an account and open its pricing thread in the Renewals channel\n" +
         "• `@bot assign` — open the new-account form (HubSpot owner + to-do + Drive folder)\n" +
         "• `@bot help` — show this list",
     });
@@ -1104,6 +1375,67 @@ async function handleAppMention(
     return;
   }
 
+  // ── Renewal (kickoff a pricing thread for a customer) ────────────
+  // `@bot renewal <query>` fuzzy-searches the book, posts an
+  // ephemeral candidate list to the requester, and on Confirm opens
+  // (or re-links) the pricing thread in the configured Renewals
+  // channel. Handled together with the 90d milestone auto-open —
+  // both persist the thread ts to csm:renewal-threads:v1 so later
+  // milestone pings + the Renewal Confirmed lifecycle reply land in
+  // the same thread.
+  if (parsed.command === "renewal") {
+    if (!parsed.args.trim()) {
+      await postThreadReply(channel, threadTs, {
+        text:
+          "Add an account name — e.g. `@bot renewal acme`. " +
+          "I'll show up to 5 candidates and you pick which one to open the pricing thread for.",
+      });
+      return;
+    }
+    const query = parsed.args.trim();
+    const overrides = await loadOverrides();
+    const lifecycleStageFor = (c: import("@/lib/types").Customer) =>
+      c.workspace_id
+        ? overrides[c.workspace_id]?.lifecycle_stage?.trim() || null
+        : null;
+    const blocks = await buildRenewalCandidateBlocks({
+      query,
+      requesterSlackId: event.user,
+      originChannel: channel,
+      originThreadTs: threadTs,
+      renewalDateFor: nextRenewalDate,
+      lifecycleStageFor,
+    });
+    if (!blocks) {
+      await postSlackEphemeral({
+        channel,
+        user: event.user,
+        text: `No accounts match "${query}" — try the company name, workspace name, workspace ID, or owner email.`,
+      });
+      return;
+    }
+    const posted = await postSlackEphemeral({
+      channel,
+      user: event.user,
+      text: `Renewal candidates for "${query}"`,
+      blocks,
+    });
+    if (!posted.ok) {
+      // Ephemeral requires channel membership. Fall back to a public
+      // thread reply so the CSM at least sees something (they can
+      // pick from the same list; the buttons still work).
+      console.warn(
+        "[slack-webhook] postSlackEphemeral for renewal fell back to thread",
+        { channel, error: posted.error }
+      );
+      await postThreadReply(channel, threadTs, {
+        text: `Renewal candidates for "${query}"`,
+        blocks,
+      });
+    }
+    return;
+  }
+
   // Unknown command — friendly hint.
   await postThreadReply(channel, threadTs, {
     text:
@@ -1158,6 +1490,56 @@ async function postThreadReply(
       "[slack-webhook] postThreadReply threw",
       e instanceof Error ? e.message : e
     );
+  }
+}
+
+/**
+ * Post an ephemeral (only-visible-to-`user`) message into `channel`.
+ * Used by `@bot renewal <query>` so the candidate picker doesn't
+ * clutter the origin channel. Returns { ok, error } instead of void
+ * so the caller can fall back to a public thread reply on failure
+ * (e.g. bot not in the channel, invalid user id, chat:write.customize
+ * scope missing).
+ *
+ * Slack's chat.postEphemeral will fail with `not_in_channel` if the
+ * bot isn't a member — which is common on quick manual tests in
+ * private channels. The renewal command's fallback keeps the CSM
+ * unblocked in that case.
+ */
+async function postSlackEphemeral(args: {
+  channel: string;
+  user: string;
+  text?: string;
+  blocks?: Array<Record<string, unknown>>;
+}): Promise<{ ok: boolean; error?: string }> {
+  const token = process.env.SLACK_BOT_TOKEN;
+  if (!token) return { ok: false, error: "SLACK_BOT_TOKEN missing" };
+  try {
+    const res = await fetch("https://slack.com/api/chat.postEphemeral", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json; charset=utf-8",
+      },
+      body: JSON.stringify({
+        channel: args.channel,
+        user: args.user,
+        text: args.text,
+        blocks: args.blocks,
+        unfurl_links: false,
+        unfurl_media: false,
+      }),
+    });
+    const j = (await res.json()) as { ok: boolean; error?: string };
+    if (!j.ok) {
+      return { ok: false, error: j.error ?? "chat.postEphemeral failed" };
+    }
+    return { ok: true };
+  } catch (e) {
+    return {
+      ok: false,
+      error: e instanceof Error ? e.message : String(e),
+    };
   }
 }
 
