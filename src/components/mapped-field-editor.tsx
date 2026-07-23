@@ -39,6 +39,16 @@ interface Props {
    *  plain `{value ?? "—"}` span. Lets callers (RiskLevelChip,
    *  StatusBadge) keep their existing chip styling. */
   renderReadOnly?: (value: string | null | undefined) => React.ReactNode;
+  /**
+   * Compact mode for narrow contexts (customer-table cells) — hides
+   * the "✎ Edit" text button and makes the read-only chip itself
+   * clickable to open the editor. The chip stays visually identical
+   * to the plain read-only render; a tooltip explains the affordance
+   * so first-time users aren't confused about the click behavior.
+   * Save / Cancel / status text still render the same way, so the
+   * editing UX after the click is unchanged.
+   */
+  compact?: boolean;
 }
 
 interface MappingsResponse {
@@ -50,6 +60,7 @@ export function MappedFieldEditor({
   currentValue,
   workspaceId,
   renderReadOnly,
+  compact = false,
 }: Props) {
   const router = useRouter();
   const [mapping, setMapping] = useState<FieldMapping | null>(null);
@@ -237,7 +248,10 @@ export function MappedFieldEditor({
 
   if (editing) {
     return (
-      <div className="space-y-1">
+      <div
+        className="space-y-1"
+        onClick={compact ? (e) => e.stopPropagation() : undefined}
+      >
         {fieldDef.type === "enum" ? (
           (() => {
             // Pick the option source: HubSpot-fetched options win
@@ -381,6 +395,43 @@ export function MappedFieldEditor({
         {report.text.length > 60 ? "…" : ""}
       </span>
     ) : null;
+
+  // Compact mode: hide the "✎ Edit" text and make the chip itself the
+  // affordance. Used in narrow customer-table cells (engagement + risk)
+  // where a separate Edit link would push the chip out of its column.
+  //
+  // `stopPropagation` on every interaction is deliberate: the compact
+  // editor typically nests inside a click-to-expand row (customer-table
+  // rows use <tr onClick={toggleExpanded}>). Without stopping the
+  // click, opening the picker would ALSO expand the company profile —
+  // exactly the "have to expand first" friction the CSMs asked to lose.
+  // The wrapper span captures bubbling from the select + Save/Cancel
+  // buttons rendered above in the `editing` branch, too.
+  //
+  // Falls back to the plain read-only chip when the field isn't
+  // editable (no push mapping / no workspace), so pull-only fields
+  // still render cleanly with no misleading click affordance.
+  if (compact) {
+    if (!editable) {
+      return <span className="inline-flex items-center">{renderValue()}</span>;
+    }
+    return (
+      <span
+        className="inline-flex items-center gap-1"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <button
+          type="button"
+          onClick={() => setEditing(true)}
+          className="inline-flex items-center rounded-sm hover:ring-1 hover:ring-accent/50 focus:outline-none focus:ring-2 focus:ring-accent transition"
+          title={`Click to edit — pushes to HubSpot property "${mapping?.hubspot_property}"`}
+        >
+          {renderValue()}
+        </button>
+        {reportNode}
+      </span>
+    );
+  }
 
   if (isBlockField) {
     return (
