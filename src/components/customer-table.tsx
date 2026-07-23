@@ -38,6 +38,8 @@ import type { AdGapReport } from "@/lib/types";
 import { getTierLadder } from "@/lib/tiers/client";
 import { buildBulkDrafts } from "@/lib/templates/bulk-drafts";
 import { BulkDraftsModal, type BulkDraft } from "./bulk-drafts-modal";
+import { MappedFieldEditor } from "./mapped-field-editor";
+import { MAPPABLE_DASHBOARD_FIELDS } from "@/lib/data/field-mappings-types";
 
 type SortKey = keyof CustomerWithMetrics | "features_enabled";
 type SortDir = "asc" | "desc";
@@ -641,7 +643,22 @@ export function CustomerTable({
         );
       }
       case "company_engagement":
-        return <StatusBadge value={c.company_engagement} />;
+        // Compact inline editor — CSMs can change Engagement (Touch
+        // level) without expanding the detail panel. Push-to-HubSpot
+        // is wired via the standard field-mappings flow the detail
+        // panel already uses; the read-only chip stays visually
+        // identical, just clickable now.
+        return (
+          <MappedFieldEditor
+            compact
+            fieldDef={MAPPABLE_DASHBOARD_FIELDS.find(
+              (f) => f.id === "company_engagement"
+            )!}
+            currentValue={c.company_engagement}
+            workspaceId={c.workspace_id}
+            renderReadOnly={(v) => <StatusBadge value={v ?? null} />}
+          />
+        );
       case "customer_success_manager":
         // Snake-cased identifier → "Jacob Perry" reads cleaner inline.
         // Empty cell when unassigned so the column doesn't shout "-"
@@ -654,10 +671,25 @@ export function CustomerTable({
           <span className="text-subtle text-xs italic">unassigned</span>
         );
       case "property_risk_level":
+        // Compact inline editor — CSMs can change Risk without
+        // expanding the detail panel. The chip render is unchanged
+        // (RiskLevelChip is passed through as renderReadOnly), so
+        // sort behavior, colour coding, and the risk-detail tooltip
+        // all keep working exactly as before.
         return (
-          <RiskLevelChip
-            level={c.property_risk_level}
-            detail={c.property_risk_level_detail}
+          <MappedFieldEditor
+            compact
+            fieldDef={MAPPABLE_DASHBOARD_FIELDS.find(
+              (f) => f.id === "property_risk_level"
+            )!}
+            currentValue={c.property_risk_level}
+            workspaceId={c.workspace_id}
+            renderReadOnly={(v) => (
+              <RiskLevelChip
+                level={v ?? null}
+                detail={c.property_risk_level_detail}
+              />
+            )}
           />
         );
       case "next_invoice": {
