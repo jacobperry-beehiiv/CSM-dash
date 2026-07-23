@@ -794,8 +794,13 @@ function buildFooterLinks(
  *  company_name, workspace_name, workspace_id, and owner_email.
  *  Returns matches sorted by ARR descending (most-significant accounts
  *  first). The caller merges these with publication-name matches before
- *  capping at FIND_MAX_MATCHES. */
-function searchCustomers(customers: Customer[], query: string): Customer[] {
+ *  capping at FIND_MAX_MATCHES.
+ *
+ *  Exported so the `@normbot renewal <query>` command in the Slack
+ *  webhook can reuse the same fuzzy shape callers of `@normbot find`
+ *  already get — otherwise a CSM would see two different match
+ *  orderings depending on which command they typed. */
+export function searchCustomers(customers: Customer[], query: string): Customer[] {
   const q = query.trim().toLowerCase();
   if (!q) return [];
   const matches: Customer[] = [];
@@ -1926,4 +1931,160 @@ export async function openSlackView(
       error: e instanceof Error ? e.message : String(e),
     };
   }
+}
+
+// ─── Renewal Confirm interactive button ───────────────────────────────
+//
+// The `@normbot renewal <query>` command shows a candidate list of
+// up to 5 customer matches. Each row has a Confirm button whose
+// `value` is `RenewalConfirmActionValue` (JSON) — carrying the
+// workspace_id + who requested + where the mention came from.
+// Handled in the Slack webhook's `handleBlockActions` under this
+// action_id.
+
+export const RENEWAL_CONFIRM_ACTION_ID = "renewal_confirm";
+
+export interface RenewalConfirmActionValue {
+  workspace_id: string;
+  requester_slack_id: string;
+  origin_channel: string;
+  origin_thread_ts: string;
+}
+
+const RENEWAL_MAX_MATCHES = 5;
+
+/** Format ARR as "$12.3K/yr" — compact enough for the section body. */
+function shortArr(arr: number | null | undefined): string {
+  if (arr == null || !Number.isFinite(arr)) return "—";
+  if (arr === 0) return "$0/yr";
+  if (arr >= 1_000_000) {
+    return `$${(arr / 1_000_000).toFixed(1).replace(/\.0$/, "")}M/yr`;
+  }
+  if (arr >= 1000) {
+    return `$${(arr / 1000).toFixed(1).replace(/\.0$/, "")}K/yr`;
+  }
+  return `$${arr.toLocaleString()}/yr`;
+}
+
+function formatDateForRenewalPicker(iso: string | null): string {
+  if (!iso) return "no date on file";
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return "no date on file";
+  return d.toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    timeZone: "UTC",
+  });
+}
+
+/**
+ * Build the Block Kit blocks for `@normbot renewal <query>` — the
+ * ephemeral candidate picker the CSM sees before we open a pricing
+ * thread. Up to 5 rows, each with a Confirm button carrying
+ * {workspace_id, requester_slack_id, origin_channel, origin_thread_ts}
+ * so the block_actions handler has everything it needs to post the
+ * kickoff message + persist the thread ts.
+ *
+ * `renewalDateFor` is injected so the caller (webhook) can reuse
+ * the same `nextRenewalDate` helper the milestone engine uses —
+ * keeps the picker's "Renewal date" column in agreement with the
+ * dashboard and the sweep.
+ *
+ * Returns null when the fuzzy search produced zero matches so the
+ * webhook can send a contextual "no results" reply.
+ */
+export async function buildRenewalCandidateBlocks(args: {
+  query: string;
+  requesterSlackId: string;
+  originChannel: string;
+  originThreadTs: string;
+  renewalDateFor: (c: Customer) => string | null;
+  lifecycleStageFor: (c: Customer) => string | null;
+}): Promise<Array<Record<string, unknown>> | null> {
+  const {
+    query,
+    requesterSlackId,
+    originChannel,
+    originThreadTs,
+    renewalDateFor,
+    lifecycleStageFor,
+  } = args;
+  let customers: Customer[];
+  try {
+    customers = await loadCustomers();
+  } catch {
+    return null;
+  }
+  const matches = searchCustomers(customers, query).filter(
+    (c) => c.workspace_id
+  );
+  if (matches.length === 0) return null;
+  const shown = matches.slice(0, RENEWAL_MAX_MATCHES);
+
+  const blocks: Array<Record<string, unknown>> = [
+    {
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text:
+          `:handshake: *${matches.length} candidate${matches.length === 1 ? "" : "s"} for "${query}"*` +
+          (matches.length > shown.length
+            ? ` (showing top ${shown.length} by ARR)`
+            : "") +
+          `\nPick the account and I'll open the pricing thread in the configured Renewals channel.`,
+      },
+    },
+  ];
+
+  for (const c of shown) {
+    const name = c.company_name || c.workspace_name || "(unnamed customer)";
+    const owner = c.customer_success_manager
+      ? c.customer_success_manager.replace(/_/g, " ")
+      : "unassigned";
+    const plan = c.stripe_plan ?? "—";
+    const arr = shortArr(c.arr);
+    const renewal = formatDateForRenewalPicker(renewalDateFor(c));
+    const stage = lifecycleStageFor(c) ?? "unset";
+    const buttonValue: RenewalConfirmActionValue = {
+      workspace_id: c.workspace_id as string,
+      requester_slack_id: requesterSlackId,
+      origin_channel: originChannel,
+      origin_thread_ts: originThreadTs,
+    };
+    blocks.push({ type: "divider" });
+    blocks.push({
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text:
+          `*${name}*  ·  💰 ${arr}  ·  Plan: *${plan}*\n` +
+          `Owner: ${owner}  ·  Renewal: *${renewal}*\n` +
+          `Current stage: *${stage}*`,
+      },
+      accessory: {
+        type: "button",
+        text: { type: "plain_text", text: "Confirm", emoji: true },
+        style: "primary",
+        action_id: RENEWAL_CONFIRM_ACTION_ID,
+        value: JSON.stringify(buttonValue),
+      },
+    });
+  }
+
+  if (matches.length > shown.length) {
+    blocks.push({
+      type: "context",
+      elements: [
+        {
+          type: "mrkdwn",
+          text: `_${matches.length - shown.length} more match${
+            matches.length - shown.length === 1 ? "" : "es"
+          } weren't shown — narrow the query if none of the above are right._`,
+        },
+      ],
+    });
+  }
+
+  return blocks;
 }

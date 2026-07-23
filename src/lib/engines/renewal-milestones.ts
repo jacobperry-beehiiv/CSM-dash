@@ -13,6 +13,10 @@ import {
   nextRenewalDate,
 } from "../renewals/date";
 import {
+  buildRenewalKickoffMessage,
+  buildRenewalMilestoneReply,
+} from "../renewals/messages";
+import {
   getRenewalThread,
   saveRenewalThreadIfAbsent,
   type RenewalThreadRecord,
@@ -371,6 +375,12 @@ async function fireMilestone(args: {
 
   const existingThread = await getRenewalThread(workspaceId);
   if (milestone === 90 && !existingThread) {
+    const kickoffText = buildRenewalKickoffMessage({
+      customer: c,
+      settings,
+      renewalIso,
+      lifecycleStage: stage,
+    });
     const kickoffText = buildKickoffMessage(c, settings, renewalIso, stage);
     if (!dryRun) {
       const r = await postToSlack({ channelId, text: kickoffText });
@@ -395,6 +405,13 @@ async function fireMilestone(args: {
       threadOpened = true;
     }
   } else if (existingThread || milestone !== 90) {
+    const replyText = buildRenewalMilestoneReply({
+      customer: c,
+      settings,
+      milestone,
+      renewalIso,
+      lifecycleStage: stage,
+    });
     const replyText = buildMilestoneReply(c, settings, milestone, renewalIso, stage);
     const thread = existingThread ?? null;
     if (thread && thread.thread_ts) {
@@ -408,6 +425,13 @@ async function fireMilestone(args: {
       }
     } else if (!thread) {
       if (!dryRun) {
+        const text = buildRenewalKickoffMessage({
+          customer: c,
+          settings,
+          renewalIso,
+          lifecycleStage: stage,
+          openedByLine: `_(auto-opened at the ${milestone}-day mark; no earlier pricing thread was found.)_`,
+        });
         const text =
           buildKickoffMessage(c, settings, renewalIso, stage) +
           `\n\n_(auto-opened at the ${milestone}-day mark; no earlier pricing thread was found.)_`;
