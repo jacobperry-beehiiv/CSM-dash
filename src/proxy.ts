@@ -104,6 +104,15 @@ export default auth((req) => {
   // .github/workflows/wins-detection.yml.
   if (pathname.startsWith("/api/wins/detect")) return;
 
+  // CSM-owned renewals milestone sweep — dual session/bearer auth on
+  // the route (CRON_SECRET bearer OR signed-in CSM team member).
+  // Fires 90/60/30/7d Slack pings + personal-todos and stashes
+  // pricing thread ts in csm:renewal-threads:v1. Same 307-mystery
+  // fingerprint the cadence + wins routes had before their
+  // exemptions — do not remove without ripping out the cron. Cron at
+  // .github/workflows/renewal-milestones.yml.
+  if (pathname.startsWith("/api/renewals/milestone-sweep")) return;
+
   if (!req.auth) {
     const url = req.nextUrl.clone();
     url.pathname = "/login";
