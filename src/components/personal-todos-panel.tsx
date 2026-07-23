@@ -64,6 +64,8 @@ const SOURCE_LABEL: Record<TodoSource, { icon: string; label: string }> = {
   feature_request: { icon: "💡", label: "Feature request" },
   slack_assign: { icon: "🎯", label: "Assign playbook" },
   sybill_callrecap: { icon: "📞", label: "Sybill" },
+  renewal_milestone: { icon: "🔁", label: "Renewal milestone" },
+  renewal_confirmed: { icon: "✅", label: "Renewal confirmed" },
 };
 
 /** Replace bare URLs with anchors so links pasted into details are

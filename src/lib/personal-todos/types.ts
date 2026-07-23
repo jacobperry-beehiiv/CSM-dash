@@ -31,7 +31,18 @@ export type TodoSource =
    *  message id + call URL for traceability. Dedup happens upstream
    *  in sybill-ingest-state (Gmail message_id → processed timestamp)
    *  so we don't need a unique-key check at the store layer. */
-  | "sybill_callrecap";
+  | "sybill_callrecap"
+  /** Created by the CSM-owned renewals milestone engine when a
+   *  customer's renewal date hits 90 / 60 / 30 / 7 days out.
+   *  source_meta carries workspace_id + milestone_days so a re-run
+   *  can dedupe. Fires alongside a Slack thread ping into the
+   *  pricing thread saved in `csm:renewal-threads:v1`. */
+  | "renewal_milestone"
+  /** Created when a customer transitions to the "Renewal Confirmed"
+   *  lifecycle stage — a verification todo dated to the renewal
+   *  date so the CSM confirms the invoice actually went through.
+   *  Idempotent: only fires on the transition INTO the stage. */
+  | "renewal_confirmed";
 
 /** Slack-side provenance carried on rows created from Slack. Filled in
  *  by the inbound webhook so the UI can render a "↗ View in Slack"
@@ -65,6 +76,20 @@ export interface SlackSourceMeta {
   /** Sybill's deep link to the call recording / transcript, parsed
    *  out of the recap email when present. */
   sybill_call_url?: string;
+  /** For source === "renewal_milestone" | "renewal_confirmed": the
+   *  workspace this todo pertains to. Lets the panel render a deep
+   *  link back to the customer detail. */
+  workspace_id?: string;
+  /** For source === "renewal_milestone": which milestone triggered
+   *  this todo (90 / 60 / 30 / 7). Used by the engine's dedupe set
+   *  as one half of the composite (workspace_id, milestone_days). */
+  milestone_days?: number;
+  /** For source === "renewal_confirmed": the lifecycle stage the
+   *  customer was in immediately before transitioning to "Renewal
+   *  Confirmed". Purely audit context so the Notes timeline can
+   *  render "went from Follow Up Sent → Renewal Confirmed" if we
+   *  ever surface it. */
+  prior_lifecycle_stage?: string;
 }
 
 export interface PersonalTodo {

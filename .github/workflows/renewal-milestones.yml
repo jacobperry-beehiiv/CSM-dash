@@ -1,0 +1,65 @@
+name: renewal-milestones
+
+# CSM-owned renewals milestone sweep. Fires 90 / 60 / 30 / 7 day
+# Slack pings + personal-todos + auto-opens the pricing thread on
+# the first 90d fire per customer. Idempotent via a
+# (workspace_id, milestone_days, renewal_iso) dedupe set in KV.
+#
+# Required repo secrets:
+#   • CRON_SECRET                        — bearer; same value as the Vercel env var
+#   • DASHBOARD_URL                      — root URL, no trailing slash
+#   • VERCEL_AUTOMATION_BYPASS_SECRET    — Vercel Deployment Protection bypass
+#
+# Triggers:
+#   • daily at 15:00 UTC (30 min after the personal-todos activation
+#     sweep so a same-day 90d fire lands before its own reminder
+#     ladder runs).
+#   • manually via "Run workflow".
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 15 * * *"
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify required secrets are set
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          DASHBOARD_URL: ${{ secrets.DASHBOARD_URL }}
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+        run: |
+          missing=()
+          for v in CRON_SECRET DASHBOARD_URL VERCEL_AUTOMATION_BYPASS_SECRET; do
+            if [ -z "${!v}" ]; then
+              missing+=("$v")
+            fi
+          done
+          if [ "${#missing[@]}" -ne 0 ]; then
+            echo "::error::Missing required repo secret(s): ${missing[*]}"
+            exit 1
+          fi
+          echo "All required secrets present."
+
+      - name: POST /api/renewals/milestone-sweep
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          DASHBOARD_URL: ${{ secrets.DASHBOARD_URL }}
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+        run: |
+          set -e
+          response=$(curl -sS -w "\n%{http_code}" -X POST \
+            -H "Authorization: Bearer ${CRON_SECRET}" \
+            -H "x-vercel-protection-bypass: ${VERCEL_AUTOMATION_BYPASS_SECRET}" \
+            -H "Content-Type: application/json" \
+            "${DASHBOARD_URL}/api/renewals/milestone-sweep")
+          body=$(echo "$response" | sed '$d')
+          code=$(echo "$response" | tail -n1)
+          echo "HTTP $code"
+          echo "$body"
+          if [ "$code" != "200" ]; then
+            echo "::error::Renewal milestone sweep failed with HTTP $code"
+            exit 1
+          fi

@@ -641,6 +641,19 @@ export default function SlackSettingsPage() {
         }
       />
 
+      <RenewalsChannelSection
+        channelId={settings.am?.renewals_slack_channel_id ?? ""}
+        onChange={(next) =>
+          setSettings((prev) => ({
+            ...prev,
+            am: {
+              ...(prev.am ?? {}),
+              renewals_slack_channel_id: next,
+            },
+          }))
+        }
+      />
+
       <OnboardingDriveTemplateSection
         folderId={settings.am?.onboarding_drive_template_folder_id ?? ""}
         folderIdNoOp={
@@ -1246,6 +1259,43 @@ function LifecycleStagesSection({
  *  as a free-text field — Drive doesn't have a typed picker we can
  *  embed and the IDs are stable. Leaving the field empty disables the
  *  seed step entirely; new folders ship empty (current behavior). */
+function RenewalsChannelSection({
+  channelId,
+  onChange,
+}: {
+  channelId: string;
+  onChange: (next: string) => void;
+}) {
+  return (
+    <section className="bg-surface rounded-xl border border-border shadow-card p-4 space-y-3">
+      <div>
+        <h2 className="text-sm font-semibold text-fg">
+          Renewals Slack channel
+        </h2>
+        <p className="text-xs text-muted mt-1">
+          Channel ID where the CSM-owned renewals workflow posts pricing
+          threads. Every renewal — whether kicked off via{" "}
+          <code className="font-mono bg-surface-2 px-1 rounded">
+            @normbot renewal
+          </code>{" "}
+          or auto-opened by the 90-day milestone engine — gets a single
+          kickoff message here; 60/30/7-day milestone pings thread-reply
+          into that saved message so Richard, Juliet, and Priya can watch
+          pacing without opening the dashboard. The bot user must be a
+          member of the channel. Leave blank to disable the workflow.
+        </p>
+      </div>
+      <input
+        type="text"
+        value={channelId}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder="C0AMK142WUR"
+        className="w-full px-3 py-2 text-sm font-mono bg-canvas border border-border rounded-md focus:outline-none focus:ring-2 focus:ring-accent"
+      />
+    </section>
+  );
+}
+
 function OnboardingDriveTemplateSection({
   folderId,
   folderIdNoOp,
