@@ -505,10 +505,16 @@ export function BulkDraftsModal({
   /** Union of every HubSpot association label seen across every
    *  contact in the current batch. Sorted for stable button order.
    *  Empty when no contact in the batch carries any label, in which
-   *  case the Quick-include toolbar hides itself entirely. */
+   *  case the Quick-include toolbar hides itself entirely.
+   *
+   *  Iterates the RAW `drafts` list, not `actionableDrafts` — the
+   *  latter is filtered to drafts with a non-empty selected `to`, so
+   *  a row where the user unticked every recipient wouldn't
+   *  contribute its labels back into the toolbar and a subsequent
+   *  Quick-include click couldn't re-add anyone from it. */
   const allLabelsInBatch = useMemo(() => {
     const s = new Set<string>();
-    for (const d of actionableDrafts) {
+    for (const d of drafts) {
       for (const r of d.recipients) {
         for (const label of r.labels ?? []) {
           if (label) s.add(label);
@@ -516,12 +522,26 @@ export function BulkDraftsModal({
       }
     }
     return Array.from(s).sort();
-  }, [actionableDrafts]);
+  }, [drafts]);
 
   /** Toggle a label active/inactive. Activating ticks every
    *  recipient whose contact carries that label across every draft;
    *  deactivating unticks them UNLESS another active label still
-   *  applies. Owners (default-checked) are never auto-unticked. */
+   *  applies. Owners (default-checked) are never auto-unticked.
+   *
+   *  Iterates the RAW `drafts` list — every reader
+   *  (`liveTo` / `toggleRecipient` / the render loop) keys
+   *  `recipientSelection` by the ORIGINAL `d.compose_url` from the
+   *  drafts prop. `actionableDrafts` overwrites `compose_url` via
+   *  `liveComposeUrl`, and those live URLs diverge from the original
+   *  whenever the template has a `send_as_email` alias (different
+   *  `/mail/u/<alias>/` path) or a per-recipient merge tag like
+   *  `{{customer.contact_first_name}}` — writing to the live key
+   *  makes the audience selection land in a phantom entry that
+   *  liveTo never reads, so the BCC combine (and the row's
+   *  compose URL) silently keep the un-toggled recipient set.
+   *  That was the reported "merge as BCC ignores audience
+   *  selections" symptom. */
   function toggleLabel(label: string) {
     const wasActive = activeLabels.has(label);
     const nextActive = new Set(activeLabels);
@@ -531,7 +551,7 @@ export function BulkDraftsModal({
 
     setRecipientSelection((sel) => {
       const out = { ...sel };
-      for (const d of actionableDrafts) {
+      for (const d of drafts) {
         const draftSel = new Set(out[d.compose_url] ?? []);
         for (const r of d.recipients) {
           const labels = r.labels ?? [];
