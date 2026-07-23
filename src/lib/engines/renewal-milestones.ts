@@ -25,7 +25,6 @@ import {
   hasMilestoneFired,
   markMilestoneFired,
 } from "../data/renewal-milestones-fired";
-import { fmtCurrency } from "../../components/format";
 
 /**
  * CSM-owned renewals milestone engine.
@@ -128,87 +127,10 @@ function companyLabel(c: Customer): string {
   return c.company_name ?? c.workspace_name ?? "an account";
 }
 
-function csmMention(c: Customer, settings: SettingsShape): string {
-  const handle = c.customer_success_manager;
-  if (!handle) return "the CSM";
-  const slackId = settings.slack.csm_user_ids[handle];
-  if (slackId) return `<@${slackId}>`;
-  return handle.replace(/_/g, " ");
-}
-
-function dashboardOrigin(): string {
-  return (
-    process.env.NEXT_PUBLIC_DASHBOARD_URL ?? "https://csm-dash.vercel.app"
-  ).replace(/\/+$/, "");
-}
-
-function customerDeepLink(c: Customer): string {
-  const origin = dashboardOrigin();
-  const params = new URLSearchParams({ tab: "renewals" });
-  if (c.workspace_id) params.set("workspace_id", c.workspace_id);
-  return `${origin}/csm?${params.toString()}`;
-}
-
-function formatRenewalDate(iso: string | null): string {
-  if (!iso) return "—";
-  const d = new Date(iso);
-  if (isNaN(d.getTime())) return "—";
-  return d.toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-    timeZone: "UTC",
-  });
-}
-
 function utcYmd(iso: string): string {
   const d = new Date(iso);
   if (isNaN(d.getTime())) return iso;
   return d.toISOString().slice(0, 10);
-}
-
-function buildKickoffMessage(
-  c: Customer,
-  settings: SettingsShape,
-  renewalIso: string,
-  lifecycleStage: string | null
-): string {
-  const mention = csmMention(c, settings);
-  const arrLine = c.arr != null ? `${fmtCurrency(c.arr)}/yr` : "—";
-  const stageLine = lifecycleStage ?? "—";
-  const link = customerDeepLink(c);
-  return [
-    `:handshake: *Renewal kickoff — ${companyLabel(c)}*`,
-    `• Plan: *${c.stripe_plan ?? "—"}*`,
-    `• Current ARR: *${arrLine}*`,
-    `• Lifecycle stage: *${stageLine}*`,
-    `• Renewal date: *${formatRenewalDate(renewalIso)}*`,
-    `• CSM: ${mention}`,
-    ``,
-    `Opening the pricing thread here so we track pacing in one place.`,
-    `<${link}|Open in dashboard ↗>`,
-  ].join("\n");
-}
-
-function buildMilestoneReply(
-  c: Customer,
-  settings: SettingsShape,
-  milestone: Milestone,
-  renewalIso: string,
-  lifecycleStage: string | null
-): string {
-  const mention = csmMention(c, settings);
-  const stageLine = lifecycleStage ?? "—";
-  const link = customerDeepLink(c);
-  const daysLine =
-    milestone === 7
-      ? `Only *7 days* until renewal on ${formatRenewalDate(renewalIso)}.`
-      : `*${milestone} days* until renewal on ${formatRenewalDate(renewalIso)}.`;
-  return [
-    `:alarm_clock: ${daysLine} ${mention}`,
-    `Current lifecycle stage: *${stageLine}*.`,
-    `<${link}|Open in dashboard ↗>`,
-  ].join("\n");
 }
 
 function todoTitleFor(
@@ -381,7 +303,6 @@ async function fireMilestone(args: {
       renewalIso,
       lifecycleStage: stage,
     });
-    const kickoffText = buildKickoffMessage(c, settings, renewalIso, stage);
     if (!dryRun) {
       const r = await postToSlack({ channelId, text: kickoffText });
       slackTs = r.ts;
@@ -412,7 +333,6 @@ async function fireMilestone(args: {
       renewalIso,
       lifecycleStage: stage,
     });
-    const replyText = buildMilestoneReply(c, settings, milestone, renewalIso, stage);
     const thread = existingThread ?? null;
     if (thread && thread.thread_ts) {
       if (!dryRun) {
@@ -432,9 +352,6 @@ async function fireMilestone(args: {
           lifecycleStage: stage,
           openedByLine: `_(auto-opened at the ${milestone}-day mark; no earlier pricing thread was found.)_`,
         });
-        const text =
-          buildKickoffMessage(c, settings, renewalIso, stage) +
-          `\n\n_(auto-opened at the ${milestone}-day mark; no earlier pricing thread was found.)_`;
         const r = await postToSlack({ channelId, text });
         slackTs = r.ts;
         const rec: RenewalThreadRecord = {
