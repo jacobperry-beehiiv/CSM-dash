@@ -90,6 +90,20 @@ export default auth((req) => {
   // client's JSON parser blows up.
   if (pathname.startsWith("/api/last-contact/gmail")) return;
 
+  // Daily send-cadence refresh — same dual session/bearer auth on
+  // the route (CRON_SECRET bearer OR signed-in CSM team member).
+  // Without this bypass the GitHub Actions cron POSTs get 307'd to
+  // /login before the bearer check can run. Feeds the per-customer
+  // inferred_cadence_days KV overlay that Flag A's threshold reads
+  // from. Cron at .github/workflows/cadence-refresh.yml.
+  if (pathname.startsWith("/api/customers/refresh-cadence")) return;
+
+  // Wins & Opportunities daily detection — same dual auth shape.
+  // Without this bypass the cron POST gets 307'd and no candidate
+  // wins ever get written to the csm:wins:v1 KV row. Cron at
+  // .github/workflows/wins-detection.yml.
+  if (pathname.startsWith("/api/wins/detect")) return;
+
   if (!req.auth) {
     const url = req.nextUrl.clone();
     url.pathname = "/login";
