@@ -1,5 +1,7 @@
 "use client";
 
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import type {
@@ -519,6 +521,63 @@ function CompactEnumPicker({
   onPick,
   onClose,
 }: CompactEnumPickerProps) {
+  const anchorRef = useRef<HTMLSpanElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  // Portal the menu to document.body with viewport-fixed positioning
+  // so it escapes the customer-table cells' `overflow-hidden`. Without
+  // this, longer chips like "Light Green" get clipped by the cell's
+  // ~8% column width — same reason a native <select> works: the OS
+  // renders its menu at the browser layer, not inside the DOM tree.
+  const [menuPos, setMenuPos] = useState<{
+    top: number;
+    left: number;
+  } | null>(null);
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  // Compute the menu position relative to the anchor's viewport rect.
+  // `useLayoutEffect` runs after DOM mutation but before paint, so
+  // the menu's first visible frame is already placed — no "menu flashes
+  // at 0,0 for a tick" flicker.
+  useLayoutEffect(() => {
+    function reposition() {
+      const el = anchorRef.current;
+      if (!el) return;
+      const rect = el.getBoundingClientRect();
+      // Clamp the left edge so a right-edge cell doesn't push the menu
+      // off-screen. The menu's own width is capped by max-w below.
+      const menuWidthEstimate = 224; // matches min-w-[14rem]
+      const maxLeft = Math.max(
+        8,
+        window.innerWidth - menuWidthEstimate - 8
+      );
+      setMenuPos({
+        top: rect.bottom + 4,
+        left: Math.min(rect.left, maxLeft),
+      });
+    }
+    reposition();
+    // Reposition on scroll / resize so the menu tracks the trigger.
+    window.addEventListener("scroll", reposition, true);
+    window.addEventListener("resize", reposition);
+    return () => {
+      window.removeEventListener("scroll", reposition, true);
+      window.removeEventListener("resize", reposition);
+    };
+  }, []);
+
+  // Close on outside-click. `mousedown` so a chip click inside the
+  // menu doesn't race the close-on-outside handler between
+  // mousedown+mouseup on slower devices. Both the anchor + the
+  // portaled menu are "inside" — check both refs.
+  useEffect(() => {
+    function onMouseDown(e: MouseEvent) {
+      const t = e.target as Node;
+      if (anchorRef.current?.contains(t)) return;
+      if (menuRef.current?.contains(t)) return;
   const containerRef = useRef<HTMLDivElement>(null);
 
   // Close on outside-click. Use `mousedown` (not `click`) so a
@@ -562,6 +621,99 @@ function CompactEnumPicker({
     );
   };
 
+  const menuNode = menuPos ? (
+    <div
+      ref={menuRef}
+      // z-[60] sits above the table row's hover state (blue-50) plus
+      // any sticky headers. `whitespace-nowrap` on each option keeps
+      // "Light Green" from wrapping mid-chip. min-w-[14rem] gives the
+      // widest option (currently "Very High Touch" on engagement)
+      // room without truncation, and max-w-xs caps super-long HubSpot
+      // options from stretching across half the viewport.
+      className="fixed z-[60] min-w-[14rem] max-w-xs rounded-md border border-border-strong bg-surface shadow-lg p-1.5 space-y-1"
+      style={{ top: menuPos.top, left: menuPos.left }}
+      role="listbox"
+      onClick={(e) => e.stopPropagation()}
+    >
+      {loading ? (
+        <div className="px-2 py-1 text-[11px] text-subtle italic">
+          Loading options…
+        </div>
+      ) : options.length === 0 ? (
+        <div className="px-2 py-1 text-[11px] text-subtle italic">
+          {hubspotOptionsError
+            ? `Couldn't load options: ${hubspotOptionsError.slice(0, 40)}`
+            : "No options available"}
+        </div>
+      ) : (
+        <>
+          {options.map((o) => {
+            const isCurrent = o.value.trim().toLowerCase() === currentLc;
+            return (
+              <button
+                key={o.value}
+                type="button"
+                role="option"
+                aria-selected={isCurrent}
+                disabled={saving}
+                onClick={() => onPick(o.value)}
+                className={`w-full flex items-center gap-2 px-1.5 py-1 rounded text-left text-xs hover:bg-canvas disabled:opacity-50 whitespace-nowrap ${
+                  isCurrent ? "bg-canvas ring-1 ring-accent/40" : ""
+                }`}
+                title={
+                  isCurrent
+                    ? "Currently selected"
+                    : `Set to "${o.label}" — pushes to HubSpot`
+                }
+              >
+                {renderOptionChip(o.value, o.label)}
+                {isCurrent ? (
+                  <span className="ml-auto text-[10px] text-subtle">✓</span>
+                ) : null}
+              </button>
+            );
+          })}
+          {currentValue ? (
+            <button
+              type="button"
+              disabled={saving}
+              onClick={() => onPick(null)}
+              className="w-full text-left px-1.5 py-1 rounded text-[11px] text-subtle italic hover:bg-canvas hover:text-fg disabled:opacity-50 border-t border-border mt-1 pt-1.5"
+              title="Clear the value — pushes an empty value to HubSpot"
+            >
+              Clear
+            </button>
+          ) : null}
+        </>
+      )}
+      {saving ? (
+        <div className="px-2 py-1 text-[11px] text-subtle italic">
+          Saving…
+        </div>
+      ) : null}
+      {report?.kind === "err" ? (
+        <div
+          className="px-2 py-1 text-[11px] text-red-700 dark:text-red-300"
+          title={report.text}
+        >
+          ⚠ {report.text.slice(0, 40)}
+          {report.text.length > 40 ? "…" : ""}
+        </div>
+      ) : null}
+    </div>
+  ) : null;
+
+  return (
+    <span
+      ref={anchorRef}
+      className="inline-flex items-center"
+      onClick={(e) => e.stopPropagation()}
+    >
+      <span className="opacity-60">
+        {renderOptionChip(currentValue ?? "", currentValue ?? "—")}
+      </span>
+      {mounted && menuNode ? createPortal(menuNode, document.body) : null}
+    </span>
   return (
     <div
       ref={containerRef}
