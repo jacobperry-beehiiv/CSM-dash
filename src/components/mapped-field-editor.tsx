@@ -2,6 +2,7 @@
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import type {
   FieldMapping,
@@ -577,6 +578,16 @@ function CompactEnumPicker({
       const t = e.target as Node;
       if (anchorRef.current?.contains(t)) return;
       if (menuRef.current?.contains(t)) return;
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  // Close on outside-click. Use `mousedown` (not `click`) so a
+  // teammate clicking a chip inside the popover doesn't fire close
+  // between mousedown+mouseup — that used to swallow the pick on
+  // slower browsers. Also close on Escape for a11y.
+  useEffect(() => {
+    function onMouseDown(e: MouseEvent) {
+      if (!containerRef.current) return;
+      if (containerRef.current.contains(e.target as Node)) return;
       onClose();
     }
     function onKey(e: KeyboardEvent) {
@@ -598,6 +609,10 @@ function CompactEnumPicker({
   const currentLc = (currentValue ?? "").trim().toLowerCase();
 
   const renderOptionChip = (value: string, label: string) => {
+    // Prefer the caller-supplied chip renderer so the option shows
+    // the exact same style (RiskLevelChip / StatusBadge / …) as the
+    // read-only cell. Fallback to a neutral pill for fields without
+    // a chip renderer.
     if (renderReadOnly) return renderReadOnly(value);
     return (
       <span className="inline-flex items-center px-2 py-0.5 text-xs rounded-full bg-surface-2 text-fg border border-border">
@@ -699,5 +714,86 @@ function CompactEnumPicker({
       </span>
       {mounted && menuNode ? createPortal(menuNode, document.body) : null}
     </span>
+  return (
+    <div
+      ref={containerRef}
+      className="relative inline-flex items-center"
+      onClick={(e) => e.stopPropagation()}
+    >
+      {/* Anchor: keep the current chip visible so the popover reads
+          as "you're editing this thing" rather than replacing the
+          cell content with a floating menu. */}
+      <span className="opacity-60">{renderOptionChip(currentValue ?? "", currentValue ?? "—")}</span>
+      <div
+        className="absolute left-0 top-full z-30 mt-1 min-w-[10rem] rounded-md border border-border-strong bg-surface shadow-lg p-1.5 space-y-1"
+        role="listbox"
+      >
+        {loading ? (
+          <div className="px-2 py-1 text-[11px] text-subtle italic">
+            Loading options…
+          </div>
+        ) : options.length === 0 ? (
+          <div className="px-2 py-1 text-[11px] text-subtle italic">
+            {hubspotOptionsError
+              ? `Couldn't load options: ${hubspotOptionsError.slice(0, 40)}`
+              : "No options available"}
+          </div>
+        ) : (
+          <>
+            {options.map((o) => {
+              const isCurrent = o.value.trim().toLowerCase() === currentLc;
+              return (
+                <button
+                  key={o.value}
+                  type="button"
+                  role="option"
+                  aria-selected={isCurrent}
+                  disabled={saving}
+                  onClick={() => onPick(o.value)}
+                  className={`w-full flex items-center gap-2 px-1.5 py-1 rounded text-left text-xs hover:bg-canvas disabled:opacity-50 ${
+                    isCurrent ? "bg-canvas ring-1 ring-accent/40" : ""
+                  }`}
+                  title={
+                    isCurrent
+                      ? "Currently selected"
+                      : `Set to "${o.label}" — pushes to HubSpot`
+                  }
+                >
+                  {renderOptionChip(o.value, o.label)}
+                  {isCurrent ? (
+                    <span className="ml-auto text-[10px] text-subtle">✓</span>
+                  ) : null}
+                </button>
+              );
+            })}
+            {currentValue ? (
+              <button
+                type="button"
+                disabled={saving}
+                onClick={() => onPick(null)}
+                className="w-full text-left px-1.5 py-1 rounded text-[11px] text-subtle italic hover:bg-canvas hover:text-fg disabled:opacity-50 border-t border-border mt-1 pt-1.5"
+                title="Clear the value — pushes an empty value to HubSpot"
+              >
+                Clear
+              </button>
+            ) : null}
+          </>
+        )}
+        {saving ? (
+          <div className="px-2 py-1 text-[11px] text-subtle italic">
+            Saving…
+          </div>
+        ) : null}
+        {report?.kind === "err" ? (
+          <div
+            className="px-2 py-1 text-[11px] text-red-700 dark:text-red-300"
+            title={report.text}
+          >
+            ⚠ {report.text.slice(0, 40)}
+            {report.text.length > 40 ? "…" : ""}
+          </div>
+        ) : null}
+      </div>
+    </div>
   );
 }
