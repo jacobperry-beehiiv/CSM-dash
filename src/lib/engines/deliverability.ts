@@ -638,7 +638,11 @@ export async function runDeliverabilityCheck(
   const csmName =
     opts.csmName === undefined ? process.env.CSM_NAME ?? null : opts.csmName;
   const lookback = opts.lookbackDays ?? LOOKBACK_DAYS;
-  const targetDate = opts.targetDate ?? yesterdayUtc();
+  let targetDate = opts.targetDate ?? yesterdayUtc();
+  // Whether the caller pinned an explicit date (deep-link, digest,
+  // tests). Only when they didn't do we allow the smart empty-day
+  // fallback below to roll the target date backwards.
+  const targetDateWasDefaulted = opts.targetDate === undefined;
 
   const cacheKey = `${lookback}`;
   const now = Date.now();
@@ -664,6 +668,50 @@ export async function runDeliverabilityCheck(
 
   const { joinedPosts, csmByOrg, spamDates, snapshotGeneratedAt } =
     await entry.pending;
+
+  // Empty-day fallback: on Mondays (yesterday = Sunday, when Enterprise
+  // customers effectively never send) and on any weekday where the
+  // viewer's CSM scope happens to be quiet, the default targetDate
+  // yields zero posts and the tab reads as broken. Roll back through
+  // the lookback window to the most recent day that HAS at least one
+  // in-scope send. Callers who pinned an explicit targetDate (digest
+  // emails, deep-linked shares, tests) get the date they asked for —
+  // the fallback only kicks in when we defaulted to yesterday.
+  //
+  // Restored behavior from before the flagged-only carryover tighten:
+  // CSMs expect to see the most recent healthy sends alongside any
+  // flagged carryover, not a blank slate when Sunday shows up.
+  if (targetDateWasDefaulted) {
+    const inScope = (post: PostMetricsRow) =>
+      !csmName || csmByOrg.get(post.organization_id) === csmName;
+    const hasScopedSendOn = (date: string) =>
+      joinedPosts.some((p) => p.sent_date === date && inScope(p));
+    if (!hasScopedSendOn(targetDate)) {
+      const scopedDates = new Set(
+        joinedPosts.filter(inScope).map((p) => p.sent_date)
+      );
+      if (scopedDates.size > 0) {
+        for (let i = 1; i <= lookback; i++) {
+          const d = new Date(targetDate + "T00:00:00Z");
+          d.setUTCDate(d.getUTCDate() - i);
+          const candidate = d.toISOString().slice(0, 10);
+          if (scopedDates.has(candidate)) {
+            console.log(
+              "[deliverability] empty-day fallback",
+              {
+                requested: targetDate,
+                shifted_to: candidate,
+                csm: csmName,
+                days_back: i,
+              }
+            );
+            targetDate = candidate;
+            break;
+          }
+        }
+      }
+    }
+  }
 
   let targetPosts = joinedPosts.filter((p) => p.sent_date === targetDate);
 
