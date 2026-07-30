@@ -173,12 +173,21 @@ export async function runNativeQuery(
 
 // ─── Database IDs ─────────────────────────────────────────────────────────
 // 2   = Swarm Production Replica (Postgres) — use for org/pub/ad_network/subs
-// 100 = Swarm Main ClickHouse — DO NOT use for fact_sendables joins (timeout)
-// 199 = ClickHouse Ad Hoc — use for deliverability split queries
+// 100 = Clickhouse (production) — the current ID for the split-query
+//       deliverability, cadence-refresh, and wins-detection engines.
+//
+// Metabase reassigns numeric IDs when databases are re-provisioned:
+// the earlier ClickHouse Ad Hoc host lived at id=199 and was removed
+// (verified against Metabase's /api/database — 199 no longer resolves
+// and every native query against it 500s with
+// "Assert failed: (keyword? driver)"). The daily deliverability sync
+// silently shipped empty snapshots for weeks until we hardened the
+// workflow's post-run guard. If ClickHouse gets re-provisioned again,
+// hit /api/database with the API key and update this constant.
 export const DB = {
   POSTGRES: 2,
   CLICKHOUSE_MAIN: 100,
-  CLICKHOUSE_ADHOC: 199,
+  CLICKHOUSE_ADHOC: 100,
 } as const;
 
 // ─── QBR Charts helpers ───────────────────────────────────────────────────
