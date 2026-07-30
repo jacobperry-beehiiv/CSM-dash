@@ -16,7 +16,14 @@ name: deliverability-data-sync
 #
 # Required repo secrets (already set for the full sync):
 #   • SNAPSHOT_ENCRYPTION_KEY  — 32-byte base64; same one set in Vercel env
-# ClickHouse credentials come from public env vars baked into the engine.
+#   • METABASE_API_KEY         — Metabase session token; the deliverability
+#                                engine talks to ClickHouse THROUGH Metabase's
+#                                native-query proxy, so without this every
+#                                per-day fetchPosts call fails with
+#                                "Missing credentials" and the snapshot ships
+#                                with 0 posts (workflow still reports success
+#                                because the engine's safe() wrapper swallows
+#                                per-day errors).
 
 on:
   workflow_dispatch:
@@ -47,17 +54,36 @@ jobs:
       - name: Verify required secrets are set
         env:
           SNAPSHOT_ENCRYPTION_KEY: ${{ secrets.SNAPSHOT_ENCRYPTION_KEY }}
+          METABASE_API_KEY: ${{ secrets.METABASE_API_KEY }}
         run: |
-          if [ -z "${SNAPSHOT_ENCRYPTION_KEY}" ]; then
-            echo "::error::Missing required repo secret: SNAPSHOT_ENCRYPTION_KEY"
+          missing=()
+          for v in SNAPSHOT_ENCRYPTION_KEY METABASE_API_KEY; do
+            if [ -z "${!v}" ]; then
+              missing+=("$v")
+            fi
+          done
+          if [ "${#missing[@]}" -ne 0 ]; then
+            echo "::error::Missing required repo secret(s): ${missing[*]}"
             exit 1
           fi
-          echo "Secret present."
+          echo "All required secrets present."
 
       - name: Sync + encrypt deliverability snapshot
-        run: npm run sync -- --only=deliverability
+        # `tee` so the "(N posts, ...)" summary line stays visible in
+        # the workflow output AND we can grep it below to fail hard
+        # when the engine's per-day queries all soft-failed (which
+        # happens silently when Metabase creds are missing — the very
+        # bug this file guards against).
+        run: |
+          npm run sync -- --only=deliverability 2>&1 | tee /tmp/sync-out.log
+          if grep -q "0 posts" /tmp/sync-out.log; then
+            echo "::error::Deliverability sync wrote an empty snapshot (0 posts). Check the Metabase credentials + fetchPosts logs above — the engine's safe() wrapper swallows per-day errors so the outer sync succeeded despite every query failing."
+            exit 1
+          fi
         env:
           SNAPSHOT_ENCRYPTION_KEY: ${{ secrets.SNAPSHOT_ENCRYPTION_KEY }}
+          METABASE_URL: https://beehiiv.metabaseapp.com
+          METABASE_API_KEY: ${{ secrets.METABASE_API_KEY }}
 
       - name: Commit + push deliverability snapshot
         run: |
