@@ -93,6 +93,12 @@ const BUCKETS: Bucket[] = [
     color: "bg-yellow-50 border-yellow-200 text-yellow-900",
     match: (d) => d > 60 && d <= 90,
   },
+  {
+    label: "91–120 days",
+    detail: "91–120 days out",
+    color: "bg-lime-50 dark:bg-lime-500/10 border-lime-200 dark:border-lime-500/30 text-lime-900",
+    match: (d) => d > 90 && d <= 120,
+  },
 ];
 
 export function RenewalPanel({
@@ -473,7 +479,7 @@ export function RenewalPanel({
       <>
         {cadencePicker}
         <div className="bg-green-50 border border-green-200 rounded-lg p-4 text-sm text-green-800">
-          No renewals in the next 90 days
+          No renewals in the next 120 days
           {intervalFilter ? ` for ${bucketLabel(intervalFilter)} customers` : ""}
           {lifecycleFilter
             ? lifecycleFilter === "__unset__"

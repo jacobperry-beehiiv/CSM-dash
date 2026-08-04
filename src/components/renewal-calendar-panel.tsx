@@ -42,7 +42,7 @@ import { nextRenewalDate, priorRenewalDate } from "./renewal-panel";
 /**
  * Renewal Calendar — calendar-anchored sibling of RenewalPanel.
  *
- * RenewalPanel is forward-looking: "what's coming up in the next 90
+ * RenewalPanel is forward-looking: "what's coming up in the next 120
  * days, bucketed by urgency." This panel answers a different question:
  * "show me everything that renews in a given month." Same data source
  * (the customer book + `nextRenewalDate`), same row chrome (review
