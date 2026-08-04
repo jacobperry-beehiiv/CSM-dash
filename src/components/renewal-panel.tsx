@@ -93,6 +93,12 @@ const BUCKETS: Bucket[] = [
     color: "bg-yellow-50 border-yellow-200 text-yellow-900",
     match: (d) => d > 60 && d <= 90,
   },
+  {
+    label: "91–120 days",
+    detail: "91–120 days out",
+    color: "bg-lime-50 dark:bg-lime-500/10 border-lime-200 dark:border-lime-500/30 text-lime-900",
+    match: (d) => d > 90 && d <= 120,
+  },
 ];
 
 export function RenewalPanel({
@@ -473,7 +479,7 @@ export function RenewalPanel({
       <>
         {cadencePicker}
         <div className="bg-green-50 border border-green-200 rounded-lg p-4 text-sm text-green-800">
-          No renewals in the next 90 days
+          No renewals in the next 120 days
           {intervalFilter ? ` for ${bucketLabel(intervalFilter)} customers` : ""}
           {lifecycleFilter
             ? lifecycleFilter === "__unset__"
@@ -558,16 +564,17 @@ export function RenewalPanel({
               <colgroup>
                 <col className="w-8" />
                 <col className="w-6" />
-                <col className="w-[20%]" />
+                <col className="w-[16%]" />
                 <col className="w-[9%]" />
                 <col className="w-[8%]" />
                 <col className="w-[10%]" />
+                <col className="w-[10%]" />
                 <col className="w-[6%]" />
-                <col className="w-[11%]" />
-                <col className="w-[11%]" />
+                <col className="w-[10%]" />
+                <col className="w-[10%]" />
                 <col className="w-[9%] hidden lg:table-cell" />
                 {/* Actions — stacked Stripe / HubSpot / Draft. */}
-                <col className="w-[13%]" />
+                <col className="w-[12%]" />
               </colgroup>
               <thead>
                 <tr className="text-left border-y border-border text-xs text-muted">
@@ -579,6 +586,7 @@ export function RenewalPanel({
                   </th>
                   <th className="px-3 py-2 font-medium">Risk</th>
                   <th className="px-3 py-2 font-medium">Renewal</th>
+                  <th className="px-3 py-2 font-medium">Contract renewal</th>
                   <th className="px-3 py-2 font-medium">Days</th>
                   <th className="px-3 py-2 font-medium">Lifecycle</th>
                   <th className="px-3 py-2 font-medium">Review</th>
@@ -651,6 +659,9 @@ export function RenewalPanel({
                             </div>
                           ) : null}
                         </td>
+                        <td className="px-3 py-2 text-muted">
+                          {fmtDate(c.contract_renewal ?? null)}
+                        </td>
                         <td className="px-3 py-2 font-medium text-fg">
                           {days}
                         </td>
@@ -712,7 +723,7 @@ export function RenewalPanel({
                       </tr>
                       {isOpen && (
                         <tr className="bg-blue-50 dark:bg-blue-500/20 border-b border-border">
-                          <td colSpan={11} className="px-6 py-4">
+                          <td colSpan={12} className="px-6 py-4">
                             <CustomerDetailPanel customer={c} />
                           </td>
                         </tr>

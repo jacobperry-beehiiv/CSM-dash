@@ -73,6 +73,14 @@ const BUCKETS: {
       "bg-yellow-50 dark:bg-yellow-500/10 border-yellow-200 dark:border-yellow-500/30 text-yellow-900",
     match: (d) => d > 60 && d <= 90,
   },
+  {
+    key: "d91_120",
+    label: "91–120 days",
+    detail: "91–120 days out",
+    color:
+      "bg-lime-50 dark:bg-lime-500/10 border-lime-200 dark:border-lime-500/30 text-lime-900",
+    match: (d) => d > 90 && d <= 120,
+  },
 ];
 
 const TERMINAL_STAGES = new Set(["Renewal Confirmed", "Renewal Lost"]);
@@ -118,7 +126,7 @@ export function RenewalsRollupSummary({ customers, overrides }: Props) {
     <section className="rounded-xl border border-border shadow-card bg-surface p-4 space-y-3">
       <div>
         <h2 className="text-sm font-semibold text-fg">
-          Team pacing — next 90 days
+          Team pacing — next 120 days
         </h2>
         <p className="text-xs text-muted mt-0.5">
           Counts + ARR at risk by bucket, plus a mini breakdown of
@@ -126,7 +134,7 @@ export function RenewalsRollupSummary({ customers, overrides }: Props) {
           switch back to a specific CSM to see per-owner context.
         </p>
       </div>
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
         {BUCKETS.map((b) => {
           const data = buckets.get(b.key) ?? emptyBucket();
           const stages = Array.from(data.byStage.entries()).sort(
