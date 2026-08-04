@@ -40,6 +40,7 @@ export function metabaseRowToCustomer(
       (row.renewal_date as string | null) ??
       (row.contract_renewal as string | null) ??
       null,
+    contract_renewal: (row.contract_renewal as string | null) ?? null,
     company_engagement: (row.company_engagement as string | null) ?? null,
     customer_success_manager:
       (row.customer_success_manager as string | null) ?? null,

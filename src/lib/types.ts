@@ -9,6 +9,15 @@ export interface Customer {
   active_subs: number | null;
   max_subscriptions: number | null;
   renewal_date: string | null;
+  /**
+   * Contractual renewal date straight from Metabase q10600's
+   * `contract_renewal` column. Distinct from `renewal_date` /
+   * `next_invoice`, which can fall back to the Stripe next-invoice
+   * date — this is the raw contract term-end, surfaced as its own
+   * column on the Renewals tab. Null for month-to-month / no-contract
+   * accounts.
+   */
+  contract_renewal?: string | null;
   company_engagement: string | null;
   customer_success_manager: string | null;
   customer_success_manager_email?: string | null;
