@@ -32,15 +32,36 @@ interface PutBody {
   mappings?: FieldMappingsState["mappings"];
 }
 
+// Short-lived in-memory memo of the (global, non-per-user) response.
+// The GET is hit in bursts — historically 2× per customer-table row on
+// every render — and the mappings config changes rarely, so serving
+// repeats from memory for a few seconds spares a KV/Postgres read per
+// request. Per-isolate (fine on Vercel: it absorbs a single render's
+// burst within one isolate) and bounded by TTL so a PUT elsewhere shows
+// up quickly. PUT on the same isolate invalidates it immediately.
+const GET_TTL_MS = 30_000;
+let getMemo: { at: number; body: unknown } | null = null;
+
 export async function GET() {
   const session = await auth();
   if (!session?.user?.email) {
     return NextResponse.json({ error: "Sign in required" }, { status: 401 });
   }
-  const state = await loadFieldMappings();
-  return NextResponse.json({
-    mappings: state.mappings,
-    available_fields: MAPPABLE_DASHBOARD_FIELDS,
+  if (!getMemo || Date.now() - getMemo.at >= GET_TTL_MS) {
+    const state = await loadFieldMappings();
+    getMemo = {
+      at: Date.now(),
+      body: {
+        mappings: state.mappings,
+        available_fields: MAPPABLE_DASHBOARD_FIELDS,
+      },
+    };
+  }
+  // `private` because the endpoint is auth-gated; the body itself is
+  // the same global config for every viewer. Lets the browser's HTTP
+  // cache absorb any repeat GETs the client-side dedupe doesn't.
+  return NextResponse.json(getMemo.body, {
+    headers: { "Cache-Control": "private, max-age=30" },
   });
 }
 
@@ -101,6 +122,9 @@ export async function PUT(req: Request) {
     };
   }
   const persisted = await saveFieldMappings(next);
+  // Bust the GET memo on this isolate so an admin's edit is reflected
+  // immediately here; other isolates fall through within GET_TTL_MS.
+  getMemo = null;
   return NextResponse.json({
     mappings: persisted.mappings,
     available_fields: MAPPABLE_DASHBOARD_FIELDS,
