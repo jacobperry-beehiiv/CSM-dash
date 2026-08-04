@@ -206,6 +206,34 @@ export function uniqueCsms(customers: Customer[]): string[] {
   return [...set].sort();
 }
 
+export interface CsmRosterEntry {
+  /** Internal handle, e.g. "Jacob_Perry". */
+  handle: string;
+  /** Lower-cased sign-in email — the value stored in a template's
+   *  `csm_tags`. */
+  email: string;
+}
+
+/**
+ * Unique CSM roster (handle + email) from the customer book, for
+ * pickers that need to scope by CSM email rather than handle — e.g.
+ * the template editor's "Visible to CSMs" dropdown, whose stored
+ * values are emails. Only includes CSMs whose book rows carry an
+ * email; de-duped by email, sorted by handle.
+ */
+export function csmRoster(customers: Customer[]): CsmRosterEntry[] {
+  const byEmail = new Map<string, CsmRosterEntry>();
+  for (const c of customers) {
+    const handle = c.customer_success_manager;
+    const email = c.customer_success_manager_email;
+    if (!handle || !email) continue;
+    const key = email.trim().toLowerCase();
+    if (!key || byEmail.has(key)) continue;
+    byEmail.set(key, { handle, email: key });
+  }
+  return [...byEmail.values()].sort((a, b) => a.handle.localeCompare(b.handle));
+}
+
 /**
  * Look up the internal CSM handle ("Jacob_Perry") owned by the
  * sign-in email. Walks the customer book for a row where
