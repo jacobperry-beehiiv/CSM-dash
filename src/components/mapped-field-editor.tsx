@@ -56,6 +56,46 @@ interface MappingsResponse {
   mappings: Record<string, FieldMapping>;
 }
 
+// ─── Shared mappings loader ────────────────────────────────────────
+// This editor renders MANY times per page: twice per customer-table
+// row (engagement + risk) across the whole book, plus ~5 on each
+// detail panel. If every instance fired its own GET on mount the
+// endpoint would see 2×N requests per table render — the request
+// fan-out behind the /api/settings/field-mappings load spike.
+//
+// The browser does NOT dedupe concurrent in-flight fetches (only
+// cached responses), so we dedupe here: one shared in-flight promise
+// that every instance awaits, plus a short-TTL memo of the result.
+// A full-book render now costs a single round-trip. The config
+// changes rarely, so the TTL staleness is a non-issue; an admin's
+// edit on /settings/hubspot-fields is picked up on the next reload.
+const MAPPINGS_TTL_MS = 30_000;
+let mappingsMemo: { at: number; data: Record<string, FieldMapping> } | null =
+  null;
+let mappingsInFlight: Promise<Record<string, FieldMapping>> | null = null;
+
+function loadFieldMappingsShared(): Promise<Record<string, FieldMapping>> {
+  if (mappingsMemo && Date.now() - mappingsMemo.at < MAPPINGS_TTL_MS) {
+    return Promise.resolve(mappingsMemo.data);
+  }
+  if (mappingsInFlight) return mappingsInFlight;
+  mappingsInFlight = fetch("/api/settings/field-mappings")
+    .then(async (r) => {
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const j = (await r.json()) as MappingsResponse;
+      const data = j.mappings ?? {};
+      mappingsMemo = { at: Date.now(), data };
+      return data;
+    })
+    .finally(() => {
+      // Clear the in-flight handle regardless of outcome so a failed
+      // load (which leaves the memo empty) is retried on the next
+      // mount rather than being wedged behind a rejected promise.
+      mappingsInFlight = null;
+    });
+  return mappingsInFlight;
+}
+
 export function MappedFieldEditor({
   fieldDef,
   currentValue,
@@ -83,22 +123,15 @@ export function MappedFieldEditor({
     null
   );
 
-  // Single fetch per mount. The dashboard renders this editor inline
-  // alongside ~5 other fields on the customer detail panel — each
-  // editor fires its own GET, but the browser dedupes identical
-  // GETs and Next.js's force-dynamic doesn't add cache-busting
-  // params, so in practice this becomes one real network round-trip
-  // per panel open.
+  // Mappings come from the shared loader above — one round-trip per
+  // page regardless of how many editors mount, instead of one GET
+  // per instance.
   useEffect(() => {
     let cancelled = false;
-    fetch("/api/settings/field-mappings")
-      .then(async (r) => {
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        return (await r.json()) as MappingsResponse;
-      })
-      .then((j) => {
+    loadFieldMappingsShared()
+      .then((mappings) => {
         if (cancelled) return;
-        setMapping(j.mappings[fieldDef.id] ?? null);
+        setMapping(mappings[fieldDef.id] ?? null);
         setMappingsLoaded(true);
       })
       .catch(() => {
