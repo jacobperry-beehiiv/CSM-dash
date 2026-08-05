@@ -20,6 +20,19 @@ accounts, and renewals — with both a CSM-side (Enterprise) lens and an AM-side
 The team-wide CSM filter and Enterprise/Growth/All segment toggle live in the
 header and apply across every page via URL search params.
 
+## Working on the code
+
+New engineer? Start with **[`CLAUDE.md`](CLAUDE.md)** — the onboarding
+guide (mental model, local dev, house style, gotchas). Deeper references
+live in **[`docs/`](docs/)**:
+
+- [docs/architecture.md](docs/architecture.md) — data lifecycle, sync
+  job, KV store, engines, auth.
+- [docs/how-to/](docs/how-to/) — task recipes (add a Metabase field, a
+  merge tag, an at-risk flag, an API endpoint, a settings field, a draft
+  CC option).
+- [docs/adr/](docs/adr/) — why the load-bearing decisions were made.
+
 ## Local setup
 
 ```bash
