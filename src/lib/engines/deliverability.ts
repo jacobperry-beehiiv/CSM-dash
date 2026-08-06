@@ -61,6 +61,12 @@ interface Q4Row {
   spam_reports: number;
 }
 
+interface Q5Row {
+  sendable_id: string;
+  bounce_classification: string;
+  bounces: number;
+}
+
 /**
  * Q1 — fetch posts sent in the last N days for the orgs in our CSM
  * book. The `plan_id = 8` filter alone returns ~100k posts/15d, well
@@ -270,6 +276,84 @@ async function fetchSpam(
   });
 }
 
+/**
+ * Q5 — SendGrid `bounce_classification` breakdown per post. Mirrors
+ * fetchSpam's index-hitting shape (timestamp partition prune +
+ * publication_id sort-key seek). Returns one row per
+ * (post_id, classification) bucket; the caller aggregates into a
+ * top-N list per post at snapshot time.
+ *
+ * Deferrals and dropped events carry a classification too, but the
+ * CSM narrative — "why did N of your subscribers bounce" — is what
+ * `event = 'bounce'` gives. Dropped ('sender reputation') is folded
+ * in as "Dropped" so a customer with a bad IP stops showing up as a
+ * mystery. Deferrals aren't bounces yet (SendGrid retries), so we
+ * exclude them to avoid double-counting when they eventually succeed
+ * OR permanently fail into 'bounce'.
+ *
+ * Empty bounce_classification is filtered out — SendGrid records a
+ * classification for every real bounce, so empty means the event is
+ * a click/open/etc. that leaked through the event filter, or a
+ * legacy row that predates classification tagging.
+ */
+async function fetchBounceReasons(
+  postIds: string[],
+  publicationIds: string[]
+): Promise<Q5Row[]> {
+  if (publicationIds.length === 0) return [];
+  const pubInClause = toInClause(publicationIds);
+  return runChunked<Q5Row>(postIds, (chunk) => {
+    const inClause = toInClause(chunk);
+    return `
+      SELECT
+        toString(sendable_id) AS sendable_id,
+        bounce_classification,
+        count() AS bounces
+      FROM default.sendgrid_v1
+      WHERE timestamp >= now() - INTERVAL 21 DAY
+        AND publication_id IN (${pubInClause})
+        AND sendable_type = 'Post'
+        AND message_type = 'campaign'
+        AND event IN ('bounce', 'dropped')
+        AND bounce_classification != ''
+        AND sendable_id IN (${inClause})
+      GROUP BY sendable_id, bounce_classification
+    `;
+  });
+}
+
+const TOP_BOUNCE_REASONS_KEEP = 3;
+
+/**
+ * Roll a flat list of (sendable_id, classification, bounces) tuples
+ * into `top_bounce_reasons` on each PostMetricsRow — top-N by count,
+ * count-desc, ties broken alphabetically for stable ordering across
+ * re-syncs.
+ */
+function attachBounceReasons(
+  posts: PostMetricsRow[],
+  bounceRows: Q5Row[]
+): void {
+  if (bounceRows.length === 0) return;
+  const byPost = new Map<string, Array<{ classification: string; count: number }>>();
+  for (const r of bounceRows) {
+    const list = byPost.get(String(r.sendable_id)) ?? [];
+    list.push({
+      classification: String(r.bounce_classification),
+      count: Number(r.bounces) || 0,
+    });
+    byPost.set(String(r.sendable_id), list);
+  }
+  for (const p of posts) {
+    const buckets = byPost.get(p.post_id);
+    if (!buckets) continue;
+    buckets.sort(
+      (a, b) => b.count - a.count || a.classification.localeCompare(b.classification)
+    );
+    p.top_bounce_reasons = buckets.slice(0, TOP_BOUNCE_REASONS_KEEP);
+  }
+}
+
 function joinRows(
   posts: Q1Row[],
   metrics: Q2Row[],
@@ -465,6 +549,23 @@ export async function fetchDeliverabilityPosts(
         e instanceof Error ? e.message : e
       );
     }
+
+    // Bounce classification breakdown — same per-date pattern as spam
+    // so a per-date failure doesn't nuke the sibling date. Isolated
+    // in its own try/catch so a bounces failure never demotes spam
+    // (or vice versa). Attaches top-3 buckets per post via
+    // attachBounceReasons(); posts with no bounces get no field at
+    // all (the panel skips the strip in that case).
+    try {
+      const dateBounces = await fetchBounceReasons(ids, pubIds);
+      const postsForDate = joined.filter((p) => p.sent_date === date);
+      attachBounceReasons(postsForDate, dateBounces);
+    } catch (e) {
+      console.error(
+        `[deliverability] pre-compute bounce reasons for ${date} failed:`,
+        e instanceof Error ? e.message : e
+      );
+    }
   }
 
   return { posts: joined, spam_dates: spamDates };
@@ -594,6 +695,37 @@ function spamForDate(
     `spam for ${targetDate}`
   );
   spamCache.set(targetDate, { expires: now + RUN_CACHE_TTL_MS, pending });
+  return pending;
+}
+
+/**
+ * Runtime overlay for bounce classifications on a target date the
+ * snapshot didn't pre-compute (target > pre-compute window OR sync
+ * failed the bounce query for that date). Same time-bound + cache
+ * shape as spamForDate — keeps the render path fast when the snapshot
+ * already has the answer.
+ */
+const bouncesCache = new Map<
+  string,
+  { expires: number; pending: Promise<Q5Row[]> }
+>();
+
+function bouncesForDate(
+  postIds: string[],
+  publicationIds: string[],
+  targetDate: string
+): Promise<Q5Row[]> {
+  if (postIds.length === 0) return Promise.resolve([]);
+  const now = Date.now();
+  const cached = bouncesCache.get(targetDate);
+  if (cached && cached.expires > now) return cached.pending;
+  const pending = withTimeout(
+    fetchBounceReasons(postIds, publicationIds),
+    SPAM_TIMEOUT_MS,
+    [],
+    `bounce reasons for ${targetDate}`
+  );
+  bouncesCache.set(targetDate, { expires: now + RUN_CACHE_TTL_MS, pending });
   return pending;
 }
 
@@ -742,6 +874,58 @@ export async function runDeliverabilityCheck(
           spam_rate: denom > 0 ? reports / denom : 0,
         };
       });
+    }
+  }
+
+  // Bounce-reasons overlay: piggybacks on the same "target date not in
+  // pre-compute window" gate as spam. We reuse `spamDates` as the
+  // signal because both are pre-computed in the same per-date loop —
+  // if that date pre-computed spam, it pre-computed bounces too (a
+  // per-date bounce failure logs but keeps the sibling spam success,
+  // so misses are rare and self-heal on the next sync). Only apply to
+  // posts that don't already carry top_bounce_reasons from the
+  // snapshot, so a partial pre-compute doesn't blow away real data.
+  if (!spamDates.has(targetDate) && targetPosts.length > 0) {
+    const needBounces = targetPosts.filter(
+      (p) => p.top_bounce_reasons === undefined
+    );
+    if (needBounces.length > 0) {
+      const pubIds = [
+        ...new Set(needBounces.map((p) => p.publication_id)),
+      ];
+      const bounces = await bouncesForDate(
+        needBounces.map((p) => p.post_id),
+        pubIds,
+        targetDate
+      );
+      if (bounces.length > 0) {
+        // Aggregate into top-N per post the same way sync does.
+        const byPost = new Map<
+          string,
+          Array<{ classification: string; count: number }>
+        >();
+        for (const r of bounces) {
+          const list = byPost.get(String(r.sendable_id)) ?? [];
+          list.push({
+            classification: String(r.bounce_classification),
+            count: Number(r.bounces) || 0,
+          });
+          byPost.set(String(r.sendable_id), list);
+        }
+        targetPosts = targetPosts.map((p) => {
+          const buckets = byPost.get(p.post_id);
+          if (!buckets) return p;
+          buckets.sort(
+            (a, b) =>
+              b.count - a.count ||
+              a.classification.localeCompare(b.classification)
+          );
+          return {
+            ...p,
+            top_bounce_reasons: buckets.slice(0, TOP_BOUNCE_REASONS_KEEP),
+          };
+        });
+      }
     }
   }
 
