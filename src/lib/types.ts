@@ -188,6 +188,18 @@ export interface PostMetricsRow {
   unsub_rate: number;
   spam_reports: number;
   spam_rate: number;
+  /**
+   * Top-3 SendGrid `bounce_classification` buckets for this post,
+   * populated at sync time (and via runtime overlay for older dates
+   * not in the pre-compute window). Sorted count-desc.
+   *
+   * Optional because pre-Aug-2026 snapshots didn't have this field —
+   * old cached snapshots read back as `undefined`, which the panel
+   * treats the same as "no bounce breakdown available" and skips the
+   * chip strip. Once the sync rewrites, every row carries it (empty
+   * array when there were no bounces on the send).
+   */
+  top_bounce_reasons?: Array<{ classification: string; count: number }>;
 }
 
 export type RedFlagSeverity = "critical" | "warning";
