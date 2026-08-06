@@ -74,9 +74,18 @@ jobs:
         # when the engine's per-day queries all soft-failed (which
         # happens silently when Metabase creds are missing — the very
         # bug this file guards against).
+        #
+        # Pattern is a FIXED string "(0 posts, " with the leading
+        # paren + trailing comma. Naive `grep -q "0 posts"` matches
+        # "30000 posts" too — every N-ending-in-0 count trips the
+        # guard as a false positive, blocking real syncs from
+        # committing (30k-post sync on 2026-08-06 was aborted this
+        # way). Anchoring to "(0 posts, " matches only the true
+        # empty case that sync.ts emits: "[sync] wrote … (0 posts,
+        # spam dates: none, 0.0s)".
         run: |
           npm run sync -- --only=deliverability 2>&1 | tee /tmp/sync-out.log
-          if grep -q "0 posts" /tmp/sync-out.log; then
+          if grep -qF "(0 posts, " /tmp/sync-out.log; then
             echo "::error::Deliverability sync wrote an empty snapshot (0 posts). Check the Metabase credentials + fetchPosts logs above — the engine's safe() wrapper swallows per-day errors so the outer sync succeeded despite every query failing."
             exit 1
           fi
