@@ -20,6 +20,7 @@ import { DeliverabilityLoading } from "@/components/deliverability-loading";
 import { QbrChartsTab } from "@/components/qbr-charts/qbr-charts-tab";
 import type { WorkspaceOption } from "@/components/qbr-charts/workspace-picker";
 import { WinsList } from "@/components/wins-list";
+import { UpgradeAnalysisQueue } from "@/components/upgrade-analysis-queue";
 import { JulietFlagList } from "@/components/juliet-flag-list";
 import { RenewalPanel } from "@/components/renewal-panel";
 import { RenewalCalendarPanel } from "@/components/renewal-calendar-panel";
@@ -107,9 +108,19 @@ export default async function CsmPage({
     "wins-opportunities",
     viewerEmail
   );
-  const TABS = winsEnabled
-    ? [...BASE_TABS, { id: "wins", label: "Wins & Opportunities" }]
-    : BASE_TABS;
+  const upgradeAnalysisEnabled = await isFeatureEnabledFor(
+    "upgrade-analysis",
+    viewerEmail
+  );
+  const TABS = [
+    ...BASE_TABS,
+    ...(winsEnabled
+      ? [{ id: "wins" as const, label: "Wins & Opportunities" }]
+      : []),
+    ...(upgradeAnalysisEnabled
+      ? [{ id: "upgrade-analysis" as const, label: "Upgrade Analysis" }]
+      : []),
+  ];
 
   try {
     const all = await loadCustomers();
@@ -126,6 +137,7 @@ export default async function CsmPage({
           csms={csms}
           priorEspOptions={profileOptions.priorEsp}
           techStackOptions={profileOptions.techStack}
+          upgradeAnalysisEnabled={upgradeAnalysisEnabled}
         />
       );
     } else if (tab === "at-risk") {
@@ -213,6 +225,20 @@ export default async function CsmPage({
             isAdmin={isAdmin(viewerEmail)}
           />
         );
+      }
+    } else if (tab === "upgrade-analysis") {
+      if (!upgradeAnalysisEnabled) {
+        body = (
+          <div className="text-sm text-muted italic">
+            Upgrade Analysis isn&apos;t enabled for this account yet.
+          </div>
+        );
+      } else {
+        // Full book for the lookup — the queue joins scan → pub name +
+        // owner_email + workspace_name. `filterCustomers(all, { csm })`
+        // scopes to the viewer's CSM handle (or all when ?csm=all).
+        const bookForQueue = filterCustomers(all, { csm });
+        body = <UpgradeAnalysisQueue customers={bookForQueue} csmScope={csm} />;
       }
     } else {
       body = (

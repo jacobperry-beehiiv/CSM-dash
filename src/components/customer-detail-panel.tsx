@@ -20,6 +20,7 @@ import { HubSpotLinkBadge } from "./hubspot-link-badge";
 import { MappedFieldEditor } from "./mapped-field-editor";
 import { ProfileFieldsSection } from "./profile-fields-section";
 import { StatusBadge } from "./status-badge";
+import { UpgradeAnalysisPanel } from "./upgrade-analysis-panel";
 import { MAPPABLE_DASHBOARD_FIELDS } from "@/lib/data/field-mappings-types";
 import { stripeCustomerUrl } from "@/lib/links";
 
@@ -62,6 +63,12 @@ interface Props {
    *  surfaced under the date so a CSM can sanity-check that an OOO
    *  auto-reply or newsletter isn't the reason "today" appears. */
   gmailMatch?: { subject: string | null; from: string | null } | null;
+  /** Mount the D&C Upgrade Analysis surface above `topSlot`. Off by
+   *  default — the page-level renderer (csm/page.tsx, am/page.tsx)
+   *  passes true when the viewer has the `upgrade-analysis` flag on.
+   *  The panel itself only fetches on demand; leaving it off just
+   *  hides the CTA rather than saving API cost. */
+  upgradeAnalysisEnabled?: boolean;
 }
 
 export function CustomerDetailPanel({
@@ -72,9 +79,13 @@ export function CustomerDetailPanel({
   onGmailRefresh,
   gmailScopeMissing,
   gmailMatch,
+  upgradeAnalysisEnabled = false,
 }: Props) {
   return (
     <div className="space-y-4">
+      {upgradeAnalysisEnabled && c.workspace_id ? (
+        <UpgradeAnalysisPanel publicationId={c.workspace_id} />
+      ) : null}
       {topSlot}
 
       {/* Top metadata strip — at-a-glance identifiers. Owner email

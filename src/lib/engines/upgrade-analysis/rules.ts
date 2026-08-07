@@ -82,10 +82,21 @@ export function scoreFunnel(
 
 // ─── Pillar 4: engagement (verified clicks, not opens) ───────────────────
 
+/** Minimum deliveries required before we score the engagement pillar
+ *  at all. A pub with <1000 deliveries in the window doesn't have
+ *  enough signal to tell "hollow" from "quiet". Below this we return
+ *  green with `insufficient_volume: true` so the UI can render the
+ *  cause instead of a false red. */
+const MIN_DELIV_FOR_ENGAGEMENT = 1000;
+
 /** Trust verified clicks, not opens. `hollow_list = true` when the
  *  verified click rate is below the config floor — the audience
  *  looks engaged (high raw open rate) but isn't (near-zero verified
- *  clicks = the opens are MPP/machine). */
+ *  clicks = the opens are MPP/machine).
+ *
+ *  Guarded on minimum volume: below MIN_DELIV_FOR_ENGAGEMENT the
+ *  pillar is skipped (green + insufficient_volume). Otherwise
+ *  `0 / 0 = 0 < 0.005` would false-red every pub that hasn't sent. */
 export function engagementTruth(
   funnel: FunnelCounters,
   cfg: UpgradeAnalysisConfig
@@ -95,11 +106,25 @@ export function engagementTruth(
   verified_ctor: number;
   hollow_list: boolean;
   raw_open_rate: number;
+  insufficient_volume: boolean;
 } {
   const verified_click_rate = rate(funnel.v_clicks, funnel.deliv);
   const verified_ctor = rate(funnel.v_clicks, funnel.v_opens);
   const raw_open_rate = rate(funnel.opens, funnel.deliv);
-  const hollow_list = verified_click_rate < cfg.engagement.hollow_verified_click_rate;
+
+  if (funnel.deliv < MIN_DELIV_FOR_ENGAGEMENT) {
+    return {
+      score: "green",
+      verified_click_rate,
+      verified_ctor,
+      hollow_list: false,
+      raw_open_rate,
+      insufficient_volume: true,
+    };
+  }
+
+  const hollow_list =
+    verified_click_rate < cfg.engagement.hollow_verified_click_rate;
 
   let score: PillarScore = "green";
   if (hollow_list) score = "red";
@@ -111,6 +136,7 @@ export function engagementTruth(
     verified_ctor,
     hollow_list,
     raw_open_rate,
+    insufficient_volume: false,
   };
 }
 
