@@ -16,7 +16,8 @@ export type FeatureId =
   | "gmail-draft-labels"
   | "customer-folders-sweep"
   | "sybill-ingest"
-  | "wins-opportunities";
+  | "wins-opportunities"
+  | "upgrade-analysis";
 
 /** Per-feature gate state. Defaults to "unrestricted" — everyone who
  *  passes the feature's own eligibility check (e.g. CSM with Gmail
@@ -88,6 +89,14 @@ export const FEATURE_METADATA: ReadonlyArray<FeatureMetadata> = [
     eligibility_note:
       "Detection endpoint honors the same allowlist — the daily cron will skip work for CSMs whose accounts aren't visible to any user with the flag on.",
   },
+  {
+    id: "upgrade-analysis",
+    label: "D&C Upgrade Analysis",
+    description:
+      "On-demand scorecard that pulls the six D&C Upgrade Analysis pillars (identity, acquisition, funnel, engagement, provider, network) from Metabase/ClickHouse and scores them against the tunable threshold registry. Primary use case: AMs pitching upgrades to Growth-tier customers can run the analysis first and see whether D&C needs to be looped in.",
+    eligibility_note:
+      "Endpoint is session-auth only (no cron in v1). ClickHouse/Postgres queries are relatively expensive — the 24h freshness guard prevents accidental repeat-scans.",
+  },
 ];
 
 /** Safe defaults — every feature ships unrestricted. New flags
@@ -119,6 +128,14 @@ export const DEFAULT_FLAGS: AdminFlags = {
     // Validate detection quality on Jacob's book before opening to
     // Hayden or the wider Enterprise CSM team.
     "wins-opportunities": {
+      restricted: true,
+      allowed_emails: ["jacob.perry@beehiiv.com"],
+    },
+    // Ships dark — PR 1 shipping just the engine + manual scan
+    // endpoint. Validate the scorecard against 10 D&C-decided cases
+    // before opening to AMs; UI + Slack search integration land in
+    // PR 2/3 and expand the allowlist.
+    "upgrade-analysis": {
       restricted: true,
       allowed_emails: ["jacob.perry@beehiiv.com"],
     },
