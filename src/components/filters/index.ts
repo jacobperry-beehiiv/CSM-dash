@@ -20,4 +20,8 @@ export { SearchInput } from "./search-input";
 export { SelectFilter, type SelectOption } from "./select-filter";
 export { SegmentToggle, type SegmentOption } from "./segment-toggle";
 export { ChipMultiSelect, type ChipOption } from "./chip-multi-select";
+export {
+  MultiSelectFilter,
+  type MultiSelectOption,
+} from "./multi-select-filter";
 export { FilterPanel } from "./filter-panel";

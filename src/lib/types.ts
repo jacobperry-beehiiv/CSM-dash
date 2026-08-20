@@ -132,6 +132,24 @@ export interface Customer {
    * expected cadence for a newer customer with < 3 sends of history.
    */
   expected_send_cadence_days?: number | null;
+
+  /**
+   * CSM-set "Prior ESP" — the newsletter platform(s) this customer
+   * migrated from (multi-select, e.g. ["Sailthru", "Mailchimp"]).
+   * Override-only: it never comes from Metabase/HubSpot, so it lives in
+   * the customer-overrides KV and survives the twice-daily snapshot
+   * refresh. The selectable list is admin-managed at
+   * /settings/profile-fields.
+   */
+  prior_esp?: string[] | null;
+  /**
+   * CSM-set "Tech Stack" — the other tools this customer uses
+   * (multi-select, e.g. ["WordPress", "Patreon"]). Override-only, same
+   * KV + admin-managed option list as prior_esp. Stored as its own
+   * typed override key because the generic field_overrides bag only
+   * holds single string values.
+   */
+  tech_stack?: string[] | null;
 }
 
 export interface HubSpotContactRef {

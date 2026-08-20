@@ -2,6 +2,7 @@ import { Suspense } from "react";
 import { auth } from "@/auth";
 import { SettingsSidebar } from "@/components/settings-sidebar";
 import { isFeatureEnabledFor } from "@/lib/auth/feature-flags";
+import { isProfileOptionsAdmin } from "@/lib/auth/admin";
 
 export default async function SettingsLayout({
   children,
@@ -35,6 +36,15 @@ export default async function SettingsLayout({
       label: "Wins detection thresholds",
       description:
         "Tune the per-rule thresholds the daily wins-detection engine scores against. Overrides layer over shipped defaults; blank fields fall through.",
+    });
+  }
+  // Admin-only: curate the shared Prior ESP / Tech Stack option lists.
+  if (isProfileOptionsAdmin(email)) {
+    extras.push({
+      href: "/settings/profile-fields",
+      label: "Prior ESP & Tech Stack",
+      description:
+        "Manage the shared option lists for the Prior ESP and Tech Stack account fields.",
     });
   }
   return (

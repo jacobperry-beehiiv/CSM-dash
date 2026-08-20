@@ -26,6 +26,7 @@ import { isAdmin } from "@/lib/auth/admin";
 import { isFeatureEnabledFor } from "@/lib/auth/feature-flags";
 import { loadWinsBlob } from "@/lib/data/wins-store";
 import { loadJulietFlags } from "@/lib/data/juliet-flags-store";
+import { loadProfileFieldOptions } from "@/lib/data/profile-field-options";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -123,7 +124,15 @@ export default async function CsmPage({
 
     if (tab === "book") {
       const fullBook = filterCustomers(all, { csm }).map(withUtilization);
-      body = <CustomerTable initialCustomers={fullBook} csms={csms} />;
+      const profileOptions = await loadProfileFieldOptions();
+      body = (
+        <CustomerTable
+          initialCustomers={fullBook}
+          csms={csms}
+          priorEspOptions={profileOptions.priorEsp}
+          techStackOptions={profileOptions.techStack}
+        />
+      );
     } else if (tab === "at-risk") {
       const result = await runAtRiskCheck({ customers: book, csmName: null });
       body = <AtRiskTable data={result} csms={csms} />;

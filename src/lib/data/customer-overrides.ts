@@ -73,6 +73,21 @@ export interface CustomerOverride {
   expected_send_cadence_days?: number;
   expected_send_cadence_updated_at?: string;
   expected_send_cadence_updated_by?: string;
+  /** CSM-set "Prior ESP" — the newsletter platform(s) this customer
+   *  migrated from (multi-select, chosen from the admin-managed list at
+   *  /settings/profile-fields). Stored as its own typed key rather than
+   *  in the field_overrides bag because the bag only holds single
+   *  strings. An empty / undefined array clears the override. */
+  prior_esp?: string[];
+  prior_esp_updated_at?: string;
+  prior_esp_updated_by?: string;
+  /** CSM-set "Tech Stack" — the other tools this customer uses
+   *  (multi-select). Stored as its own typed key rather than in the
+   *  field_overrides bag because the bag only holds single strings.
+   *  An empty / undefined array clears the override. */
+  tech_stack?: string[];
+  tech_stack_updated_at?: string;
+  tech_stack_updated_by?: string;
 }
 
 export type OverrideMap = Record<string, CustomerOverride>;
@@ -132,6 +147,29 @@ export async function setOverride(
   applyField("expected_send_cadence_days");
   applyField("expected_send_cadence_updated_at");
   applyField("expected_send_cadence_updated_by");
+  applyField("prior_esp_updated_at");
+  applyField("prior_esp_updated_by");
+  applyField("tech_stack_updated_at");
+  applyField("tech_stack_updated_by");
+  // prior_esp and tech_stack are arrays — an empty / omitted array
+  // clears the field, otherwise it REPLACES the prior selection
+  // (multi-select edits send the full desired set, not a delta).
+  if ("prior_esp" in patch) {
+    const incoming = patch.prior_esp;
+    if (!incoming || incoming.length === 0) {
+      delete current.prior_esp;
+    } else {
+      current.prior_esp = incoming;
+    }
+  }
+  if ("tech_stack" in patch) {
+    const incoming = patch.tech_stack;
+    if (!incoming || incoming.length === 0) {
+      delete current.tech_stack;
+    } else {
+      current.tech_stack = incoming;
+    }
+  }
   // field_overrides is a bag — patches MERGE with the existing bag
   // rather than replace it, so a single-field edit doesn't wipe out
   // every prior mapped-field override.
@@ -200,6 +238,11 @@ export function applyOverride(
     // pinned value only relaxes the threshold, never tightens it.
     expected_send_cadence_days:
       ov.expected_send_cadence_days ?? customer.expected_send_cadence_days,
+    // Profile fields — override-only, so the override value is the
+    // source of truth when present. (`customer.*` is effectively always
+    // undefined here since these never come from the snapshot.)
+    prior_esp: ov.prior_esp ?? customer.prior_esp,
+    tech_stack: ov.tech_stack ?? customer.tech_stack,
   };
   // Spread bag values onto the customer. Each entry's `value`
   // replaces the corresponding Customer field; null clears it. Type

@@ -20,3 +20,22 @@ export function isAdmin(email: string | null | undefined): boolean {
 export function listAdminEmails(): string[] {
   return Array.from(ADMIN_EMAILS);
 }
+
+/**
+ * Separate, narrower allowlist for managing the shared Prior ESP /
+ * Tech Stack option lists at /settings/profile-fields. Kept distinct
+ * from ADMIN_EMAILS on purpose: being able to curate these dropdowns
+ * shouldn't grant the full super-admin surface (team-todos, flags),
+ * and vice-versa. Expand by adding emails here.
+ */
+const PROFILE_OPTIONS_ADMINS: ReadonlySet<string> = new Set([
+  "juliet@beehiiv.com",
+  "jacob.perry@beehiiv.com",
+]);
+
+export function isProfileOptionsAdmin(
+  email: string | null | undefined
+): boolean {
+  if (!email) return false;
+  return PROFILE_OPTIONS_ADMINS.has(email.trim().toLowerCase());
+}
