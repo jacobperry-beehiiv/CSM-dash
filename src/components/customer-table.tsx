@@ -69,6 +69,19 @@ const COLUMNS: ColumnDef[] = [
   // Engagement bumped 8 → 10 so "Medium Touch" no longer bleeds the
   // header / pill into the CSM cell.
   { key: "company_engagement", label: "Engagement", width: "w-[10%]", showAt: "lg" },
+  // Live / Onboarding / At Risk / Churned pill from HubSpot's
+  // company_status. Ships default-visible alongside Engagement + CSM
+  // so the same "state of the account" cluster reads left-to-right;
+  // the column picker can hide it. The Status filter dropdown above
+  // the table already existed — surfacing the pill inline saves the
+  // reader an expand click to see whether a row is Live vs still
+  // Onboarding when scanning.
+  {
+    key: "property_company_status",
+    label: "Status",
+    width: "w-[8%]",
+    showAt: "md",
+  },
   // CSM bumped 8 → 10 so "Jacob Perry" (and similar) stays on one
   // line. Lives next to Engagement because both answer "who/what
   // owns this account?". Stays in sync with the customer-overrides
@@ -320,18 +333,34 @@ export function CustomerTable({
     gmailDateFor,
   ]);
 
-  // Counts shown next to each option in the lifecycle dropdown so the
+  // Counts shown next to each option in the status dropdown so the
   // viewer sees how many rows each filter would yield. Derived from
   // the full book (ignoring the active status filter), so the counts
   // stay stable as the user toggles.
-  const statusCounts = useMemo(() => {
-    const counts: { live: number; onboarding: number } = { live: 0, onboarding: 0 };
+  //
+  // Discovered dynamically from the book rather than hard-coded —
+  // HubSpot has more than Live/Onboarding (At Risk, Churned, and any
+  // custom values a team adds) and we want each to be filterable
+  // without a code change. The option list is sorted by count desc
+  // so the most common statuses land at the top of the dropdown.
+  const statusOptions = useMemo(() => {
+    const counts = new Map<string, number>();
     for (const c of initialCustomers) {
-      const s = (c.property_company_status ?? "").toLowerCase();
-      if (s === "live") counts.live++;
-      else if (s === "onboarding") counts.onboarding++;
+      const raw = c.property_company_status?.trim();
+      if (!raw) continue;
+      counts.set(raw, (counts.get(raw) ?? 0) + 1);
     }
-    return counts;
+    const options = Array.from(counts.entries()).map(([value, count]) => ({
+      value,
+      label: value,
+      count,
+    }));
+    options.sort((a, b) => {
+      if (b.count !== a.count) return b.count - a.count;
+      return a.label.localeCompare(b.label);
+    });
+    const total = options.reduce((s, o) => s + o.count, 0);
+    return { options, total };
   }, [initialCustomers]);
 
   function toggleSort(key: SortKey) {
@@ -659,6 +688,8 @@ export function CustomerTable({
             renderReadOnly={(v) => <StatusBadge value={v ?? null} />}
           />
         );
+      case "property_company_status":
+        return <StatusBadge value={c.property_company_status ?? null} />;
       case "customer_success_manager":
         // Snake-cased identifier → "Jacob Perry" reads cleaner inline.
         // Empty cell when unassigned so the column doesn't shout "-"
@@ -778,15 +809,8 @@ export function CustomerTable({
           value={statusFilter}
           onChange={setStatusFilter}
           emptyLabel="All"
-          emptyCount={statusCounts.live + statusCounts.onboarding}
-          options={[
-            { value: "Live", label: "Live", count: statusCounts.live },
-            {
-              value: "Onboarding",
-              label: "Onboarding",
-              count: statusCounts.onboarding,
-            },
-          ]}
+          emptyCount={statusOptions.total}
+          options={statusOptions.options}
         />
       </FilterBar>
 
