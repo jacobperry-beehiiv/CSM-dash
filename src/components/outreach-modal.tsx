@@ -193,14 +193,22 @@ export function OutreachModal({
   }, [templateUsesAdGap, adGap, customer.workspace_id]);
 
   // Drives the first-name resolver — "Hi Eric," when sending to one
-  // person, "Hi there," when sending to a group. Also threads the
-  // deliverability sub-context through when the modal was opened
-  // from a flagged-send launcher, so deliverability-warning templates
-  // see real values instead of empty {{publication_name}} etc.
+  // person, "Hi there," when sending to a group. `recipient_email`
+  // MUST be threaded through when exactly one recipient is checked so
+  // the resolver can look up that specific contact in
+  // hubspot_contacts. Without it, firstNameForContext falls through
+  // to `bestHubspotFirstName`, which picks the customer's PRIMARY
+  // contact regardless of who's actually in the To field — so
+  // checking Colton produced "Hi Cait," because Cait is primary.
+  // Same shape the bulk-drafts modal already uses via its `rerender`
+  // closure. Also threads the deliverability sub-context through when
+  // the modal was opened from a flagged-send launcher.
   const ctx: MergeContext = {
     ladder,
     adGap,
     recipient_count: recipientEmails.length,
+    recipient_email:
+      recipientEmails.length === 1 ? recipientEmails[0] : null,
     deliverability,
   };
   const subject = template
