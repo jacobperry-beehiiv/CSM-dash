@@ -9,6 +9,15 @@ export interface Customer {
   active_subs: number | null;
   max_subscriptions: number | null;
   renewal_date: string | null;
+  /**
+   * Contractual renewal date straight from Metabase q10600's
+   * `contract_renewal` column. Distinct from `renewal_date` /
+   * `next_invoice`, which can fall back to the Stripe next-invoice
+   * date — this is the raw contract term-end, surfaced as its own
+   * column on the Renewals tab. Null for month-to-month / no-contract
+   * accounts.
+   */
+  contract_renewal?: string | null;
   company_engagement: string | null;
   customer_success_manager: string | null;
   customer_success_manager_email?: string | null;
@@ -197,6 +206,18 @@ export interface PostMetricsRow {
   unsub_rate: number;
   spam_reports: number;
   spam_rate: number;
+  /**
+   * Top-3 SendGrid `bounce_classification` buckets for this post,
+   * populated at sync time (and via runtime overlay for older dates
+   * not in the pre-compute window). Sorted count-desc.
+   *
+   * Optional because pre-Aug-2026 snapshots didn't have this field —
+   * old cached snapshots read back as `undefined`, which the panel
+   * treats the same as "no bounce breakdown available" and skips the
+   * chip strip. Once the sync rewrites, every row carries it (empty
+   * array when there were no bounces on the send).
+   */
+  top_bounce_reasons?: Array<{ classification: string; count: number }>;
 }
 
 export type RedFlagSeverity = "critical" | "warning";

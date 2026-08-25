@@ -13,6 +13,7 @@ import {
   type StoredTemplate,
 } from "@/lib/templates/types";
 import { useViewerEmail } from "@/lib/auth-client";
+import { TEAM_CC_OPTIONS } from "@/lib/data/team-cc";
 import { getTierLadder } from "@/lib/tiers/client";
 import type { EnterpriseTier } from "@/lib/tiers/store";
 import type { AdGapReport } from "@/lib/types";
@@ -102,6 +103,10 @@ export function OutreachModal({
   const [selectedRecipients, setSelectedRecipients] = useState<Set<string>>(
     () => new Set(recipientOptions.filter((r) => r.isOwner).map((r) => r.email.toLowerCase()))
   );
+  // Optional team-lead CCs (Richard / Juliet) — same toggle as the
+  // bulk-drafts modal. Written into the draft's Cc header on create.
+  const [teamCcEmails, setTeamCcEmails] = useState<Set<string>>(new Set());
+  const ccLine = [...teamCcEmails].join(", ");
 
   function toggleRecipient(email: string) {
     const key = email.toLowerCase();
@@ -223,6 +228,7 @@ export function OutreachModal({
           drafts: [
             {
               to: toLine,
+              cc: ccLine || undefined,
               subject,
               body_html,
               from: template.send_as_email || undefined,
@@ -276,6 +282,9 @@ export function OutreachModal({
             <p className="text-xs text-muted mt-0.5 truncate">
               To: {toLine || "(no recipients selected)"}
             </p>
+            {ccLine ? (
+              <p className="text-xs text-muted mt-0.5 truncate">CC: {ccLine}</p>
+            ) : null}
           </div>
           <button
             onClick={onClose}
@@ -322,6 +331,40 @@ export function OutreachModal({
                 );
               })}
             </ul>
+          </div>
+        ) : null}
+
+        {TEAM_CC_OPTIONS.length > 0 ? (
+          <div className="px-4 py-3 border-b border-border">
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs">
+              <span className="text-muted">CC:</span>
+              {TEAM_CC_OPTIONS.map((opt) => {
+                const checked = teamCcEmails.has(opt.email);
+                return (
+                  <label
+                    key={opt.email}
+                    className="flex items-center gap-1.5 cursor-pointer text-fg"
+                    title={opt.email}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={(e) =>
+                        setTeamCcEmails((prev) => {
+                          const next = new Set(prev);
+                          if (e.target.checked) next.add(opt.email);
+                          else next.delete(opt.email);
+                          return next;
+                        })
+                      }
+                      className="h-3.5 w-3.5 rounded border-border-strong cursor-pointer"
+                    />
+                    <span className="font-medium">{opt.label}</span>
+                    <span className="text-subtle">({opt.email})</span>
+                  </label>
+                );
+              })}
+            </div>
           </div>
         ) : null}
 

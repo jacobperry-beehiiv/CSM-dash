@@ -1,5 +1,4 @@
 import { Suspense } from "react";
-import { redirect } from "next/navigation";
 import {
   filterCustomers,
   getDataSource,
@@ -22,6 +21,8 @@ import { QbrChartsTab } from "@/components/qbr-charts/qbr-charts-tab";
 import type { WorkspaceOption } from "@/components/qbr-charts/workspace-picker";
 import { WinsList } from "@/components/wins-list";
 import { JulietFlagList } from "@/components/juliet-flag-list";
+import { RenewalPanel } from "@/components/renewal-panel";
+import { RenewalCalendarPanel } from "@/components/renewal-calendar-panel";
 import { isAdmin } from "@/lib/auth/admin";
 import { isFeatureEnabledFor } from "@/lib/auth/feature-flags";
 import { loadWinsBlob } from "@/lib/data/wins-store";
@@ -35,6 +36,8 @@ const BASE_TABS = [
   { id: "book", label: "All assigned" },
   { id: "deliverability", label: "Deliverability" },
   { id: "at-risk", label: "At-risk" },
+  { id: "renewals", label: "Renewals" },
+  { id: "renewal-calendar", label: "Renewal Calendar" },
   { id: "juliet", label: "Flagged for Juliet" },
   { id: "qbr-charts", label: "QBR Charts" },
 ];
@@ -81,14 +84,6 @@ export default async function CsmPage({
   searchParams: Promise<SP>;
 }) {
   const sp = await searchParams;
-  // Renewals moved to /am — redirect with the existing CSM filter so
-  // bookmarks land at the same data. Preserves ?csm= so deep-links
-  // to a specific CSM's renewal list keep working.
-  if (sp.tab === "renewals") {
-    const params = new URLSearchParams({ tab: "renewals" });
-    if (sp.csm) params.set("csm", sp.csm);
-    redirect(`/am?${params.toString()}`);
-  }
   // Legacy URLs may still link to ?tab=utilization. Feature/ad-network
   // filters now do that drill-down inside the consolidated book view.
   const rawTab = sp.tab ?? "book";
@@ -167,6 +162,27 @@ export default async function CsmPage({
           csm={csm}
           isAdmin={admin}
         />
+      );
+    } else if (tab === "renewals") {
+      // Renewals came back to /csm — CSMs own their renewals now
+      // (previously routed to /am). Uses the same filter shape as
+      // the rest of /csm: viewer's CSM scope by default, ?csm=all
+      // for the team-wide view Juliet/Priya use for pacing across
+      // the whole book. Book is filterCustomers(all, { csm }) so
+      // it includes both Enterprise + Growth, and RenewalPanel's
+      // internal cadence filter drops monthly customers anyway.
+      const renewalsBook = filterCustomers(all, { csm });
+      body = (
+        <RenewalPanel
+          customers={renewalsBook}
+          csms={csms}
+          showTeamRollup={sp.csm === "all"}
+        />
+      );
+    } else if (tab === "renewal-calendar") {
+      const renewalsBook = filterCustomers(all, { csm });
+      body = (
+        <RenewalCalendarPanel customers={renewalsBook} csms={csms} />
       );
     } else if (tab === "juliet") {
       // Team-wide queue — always show every flagged workspace,

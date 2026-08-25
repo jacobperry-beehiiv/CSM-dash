@@ -315,6 +315,18 @@ export interface AmSettings {
    * is a no-op (current behavior).
    */
   onboarding_drive_template_folder_id_no_op?: string;
+  /**
+   * Slack channel ID where the CSM-owned renewals workflow posts
+   * pricing threads. Every renewal — whether kicked off via the
+   * `@normbot renewal` command or auto-opened by the 90d milestone
+   * engine — gets a single kickoff message in this channel, and
+   * 60/30/7d milestone pings thread-reply into that saved message
+   * so Richard/Juliet/Priya can watch pacing without checking the
+   * dashboard. Leave blank to disable the workflow; the milestone
+   * engine will short-circuit with a clear error rather than post
+   * to a fallback channel.
+   */
+  renewals_slack_channel_id?: string;
 }
 
 /** Built-in status list. The first two names ("Pinged" and
@@ -440,6 +452,7 @@ export const DEFAULTS: SettingsShape = {
     daily_digest_channel_id: "",
     onboarding_drive_template_folder_id: "",
     onboarding_drive_template_folder_id_no_op: "",
+    renewals_slack_channel_id: "",
   },
   personal_todos: {
     trigger_emoji: DEFAULT_TODO_TRIGGER_EMOJI,

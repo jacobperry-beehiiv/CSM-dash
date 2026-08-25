@@ -1437,9 +1437,81 @@ function DeliverabilityDetail({ alert }: { alert: DeliverabilityAlert }) {
             ))}
           </ul>
         )}
+        <TopBounceReasons
+          reasons={alert.post.top_bounce_reasons}
+          flagged={alert.flags.length > 0}
+        />
       </div>
     </div>
   );
+}
+
+/**
+ * Compact chip strip surfacing the top-3 SendGrid bounce_classification
+ * buckets that contributed to this post's bounces. Renders inline
+ * below the flag list on FLAGGED posts only — a clean send doesn't
+ * need bounce triage context (bounces below threshold are normal),
+ * and hiding it there keeps the "everything healthy" case visually
+ * quiet.
+ *
+ * Empty / undefined `reasons` → nothing. That covers legacy snapshots
+ * before this field existed AND healthy sends whose bounce query
+ * legitimately returned no bounces (the engine drops the field
+ * entirely in that case, not an empty array — see attachBounceReasons).
+ */
+function TopBounceReasons({
+  reasons,
+  flagged,
+}: {
+  reasons?: Array<{ classification: string; count: number }>;
+  flagged: boolean;
+}) {
+  if (!flagged) return null;
+  if (!reasons || reasons.length === 0) return null;
+  return (
+    <div className="mt-3 pt-3 border-t border-border">
+      <div
+        className="text-[11px] font-semibold uppercase tracking-wide text-muted mb-1.5"
+        title="Top SendGrid bounce classifications for this send — points at whether the bounces are a list-quality problem (Invalid Address / Mailbox Unavailable), a reputation problem (Reputation / Content), or a technical / auth misconfiguration."
+      >
+        Top bounce reasons
+      </div>
+      <div className="flex flex-wrap gap-1.5">
+        {reasons.map((r) => (
+          <span
+            key={r.classification}
+            className="inline-flex items-center gap-1 px-2 py-0.5 text-xs rounded-full border border-border-strong bg-canvas text-fg"
+            title={`${r.count.toLocaleString()} bounces classified as "${r.classification}" by SendGrid`}
+          >
+            <span>{humanizeBounceClassification(r.classification)}</span>
+            <span className="text-muted font-mono text-[10px]">
+              {r.count.toLocaleString()}
+            </span>
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * SendGrid ships some classifications as CamelCase enum tokens
+ * ("QuotaIssues", "AuthenticationFailed", "InactiveMailbox") and
+ * others as already-humanized phrases ("Mailbox Unavailable",
+ * "Invalid Address", "Frequency or Volume Too High"). Split the
+ * CamelCase ones on capitalized boundaries and lowercase the tail
+ * so the strip reads consistently. Leave already-spaced values
+ * untouched.
+ */
+function humanizeBounceClassification(raw: string): string {
+  if (!raw) return "—";
+  if (/\s/.test(raw)) return raw; // already humanized
+  // Split "AuthenticationFailed" → ["Authentication", "Failed"]
+  const parts = raw.match(/[A-Z]+[a-z0-9]*|[a-z0-9]+/g);
+  if (!parts || parts.length === 0) return raw;
+  return parts
+    .map((p, i) => (i === 0 ? p : p.toLowerCase()))
+    .join(" ");
 }
 
 function Metric({ label, value }: { label: string; value: string }) {

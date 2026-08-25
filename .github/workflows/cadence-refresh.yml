@@ -42,6 +42,34 @@ jobs:
           fi
           echo "All required secrets present."
 
+      # TEMP DIAGNOSTIC — remove once the 307 mystery is resolved.
+      # Prints length + a short SHA-256 prefix of the bypass secret so
+      # we can compare against the Vercel-visible value without ever
+      # revealing the raw secret. GitHub Actions masks any string that
+      # matches the secret value; hashes and byte counts are neither
+      # the value nor substrings of it, so they print clean.
+      - name: Debug bypass secret shape
+        env:
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+          DASHBOARD_URL: ${{ secrets.DASHBOARD_URL }}
+        run: |
+          raw_len=$(printf '%s' "$VERCEL_AUTOMATION_BYPASS_SECRET" | wc -c | tr -d ' ')
+          trimmed=$(printf '%s' "$VERCEL_AUTOMATION_BYPASS_SECRET" \
+            | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+          trimmed_len=$(printf '%s' "$trimmed" | wc -c | tr -d ' ')
+          sha_prefix=$(printf '%s' "$VERCEL_AUTOMATION_BYPASS_SECRET" \
+            | shasum -a 256 | cut -c1-12)
+          echo "Bypass secret raw byte length: $raw_len (expected 32)"
+          echo "Bypass secret whitespace-trimmed byte length: $trimmed_len"
+          if [ "$raw_len" != "$trimmed_len" ]; then
+            echo "::warning::Bypass secret has surrounding whitespace \
+              ($((raw_len - trimmed_len)) extra bytes)"
+          fi
+          echo "Bypass secret SHA-256 (first 12 hex): $sha_prefix"
+          echo "(compare against: printf '%s' '<paste from Vercel>' | shasum -a 256 | cut -c1-12)"
+          url_len=$(printf '%s' "$DASHBOARD_URL" | wc -c | tr -d ' ')
+          echo "DASHBOARD_URL byte length: $url_len"
+
       - name: POST /api/customers/refresh-cadence
         env:
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
@@ -49,7 +77,13 @@ jobs:
           VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
         run: |
           set -e
-          response=$(curl -sS -w "\n%{http_code}" -X POST \
+          # TEMP DIAGNOSTIC — dump response headers so we can see
+          # WHICH auth layer is redirecting. `-D /tmp/hdrs` writes
+          # the full response header block to a file; we then cat
+          # it after the body. Look for `location:` — if it points
+          # at a `vercel.com/sso-api...` URL, Deployment Protection
+          # is rejecting; if it's same-origin, it's app-level.
+          response=$(curl -sS -D /tmp/hdrs -w "\n%{http_code}" -X POST \
             -H "Authorization: Bearer ${CRON_SECRET}" \
             -H "x-vercel-protection-bypass: ${VERCEL_AUTOMATION_BYPASS_SECRET}" \
             -H "Content-Type: application/json" \
@@ -58,6 +92,9 @@ jobs:
           code=$(echo "$response" | tail -n1)
           echo "HTTP $code"
           echo "$body"
+          echo "=== Response headers ==="
+          cat /tmp/hdrs
+          echo "=== End headers ==="
           if [ "$code" != "200" ]; then
             echo "::error::Cadence refresh failed with HTTP $code"
             exit 1

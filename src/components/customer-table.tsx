@@ -38,6 +38,8 @@ import type { AdGapReport } from "@/lib/types";
 import { getTierLadder } from "@/lib/tiers/client";
 import { buildBulkDrafts } from "@/lib/templates/bulk-drafts";
 import { BulkDraftsModal, type BulkDraft } from "./bulk-drafts-modal";
+import { MappedFieldEditor } from "./mapped-field-editor";
+import { MAPPABLE_DASHBOARD_FIELDS } from "@/lib/data/field-mappings-types";
 
 type SortKey = keyof CustomerWithMetrics | "features_enabled";
 type SortDir = "asc" | "desc";
@@ -67,6 +69,19 @@ const COLUMNS: ColumnDef[] = [
   // Engagement bumped 8 → 10 so "Medium Touch" no longer bleeds the
   // header / pill into the CSM cell.
   { key: "company_engagement", label: "Engagement", width: "w-[10%]", showAt: "lg" },
+  // Live / Onboarding / At Risk / Churned pill from HubSpot's
+  // company_status. Ships default-visible alongside Engagement + CSM
+  // so the same "state of the account" cluster reads left-to-right;
+  // the column picker can hide it. The Status filter dropdown above
+  // the table already existed — surfacing the pill inline saves the
+  // reader an expand click to see whether a row is Live vs still
+  // Onboarding when scanning.
+  {
+    key: "property_company_status",
+    label: "Status",
+    width: "w-[8%]",
+    showAt: "md",
+  },
   // CSM bumped 8 → 10 so "Jacob Perry" (and similar) stays on one
   // line. Lives next to Engagement because both answer "who/what
   // owns this account?". Stays in sync with the customer-overrides
@@ -400,18 +415,34 @@ export function CustomerTable({
     gmailDateFor,
   ]);
 
-  // Counts shown next to each option in the lifecycle dropdown so the
+  // Counts shown next to each option in the status dropdown so the
   // viewer sees how many rows each filter would yield. Derived from
   // the full book (ignoring the active status filter), so the counts
   // stay stable as the user toggles.
-  const statusCounts = useMemo(() => {
-    const counts: { live: number; onboarding: number } = { live: 0, onboarding: 0 };
+  //
+  // Discovered dynamically from the book rather than hard-coded —
+  // HubSpot has more than Live/Onboarding (At Risk, Churned, and any
+  // custom values a team adds) and we want each to be filterable
+  // without a code change. The option list is sorted by count desc
+  // so the most common statuses land at the top of the dropdown.
+  const statusOptions = useMemo(() => {
+    const counts = new Map<string, number>();
     for (const c of initialCustomers) {
-      const s = (c.property_company_status ?? "").toLowerCase();
-      if (s === "live") counts.live++;
-      else if (s === "onboarding") counts.onboarding++;
+      const raw = c.property_company_status?.trim();
+      if (!raw) continue;
+      counts.set(raw, (counts.get(raw) ?? 0) + 1);
     }
-    return counts;
+    const options = Array.from(counts.entries()).map(([value, count]) => ({
+      value,
+      label: value,
+      count,
+    }));
+    options.sort((a, b) => {
+      if (b.count !== a.count) return b.count - a.count;
+      return a.label.localeCompare(b.label);
+    });
+    const total = options.reduce((s, o) => s + o.count, 0);
+    return { options, total };
   }, [initialCustomers]);
 
   // Per-option counts for the Prior ESP dropdown + Tech Stack chips,
@@ -753,7 +784,24 @@ export function CustomerTable({
         );
       }
       case "company_engagement":
-        return <StatusBadge value={c.company_engagement} />;
+        // Compact inline editor — CSMs can change Engagement (Touch
+        // level) without expanding the detail panel. Push-to-HubSpot
+        // is wired via the standard field-mappings flow the detail
+        // panel already uses; the read-only chip stays visually
+        // identical, just clickable now.
+        return (
+          <MappedFieldEditor
+            compact
+            fieldDef={MAPPABLE_DASHBOARD_FIELDS.find(
+              (f) => f.id === "company_engagement"
+            )!}
+            currentValue={c.company_engagement}
+            workspaceId={c.workspace_id}
+            renderReadOnly={(v) => <StatusBadge value={v ?? null} />}
+          />
+        );
+      case "property_company_status":
+        return <StatusBadge value={c.property_company_status ?? null} />;
       case "customer_success_manager":
         // Snake-cased identifier → "Jacob Perry" reads cleaner inline.
         // Empty cell when unassigned so the column doesn't shout "-"
@@ -766,10 +814,25 @@ export function CustomerTable({
           <span className="text-subtle text-xs italic">unassigned</span>
         );
       case "property_risk_level":
+        // Compact inline editor — CSMs can change Risk without
+        // expanding the detail panel. The chip render is unchanged
+        // (RiskLevelChip is passed through as renderReadOnly), so
+        // sort behavior, colour coding, and the risk-detail tooltip
+        // all keep working exactly as before.
         return (
-          <RiskLevelChip
-            level={c.property_risk_level}
-            detail={c.property_risk_level_detail}
+          <MappedFieldEditor
+            compact
+            fieldDef={MAPPABLE_DASHBOARD_FIELDS.find(
+              (f) => f.id === "property_risk_level"
+            )!}
+            currentValue={c.property_risk_level}
+            workspaceId={c.workspace_id}
+            renderReadOnly={(v) => (
+              <RiskLevelChip
+                level={v ?? null}
+                detail={c.property_risk_level_detail}
+              />
+            )}
           />
         );
       case "next_invoice": {
@@ -858,15 +921,8 @@ export function CustomerTable({
           value={statusFilter}
           onChange={setStatusFilter}
           emptyLabel="All"
-          emptyCount={statusCounts.live + statusCounts.onboarding}
-          options={[
-            { value: "Live", label: "Live", count: statusCounts.live },
-            {
-              value: "Onboarding",
-              label: "Onboarding",
-              count: statusCounts.onboarding,
-            },
-          ]}
+          emptyCount={statusOptions.total}
+          options={statusOptions.options}
         />
         {priorEspOptions.length > 0 ? (
           <MultiSelectFilter

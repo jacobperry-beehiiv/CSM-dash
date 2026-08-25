@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { TEAM_CC_OPTIONS } from "@/lib/data/team-cc";
 
 export interface BulkDraftRecipient {
   email: string;
@@ -251,6 +252,30 @@ export function BulkDraftsModal({
   // active label keeps them in or the recipient is the owner
   // (default-checked). Owners stay default-checked regardless.
   const [activeLabels, setActiveLabels] = useState<Set<string>>(new Set());
+  // Team leads the user has opted to CC on this batch (Richard / Juliet).
+  // Applied on top of any per-draft CC (e.g. the Enterprise CC-the-CSM
+  // path) and — unlike per-customer CCs — carried onto the combined-BCC
+  // blast too, since it's a deliberate team-wide choice, not per-customer.
+  const [teamCcEmails, setTeamCcEmails] = useState<Set<string>>(new Set());
+
+  /** Merge the batch-level team CCs into a draft's own `cc` string,
+   *  de-duped case-insensitively (first-seen casing wins). Returns
+   *  undefined when the result is empty so we don't emit a bare `Cc:`. */
+  function mergeTeamCc(baseCc?: string): string | undefined {
+    const seen = new Set<string>();
+    const out: string[] = [];
+    const add = (raw: string) => {
+      const e = raw.trim();
+      if (!e) return;
+      const key = e.toLowerCase();
+      if (seen.has(key)) return;
+      seen.add(key);
+      out.push(e);
+    };
+    (baseCc ?? "").split(",").forEach(add);
+    teamCcEmails.forEach(add);
+    return out.length > 0 ? out.join(", ") : undefined;
+  }
 
   function toggleBody(draftKey: string) {
     setExpandedBodies((prev) => {
@@ -345,7 +370,7 @@ export function BulkDraftsModal({
     const to = liveTo(d);
     if (!to) return d.compose_url;
     const { subject, body_text } = liveContent(d);
-    return buildGmailComposeUrl(to, subject, body_text, d.cc, d.bcc);
+    return buildGmailComposeUrl(to, subject, body_text, mergeTeamCc(d.cc), d.bcc);
   }
 
   function toggleRecipient(draftKey: string, email: string) {
@@ -383,6 +408,7 @@ export function BulkDraftsModal({
           return {
             ...d,
             to: liveTo(d),
+            cc: mergeTeamCc(d.cc),
             subject: live.subject,
             body_text: live.body_text,
             body_html: live.body_html,
@@ -403,7 +429,7 @@ export function BulkDraftsModal({
             d.to.length > 0 || (d.bcc_batch && Boolean(d.bcc?.trim()))
         ),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [drafts, recipientSelection, selectedFrom]
+    [drafts, recipientSelection, selectedFrom, teamCcEmails]
   );
 
   /**
@@ -464,14 +490,16 @@ export function BulkDraftsModal({
     const first = actionableDrafts[0];
     const toAddress = gmail?.email ?? "";
     const bccString = allEmails.join(", ");
+    // Per-draft CCs (e.g. Enterprise-CC-the-CSM) don't generalize across
+    // customers, so they're intentionally NOT folded in here. The
+    // batch-level team CC (Richard / Juliet) IS applied — it's a
+    // deliberate team-wide choice, not per-customer data.
+    const combinedCc = mergeTeamCc(undefined);
     const draft: BulkDraft = {
       customer_label: `BCC blast — ${allEmails.length} recipient${allEmails.length === 1 ? "" : "s"}`,
       tracking_ids: trackingIds,
       to: toAddress,
-      // No CC: per-draft CCs (e.g. Enterprise-CC-the-CSM) don't
-      // generalize across customers; keeping CC empty avoids
-      // leaking one customer's CSM onto another's BCC.
-      cc: undefined,
+      cc: combinedCc,
       bcc: bccString,
       subject: first.subject,
       body_text: first.body_text,
@@ -480,7 +508,7 @@ export function BulkDraftsModal({
         toAddress,
         first.subject,
         first.body_text,
-        undefined,
+        combinedCc,
         bccString
       ),
       // Empty: the synthetic draft doesn't surface a per-recipient
@@ -493,7 +521,8 @@ export function BulkDraftsModal({
       audit_label: first.audit_label,
     };
     return draft;
-  }, [combineBcc, actionableDrafts, gmail?.email, selectedFrom]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [combineBcc, actionableDrafts, gmail?.email, selectedFrom, teamCcEmails]);
 
   /** The list the action buttons + draft preview render from.
    *  Either the original per-customer batch OR the single combined
@@ -984,6 +1013,40 @@ export function BulkDraftsModal({
                   >
                     {label}
                   </button>
+                );
+              })}
+            </div>
+          ) : null}
+          {/* Optional team-lead CCs (Richard / Juliet). Applied to
+           *  every draft in the batch on top of any per-draft CC, and
+           *  carried onto the combined-BCC blast too. */}
+          {TEAM_CC_OPTIONS.length > 0 && actionableDrafts.length > 0 ? (
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs">
+              <span className="text-muted">CC on all drafts:</span>
+              {TEAM_CC_OPTIONS.map((opt) => {
+                const checked = teamCcEmails.has(opt.email);
+                return (
+                  <label
+                    key={opt.email}
+                    className="flex items-center gap-1.5 cursor-pointer text-fg"
+                    title={opt.email}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={(e) =>
+                        setTeamCcEmails((prev) => {
+                          const next = new Set(prev);
+                          if (e.target.checked) next.add(opt.email);
+                          else next.delete(opt.email);
+                          return next;
+                        })
+                      }
+                      className="h-3.5 w-3.5 rounded border-border-strong cursor-pointer"
+                    />
+                    <span className="font-medium">{opt.label}</span>
+                    <span className="text-subtle">({opt.email})</span>
+                  </label>
                 );
               })}
             </div>

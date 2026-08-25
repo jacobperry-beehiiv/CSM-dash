@@ -281,24 +281,40 @@ function workflowMeta(
 ): { label: string; noun: string; filteredUrl: string } {
   const base = dashboardUrl();
   const enc = encodeURIComponent(csmHandle);
+  // Both filter conventions get appended to every link so the deep
+  // link works regardless of which one the target panel reads:
+  //   • `needs_review=1` — legacy boolean shorthand still honored by
+  //     past-due-panel and enterprise-only-panel (see the fallback at
+  //     approaching-enterprise-panel.tsx:266).
+  //   • `review=needs_review` — the explicit review-state filter
+  //     (also supports reach_out / skip / done); some panels ONLY
+  //     read this one and would otherwise show the default filter.
+  // The two together give the digest link "just work" behavior on
+  // every panel the digest points at, current and future.
+  const reviewParams = `needs_review=1&review=needs_review`;
   switch (workflow) {
     case "past_due":
       return {
         label: "past-due outreach",
         noun: "past-due account",
-        filteredUrl: `${base}/am?tab=past-due&csm=${enc}&needs_review=1`,
+        filteredUrl: `${base}/am?tab=past-due&csm=${enc}&${reviewParams}`,
       };
     case "proactive":
       return {
         label: "proactive outreach",
         noun: "Enterprise account approaching cap",
-        filteredUrl: `${base}/am?tab=proactive&csm=${enc}&needs_review=1`,
+        filteredUrl: `${base}/am?tab=proactive&csm=${enc}&${reviewParams}`,
       };
     case "renewals":
+      // Point directly at /csm (where Renewals actually lives after
+      // the CSM-owned renewals rollout). Going via /am?tab=renewals
+      // still works — /am 307-redirects to /csm — but that redirect
+      // ONLY carries `tab` and `csm` forward, so the review params
+      // we just added would be silently stripped mid-hop.
       return {
         label: "renewals",
         noun: "renewal",
-        filteredUrl: `${base}/am?tab=renewals&csm=${enc}&needs_review=1`,
+        filteredUrl: `${base}/csm?tab=renewals&csm=${enc}&${reviewParams}`,
       };
   }
 }

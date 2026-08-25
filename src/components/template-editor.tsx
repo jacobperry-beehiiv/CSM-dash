@@ -12,6 +12,13 @@ import { RichTextEditor } from "./rich-text-editor";
 import { getTierLadder } from "@/lib/tiers/client";
 import type { EnterpriseTier } from "@/lib/tiers/store";
 
+/** Local mirror of the /api/csms shape — avoids importing the
+ *  server-only load-customers module into this client component. */
+interface CsmRosterEntry {
+  handle: string;
+  email: string;
+}
+
 const PREVIEW_CUSTOMER: Customer = {
   workspace_id: "ws_preview",
   workspace_name: "preview-workspace",
@@ -62,9 +69,8 @@ export function TemplateEditor({
   const [team, setTeam] = useState<TemplateTeam>(
     initial ? templateTeam(initial) : "csm"
   );
-  const [csmTagsInput, setCsmTagsInput] = useState(
-    initial?.csm_tags?.join(", ") ?? ""
-  );
+  const [csmTags, setCsmTags] = useState<string[]>(initial?.csm_tags ?? []);
+  const [roster, setRoster] = useState<CsmRosterEntry[]>([]);
   const [subject, setSubject] = useState(initial?.subject ?? "");
   const [bodyHtml, setBodyHtml] = useState(initial?.body_html ?? "");
   const [sendAsEmail, setSendAsEmail] = useState(initial?.send_as_email ?? "");
@@ -134,12 +140,28 @@ export function TemplateEditor({
     };
   }, []);
 
+  // CSM roster for the "Visible to CSMs" picker. Soft-fails to [] so
+  // the field still works (chips + manual save) if the lookup is down;
+  // already-saved emails render as raw-email chips either way.
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/csms")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => {
+        if (!cancelled && j) setRoster((j as { csms: CsmRosterEntry[] }).csms);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   // Reset state when switching to a different template
   useEffect(() => {
     setLabel(initial?.label ?? "");
     setBlurb(initial?.blurb ?? "");
     setTeam(initial ? templateTeam(initial) : "csm");
-    setCsmTagsInput(initial?.csm_tags?.join(", ") ?? "");
+    setCsmTags(initial?.csm_tags ?? []);
     setSubject(initial?.subject ?? "");
     setBodyHtml(initial?.body_html ?? "");
     setSendAsEmail(initial?.send_as_email ?? "");
@@ -180,8 +202,7 @@ export function TemplateEditor({
     setBusy(true);
     setError(null);
     try {
-      const csm_tags = csmTagsInput
-        .split(",")
+      const csm_tags = csmTags
         .map((s) => s.trim().toLowerCase())
         .filter(Boolean);
       const res = await fetch("/api/templates", {
@@ -294,18 +315,63 @@ export function TemplateEditor({
         </div>
         <div>
           <label className="text-xs text-muted block mb-1">
-            Visible to CSMs (comma-separated emails)
+            Visible to CSMs
           </label>
-          <input
-            type="text"
-            value={csmTagsInput}
-            onChange={(e) => setCsmTagsInput(e.target.value)}
-            placeholder="leave blank = visible to everyone"
-            className="w-full px-3 py-2 border border-border-strong rounded-md text-sm font-mono"
-          />
+          <select
+            value=""
+            onChange={(e) => {
+              const email = e.target.value;
+              if (!email) return;
+              setCsmTags((prev) =>
+                prev.includes(email) ? prev : [...prev, email]
+              );
+            }}
+            className="w-full px-3 py-2 border border-border-strong rounded-md text-sm bg-surface"
+          >
+            <option value="">
+              {csmTags.length === 0
+                ? "Everyone — pick a CSM to restrict…"
+                : "+ Add a CSM…"}
+            </option>
+            {roster
+              .filter((c) => !csmTags.includes(c.email))
+              .map((c) => (
+                <option key={c.email} value={c.email}>
+                  {c.handle.replace(/_/g, " ")} · {c.email}
+                </option>
+              ))}
+          </select>
+          {csmTags.length > 0 ? (
+            <div className="flex flex-wrap gap-1.5 mt-2">
+              {csmTags.map((email) => {
+                const entry = roster.find((c) => c.email === email);
+                const label = entry ? entry.handle.replace(/_/g, " ") : email;
+                return (
+                  <span
+                    key={email}
+                    title={email}
+                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs bg-canvas border border-border-strong"
+                  >
+                    <span className="text-fg">{label}</span>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setCsmTags((prev) => prev.filter((e) => e !== email))
+                      }
+                      className="text-subtle hover:text-red-600 leading-none text-sm"
+                      aria-label={`Remove ${label}`}
+                    >
+                      ×
+                    </button>
+                  </span>
+                );
+              })}
+            </div>
+          ) : null}
           <p className="text-[11px] text-subtle mt-1">
             When set, this template only appears in the bulk-draft and
-            outreach dropdowns for the listed CSMs. Empty = universal.
+            outreach dropdowns for the listed CSMs. Empty = visible to
+            everyone.
           </p>
         </div>
         <div>
