@@ -6,11 +6,21 @@ import type { Customer } from "@/lib/types";
  * from React or Node-only modules — so this file is safe to include in
  * either surface.
  *
- * `nextRenewalDate` and `priorRenewalDate` are the two anchors:
- *   • `nextRenewalDate` is the forward-looking contract-end / next
- *     charge date we surface everywhere (panel bucket math, calendar
- *     row placement, milestone engine day-count).
- *   • `priorRenewalDate` is the inferred most-recent past renewal
+ * Three anchors, each answering a different question:
+ *   • `contractRenewalDate` — when the CONTRACT is up. Sourced from
+ *     HubSpot's `contract_renewal` field. This is the anchor CSMs
+ *     care about for renewal outreach and pricing conversations, and
+ *     it's what the Renewals tab buckets by. Returns null for
+ *     accounts where HubSpot hasn't populated the field — those
+ *     surface in the tab's "Uncontracted" bucket as a data gap.
+ *   • `nextPaymentDate` — when the customer is next charged.
+ *     Sourced from Stripe's `next_invoice` (or `renewal_date` as
+ *     fallback), with monthly-cadence day-of-month roll-forward.
+ *     Used for anything payment-lifecycle related (past-due panel,
+ *     next-charge column, at-risk signals, template merge tags).
+ *     Named `nextRenewalDate` historically because we hadn't yet
+ *     separated "next charge" from "contract renewal" as concepts.
+ *   • `priorRenewalDate` — the inferred most-recent past renewal
  *     (used by the Calendar tab to backfill already-renewed rows for
  *     the picked month).
  *
@@ -20,15 +30,33 @@ import type { Customer } from "@/lib/types";
  */
 
 /**
- * Computes the customer's next renewal/charge date.
+ * Returns HubSpot's `contract_renewal` value for the customer, or
+ * null when it hasn't been populated. Wrapped as a helper (rather
+ * than inlined at every callsite) so future logic — year-1 midpoint
+ * milestone for multi-year deals, contract-length override from a
+ * separate HubSpot property, CSM manual overrides — has a single
+ * anchor point to extend.
+ */
+export function contractRenewalDate(c: Customer): string | null {
+  return c.contract_renewal ?? null;
+}
+
+/**
+ * Computes the customer's next PAYMENT date (previously named
+ * `nextRenewalDate`).
  *
  * Monthly customers' `next_invoice` from Stripe can drift far past 30
  * days (it represents the end of the current paid period, not the
  * next monthly charge). For monthly cadences we take the day-of-month
  * from next_invoice and roll forward to the next occurrence from
  * today. Annual / other cadences use the date as-is.
+ *
+ * DO NOT use this for renewal-outreach decisions — use
+ * `contractRenewalDate` instead. `nextPaymentDate` answers "when is
+ * Stripe about to bill them," which is not the same as "when is the
+ * contract up."
  */
-export function nextRenewalDate(c: Customer): string | null {
+export function nextPaymentDate(c: Customer): string | null {
   const baseStr = c.next_invoice ?? c.renewal_date;
   if (!baseStr) return null;
   const base = new Date(baseStr);
@@ -60,7 +88,7 @@ export function nextRenewalDate(c: Customer): string | null {
  *
  * Returns null when the customer is monthly, churned, the inferred
  * prior is absurdly old (>5y — usually wrong cadence), or the base
- * date is already in the past (in which case `nextRenewalDate` is the
+ * date is already in the past (in which case `nextPaymentDate` is the
  * right surface for the row instead).
  */
 export function priorRenewalDate(c: Customer): string | null {

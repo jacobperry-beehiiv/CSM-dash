@@ -37,7 +37,7 @@ import {
   cadenceRowLabel,
   intervalBucket,
 } from "@/lib/customer-helpers";
-import { nextRenewalDate, priorRenewalDate } from "./renewal-panel";
+import { contractRenewalDate, priorRenewalDate } from "./renewal-panel";
 
 /**
  * Renewal Calendar — calendar-anchored sibling of RenewalPanel.
@@ -45,7 +45,7 @@ import { nextRenewalDate, priorRenewalDate } from "./renewal-panel";
  * RenewalPanel is forward-looking: "what's coming up in the next 120
  * days, bucketed by urgency." This panel answers a different question:
  * "show me everything that renews in a given month." Same data source
- * (the customer book + `nextRenewalDate`), same row chrome (review
+ * (the customer book + `contractRenewalDate`), same row chrome (review
  * state, lifecycle, bulk select, expand-for-detail). Different filter
  * axis — picks a calendar month instead of a relative time window.
  *
@@ -266,7 +266,7 @@ export function RenewalCalendarPanel({ customers, csms }: Props) {
     const set = new Set<string>();
     set.add(thisMonthKey());
     for (const c of customers) {
-      for (const iso of [nextRenewalDate(c), priorRenewalDate(c)]) {
+      for (const iso of [contractRenewalDate(c), priorRenewalDate(c)]) {
         if (!iso) continue;
         const d = new Date(iso);
         if (isNaN(d.getTime())) continue;
@@ -339,7 +339,7 @@ export function RenewalCalendarPanel({ customers, csms }: Props) {
     ];
   }, [customers, overrides, lifecycleOptions]);
 
-  // Flat list of customers whose nextRenewalDate falls in the picked
+  // Flat list of customers whose contractRenewalDate falls in the picked
   // month, after all filters apply. Sorted ascending by renewal date
   // — earliest first within the month so a CSM scans top-down in
   // time order.
@@ -404,7 +404,7 @@ export function RenewalCalendarPanel({ customers, csms }: Props) {
         enriched.push({ c, date: priorIso, day: priorDay, renewed: true });
         continue;
       }
-      const nextIso = nextRenewalDate(c);
+      const nextIso = contractRenewalDate(c);
       const nextDay = nextIso ? new Date(nextIso) : null;
       if (inMonth(nextDay, month)) {
         enriched.push({ c, date: nextIso, day: nextDay, renewed: false });
