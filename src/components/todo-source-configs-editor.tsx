@@ -216,39 +216,53 @@ export function TodoSourceConfigsEditor({
                   no button at all when the default is also empty).
                 </p>
                 <div className="space-y-1.5">
-                  {meta.variant_actions.map((v) => {
+                  {meta.variant_actions.map((v, i) => {
                     const currentBinding =
                       cfg.linked_template_by_variant?.[v.key] ?? "";
+                    // Render a group header only on the first row of
+                    // each named group. `variant_actions` is authored
+                    // in-order so a change in `group` value between
+                    // consecutive rows marks a section boundary.
+                    const prevGroup =
+                      i > 0 ? meta.variant_actions![i - 1].group : null;
+                    const showHeader =
+                      v.group != null && v.group !== prevGroup;
                     return (
-                      <div
-                        key={v.key}
-                        className="flex items-center gap-2 text-xs"
-                      >
-                        <span className="w-24 text-subtle">{v.label}</span>
-                        <select
-                          className="flex-1 text-sm px-2 py-1 rounded border border-border bg-surface"
-                          value={currentBinding}
-                          onChange={(e) => {
-                            const next: Record<string, string | null> = {
-                              ...(cfg.linked_template_by_variant ?? {}),
-                            };
-                            if (e.currentTarget.value) {
-                              next[v.key] = e.currentTarget.value;
-                            } else {
-                              delete next[v.key];
-                            }
-                            setField(source, {
-                              linked_template_by_variant: next,
-                            });
-                          }}
-                        >
-                          <option value="">— use default —</option>
-                          {templateOptions.map((t) => (
-                            <option key={t.id} value={t.id}>
-                              {t.name}
-                            </option>
-                          ))}
-                        </select>
+                      <div key={v.key}>
+                        {showHeader ? (
+                          <div className="mt-2 mb-1 text-[10px] font-semibold uppercase tracking-wide text-subtle border-b border-border/60 pb-0.5">
+                            {v.group}
+                          </div>
+                        ) : null}
+                        <div className="flex items-center gap-2 text-xs">
+                          <span className="w-60 text-subtle truncate" title={v.label}>
+                            {v.label}
+                          </span>
+                          <select
+                            className="flex-1 text-sm px-2 py-1 rounded border border-border bg-surface"
+                            value={currentBinding}
+                            onChange={(e) => {
+                              const next: Record<string, string | null> = {
+                                ...(cfg.linked_template_by_variant ?? {}),
+                              };
+                              if (e.currentTarget.value) {
+                                next[v.key] = e.currentTarget.value;
+                              } else {
+                                delete next[v.key];
+                              }
+                              setField(source, {
+                                linked_template_by_variant: next,
+                              });
+                            }}
+                          >
+                            <option value="">— use default —</option>
+                            {templateOptions.map((t) => (
+                              <option key={t.id} value={t.id}>
+                                {t.name}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
                       </div>
                     );
                   })}

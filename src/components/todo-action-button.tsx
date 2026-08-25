@@ -35,26 +35,47 @@ export function TodoActionButton({ todo, sourceConfigs }: Props) {
   const [error, setError] = useState<string | null>(null);
 
   const workspaceId = todo.source_meta?.workspace_id;
+  // slack_assign todos don't carry workspace_id — the @bot assign
+  // spawn point only knows hubspot_company_id. The by-workspace
+  // endpoint accepts either param, so we fall back to it when
+  // workspace_id is missing.
+  const hubspotCompanyId = todo.source_meta?.hubspot_company_id;
+  const canResolveCustomer = Boolean(workspaceId || hubspotCompanyId);
   const cfg = sourceConfigs[todo.source as AutomatedSource];
-  // Per-variant binding wins over the default. For renewal_milestone
-  // today the variant key is String(source_meta.milestone_days) — a
-  // 90-day todo picks up cfg.linked_template_by_variant["90"] when
-  // set, falling back to cfg.linked_template_id when it isn't.
-  const milestoneDays = todo.source_meta?.milestone_days;
-  const variantKey = milestoneDays != null ? String(milestoneDays) : null;
+  // Per-variant binding wins over the default. The variant key is
+  // stamped by the engine on source_meta with a source-specific
+  // field, so we pick it per source rather than picking one common
+  // field:
+  //   - renewal_milestone → String(source_meta.milestone_days)
+  //     ("90", "60", "30", "7")
+  //   - slack_assign      → source_meta.playbook_step
+  //     ("onboarding:confirm_handoff", "live:intro_call", …)
+  // Other sources don't have variants today.
+  const variantKey = ((): string | null => {
+    if (todo.source === "renewal_milestone") {
+      const d = todo.source_meta?.milestone_days;
+      return d != null ? String(d) : null;
+    }
+    if (todo.source === "slack_assign") {
+      return todo.source_meta?.playbook_step ?? null;
+    }
+    return null;
+  })();
   const variantBinding =
     variantKey != null ? cfg?.linked_template_by_variant?.[variantKey] : null;
   const linkedTemplateId = variantBinding ?? cfg?.linked_template_id ?? null;
-  if (!workspaceId || !linkedTemplateId) return null;
+  if (!canResolveCustomer || !linkedTemplateId) return null;
 
   async function openModal() {
     setLoading(true);
     setError(null);
     try {
+      const params = new URLSearchParams();
+      if (workspaceId) params.set("workspace_id", workspaceId);
+      else if (hubspotCompanyId)
+        params.set("hubspot_company_id", String(hubspotCompanyId));
       const r = await fetch(
-        `/api/customers/by-workspace?workspace_id=${encodeURIComponent(
-          workspaceId as string
-        )}`
+        `/api/customers/by-workspace?${params.toString()}`
       );
       const body = (await r.json()) as {
         customer?: Customer;
