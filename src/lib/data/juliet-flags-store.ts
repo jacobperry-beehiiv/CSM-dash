@@ -22,11 +22,34 @@ import { kvGet, kvSet } from "../storage/kv";
 
 const KEY = "csm:juliet-flags:v1";
 
+/** Workflow status for a Juliet-flagged workspace. Rows in KV before
+ *  the status field existed default to "open" — the field is optional
+ *  on the type for back-compat, but the panel always treats a missing
+ *  value as "open". */
+export type JulietFlagStatus =
+  | "open"
+  /** Juliet has done the outreach; the row stays visible in her
+   *  queue (dimmed) so she can still refer back to context. */
+  | "outreach_made"
+  /** Fully resolved — the conversation ran its course. Same
+   *  visual treatment as outreach_made today but distinct semantics
+   *  so we can split the queue later if she wants. */
+  | "resolved";
+
 export interface JulietFlag {
   flagged_at: string;
   flagged_by?: string | null;
   /** Short "why Juliet should touch this" note. Freeform. Optional. */
   note?: string | null;
+  /** Current workflow status. Missing = "open" (back-compat with
+   *  rows created before this field existed). */
+  status?: JulietFlagStatus;
+  /** ISO of the last status change. Set together with `status`;
+   *  cleared when the flag is re-raised. */
+  status_updated_at?: string | null;
+  /** Session email of whoever moved the status (usually Juliet
+   *  herself, occasionally the flag-raiser going back to correct). */
+  status_updated_by?: string | null;
 }
 
 export type JulietFlagMap = Record<string, JulietFlag>;
@@ -44,6 +67,9 @@ export async function setJulietFlag(
 ): Promise<JulietFlagMap> {
   const map = { ...(await loadJulietFlags()) };
   if (flagged) {
+    // Re-raising resets status to "open" implicitly — clearing the
+    // status field entirely (rather than writing "open") keeps the
+    // blob small since missing = "open" by convention.
     map[workspaceId] = {
       flagged_at: new Date().toISOString(),
       flagged_by: meta.flaggedBy ?? null,
@@ -62,4 +88,26 @@ export async function isJulietFlagged(
   if (!workspaceId) return false;
   const map = await loadJulietFlags();
   return map[workspaceId] != null;
+}
+
+/** Update the workflow status on an existing flag. No-op if the
+ *  workspace isn't currently flagged — status only makes sense in
+ *  the context of an open raise. Preserves the raise metadata
+ *  (flagged_at, flagged_by, note) so the audit trail stays intact. */
+export async function setJulietFlagStatus(
+  workspaceId: string,
+  status: JulietFlagStatus,
+  actedBy: string | null = null
+): Promise<JulietFlagMap> {
+  const map = { ...(await loadJulietFlags()) };
+  const existing = map[workspaceId];
+  if (!existing) return map;
+  map[workspaceId] = {
+    ...existing,
+    status,
+    status_updated_at: new Date().toISOString(),
+    status_updated_by: actedBy,
+  };
+  await kvSet(KEY, map);
+  return map;
 }
