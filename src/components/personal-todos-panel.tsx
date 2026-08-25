@@ -13,6 +13,11 @@ import { normalizeSlackText } from "@/lib/personal-todos/normalize-text";
 import { DoneCheckbox } from "./done-checkbox";
 import { SybillSyncControl } from "./sybill-sync-control";
 import { TodoCelebration } from "./todo-celebration";
+import { TodoActionButton } from "./todo-action-button";
+import type {
+  AutomatedSource,
+  TodoSourceConfig,
+} from "@/lib/data/todo-source-configs-types";
 
 /**
  * Personal to-do list — rendered on the home page directly beneath
@@ -112,6 +117,12 @@ export function PersonalTodosPanel({
   const [saving, setSaving] = useState(false);
   const [showCompleted, setShowCompleted] = useState(false);
   const [showScheduled, setShowScheduled] = useState(false);
+  // Automated-todo action registry — loaded once on mount. Sparse map
+  // (only sources with a customized entry appear); TodoActionButton
+  // reads out per-todo whether an outreach template is bound.
+  const [sourceConfigs, setSourceConfigs] = useState<
+    Partial<Record<AutomatedSource, TodoSourceConfig>>
+  >({});
 
   // Composer state
   const [draftTitle, setDraftTitle] = useState("");
@@ -124,6 +135,36 @@ export function PersonalTodosPanel({
     new Map()
   );
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Load the automated-todo action registry once on mount so we
+  // know which sources have a linked outreach template. Ignore
+  // errors — a failed load just means no action buttons render.
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/todo-source-configs")
+      .then((r) => r.json())
+      .then(
+        (
+          j: {
+            bindings?: Record<string, { linked_template_id: string | null }>;
+          }
+        ) => {
+          if (cancelled) return;
+          const next: Partial<Record<AutomatedSource, TodoSourceConfig>> = {};
+          for (const [source, cfg] of Object.entries(j.bindings ?? {})) {
+            next[source as AutomatedSource] = {
+              phrasing_template: "",
+              linked_template_id: cfg.linked_template_id,
+            };
+          }
+          setSourceConfigs(next);
+        }
+      )
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Initial load — include scheduled so we can render the dormant
   // section. The endpoint hides them by default.
@@ -445,6 +486,7 @@ export function PersonalTodosPanel({
               onToggle={() => toggleComplete(t.id)}
               onPatch={(patch) => patchTodo(t.id, patch)}
               onDelete={() => deleteTodo(t.id)}
+              sourceConfigs={sourceConfigs}
             />
           ))
         )}
@@ -469,6 +511,7 @@ export function PersonalTodosPanel({
                   onToggle={() => toggleComplete(t.id)}
                   onPatch={(patch) => patchTodo(t.id, patch)}
                   onDelete={() => deleteTodo(t.id)}
+                  sourceConfigs={sourceConfigs}
                   dim
                 />
               ))
@@ -494,6 +537,7 @@ export function PersonalTodosPanel({
                   onToggle={() => toggleComplete(t.id)}
                   onPatch={(patch) => patchTodo(t.id, patch)}
                   onDelete={() => deleteTodo(t.id)}
+                  sourceConfigs={sourceConfigs}
                   dim
                 />
               ))
@@ -509,12 +553,23 @@ interface RowProps {
   onToggle: () => void;
   onPatch: (patch: Partial<PersonalTodo>) => void;
   onDelete: () => void;
+  /** Automated-todo action registry loaded by the parent. Passed to
+   *  TodoActionButton to decide whether a "Draft outreach" button
+   *  renders for this todo. */
+  sourceConfigs: Partial<Record<AutomatedSource, TodoSourceConfig>>;
   /** Visually dim — used for scheduled (future) + completed rows so
    *  they don't compete with the active list. */
   dim?: boolean;
 }
 
-function TodoRow({ todo, onToggle, onPatch, onDelete, dim }: RowProps) {
+function TodoRow({
+  todo,
+  onToggle,
+  onPatch,
+  onDelete,
+  sourceConfigs,
+  dim,
+}: RowProps) {
   const sourceInfo = SOURCE_LABEL[todo.source] ?? SOURCE_LABEL.manual;
   const isDone = Boolean(todo.completed_at);
   // Fires the celebration overlay only on the not-done → done
@@ -586,6 +641,7 @@ function TodoRow({ todo, onToggle, onPatch, onDelete, dim }: RowProps) {
               ↗ View in Slack
             </a>
           ) : null}
+          <TodoActionButton todo={todo} sourceConfigs={sourceConfigs} />
         </div>
         <div className="mt-1 flex items-center gap-3 text-[11px] text-muted">
           <label className="flex items-center gap-1">

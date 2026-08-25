@@ -9,6 +9,10 @@ import { applyTodoOps } from "../personal-todos/store";
 import { userKeyFromEmail } from "../personal-todos/identity";
 import { newTodoId, type PersonalTodo } from "../personal-todos/types";
 import {
+  applyTemplate,
+  loadEffectiveTodoSourceConfigs,
+} from "../data/todo-source-configs";
+import {
   contractRenewalDate,
   daysUntilRenewal,
 } from "../renewals/date";
@@ -148,7 +152,12 @@ function utcYmd(iso: string): string {
   return d.toISOString().slice(0, 10);
 }
 
-function todoTitleFor(
+/**
+ * Legacy fallback used only when the registry template renders to
+ * empty (misconfigured override). Preserves the historical
+ * per-milestone phrasing so a busted config doesn't blank the title.
+ */
+function fallbackTitleFor(
   c: Customer,
   milestone: Milestone
 ): string {
@@ -161,12 +170,13 @@ function todoTitleFor(
 function buildTodo(
   c: Customer,
   milestone: Milestone,
-  renewalIso: string
+  renewalIso: string,
+  registryTitle: string | null
 ): PersonalTodo {
   const now = new Date().toISOString();
   return {
     id: newTodoId(),
-    title: todoTitleFor(c, milestone),
+    title: registryTitle?.trim() || fallbackTitleFor(c, milestone),
     details: null,
     due_date: utcYmd(renewalIso),
     surface_at: null,
@@ -198,10 +208,14 @@ export async function runRenewalMilestoneSweep(
   // on the Customer row itself — applyOverride doesn't project it),
   // so read the overlay separately and consult it per-workspace when
   // checking the terminal-stage exclusion.
-  const [customers, overrides, settings] = await Promise.all([
+  const [customers, overrides, settings, sourceConfigs] = await Promise.all([
     loadCustomers(),
     loadOverrides(),
     loadSettings(),
+    // Load the automated-todo phrasing registry once per sweep —
+    // engines fire many todos per run, so lift the KV read above the
+    // per-row loop.
+    loadEffectiveTodoSourceConfigs(),
   ]);
   const channelId = settings.am?.renewals_slack_channel_id?.trim() ?? "";
   if (!channelId) {
@@ -265,6 +279,13 @@ export async function runRenewalMilestoneSweep(
       }
 
       try {
+        const registryTitle = applyTemplate(
+          sourceConfigs.renewal_milestone.phrasing_template,
+          {
+            company_name: companyLabel(c),
+            milestone_days: milestone,
+          }
+        );
         const outcome = await fireMilestone({
           customer: c,
           milestone,
@@ -274,6 +295,7 @@ export async function runRenewalMilestoneSweep(
           settings,
           channelId,
           csmEmail,
+          registryTitle,
           dryRun: opts.dryRun === true,
         });
         result.fired.push(outcome);
@@ -299,6 +321,12 @@ async function fireMilestone(args: {
   settings: SettingsShape;
   channelId: string;
   csmEmail: string;
+  /** Pre-rendered title from the todo-source-configs registry. When
+   *  the admin has customized `renewal_milestone`, this is the
+   *  applied template (with `{{company_name}}` / `{{milestone_days}}`
+   *  already substituted). buildTodo falls back to the historical
+   *  per-milestone phrasing when this is empty. */
+  registryTitle: string;
   dryRun: boolean;
 }): Promise<FireResult> {
   const {
@@ -400,7 +428,7 @@ async function fireMilestone(args: {
 
   let todoCreated = false;
   if (!dryRun) {
-    const todo = buildTodo(c, milestone, renewalIso);
+    const todo = buildTodo(c, milestone, renewalIso, args.registryTitle);
     await applyTodoOps(userKeyFromEmail(csmEmail), [{ type: "add", todo }]);
     todoCreated = true;
 
