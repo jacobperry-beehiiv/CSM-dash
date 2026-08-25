@@ -1987,9 +1987,10 @@ function formatDateForRenewalPicker(iso: string | null): string {
  * kickoff message + persist the thread ts.
  *
  * `renewalDateFor` is injected so the caller (webhook) can reuse
- * the same `nextRenewalDate` helper the milestone engine uses —
+ * the same `contractRenewalDate` helper the milestone engine uses —
  * keeps the picker's "Renewal date" column in agreement with the
- * dashboard and the sweep.
+ * dashboard and the sweep. Candidates without a contract_renewal
+ * value show a dash there and can't be Confirm'd (webhook checks).
  *
  * Returns null when the fuzzy search produced zero matches so the
  * webhook can send a contextual "no results" reply.

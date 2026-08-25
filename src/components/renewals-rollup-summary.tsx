@@ -4,7 +4,7 @@ import { useMemo } from "react";
 import type { Customer } from "@/lib/types";
 import { fmtCurrency } from "./format";
 import { intervalBucket } from "@/lib/customer-helpers";
-import { daysUntilRenewal, nextRenewalDate } from "@/lib/renewals/date";
+import { contractRenewalDate, daysUntilRenewal } from "@/lib/renewals/date";
 
 /**
  * Team-wide pacing summary shown at the top of the Renewals panel
@@ -107,7 +107,7 @@ export function RenewalsRollupSummary({ customers, overrides }: Props) {
       const stage =
         overrides[c.workspace_id]?.lifecycle_stage?.trim() ?? "";
       if (stage && TERMINAL_STAGES.has(stage)) continue;
-      const renewalIso = nextRenewalDate(c);
+      const renewalIso = contractRenewalDate(c);
       const days = daysUntilRenewal(renewalIso, now);
       if (days == null) continue;
       const bucket = BUCKETS.find((b) => b.match(days));

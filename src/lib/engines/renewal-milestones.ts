@@ -9,8 +9,8 @@ import { applyTodoOps } from "../personal-todos/store";
 import { userKeyFromEmail } from "../personal-todos/identity";
 import { newTodoId, type PersonalTodo } from "../personal-todos/types";
 import {
+  contractRenewalDate,
   daysUntilRenewal,
-  nextRenewalDate,
 } from "../renewals/date";
 import {
   buildRenewalKickoffMessage,
@@ -30,11 +30,20 @@ import {
  * CSM-owned renewals milestone engine.
  *
  * Walks the customer book once, computes days-until-renewal per row
- * via the shared `nextRenewalDate` + `daysUntilRenewal` helpers, and
- * fires exactly-once side effects at each of the 90 / 60 / 30 / 7 day
- * marks. The (workspace_id, milestone_days, renewal_iso) dedupe set
- * in `csm:renewal-milestones-fired:v1` guarantees a re-run on the
- * same day (or a manual retrigger) doesn't double-fire.
+ * via the shared `contractRenewalDate` + `daysUntilRenewal` helpers,
+ * and fires exactly-once side effects at each of the 90 / 60 / 30 / 7
+ * day marks. Anchored on HubSpot's `contract_renewal` field — the
+ * real contract term-end — NOT on Stripe's `next_invoice`, so pings
+ * fire against the CSM's actual renewal motion instead of the next
+ * monthly charge for accounts whose billing cadence doesn't line up
+ * with their contract term. Customers without a `contract_renewal`
+ * value in HubSpot are counted + logged as skipped; they surface in
+ * the Renewals tab's Uncontracted bucket as a data gap for CSMs to
+ * close in HubSpot.
+ *
+ * The (workspace_id, milestone_days, renewal_iso) dedupe set in
+ * `csm:renewal-milestones-fired:v1` guarantees a re-run on the same
+ * day (or a manual retrigger) doesn't double-fire.
  *
  * Milestones:
  *   • 90d — ensure a pricing thread exists in the configured
@@ -81,6 +90,12 @@ interface SkipResult {
 
 interface SweepResult {
   scanned: number;
+  /** Rows that would otherwise have been eligible (annual cadence,
+   *  active lifecycle, has CSM email) but were skipped because their
+   *  HubSpot `contract_renewal` field is empty. Surfaced so the daily
+   *  sweep log tells CSMs how big the Uncontracted-bucket data gap
+   *  is. Not a `SkipResult[]` — no per-row detail needed. */
+  skipped_missing_contract_renewal: number;
   fired: FireResult[];
   skipped: SkipResult[];
   failures: { workspace_id: string; milestone_days: Milestone; error: string }[];
@@ -173,6 +188,7 @@ export async function runRenewalMilestoneSweep(
 ): Promise<SweepResult> {
   const result: SweepResult = {
     scanned: 0,
+    skipped_missing_contract_renewal: 0,
     fired: [],
     skipped: [],
     failures: [],
@@ -209,9 +225,15 @@ export async function runRenewalMilestoneSweep(
     if (!c.customer_success_manager) continue;
     const csmEmail = c.customer_success_manager_email;
     if (!csmEmail) continue;
-    const renewalIso = nextRenewalDate(c);
+    const renewalIso = contractRenewalDate(c);
     const daysUntil = daysUntilRenewal(renewalIso, now);
-    if (renewalIso == null || daysUntil == null) continue;
+    // No contract_renewal in HubSpot — count as skipped so the sweep
+    // log surfaces the data-gap. These accounts also render in the
+    // Renewals tab's Uncontracted bucket for CSMs to close.
+    if (renewalIso == null || daysUntil == null) {
+      result.skipped_missing_contract_renewal++;
+      continue;
+    }
 
     const renewalYmd = utcYmd(renewalIso);
     result.scanned++;

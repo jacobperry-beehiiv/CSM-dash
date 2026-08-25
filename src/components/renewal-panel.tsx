@@ -39,7 +39,8 @@ import {
   intervalBucket,
 } from "@/lib/customer-helpers";
 import {
-  nextRenewalDate,
+  contractRenewalDate,
+  nextPaymentDate,
   priorRenewalDate,
 } from "@/lib/renewals/date";
 
@@ -47,7 +48,7 @@ import {
 // caller that historically imported these from `./renewal-panel`
 // keeps working without a shotgun-edit across the codebase. New
 // callers should import from `@/lib/renewals/date` directly.
-export { nextRenewalDate, priorRenewalDate };
+export { contractRenewalDate, priorRenewalDate };
 
 interface Props {
   customers: Customer[];
@@ -65,39 +66,50 @@ interface Bucket {
   label: string;
   detail: string;
   color: string;
-  match: (days: number) => boolean;
+  /** Matcher over the days-until-contract-renewal count. `null` means
+   *  the customer has no `contract_renewal` value in HubSpot — only
+   *  the "Uncontracted" bucket returns true for null; every other
+   *  bucket returns false so those rows funnel exclusively into
+   *  Uncontracted. */
+  match: (days: number | null) => boolean;
 }
 
 const BUCKETS: Bucket[] = [
   {
+    label: "Uncontracted",
+    detail: "no contract_renewal set in HubSpot",
+    color: "bg-slate-50 dark:bg-slate-500/10 border-slate-300 dark:border-slate-500/40 text-slate-900",
+    match: (d) => d == null,
+  },
+  {
     label: "Past due",
-    detail: "renewal date in the past",
+    detail: "contract renewal in the past",
     color: "bg-red-50 dark:bg-red-500/10 border-red-200 dark:border-red-500/30 text-red-900",
-    match: (d) => d < 0,
+    match: (d) => d != null && d < 0,
   },
   {
     label: "≤ 30 days",
     detail: "in the next 30 days",
     color: "bg-red-50 dark:bg-red-500/10 border-red-200 dark:border-red-500/30 text-red-900",
-    match: (d) => d >= 0 && d <= 30,
+    match: (d) => d != null && d >= 0 && d <= 30,
   },
   {
     label: "31–60 days",
     detail: "31–60 days out",
     color: "bg-amber-50 dark:bg-amber-500/10 border-amber-200 dark:border-amber-500/30 text-amber-900",
-    match: (d) => d > 30 && d <= 60,
+    match: (d) => d != null && d > 30 && d <= 60,
   },
   {
     label: "61–90 days",
     detail: "61–90 days out",
     color: "bg-yellow-50 border-yellow-200 text-yellow-900",
-    match: (d) => d > 60 && d <= 90,
+    match: (d) => d != null && d > 60 && d <= 90,
   },
   {
     label: "91–120 days",
     detail: "91–120 days out",
     color: "bg-lime-50 dark:bg-lime-500/10 border-lime-200 dark:border-lime-500/30 text-lime-900",
-    match: (d) => d > 90 && d <= 120,
+    match: (d) => d != null && d > 90 && d <= 120,
   },
 ];
 
@@ -411,10 +423,16 @@ export function RenewalPanel({
     return BUCKETS.map((b) => {
       const list = filtered
         .map((c) => {
-          const date = nextRenewalDate(c);
-          return { c, date, days: daysUntil(date) };
+          // Bucket math anchors on contract renewal (HubSpot's
+          // contract_renewal field). Next-payment date is kept
+          // alongside so the row can still render it in its own
+          // "Next payment" column — distinct from the contract date
+          // the reader is bucketed by.
+          const date = contractRenewalDate(c);
+          const paymentDate = nextPaymentDate(c);
+          return { c, date, paymentDate, days: daysUntil(date) };
         })
-        .filter(({ days }) => days != null && b.match(days as number))
+        .filter(({ days }) => b.match(days))
         .sort((a, b) => b.c.arr - a.c.arr);
       return { bucket: b, list };
     });
@@ -585,7 +603,7 @@ export function RenewalPanel({
                     Renewal price
                   </th>
                   <th className="px-3 py-2 font-medium">Risk</th>
-                  <th className="px-3 py-2 font-medium">Renewal</th>
+                  <th className="px-3 py-2 font-medium">Next payment</th>
                   <th className="px-3 py-2 font-medium">Contract renewal</th>
                   <th className="px-3 py-2 font-medium">Days</th>
                   <th className="px-3 py-2 font-medium">Lifecycle</th>
@@ -595,7 +613,7 @@ export function RenewalPanel({
                 </tr>
               </thead>
               <tbody>
-                {list.map(({ c, date, days }, idx) => {
+                {list.map(({ c, date, paymentDate, days }, idx) => {
                   const k = rowKey(c, bucketIdx, idx);
                   const isOpen = expanded.has(k);
                   const cadenceLabel = cadenceRowLabel(c);
@@ -652,7 +670,7 @@ export function RenewalPanel({
                           />
                         </td>
                         <td className="px-3 py-2 text-muted">
-                          <div>{fmtDate(date ?? null)}</div>
+                          <div>{fmtDate(paymentDate ?? null)}</div>
                           {cadenceLabel ? (
                             <div className="text-xs text-muted">
                               {cadenceLabel}
@@ -660,10 +678,10 @@ export function RenewalPanel({
                           ) : null}
                         </td>
                         <td className="px-3 py-2 text-muted">
-                          {fmtDate(c.contract_renewal ?? null)}
+                          {fmtDate(date ?? null)}
                         </td>
                         <td className="px-3 py-2 font-medium text-fg">
-                          {days}
+                          {days ?? "—"}
                         </td>
                         <td
                           className="px-3 py-2"

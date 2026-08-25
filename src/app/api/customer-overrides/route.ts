@@ -14,7 +14,7 @@ import {
   newTodoId,
   type PersonalTodo,
 } from "@/lib/personal-todos/types";
-import { nextRenewalDate } from "@/lib/renewals/date";
+import { contractRenewalDate } from "@/lib/renewals/date";
 import { buildRenewalConfirmedReply } from "@/lib/renewals/messages";
 
 export const dynamic = "force-dynamic";
@@ -254,7 +254,7 @@ async function runRenewalConfirmedSideEffects(args: {
     const csmEmail = customer.customer_success_manager_email;
     if (csmEmail) {
       try {
-        const renewalIso = nextRenewalDate(customer);
+        const renewalIso = contractRenewalDate(customer);
         const dueYmd = renewalIso ? renewalIso.slice(0, 10) : null;
         const todo: PersonalTodo = {
           id: newTodoId(),

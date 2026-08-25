@@ -22,7 +22,7 @@ import {
   type ViewSubmissionPayload,
 } from "@/lib/integrations/slack-views";
 import { loadOverrides } from "@/lib/data/customer-overrides";
-import { nextRenewalDate } from "@/lib/renewals/date";
+import { contractRenewalDate } from "@/lib/renewals/date";
 import {
   buildRenewalKickoffMessage,
 } from "@/lib/renewals/messages";
@@ -645,12 +645,12 @@ async function handleRenewalConfirmAction(args: {
       });
       return;
     }
-    const renewalIso = nextRenewalDate(customer);
+    const renewalIso = contractRenewalDate(customer);
     if (!renewalIso) {
       await replaceEphemeral(responseUrl, {
         text:
-          `:warning: *${customer.company_name ?? customer.workspace_name ?? "This customer"}* doesn't have a next-renewal date on file (no next_invoice or renewal_date). ` +
-          `Check the customer in the dashboard first — a valid renewal date is what the milestone engine's pings + pacing math run against.`,
+          `:warning: *${customer.company_name ?? customer.workspace_name ?? "This customer"}* doesn't have a *Contract renewal* date in HubSpot. ` +
+          `Set the \`contract_renewal\` field on their HubSpot company record first — it's the anchor the Renewals tab buckets by and the milestone engine's pacing math runs against.`,
       });
       return;
     }
@@ -1403,7 +1403,7 @@ async function handleAppMention(
       requesterSlackId: event.user,
       originChannel: channel,
       originThreadTs: threadTs,
-      renewalDateFor: nextRenewalDate,
+      renewalDateFor: contractRenewalDate,
       lifecycleStageFor,
     });
     if (!blocks) {
