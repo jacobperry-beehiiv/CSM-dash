@@ -2,7 +2,7 @@ import { Suspense } from "react";
 import { auth } from "@/auth";
 import { SettingsSidebar } from "@/components/settings-sidebar";
 import { isFeatureEnabledFor } from "@/lib/auth/feature-flags";
-import { isProfileOptionsAdmin } from "@/lib/auth/admin";
+import { isAdmin, isProfileOptionsAdmin } from "@/lib/auth/admin";
 
 export default async function SettingsLayout({
   children,
@@ -45,6 +45,17 @@ export default async function SettingsLayout({
       label: "Prior ESP & Tech Stack",
       description:
         "Manage the shared option lists for the Prior ESP and Tech Stack account fields.",
+    });
+  }
+  // Super-admin only: the automated-todo phrasing + action registry.
+  // A wrong action binding fires on real customer outreach so we
+  // stay in the tight admin allowlist here.
+  if (isAdmin(email)) {
+    extras.push({
+      href: "/settings/todo-automation",
+      label: "Todo automation",
+      description:
+        "Phrasing + linked outreach template for every automated todo source (renewal milestones, Sybill recaps, etc.).",
     });
   }
   return (

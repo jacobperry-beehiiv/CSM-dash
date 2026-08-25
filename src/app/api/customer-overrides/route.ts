@@ -16,6 +16,7 @@ import {
 } from "@/lib/personal-todos/types";
 import { contractRenewalDate } from "@/lib/renewals/date";
 import { buildRenewalConfirmedReply } from "@/lib/renewals/messages";
+import { renderTodoTitle } from "@/lib/data/todo-source-configs";
 
 export const dynamic = "force-dynamic";
 
@@ -256,13 +257,22 @@ async function runRenewalConfirmedSideEffects(args: {
       try {
         const renewalIso = contractRenewalDate(customer);
         const dueYmd = renewalIso ? renewalIso.slice(0, 10) : null;
+        const companyName =
+          customer.company_name ??
+          customer.workspace_name ??
+          workspaceId;
+        // Title comes from the automated-todo phrasing registry
+        // (/settings/todo-automation). renderTodoTitle falls back to a
+        // sensible default when the admin hasn't overridden — the
+        // shipped default here mirrors the historical hard-coded
+        // string, so a fresh install behaves identically.
+        const registryTitle = await renderTodoTitle("renewal_confirmed", {
+          company_name: companyName,
+          prior_stage: priorStage ?? null,
+        });
         const todo: PersonalTodo = {
           id: newTodoId(),
-          title: `Verify ${
-            customer.company_name ??
-            customer.workspace_name ??
-            workspaceId
-          } renewal went through`,
+          title: registryTitle,
           details: null,
           due_date: dueYmd,
           surface_at: null,
