@@ -52,9 +52,19 @@ export interface TodoSourceConfig {
    */
   phrasing_template: string;
   /** Optional outreach template id to open when the CSM clicks the
-   *  todo's action button. When null/empty, no button renders. Must
-   *  correspond to a template in the stored-templates KV. */
+   *  todo's action button. When null/empty, no button renders (unless
+   *  a variant-specific entry in `linked_template_by_variant`
+   *  matches). Must correspond to a template in the stored-templates
+   *  KV. */
   linked_template_id: string | null;
+  /** Per-variant action bindings for sources that fire in variants
+   *  (today: only renewal_milestone at 90/60/30/7 days). Keys are the
+   *  variant string — for renewal_milestone that's
+   *  `String(source_meta.milestone_days)`. Values are outreach
+   *  template ids. When a todo's variant appears here, the panel
+   *  action button uses that template. When absent, falls back to
+   *  `linked_template_id`. Empty map = no per-variant bindings. */
+  linked_template_by_variant?: Record<string, string | null>;
   /** Free-form admin note surfaced in the settings UI so the reason
    *  behind the wiring is visible ("using T4/rec pitch template for
    *  90d milestone because that's what Juliet sends first"). Not
@@ -84,15 +94,29 @@ export const SOURCE_METADATA: Record<
     supports_prior_stage: boolean;
     /** When true, the settings UI advertises `{{original_text}}`. */
     supports_original_text: boolean;
+    /** Variants supported for per-variant action bindings. When set,
+     *  the settings editor renders a per-variant template picker
+     *  alongside the single fallback dropdown. For renewal_milestone
+     *  the variants are the four milestone-day values the engine
+     *  fires at. Every variant is optional — leaving one unset means
+     *  the source's fallback `linked_template_id` applies (or no
+     *  button when that's null too). */
+    variant_actions?: Array<{ key: string; label: string }>;
   }
 > = {
   renewal_milestone: {
     label: "Renewal milestone (90/60/30/7d)",
     description:
-      "Fired by the renewal-milestones sweep when a customer's contract renewal date hits one of the tracked milestones. `{{milestone_days}}` interpolates to the specific day-count.",
+      "Fired by the renewal-milestones sweep when a customer's contract renewal date hits one of the tracked milestones. `{{milestone_days}}` interpolates to the specific day-count. Each milestone can bind a different outreach template — 90d for kickoff, 30d for pricing follow-up, etc.",
     supports_milestone: true,
     supports_prior_stage: false,
     supports_original_text: false,
+    variant_actions: [
+      { key: "90", label: "90 days out" },
+      { key: "60", label: "60 days out" },
+      { key: "30", label: "30 days out" },
+      { key: "7", label: "7 days out" },
+    ],
   },
   renewal_confirmed: {
     label: "Renewal confirmed — verify invoice",

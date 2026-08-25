@@ -79,6 +79,23 @@ export async function PUT(req: Request) {
     const override = payload.overrides[source];
     if (!override) continue;
     const defaults = DEFAULT_TODO_SOURCE_CONFIGS[source];
+    // Normalize per-variant bindings: drop empty strings + null
+    // entries so we don't persist "no binding" as an explicit map
+    // key. A completely empty map is dropped from the persisted
+    // shape too so blobs stay small.
+    const variantBindings: Record<string, string> = {};
+    if (
+      override.linked_template_by_variant &&
+      typeof override.linked_template_by_variant === "object"
+    ) {
+      for (const [variant, templateId] of Object.entries(
+        override.linked_template_by_variant
+      )) {
+        if (typeof templateId === "string" && templateId.trim().length > 0) {
+          variantBindings[variant] = templateId;
+        }
+      }
+    }
     // Drop the entry entirely if every field matches the default —
     // keeps the blob small and lets a future default change
     // propagate. String equality is fine here; the fields are all
@@ -89,7 +106,8 @@ export async function PUT(req: Request) {
     const sameLink =
       (override.linked_template_id ?? null) === defaults.linked_template_id;
     const noNote = !override.admin_note?.trim();
-    if (sameTemplate && sameLink && noNote) continue;
+    const noVariants = Object.keys(variantBindings).length === 0;
+    if (sameTemplate && sameLink && noNote && noVariants) continue;
     cleaned[source] = {
       phrasing_template:
         typeof override.phrasing_template === "string" &&
@@ -101,6 +119,7 @@ export async function PUT(req: Request) {
         override.linked_template_id !== ""
           ? override.linked_template_id
           : null,
+      linked_template_by_variant: noVariants ? undefined : variantBindings,
       admin_note: override.admin_note?.trim() || null,
     };
   }
