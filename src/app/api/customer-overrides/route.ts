@@ -2,7 +2,6 @@ import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { loadOverrides, setOverride } from "@/lib/data/customer-overrides";
 import { loadProfileFieldOptions } from "@/lib/data/profile-field-options";
-import { invalidateCustomerCache } from "@/lib/data/load-customers";
 import {
   invalidateCustomerCache,
   loadCustomers,
