@@ -146,7 +146,13 @@ export function PersonalTodosPanel({
       .then(
         (
           j: {
-            bindings?: Record<string, { linked_template_id: string | null }>;
+            bindings?: Record<
+              string,
+              {
+                linked_template_id: string | null;
+                linked_template_by_variant?: Record<string, string | null>;
+              }
+            >;
           }
         ) => {
           if (cancelled) return;
@@ -155,6 +161,7 @@ export function PersonalTodosPanel({
             next[source as AutomatedSource] = {
               phrasing_template: "",
               linked_template_id: cfg.linked_template_id,
+              linked_template_by_variant: cfg.linked_template_by_variant,
             };
           }
           setSourceConfigs(next);
