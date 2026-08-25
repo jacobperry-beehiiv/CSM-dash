@@ -5,7 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import type { Customer, CustomerWithMetrics } from "@/lib/types";
 import { StatusBadge } from "./status-badge";
 import { RiskLevelChip } from "./risk-level-chip";
-import { FilterBar, SearchInput, SelectFilter } from "./filters";
+import { FilterBar, SearchInput, SelectFilter, MultiSelectFilter } from "./filters";
 import { CsmSelector } from "./csm-selector";
 import { useUrlSearch } from "@/lib/hooks/use-url-search";
 import { usePublicationsIndex } from "@/lib/hooks/use-publications-index";
@@ -123,9 +123,15 @@ const VISIBILITY_COLUMNS: VisibilityColumnDef[] = COLUMNS.map((c) => ({
 export function CustomerTable({
   initialCustomers,
   csms,
+  priorEspOptions = [],
+  techStackOptions = [],
 }: {
   initialCustomers: CustomerWithMetrics[];
   csms: string[];
+  /** Shared admin-managed choices for the Prior ESP filter. */
+  priorEspOptions?: string[];
+  /** Shared admin-managed choices for the Tech Stack filter. */
+  techStackOptions?: string[];
 }) {
   const viewerEmail = useViewerEmail();
   const router = useRouter();
@@ -222,6 +228,54 @@ export function CustomerTable({
   // empty/"All" option leaves both showing. Synced to the URL so the
   // viewer can deep-link a status-scoped view.
   const [statusFilter, setStatusFilter] = useUrlSearch("status");
+  // Prior ESP + Tech Stack multi-selects. Each is URL-synced as a
+  // comma-joined param (?prior_esp= / ?tech=), hydrated into a Set here
+  // (useUrlSearch only holds a single string, so the join/split lives
+  // in these hooks).
+  const [priorEspRaw, setPriorEspRaw] = useUrlSearch("prior_esp");
+  const priorEspSelected = useMemo(
+    () =>
+      new Set(
+        priorEspRaw
+          ? priorEspRaw
+              .split(",")
+              .map((s) => s.trim())
+              .filter(Boolean)
+          : []
+      ),
+    [priorEspRaw]
+  );
+  const togglePriorEsp = useCallback(
+    (value: string) => {
+      const next = new Set(priorEspSelected);
+      if (next.has(value)) next.delete(value);
+      else next.add(value);
+      setPriorEspRaw(Array.from(next).join(","));
+    },
+    [priorEspSelected, setPriorEspRaw]
+  );
+  const [techRaw, setTechRaw] = useUrlSearch("tech");
+  const techSelected = useMemo(
+    () =>
+      new Set(
+        techRaw
+          ? techRaw
+              .split(",")
+              .map((s) => s.trim())
+              .filter(Boolean)
+          : []
+      ),
+    [techRaw]
+  );
+  const toggleTech = useCallback(
+    (value: string) => {
+      const next = new Set(techSelected);
+      if (next.has(value)) next.delete(value);
+      else next.add(value);
+      setTechRaw(Array.from(next).join(","));
+    },
+    [techSelected, setTechRaw]
+  );
   const [featureMatcher, setFeatureMatcher] =
     useState<WorkspaceFeatureMatcher | null>(null);
   const [outreachFor, setOutreachFor] = useState<Customer | null>(null);
@@ -303,6 +357,32 @@ export function CustomerTable({
         (c) => (c.property_company_status ?? "").toLowerCase() === target
       );
     }
+    if (priorEspSelected.size > 0) {
+      // OR within the facet: a row matches if it migrated from ANY of
+      // the selected ESPs.
+      list = list.filter((c) => {
+        const esps = c.prior_esp ?? [];
+        for (const t of priorEspSelected) {
+          if (esps.some((s) => s.toLowerCase() === t.toLowerCase())) {
+            return true;
+          }
+        }
+        return false;
+      });
+    }
+    if (techSelected.size > 0) {
+      // OR within the facet: a row matches if it uses ANY of the
+      // selected tools.
+      list = list.filter((c) => {
+        const stack = c.tech_stack ?? [];
+        for (const t of techSelected) {
+          if (stack.some((s) => s.toLowerCase() === t.toLowerCase())) {
+            return true;
+          }
+        }
+        return false;
+      });
+    }
 
     list = [...list].sort((a, b) => {
       const av = pickSortValue(a, sortKey, {
@@ -327,6 +407,8 @@ export function CustomerTable({
     search,
     featureMatcher,
     statusFilter,
+    priorEspSelected,
+    techSelected,
     sortKey,
     sortDir,
     ws2pubs,
@@ -362,6 +444,36 @@ export function CustomerTable({
     const total = options.reduce((s, o) => s + o.count, 0);
     return { options, total };
   }, [initialCustomers]);
+
+  // Per-option counts for the Prior ESP dropdown + Tech Stack chips,
+  // derived from the full book (ignoring the active profile filters) so
+  // they stay stable as the user toggles. Counted per OPTION and
+  // case-insensitively — matching how the filters compare — so the
+  // count stays correct even if a stored value differs in casing from
+  // the option label (e.g. after an admin re-cases an option). Keying
+  // by the option value also gives every option an explicit count
+  // (0 for unused ones), so ChipMultiSelect can dim/disable chips that
+  // would yield zero rows.
+  const priorEspCounts = useMemo(() => {
+    const m: Record<string, number> = {};
+    for (const o of priorEspOptions) {
+      const target = o.toLowerCase();
+      m[o] = initialCustomers.filter((c) =>
+        (c.prior_esp ?? []).some((s) => s.toLowerCase() === target)
+      ).length;
+    }
+    return m;
+  }, [initialCustomers, priorEspOptions]);
+  const techCounts = useMemo(() => {
+    const m: Record<string, number> = {};
+    for (const o of techStackOptions) {
+      const target = o.toLowerCase();
+      m[o] = initialCustomers.filter((c) =>
+        (c.tech_stack ?? []).some((s) => s.toLowerCase() === target)
+      ).length;
+    }
+    return m;
+  }, [initialCustomers, techStackOptions]);
 
   function toggleSort(key: SortKey) {
     if (sortKey === key) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
@@ -812,6 +924,38 @@ export function CustomerTable({
           emptyCount={statusOptions.total}
           options={statusOptions.options}
         />
+        {priorEspOptions.length > 0 ? (
+          <MultiSelectFilter
+            label="Prior ESP"
+            emptyLabel="All"
+            className="w-40 justify-between"
+            disableZeroCounts={false}
+            options={priorEspOptions.map((o) => ({
+              value: o,
+              label: o,
+              count: priorEspCounts[o] ?? 0,
+            }))}
+            selected={priorEspSelected}
+            onToggle={togglePriorEsp}
+            onClear={() => setPriorEspRaw("")}
+          />
+        ) : null}
+        {techStackOptions.length > 0 ? (
+          <MultiSelectFilter
+            label="Tech stack"
+            emptyLabel="All"
+            className="w-40 justify-between"
+            disableZeroCounts={false}
+            options={techStackOptions.map((o) => ({
+              value: o,
+              label: o,
+              count: techCounts[o] ?? 0,
+            }))}
+            selected={techSelected}
+            onToggle={toggleTech}
+            onClear={() => setTechRaw("")}
+          />
+        ) : null}
       </FilterBar>
 
       <div className="space-y-3 mb-4">
