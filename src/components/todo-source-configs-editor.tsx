@@ -205,9 +205,62 @@ export function TodoSourceConfigsEditor({
               ) : null}
             </div>
 
+            {meta.variant_actions ? (
+              <div>
+                <label className="text-xs font-medium text-fg block mb-1">
+                  Per-stage outreach templates
+                </label>
+                <p className="text-[10px] text-muted mb-2">
+                  Each stage can bind its own template — leave a row unset
+                  to fall back to the default template below (or to render
+                  no button at all when the default is also empty).
+                </p>
+                <div className="space-y-1.5">
+                  {meta.variant_actions.map((v) => {
+                    const currentBinding =
+                      cfg.linked_template_by_variant?.[v.key] ?? "";
+                    return (
+                      <div
+                        key={v.key}
+                        className="flex items-center gap-2 text-xs"
+                      >
+                        <span className="w-24 text-subtle">{v.label}</span>
+                        <select
+                          className="flex-1 text-sm px-2 py-1 rounded border border-border bg-surface"
+                          value={currentBinding}
+                          onChange={(e) => {
+                            const next: Record<string, string | null> = {
+                              ...(cfg.linked_template_by_variant ?? {}),
+                            };
+                            if (e.currentTarget.value) {
+                              next[v.key] = e.currentTarget.value;
+                            } else {
+                              delete next[v.key];
+                            }
+                            setField(source, {
+                              linked_template_by_variant: next,
+                            });
+                          }}
+                        >
+                          <option value="">— use default —</option>
+                          {templateOptions.map((t) => (
+                            <option key={t.id} value={t.id}>
+                              {t.name}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : null}
+
             <div>
               <label className="text-xs font-medium text-fg block mb-1">
-                Linked outreach template (optional)
+                {meta.variant_actions
+                  ? "Default outreach template (fallback)"
+                  : "Linked outreach template (optional)"}
               </label>
               <select
                 className="w-full text-sm px-2 py-1 rounded border border-border bg-surface"
@@ -226,9 +279,9 @@ export function TodoSourceConfigsEditor({
                 ))}
               </select>
               <div className="text-[10px] text-muted mt-1">
-                When set, todos of this source get a &ldquo;Draft outreach&rdquo;
-                button that opens the outreach modal with the customer +
-                this template pre-selected.
+                {meta.variant_actions
+                  ? "Used when a stage above doesn't have its own template set."
+                  : "When set, todos of this source get a “Draft outreach” button that opens the outreach modal with the customer + this template pre-selected."}
                 {linkedTpl ? (
                   <>
                     {" "}Currently linked to <strong>{linkedTpl.name}</strong>.

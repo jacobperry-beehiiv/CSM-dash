@@ -36,7 +36,15 @@ export function TodoActionButton({ todo, sourceConfigs }: Props) {
 
   const workspaceId = todo.source_meta?.workspace_id;
   const cfg = sourceConfigs[todo.source as AutomatedSource];
-  const linkedTemplateId = cfg?.linked_template_id;
+  // Per-variant binding wins over the default. For renewal_milestone
+  // today the variant key is String(source_meta.milestone_days) — a
+  // 90-day todo picks up cfg.linked_template_by_variant["90"] when
+  // set, falling back to cfg.linked_template_id when it isn't.
+  const milestoneDays = todo.source_meta?.milestone_days;
+  const variantKey = milestoneDays != null ? String(milestoneDays) : null;
+  const variantBinding =
+    variantKey != null ? cfg?.linked_template_by_variant?.[variantKey] : null;
+  const linkedTemplateId = variantBinding ?? cfg?.linked_template_id ?? null;
   if (!workspaceId || !linkedTemplateId) return null;
 
   async function openModal() {
