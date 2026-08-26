@@ -454,12 +454,17 @@ function TaskRow({
   return (
     <tr className="border-b border-border align-top hover:bg-canvas/40">
       <td className="px-2 py-1.5 font-medium text-fg">
-        <input
-          type="text"
+        {/* Textarea (not input) so long asks wrap instead of scrolling off
+            the column. `field-sizing:content` auto-grows the box to fit
+            the wrapped text; rows={1} keeps a short ask compact. `resize-y`
+            gives the user a manual handle as a fallback on browsers that
+            don't yet support field-sizing. */}
+        <textarea
           value={task.ask}
           onChange={(e) => onPatch({ ask: e.target.value })}
           placeholder="Programmatic Ads Beta Outreach…"
-          className="w-full px-1.5 py-1 bg-transparent border border-transparent hover:border-border focus:border-accent rounded text-sm focus:outline-none"
+          rows={1}
+          className="w-full px-1.5 py-1 bg-transparent border border-transparent hover:border-border focus:border-accent rounded text-sm focus:outline-none resize-y [field-sizing:content] whitespace-pre-wrap break-words"
         />
       </td>
       <td className="px-2 py-1.5 text-muted">
