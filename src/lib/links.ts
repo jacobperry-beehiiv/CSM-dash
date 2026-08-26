@@ -195,11 +195,19 @@ export function composeUrlForTemplate(
   template: StoredTemplate,
   customer: Customer,
   ladder?: EnterpriseTier[],
-  extra?: { cc?: string | null; bcc?: string | null }
+  extra?: {
+    cc?: string | null;
+    bcc?: string | null;
+    /** Signed-in CSM's custom merge tags — folded into the compose URL's
+     *  merge context so `{{scheduling_text}}` etc. resolve consistently
+     *  with the preview text the bulk-drafts modal shows. Without it
+     *  the Gmail-compose fallback opens with unresolved tokens. */
+    customTags?: Record<string, string>;
+  }
 ): string | null {
   const to = customer.owner_email ?? null;
   if (!to) return null;
-  const ctx = { ladder };
+  const ctx = { ladder, custom_tags: extra?.customTags };
   const subject = applyMergeTags(template.subject, customer, ctx);
   const body = htmlToText(applyMergeTags(template.body_html, customer, ctx));
   return gmailComposeUrl({
@@ -222,11 +230,16 @@ export function composeUrlWithAdGap(
   customer: Customer,
   ladder: EnterpriseTier[] | undefined,
   adGap: AdGapReport | null,
-  extra?: { cc?: string | null; bcc?: string | null }
+  extra?: {
+    cc?: string | null;
+    bcc?: string | null;
+    /** See composeUrlForTemplate — same purpose here. */
+    customTags?: Record<string, string>;
+  }
 ): string | null {
   const to = customer.owner_email ?? null;
   if (!to) return null;
-  const ctx = { ladder, adGap };
+  const ctx = { ladder, adGap, custom_tags: extra?.customTags };
   const subject = applyMergeTags(template.subject, customer, ctx);
   const body = htmlToText(applyMergeTags(template.body_html, customer, ctx));
   return gmailComposeUrl({

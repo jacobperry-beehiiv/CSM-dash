@@ -11,6 +11,7 @@ import {
 } from "@/lib/templates/bulk-drafts";
 import { isVisibleToCsm, type StoredTemplate } from "@/lib/templates/types";
 import { useViewerEmail } from "@/lib/auth-client";
+import { useCustomMergeTags } from "@/lib/data/use-custom-merge-tags";
 import { getTierLadder } from "@/lib/tiers/client";
 import type { Customer } from "@/lib/types";
 import type { EnterpriseTier } from "@/lib/tiers/store";
@@ -99,6 +100,11 @@ export function BulkEmailLauncher({
   auditLabel,
 }: Props) {
   const viewerEmail = useViewerEmail();
+  // Signed-in CSM's custom merge tags — see customer-table.tsx for
+  // the same treatment. Threaded per-row so shared templates that
+  // reference the sender's {{scheduling_text}} / signature / etc.
+  // resolve to the current viewer's copy.
+  const customTags = useCustomMergeTags();
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -169,11 +175,12 @@ export function BulkEmailLauncher({
       bccLookup,
       trackingIdFor,
       extraContextFor,
+      customTags: customTags ?? undefined,
       bccBatchSize,
       bccBatchTo,
       auditLabel,
     });
-  }, [open, templateId, customers, templates, ladder, ccLookup, bccLookup, trackingIdFor, extraContextFor, bccBatchSize, bccBatchTo, auditLabel]);
+  }, [open, templateId, customers, templates, ladder, ccLookup, bccLookup, trackingIdFor, extraContextFor, customTags, bccBatchSize, bccBatchTo, auditLabel]);
 
   useEffect(() => {
     setDrafts(builtDrafts);

@@ -18,6 +18,7 @@ import { getTierLadder } from "@/lib/tiers/client";
 import type { EnterpriseTier } from "@/lib/tiers/store";
 import type { AdGapReport } from "@/lib/types";
 import type { MergeContext } from "@/lib/templates/merge-tags";
+import { useCustomMergeTags } from "@/lib/data/use-custom-merge-tags";
 
 interface Props {
   customer: Customer;
@@ -59,6 +60,11 @@ export function OutreachModal({
   deliverability,
 }: Props) {
   const viewerEmail = useViewerEmail();
+  // Signed-in CSM's custom merge tags — folded into the render
+  // context so `{{scheduling_text}}` etc. resolve to the sender's
+  // own copy. Fetched once per tab and shared across every
+  // template-preview surface, same pattern as viewer email.
+  const customTags = useCustomMergeTags();
   const [templates, setTemplates] = useState<StoredTemplate[]>([]);
   const [ladder, setLadder] = useState<EnterpriseTier[]>([]);
   const [adGap, setAdGap] = useState<AdGapReport | null>(null);
@@ -210,6 +216,7 @@ export function OutreachModal({
     recipient_email:
       recipientEmails.length === 1 ? recipientEmails[0] : null,
     deliverability,
+    custom_tags: customTags ?? undefined,
   };
   const subject = template
     ? applyMergeTags(template.subject, customer, ctx)

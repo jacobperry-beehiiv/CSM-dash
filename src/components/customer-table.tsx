@@ -37,6 +37,7 @@ import type { StoredTemplate } from "@/lib/templates/types";
 import type { AdGapReport } from "@/lib/types";
 import { getTierLadder } from "@/lib/tiers/client";
 import { buildBulkDrafts } from "@/lib/templates/bulk-drafts";
+import { useCustomMergeTags } from "@/lib/data/use-custom-merge-tags";
 import { BulkDraftsModal, type BulkDraft } from "./bulk-drafts-modal";
 import { MappedFieldEditor } from "./mapped-field-editor";
 import { MAPPABLE_DASHBOARD_FIELDS } from "@/lib/data/field-mappings-types";
@@ -135,6 +136,13 @@ export function CustomerTable({
   techStackOptions?: string[];
 }) {
   const viewerEmail = useViewerEmail();
+  // Signed-in CSM's custom merge tags. Threaded into buildBulkDrafts
+  // so shared outreach templates that reference the sender's
+  // {{scheduling_text}} / signature / etc. resolve to this CSM's copy
+  // for every draft. `null` while loading — falls through to the
+  // no-custom-tags path (tokens render as-is), which matches how the
+  // preview would render before /api/settings/merge-tags loaded anyway.
+  const customTags = useCustomMergeTags();
   const router = useRouter();
   const searchParams = useSearchParams();
   // Resync-from-HubSpot state. Button POSTs to
@@ -630,6 +638,7 @@ export function CustomerTable({
       template: tpl,
       ladder,
       adGapByOrg,
+      customTags: customTags ?? undefined,
       auditLabel: `${tpl.label} email sent`,
     });
   }

@@ -25,6 +25,7 @@ import { composeUrlForTemplate } from "@/lib/links";
 import { suggestTemplates } from "@/lib/templates/templates";
 import { isVisibleToCsm, type StoredTemplate } from "@/lib/templates/types";
 import { useViewerEmail } from "@/lib/auth-client";
+import { useCustomMergeTags } from "@/lib/data/use-custom-merge-tags";
 import { getTierLadder } from "@/lib/tiers/client";
 import type {
   AtRiskAccount,
@@ -159,6 +160,10 @@ export function AtRiskTable({
   csms: string[];
 }) {
   const viewerEmail = useViewerEmail();
+  // Signed-in CSM's custom merge tags — threaded into the row-level
+  // "Email" quick launch so `{{scheduling_text}}` etc. resolve to the
+  // sender's copy in the compose URL. See use-custom-merge-tags.ts.
+  const customTags = useCustomMergeTags();
   const router = useRouter();
   // Two-step inline confirmation for "Mark all flags resolved". The
   // previous implementation used window.confirm(), which some browser
@@ -654,7 +659,9 @@ export function AtRiskTable({
           templates.find((t) => t.id === "general-checkin") ??
           templates[0];
         if (!tpl) continue;
-        const url = composeUrlForTemplate(tpl, a.customer, ladder);
+        const url = composeUrlForTemplate(tpl, a.customer, ladder, {
+          customTags: customTags ?? undefined,
+        });
         if (url) {
           window.open(url, "_blank", "noopener,noreferrer");
           opened++;

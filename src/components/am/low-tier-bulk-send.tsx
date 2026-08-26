@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { StoredTemplate } from "@/lib/templates/types";
 import { isVisibleToCsm } from "@/lib/templates/types";
 import { useViewerEmail } from "@/lib/auth-client";
+import { useCustomMergeTags } from "@/lib/data/use-custom-merge-tags";
 import { applyMergeTags } from "@/lib/templates/merge-tags";
 import { htmlToText } from "@/lib/templates/bulk-drafts";
 import { gmailComposeUrl } from "@/lib/links";
@@ -54,6 +55,7 @@ export function LowTierBulkSend({
   onSent,
 }: Props) {
   const viewerEmail = useViewerEmail();
+  const customTags = useCustomMergeTags();
   const [open, setOpen] = useState(false);
   const [templates, setTemplates] = useState<StoredTemplate[]>([]);
   const [templateId, setTemplateId] = useState<string>("");
@@ -117,8 +119,9 @@ export function LowTierBulkSend({
     // whole batch. The "generic" templates shipped (general-checkin)
     // don't use per-customer tokens, so this is a safe default.
     const anchor = batch[0];
-    const subject = applyMergeTags(template.subject, anchor, {});
-    const body = htmlToText(applyMergeTags(template.body_html, anchor, {}));
+    const ctx = { custom_tags: customTags ?? undefined };
+    const subject = applyMergeTags(template.subject, anchor, ctx);
+    const body = htmlToText(applyMergeTags(template.body_html, anchor, ctx));
     const bcc = batch
       .map((c) => c.owner_email)
       .filter((e): e is string => Boolean(e))

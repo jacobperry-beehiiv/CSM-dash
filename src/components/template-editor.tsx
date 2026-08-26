@@ -11,6 +11,7 @@ import type { Customer } from "@/lib/types";
 import { RichTextEditor } from "./rich-text-editor";
 import { getTierLadder } from "@/lib/tiers/client";
 import type { EnterpriseTier } from "@/lib/tiers/store";
+import { useCustomMergeTags } from "@/lib/data/use-custom-merge-tags";
 
 /** Local mirror of the /api/csms shape — avoids importing the
  *  server-only load-customers module into this client component. */
@@ -83,6 +84,11 @@ export function TemplateEditor({
   // button; the second click fires the DELETE request.
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [ladder, setLadder] = useState<EnterpriseTier[]>([]);
+  // Per-CSM custom tags flow into the preview so an editor can see
+  // their own scheduling text / signature blurb resolved in place.
+  // Other CSMs see their own values, so a shared template still
+  // reads consistently for each viewer.
+  const customTags = useCustomMergeTags();
   // Send-as aliases discovered on the connected Gmail account. Loaded
   // lazily on mount; soft-fails to [] so the editor still works
   // without the alias dropdown when /api/auth/google/aliases is down
@@ -169,12 +175,20 @@ export function TemplateEditor({
   }, [initial?.id]);
 
   const previewSubject = useMemo(
-    () => applyMergeTags(subject, PREVIEW_CUSTOMER, { ladder }),
-    [subject, ladder]
+    () =>
+      applyMergeTags(subject, PREVIEW_CUSTOMER, {
+        ladder,
+        custom_tags: customTags ?? undefined,
+      }),
+    [subject, ladder, customTags]
   );
   const previewBody = useMemo(
-    () => applyMergeTags(bodyHtml, PREVIEW_CUSTOMER, { ladder }),
-    [bodyHtml, ladder]
+    () =>
+      applyMergeTags(bodyHtml, PREVIEW_CUSTOMER, {
+        ladder,
+        custom_tags: customTags ?? undefined,
+      }),
+    [bodyHtml, ladder, customTags]
   );
 
   function insertMergeTagIntoSubject(token: string) {
