@@ -247,20 +247,32 @@ export function TodoSourceConfigsEditor({
                           </span>
                           <div className="flex-1">
                             <ActionEditor
-                              action={currentAction}
+                              action={
+                                cfg.action_by_variant?.[v.key] ?? null
+                              }
                               onChange={(next) => {
                                 const map: Record<string, TodoAction> = {
                                   ...(cfg.action_by_variant ?? {}),
                                 };
-                                if (next.kind === "none") {
+                                if (next == null) {
+                                  // "Use default" → clear the variant
+                                  // entry so runtime falls back to the
+                                  // source's default_action.
                                   delete map[v.key];
                                 } else {
+                                  // Any TodoAction — including the
+                                  // explicit { kind: "none" } "No
+                                  // action needed" state — persists
+                                  // as-is so the runtime suppresses
+                                  // the button even when the default
+                                  // would show one.
                                   map[v.key] = next;
                                 }
                                 setField(source, { action_by_variant: map });
                               }}
                               templateOptions={templateOptions}
-                              includeNoneLabel="use default"
+                              noActionLabel="No action needed"
+                              showUseDefault
                               compact
                             />
                           </div>
@@ -280,9 +292,16 @@ export function TodoSourceConfigsEditor({
               </label>
               <ActionEditor
                 action={cfg.default_action ?? { kind: "none" }}
-                onChange={(next) => setField(source, { default_action: next })}
+                // Default row never signals fall-through (it IS the
+                // fall-through). Coerce null → { kind: "none" } so
+                // the persisted shape is always a concrete action.
+                onChange={(next) =>
+                  setField(source, {
+                    default_action: next ?? { kind: "none" },
+                  })
+                }
                 templateOptions={templateOptions}
-                includeNoneLabel="no action button"
+                noActionLabel="No action needed"
               />
               <div className="text-[10px] text-muted mt-1">
                 {meta.variant_actions
@@ -335,18 +354,33 @@ export function TodoSourceConfigsEditor({
 
 // ─── Action editor sub-component ─────────────────────────────────────────
 //
-// One tagged-union input. Reuses the same shape everywhere: the
-// per-variant table calls it in `compact` mode (radios inline + template
-// dropdown / Slack fields stack below), the default row calls it in
-// regular mode. `includeNoneLabel` is the copy for the "none" radio —
-// varies between "no action button" (default row) and "use default"
-// (variant row) so the meaning is clear in context.
+// One tagged-union input, reused by both the default row (three radios:
+// No action / Email / Slack) and the per-variant row (four radios: Use
+// default / No action / Email / Slack).
+//
+// `action: TodoAction | null` — null means "no override, fall back to
+// the source's default_action." Only variant rows can legally represent
+// that; default rows always pass a non-null action. `showUseDefault`
+// controls whether the "Use default" radio is rendered — variant rows
+// pass true, default rows leave it off.
+//
+// The distinction between "Use default" and "No action needed" matters:
+//   - Use default        → variant deletes from the map, inherits the
+//                          source's default_action at runtime.
+//   - No action needed   → variant stores { kind: "none" } explicitly,
+//                          suppressing the button even when the default
+//                          would have shown one.
 
 interface ActionEditorProps {
-  action: TodoAction;
-  onChange: (next: TodoAction) => void;
+  action: TodoAction | null;
+  onChange: (next: TodoAction | null) => void;
   templateOptions: TemplateOption[];
-  includeNoneLabel: string;
+  /** Only rendered when `showUseDefault` is true — the label on the
+   *  "no action button at all" radio, worded per context. */
+  noActionLabel: string;
+  /** When true, adds a fourth "Use default" radio at the front and
+   *  allows onChange(null) to signal fall-through. */
+  showUseDefault?: boolean;
   compact?: boolean;
 }
 
@@ -354,25 +388,36 @@ function ActionEditor({
   action,
   onChange,
   templateOptions,
-  includeNoneLabel,
+  noActionLabel,
+  showUseDefault,
   compact,
 }: ActionEditorProps) {
-  const kind = action.kind;
+  const kind = action?.kind ?? "use_default";
   const channelValid =
-    action.kind !== "slack" ||
+    action?.kind !== "slack" ||
     action.channel_id === "" ||
     SLACK_CHANNEL_ID_RE.test(action.channel_id);
 
   return (
     <div className={compact ? "space-y-1.5" : "space-y-2"}>
-      <div className="flex items-center gap-3 text-xs">
+      <div className="flex items-center gap-3 text-xs flex-wrap">
+        {showUseDefault ? (
+          <label className="flex items-center gap-1 cursor-pointer">
+            <input
+              type="radio"
+              checked={action == null}
+              onChange={() => onChange(null)}
+            />
+            <span className="text-subtle">Use default</span>
+          </label>
+        ) : null}
         <label className="flex items-center gap-1 cursor-pointer">
           <input
             type="radio"
             checked={kind === "none"}
             onChange={() => onChange({ kind: "none" })}
           />
-          <span className="text-subtle">{includeNoneLabel}</span>
+          <span className="text-subtle">{noActionLabel}</span>
         </label>
         <label className="flex items-center gap-1 cursor-pointer">
           <input
@@ -382,7 +427,7 @@ function ActionEditor({
               onChange({
                 kind: "email",
                 template_id:
-                  action.kind === "email" ? action.template_id : "",
+                  action?.kind === "email" ? action.template_id : "",
               })
             }
           />
@@ -396,9 +441,9 @@ function ActionEditor({
               onChange({
                 kind: "slack",
                 channel_id:
-                  action.kind === "slack" ? action.channel_id : "",
+                  action?.kind === "slack" ? action.channel_id : "",
                 message_template:
-                  action.kind === "slack" ? action.message_template : "",
+                  action?.kind === "slack" ? action.message_template : "",
               })
             }
           />
@@ -406,7 +451,7 @@ function ActionEditor({
         </label>
       </div>
 
-      {action.kind === "email" ? (
+      {action?.kind === "email" ? (
         <select
           className="w-full text-sm px-2 py-1 rounded border border-border bg-surface"
           value={action.template_id}
@@ -423,7 +468,7 @@ function ActionEditor({
         </select>
       ) : null}
 
-      {action.kind === "slack" ? (
+      {action?.kind === "slack" ? (
         <div className="space-y-1.5">
           <div>
             <input
