@@ -30,6 +30,15 @@ interface Props {
   enterpriseRows: Customer[];
   approachingRows: ApproachingEntRow[];
   csms: string[];
+  /** Full customer book — threaded through to the Approaching
+   *  Enterprise sub-tab's D&C review queue so scan rows can join
+   *  workspace_name / owner_email. */
+  allCustomers: Customer[];
+  /** Feature-flag gate for the D&C Upgrade Analysis surfaces under
+   *  Approaching Enterprise (row panel + review queue). */
+  upgradeAnalysisEnabled: boolean;
+  /** Effective CSM filter, forwarded to the queue's own scope hint. */
+  csm: string | null;
 }
 
 const SUBTAB_LABELS: Record<ProactiveSubtab, string> = {
@@ -41,6 +50,9 @@ export function ProactiveOutreachPanel({
   enterpriseRows,
   approachingRows,
   csms,
+  allCustomers,
+  upgradeAnalysisEnabled,
+  csm,
 }: Props) {
   const [subtabRaw, setSubtab] = useUrlSearch("potab");
   const subtab: ProactiveSubtab =
@@ -73,7 +85,12 @@ export function ProactiveOutreachPanel({
       {subtab === "enterprise" ? (
         <EnterpriseOnlyPanel rows={enterpriseRows} csms={csms} />
       ) : (
-        <ApproachingEnterprisePanel rows={approachingRows} />
+        <ApproachingEnterprisePanel
+          rows={approachingRows}
+          upgradeAnalysisEnabled={upgradeAnalysisEnabled}
+          allCustomers={allCustomers}
+          csmScope={csm}
+        />
       )}
     </>
   );

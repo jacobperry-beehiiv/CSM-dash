@@ -13,6 +13,7 @@ import { NotesChip } from "./notes-chip";
 import { ReviewStateCell } from "./review-state-cell";
 import { CopyPubIdsButton } from "./copy-pub-ids-button";
 import { CustomerDetailPanel } from "../customer-detail-panel";
+import { UpgradeAnalysisQueue } from "../upgrade-analysis-queue";
 import {
   FeatureUtilizationFilter,
   type WorkspaceFeatureMatcher,
@@ -68,6 +69,17 @@ function renderApproachingRow(
 
 interface Props {
   rows: ApproachingEntRow[];
+  /** Feature-flag gate for the D&C Upgrade Analysis surfaces:
+   *   • Panel above the expanded-row CustomerDetailPanel
+   *   • "D&C review queue" view toggle at the top of this tab
+   *  When false, this tab renders exactly as before. */
+  upgradeAnalysisEnabled?: boolean;
+  /** Full customer book — passed to the D&C review queue so it can
+   *  join scan rows to workspace_name / owner_email. Ignored when
+   *  the queue view is off. */
+  allCustomers?: Customer[];
+  /** Effective CSM filter forwarded to the queue's scope hint. */
+  csmScope?: string | null;
 }
 
 interface Bucket {
@@ -112,7 +124,32 @@ function priceLabel(r: ApproachingEntRow): string {
   return `${fmtCurrency(r.last_payment_amount)}${suffix}`;
 }
 
-export function ApproachingEnterprisePanel({ rows }: Props) {
+export function ApproachingEnterprisePanel({
+  rows,
+  upgradeAnalysisEnabled = false,
+  allCustomers,
+  csmScope,
+}: Props) {
+  // View toggle at the top of the AE tab. Two options:
+  //   • "accounts" (default) — existing per-row upsell workflow.
+  //   • "queue" — D&C Upgrade Analysis review queue (feature-flag
+  //     gated; only shown when upgradeAnalysisEnabled is true).
+  // URL-synced via ?aeview= so a shared link deep-links to whichever
+  // view the sender was on.
+  const [viewRaw, setView] = useUrlSearch("aeview");
+  const view: "accounts" | "queue" =
+    upgradeAnalysisEnabled && viewRaw === "queue" ? "queue" : "accounts";
+  if (view === "queue" && upgradeAnalysisEnabled) {
+    return (
+      <>
+        <AeViewToggle current={view} onSelect={setView} />
+        <UpgradeAnalysisQueue
+          customers={allCustomers ?? []}
+          csmScope={csmScope ?? null}
+        />
+      </>
+    );
+  }
   const [search, setSearch] = useState("");
   // Feature-usage chip filter — matches the At-Risk / Customer table
   // pattern. Emits a matcher over workspace_id (== organization_id
@@ -338,6 +375,9 @@ export function ApproachingEnterprisePanel({ rows }: Props) {
 
   return (
     <>
+      {upgradeAnalysisEnabled ? (
+        <AeViewToggle current="accounts" onSelect={setView} />
+      ) : null}
       <div className="mb-4">
         <FeatureUtilizationFilter
           workspaceIds={featureWorkspaceIds}
@@ -670,7 +710,10 @@ export function ApproachingEnterprisePanel({ rows }: Props) {
                       {isOpen ? (
                         <tr className="bg-blue-50/40 dark:bg-blue-500/10 border-b border-border">
                           <td colSpan={11} className="px-6 py-4">
-                            <CustomerDetailPanel customer={resolvedCustomer} />
+                            <CustomerDetailPanel
+                              customer={resolvedCustomer}
+                              upgradeAnalysisEnabled={upgradeAnalysisEnabled}
+                            />
                             {!booked ? (
                               <p className="text-[11px] text-subtle italic mt-2">
                                 This workspace isn&rsquo;t in the
@@ -813,5 +856,40 @@ export function ApproachingEnterprisePanel({ rows }: Props) {
         );
       })() : null}
     </>
+  );
+}
+
+/** View-mode toggle at the top of the Approaching Enterprise tab. Only
+ *  renders when the D&C Upgrade Analysis feature flag is on. Same
+ *  visual pattern as the parent Proactive-Outreach sub-tab strip, one
+ *  level nested. Toggles between the account list (default) and the
+ *  D&C review queue where scans awaiting review land. */
+function AeViewToggle({
+  current,
+  onSelect,
+}: {
+  current: "accounts" | "queue";
+  onSelect: (v: string) => void;
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-1 mb-3 text-xs">
+      {(["accounts", "queue"] as const).map((v) => {
+        const active = current === v;
+        const label = v === "accounts" ? "Accounts" : "D&C review queue";
+        return (
+          <button
+            key={v}
+            onClick={() => onSelect(v)}
+            className={`px-2.5 py-1 rounded-md border transition-colors ${
+              active
+                ? "border-accent bg-accent text-accent-fg"
+                : "border-border bg-surface text-muted hover:text-fg"
+            }`}
+          >
+            {label}
+          </button>
+        );
+      })}
+    </div>
   );
 }
