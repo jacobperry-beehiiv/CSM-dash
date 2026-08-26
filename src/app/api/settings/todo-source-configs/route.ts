@@ -8,10 +8,13 @@ import {
 import {
   AUTOMATED_SOURCES,
   DEFAULT_TODO_SOURCE_CONFIGS,
+  SLACK_CHANNEL_MSG_MAX_LEN,
   type TodoSourceConfig,
   type TodoSourceConfigsBlob,
+  type TodoAction,
   type AutomatedSource,
 } from "@/lib/data/todo-source-configs-types";
+import { SLACK_CHANNEL_ID_RE } from "@/lib/integrations/slack";
 
 export const dynamic = "force-dynamic";
 
@@ -74,52 +77,90 @@ export async function PUT(req: Request) {
     );
   }
 
+  /** Coerce whatever the client sent for a single action entry into a
+   *  valid `TodoAction`, or `null` when the payload is malformed or
+   *  represents "no action" (so callers can drop it). Rules:
+   *   - `{ kind: "email", template_id }` — template_id must be a
+   *     non-empty string; otherwise → null.
+   *   - `{ kind: "slack", channel_id, message_template }` — channel_id
+   *     must match SLACK_CHANNEL_ID_RE (client-side hint says `C…`);
+   *     message_template trimmed non-empty, ≤ MSG_MAX bytes.
+   *   - anything else → null.
+   *  Server-side coercion keeps the persisted blob well-formed even
+   *  if the editor sends a partially-filled row. */
+  function normalizeAction(a: unknown): TodoAction | null {
+    if (!a || typeof a !== "object") return null;
+    const obj = a as Record<string, unknown>;
+    if (obj.kind === "email") {
+      const id = typeof obj.template_id === "string" ? obj.template_id.trim() : "";
+      if (!id) return null;
+      return { kind: "email", template_id: id };
+    }
+    if (obj.kind === "slack") {
+      const ch = typeof obj.channel_id === "string" ? obj.channel_id.trim() : "";
+      const msg =
+        typeof obj.message_template === "string"
+          ? obj.message_template.trim()
+          : "";
+      if (!ch || !SLACK_CHANNEL_ID_RE.test(ch)) return null;
+      if (!msg) return null;
+      // Slack rejects >40k-char posts; we cap well below that so a
+      // fat-fingered paste can't blow the KV row size either.
+      const trimmedMsg =
+        msg.length > SLACK_CHANNEL_MSG_MAX_LEN
+          ? msg.slice(0, SLACK_CHANNEL_MSG_MAX_LEN)
+          : msg;
+      return { kind: "slack", channel_id: ch, message_template: trimmedMsg };
+    }
+    return null;
+  }
+
   const cleaned: TodoSourceConfigsBlob["by_source"] = {};
   for (const source of AUTOMATED_SOURCES) {
     const override = payload.overrides[source];
     if (!override) continue;
     const defaults = DEFAULT_TODO_SOURCE_CONFIGS[source];
-    // Normalize per-variant bindings: drop empty strings + null
-    // entries so we don't persist "no binding" as an explicit map
-    // key. A completely empty map is dropped from the persisted
-    // shape too so blobs stay small.
-    const variantBindings: Record<string, string> = {};
+
+    const normalizedDefault =
+      normalizeAction(override.default_action) ?? { kind: "none" };
+
+    // Per-variant map: normalize each entry, drop the null ones so
+    // we don't persist "no binding" as an explicit map key. Empty
+    // final map is dropped from the persisted shape too.
+    const variantActions: Record<string, TodoAction> = {};
     if (
-      override.linked_template_by_variant &&
-      typeof override.linked_template_by_variant === "object"
+      override.action_by_variant &&
+      typeof override.action_by_variant === "object"
     ) {
-      for (const [variant, templateId] of Object.entries(
-        override.linked_template_by_variant
+      for (const [variant, actionRaw] of Object.entries(
+        override.action_by_variant
       )) {
-        if (typeof templateId === "string" && templateId.trim().length > 0) {
-          variantBindings[variant] = templateId;
-        }
+        const norm = normalizeAction(actionRaw);
+        if (norm) variantActions[variant] = norm;
       }
     }
-    // Drop the entry entirely if every field matches the default —
-    // keeps the blob small and lets a future default change
-    // propagate. String equality is fine here; the fields are all
-    // scalars.
+    const noVariants = Object.keys(variantActions).length === 0;
+
+    // Drop the entry entirely if every field matches the shipped
+    // default. String equality for the phrasing template; deep-ish
+    // equality for the default_action (kind + one payload field).
     const sameTemplate =
       typeof override.phrasing_template === "string" &&
       override.phrasing_template === defaults.phrasing_template;
-    const sameLink =
-      (override.linked_template_id ?? null) === defaults.linked_template_id;
+    const sameDefault =
+      normalizedDefault.kind === defaults.default_action.kind &&
+      normalizedDefault.kind === "none";
     const noNote = !override.admin_note?.trim();
-    const noVariants = Object.keys(variantBindings).length === 0;
-    if (sameTemplate && sameLink && noNote && noVariants) continue;
+    if (sameTemplate && sameDefault && noNote && noVariants) continue;
+
     cleaned[source] = {
       phrasing_template:
         typeof override.phrasing_template === "string" &&
         override.phrasing_template.trim().length > 0
           ? override.phrasing_template
           : defaults.phrasing_template,
-      linked_template_id:
-        override.linked_template_id != null &&
-        override.linked_template_id !== ""
-          ? override.linked_template_id
-          : null,
-      linked_template_by_variant: noVariants ? undefined : variantBindings,
+      default_action: normalizedDefault,
+      action_by_variant: noVariants ? undefined : variantActions,
       admin_note: override.admin_note?.trim() || null,
     };
   }

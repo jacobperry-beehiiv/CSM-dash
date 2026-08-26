@@ -56,7 +56,12 @@ export async function getConfigForSource(
 // components that only need to preview a template use the pure
 // `applyTemplate` export below.
 
-interface RenderContext {
+/** Base context for the todo-title phrasing template. Extended by
+ *  callers with source-specific extras (Slack action templates carry
+ *  workspace_url, csm_email, etc.). `applyTemplate` is fully
+ *  string-based on the value side, so extra fields don't need type
+ *  changes here — the interface just documents the well-known ones. */
+export interface RenderContext {
   company_name?: string | null;
   milestone_days?: number | null;
   prior_stage?: string | null;
@@ -69,14 +74,17 @@ interface RenderContext {
 /** Substitute `{{token}}` occurrences with values from `ctx`. Unknown
  *  tokens are left in place so a typo in the settings template
  *  doesn't blank the title. Empty/null values render as an empty
- *  string; the caller can trim if it wants. */
+ *  string; the caller can trim if it wants.
+ *
+ *  Accepts any string-indexed record so the Slack action path can
+ *  pass richer contexts (workspace_url, csm_email, playbook_step,
+ *  etc.) without a second helper. */
 export function applyTemplate(
   template: string,
-  ctx: RenderContext
+  ctx: Record<string, string | number | null | undefined>
 ): string {
   return template.replace(/\{\{\s*([\w.]+)\s*\}\}/g, (raw, key) => {
-    const k = key as keyof RenderContext;
-    const v = ctx[k];
+    const v = ctx[key];
     if (v == null) return "";
     return String(v);
   });
@@ -92,7 +100,13 @@ export async function renderTodoTitle(
   ctx: RenderContext
 ): Promise<string> {
   const cfg = await getConfigForSource(source);
-  const rendered = applyTemplate(cfg.phrasing_template, ctx);
+  // Widen the closed-shape RenderContext to the string-indexed record
+  // `applyTemplate` accepts. Cast is safe: RenderContext's fields are
+  // all string/number/null/undefined.
+  const rendered = applyTemplate(
+    cfg.phrasing_template,
+    ctx as Record<string, string | number | null | undefined>
+  );
   // Fallback: if the template rendered to empty (e.g. the source
   // relies on {{original_text}} but the caller didn't pass it), fall
   // back to original_text or a generic string. Never let an empty
