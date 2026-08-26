@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
-import { isAdmin } from "@/lib/auth/admin";
+import { isAdmin, listAdminEmails } from "@/lib/auth/admin";
 import { loadAdminFlags, saveAdminFlags } from "@/lib/data/admin-flags";
 import { invalidateFeatureFlagsCache } from "@/lib/auth/feature-flags";
 import { loadCustomers } from "@/lib/data/load-customers";
@@ -38,7 +38,13 @@ export async function GET() {
   }
   const flags = await loadAdminFlags();
   // Build the picker list: every CSM in the book whose Gmail is
-  // connected. Dedupe by lowercased email.
+  // connected, PLUS every admin (regardless of Gmail-connection or
+  // CSM-assignment). Admins land here because they should always be
+  // grantable on a flag — a super-admin who isn't assigned to any
+  // customer (e.g. Richard) would otherwise be un-pickable.
+  //
+  // Dedupe by lowercased email; CSM rows win the name over the
+  // admin-fallback display name when both apply.
   const [customers, connected] = await Promise.all([
     loadCustomers(),
     listConnectedEmails(),
@@ -53,6 +59,20 @@ export async function GET() {
       email: e,
       name: (c.customer_success_manager ?? "").replace(/_/g, " ") || e,
     });
+  }
+  for (const adminEmail of listAdminEmails()) {
+    const key = adminEmail.toLowerCase();
+    if (byEmail.has(key)) continue;
+    // Fallback display name: the local part, title-cased (so
+    // "richard@beehiiv.com" reads "Richard" in the picker).
+    const local = key.split("@")[0] ?? key;
+    const name =
+      local
+        .split(/[.\-_]/)
+        .filter(Boolean)
+        .map((p) => p.charAt(0).toUpperCase() + p.slice(1))
+        .join(" ") || key;
+    byEmail.set(key, { email: key, name });
   }
   const eligible_csms = Array.from(byEmail.values()).sort((a, b) =>
     a.name.localeCompare(b.name)
