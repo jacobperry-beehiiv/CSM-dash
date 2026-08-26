@@ -91,6 +91,13 @@ export async function PUT(req: Request) {
   function normalizeAction(a: unknown): TodoAction | null {
     if (!a || typeof a !== "object") return null;
     const obj = a as Record<string, unknown>;
+    if (obj.kind === "none") {
+      // "No action needed" — persisted on variants so a runtime
+      // resolution suppresses the button even when the source's
+      // default_action would show one. Distinct from "no entry in
+      // the variant map at all" (which means fall-through).
+      return { kind: "none" };
+    }
     if (obj.kind === "email") {
       const id = typeof obj.template_id === "string" ? obj.template_id.trim() : "";
       if (!id) return null;
