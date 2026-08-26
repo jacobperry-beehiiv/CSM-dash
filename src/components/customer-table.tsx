@@ -127,6 +127,7 @@ export function CustomerTable({
   csms,
   priorEspOptions = [],
   techStackOptions = [],
+  upgradeAnalysisEnabled = false,
 }: {
   initialCustomers: CustomerWithMetrics[];
   csms: string[];
@@ -134,6 +135,9 @@ export function CustomerTable({
   priorEspOptions?: string[];
   /** Shared admin-managed choices for the Tech Stack filter. */
   techStackOptions?: string[];
+  /** Feature-flag gate for the D&C Upgrade Analysis panel that
+   *  mounts above the expanded customer detail. */
+  upgradeAnalysisEnabled?: boolean;
 }) {
   const viewerEmail = useViewerEmail();
   // Signed-in CSM's custom merge tags. Threaded into buildBulkDrafts
@@ -1205,6 +1209,7 @@ export function CustomerTable({
                               : undefined
                           }
                           gmailScopeMissing={gmail.scopeMissing}
+                          upgradeAnalysisEnabled={upgradeAnalysisEnabled}
                         />
                       </td>
                     </tr>
