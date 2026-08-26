@@ -149,8 +149,8 @@ export function PersonalTodosPanel({
             bindings?: Record<
               string,
               {
-                linked_template_id: string | null;
-                linked_template_by_variant?: Record<string, string | null>;
+                default_action: TodoSourceConfig["default_action"];
+                action_by_variant?: TodoSourceConfig["action_by_variant"];
               }
             >;
           }
@@ -160,8 +160,8 @@ export function PersonalTodosPanel({
           for (const [source, cfg] of Object.entries(j.bindings ?? {})) {
             next[source as AutomatedSource] = {
               phrasing_template: "",
-              linked_template_id: cfg.linked_template_id,
-              linked_template_by_variant: cfg.linked_template_by_variant,
+              default_action: cfg.default_action,
+              action_by_variant: cfg.action_by_variant,
             };
           }
           setSourceConfigs(next);

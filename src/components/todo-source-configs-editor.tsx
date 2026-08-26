@@ -3,10 +3,18 @@
 import { useMemo, useState } from "react";
 import {
   AUTOMATED_SOURCES,
+  SLACK_CHANNEL_MSG_MAX_LEN,
   SOURCE_METADATA,
   type AutomatedSource,
+  type TodoAction,
   type TodoSourceConfig,
 } from "@/lib/data/todo-source-configs-types";
+
+// Kept in sync with SLACK_CHANNEL_ID_RE in slack.ts. Duplicated here
+// (not imported) because that module is server-only. Slack channel
+// ids start with C/G/D/Z (public / private / DM / archived) and have
+// 8+ alphanumeric chars after the prefix.
+const SLACK_CHANNEL_ID_RE = /^[CGDZ][A-Z0-9]{8,}$/;
 
 /**
  * Admin editor for the automated-todo phrasing + action registry.
@@ -129,10 +137,6 @@ export function TodoSourceConfigsEditor({
             ? "Reach out about ad-network rebate"
             : undefined,
         });
-        const linkedTpl = templateOptions.find(
-          (t) => t.id === cfg.linked_template_id
-        );
-
         return (
           <div
             key={source}
@@ -208,17 +212,17 @@ export function TodoSourceConfigsEditor({
             {meta.variant_actions ? (
               <div>
                 <label className="text-xs font-medium text-fg block mb-1">
-                  Per-stage outreach templates
+                  Per-stage actions
                 </label>
                 <p className="text-[10px] text-muted mb-2">
-                  Each stage can bind its own template — leave a row unset
-                  to fall back to the default template below (or to render
-                  no button at all when the default is also empty).
+                  Each stage picks its own action — email a template,
+                  post to a Slack channel, or leave unset to fall back
+                  to the default action below.
                 </p>
-                <div className="space-y-1.5">
+                <div className="space-y-2.5">
                   {meta.variant_actions.map((v, i) => {
-                    const currentBinding =
-                      cfg.linked_template_by_variant?.[v.key] ?? "";
+                    const currentAction: TodoAction =
+                      cfg.action_by_variant?.[v.key] ?? { kind: "none" };
                     // Render a group header only on the first row of
                     // each named group. `variant_actions` is authored
                     // in-order so a change in `group` value between
@@ -230,38 +234,36 @@ export function TodoSourceConfigsEditor({
                     return (
                       <div key={v.key}>
                         {showHeader ? (
-                          <div className="mt-2 mb-1 text-[10px] font-semibold uppercase tracking-wide text-subtle border-b border-border/60 pb-0.5">
+                          <div className="mt-3 mb-1 text-[10px] font-semibold uppercase tracking-wide text-subtle border-b border-border/60 pb-0.5">
                             {v.group}
                           </div>
                         ) : null}
-                        <div className="flex items-center gap-2 text-xs">
-                          <span className="w-60 text-subtle truncate" title={v.label}>
+                        <div className="flex items-start gap-2 text-xs">
+                          <span
+                            className="w-52 pt-1.5 text-subtle truncate"
+                            title={v.label}
+                          >
                             {v.label}
                           </span>
-                          <select
-                            className="flex-1 text-sm px-2 py-1 rounded border border-border bg-surface"
-                            value={currentBinding}
-                            onChange={(e) => {
-                              const next: Record<string, string | null> = {
-                                ...(cfg.linked_template_by_variant ?? {}),
-                              };
-                              if (e.currentTarget.value) {
-                                next[v.key] = e.currentTarget.value;
-                              } else {
-                                delete next[v.key];
-                              }
-                              setField(source, {
-                                linked_template_by_variant: next,
-                              });
-                            }}
-                          >
-                            <option value="">— use default —</option>
-                            {templateOptions.map((t) => (
-                              <option key={t.id} value={t.id}>
-                                {t.name}
-                              </option>
-                            ))}
-                          </select>
+                          <div className="flex-1">
+                            <ActionEditor
+                              action={currentAction}
+                              onChange={(next) => {
+                                const map: Record<string, TodoAction> = {
+                                  ...(cfg.action_by_variant ?? {}),
+                                };
+                                if (next.kind === "none") {
+                                  delete map[v.key];
+                                } else {
+                                  map[v.key] = next;
+                                }
+                                setField(source, { action_by_variant: map });
+                              }}
+                              templateOptions={templateOptions}
+                              includeNoneLabel="use default"
+                              compact
+                            />
+                          </div>
                         </div>
                       </div>
                     );
@@ -273,34 +275,19 @@ export function TodoSourceConfigsEditor({
             <div>
               <label className="text-xs font-medium text-fg block mb-1">
                 {meta.variant_actions
-                  ? "Default outreach template (fallback)"
-                  : "Linked outreach template (optional)"}
+                  ? "Default action (fallback)"
+                  : "Action (optional)"}
               </label>
-              <select
-                className="w-full text-sm px-2 py-1 rounded border border-border bg-surface"
-                value={cfg.linked_template_id ?? ""}
-                onChange={(e) =>
-                  setField(source, {
-                    linked_template_id: e.currentTarget.value || null,
-                  })
-                }
-              >
-                <option value="">— no action button —</option>
-                {templateOptions.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.name}
-                  </option>
-                ))}
-              </select>
+              <ActionEditor
+                action={cfg.default_action ?? { kind: "none" }}
+                onChange={(next) => setField(source, { default_action: next })}
+                templateOptions={templateOptions}
+                includeNoneLabel="no action button"
+              />
               <div className="text-[10px] text-muted mt-1">
                 {meta.variant_actions
-                  ? "Used when a stage above doesn't have its own template set."
-                  : "When set, todos of this source get a “Draft outreach” button that opens the outreach modal with the customer + this template pre-selected."}
-                {linkedTpl ? (
-                  <>
-                    {" "}Currently linked to <strong>{linkedTpl.name}</strong>.
-                  </>
-                ) : null}
+                  ? "Used when a stage above doesn't have its own action set."
+                  : "When set, todos of this source get an action button that either opens the outreach modal (email) or posts to a Slack channel."}
               </div>
             </div>
 
@@ -342,6 +329,154 @@ export function TodoSourceConfigsEditor({
           </span>
         ) : null}
       </div>
+    </div>
+  );
+}
+
+// ─── Action editor sub-component ─────────────────────────────────────────
+//
+// One tagged-union input. Reuses the same shape everywhere: the
+// per-variant table calls it in `compact` mode (radios inline + template
+// dropdown / Slack fields stack below), the default row calls it in
+// regular mode. `includeNoneLabel` is the copy for the "none" radio —
+// varies between "no action button" (default row) and "use default"
+// (variant row) so the meaning is clear in context.
+
+interface ActionEditorProps {
+  action: TodoAction;
+  onChange: (next: TodoAction) => void;
+  templateOptions: TemplateOption[];
+  includeNoneLabel: string;
+  compact?: boolean;
+}
+
+function ActionEditor({
+  action,
+  onChange,
+  templateOptions,
+  includeNoneLabel,
+  compact,
+}: ActionEditorProps) {
+  const kind = action.kind;
+  const channelValid =
+    action.kind !== "slack" ||
+    action.channel_id === "" ||
+    SLACK_CHANNEL_ID_RE.test(action.channel_id);
+
+  return (
+    <div className={compact ? "space-y-1.5" : "space-y-2"}>
+      <div className="flex items-center gap-3 text-xs">
+        <label className="flex items-center gap-1 cursor-pointer">
+          <input
+            type="radio"
+            checked={kind === "none"}
+            onChange={() => onChange({ kind: "none" })}
+          />
+          <span className="text-subtle">{includeNoneLabel}</span>
+        </label>
+        <label className="flex items-center gap-1 cursor-pointer">
+          <input
+            type="radio"
+            checked={kind === "email"}
+            onChange={() =>
+              onChange({
+                kind: "email",
+                template_id:
+                  action.kind === "email" ? action.template_id : "",
+              })
+            }
+          />
+          <span>✉︎ Email</span>
+        </label>
+        <label className="flex items-center gap-1 cursor-pointer">
+          <input
+            type="radio"
+            checked={kind === "slack"}
+            onChange={() =>
+              onChange({
+                kind: "slack",
+                channel_id:
+                  action.kind === "slack" ? action.channel_id : "",
+                message_template:
+                  action.kind === "slack" ? action.message_template : "",
+              })
+            }
+          />
+          <span>📣 Slack</span>
+        </label>
+      </div>
+
+      {action.kind === "email" ? (
+        <select
+          className="w-full text-sm px-2 py-1 rounded border border-border bg-surface"
+          value={action.template_id}
+          onChange={(e) =>
+            onChange({ kind: "email", template_id: e.currentTarget.value })
+          }
+        >
+          <option value="">— pick a template —</option>
+          {templateOptions.map((t) => (
+            <option key={t.id} value={t.id}>
+              {t.name}
+            </option>
+          ))}
+        </select>
+      ) : null}
+
+      {action.kind === "slack" ? (
+        <div className="space-y-1.5">
+          <div>
+            <input
+              type="text"
+              className={`w-full text-sm px-2 py-1 rounded border bg-surface font-mono ${
+                channelValid ? "border-border" : "border-red-400 dark:border-red-500/50"
+              }`}
+              value={action.channel_id}
+              onChange={(e) =>
+                onChange({
+                  ...action,
+                  channel_id: e.currentTarget.value.trim(),
+                })
+              }
+              placeholder="C0ABC12345"
+              aria-invalid={!channelValid}
+              spellCheck={false}
+            />
+            {!channelValid ? (
+              <div className="text-[10px] text-red-700 dark:text-red-300 mt-0.5">
+                Slack channel id must look like <code>C0ABC12345</code>
+                (starts with C/G/D, all uppercase alphanumeric).
+              </div>
+            ) : (
+              <div className="text-[10px] text-muted mt-0.5">
+                Slack channel id — find it via <em>View channel details →
+                About</em> in Slack. The bot must be a member of the
+                channel.
+              </div>
+            )}
+          </div>
+          <div>
+            <textarea
+              className="w-full text-sm px-2 py-1 rounded border border-border bg-surface font-mono resize-y [field-sizing:content]"
+              rows={2}
+              value={action.message_template}
+              maxLength={SLACK_CHANNEL_MSG_MAX_LEN}
+              onChange={(e) =>
+                onChange({
+                  ...action,
+                  message_template: e.currentTarget.value,
+                })
+              }
+              placeholder="Kicking off renewal for {{company_name}} — 30 days out. cc @{{csm_slack_id}}"
+            />
+            <div className="text-[10px] text-muted mt-0.5">
+              Supports the same merge tags as the phrasing template
+              above, plus <code>{"{{workspace_url}}"}</code> for a deep
+              link back to the customer detail.
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

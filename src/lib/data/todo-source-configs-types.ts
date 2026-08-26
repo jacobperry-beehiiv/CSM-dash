@@ -41,6 +41,31 @@ export type AutomatedSource = (typeof AUTOMATED_SOURCES)[number];
 
 // ─── Config shape ────────────────────────────────────────────────────────
 
+/** Action bound to a todo source (or variant of one). Tagged union so
+ *  the settings editor and the runtime button can branch on `kind`
+ *  without extra flags.
+ *
+ *   - `none`  → panel renders no button at all.
+ *   - `email` → panel renders "✉︎ Draft outreach"; click opens the
+ *               outreach modal with `template_id` pre-selected. Same
+ *               shape as v1 of this registry.
+ *   - `slack` → panel renders "📣 Send Slack"; click posts
+ *               `message_template` (after merge-tag substitution) to
+ *               `channel_id` via the app's bot user. `channel_id`
+ *               matches SLACK_CHANNEL_ID_RE (`C…`/`G…` etc.); no
+ *               name-to-id resolution here.
+ */
+export type TodoAction =
+  | { kind: "none" }
+  | { kind: "email"; template_id: string }
+  | { kind: "slack"; channel_id: string; message_template: string };
+
+/** Cap for Slack action `message_template`. Slack itself accepts up to
+ *  40k chars per message; we cap well below so a fat-fingered paste
+ *  can't blow the KV blob size, and any admin who legitimately needs
+ *  a long template can still fit a reasonable pitch + merge tags. */
+export const SLACK_CHANNEL_MSG_MAX_LEN = 4000;
+
 export interface TodoSourceConfig {
   /** Handlebars-style title template. Supports these tokens:
    *    - {{company_name}} — customer.company_name ?? workspace_name
@@ -51,25 +76,36 @@ export interface TodoSourceConfig {
    *  title.
    */
   phrasing_template: string;
-  /** Optional outreach template id to open when the CSM clicks the
-   *  todo's action button. When null/empty, no button renders (unless
-   *  a variant-specific entry in `linked_template_by_variant`
-   *  matches). Must correspond to a template in the stored-templates
-   *  KV. */
-  linked_template_id: string | null;
+  /** Action taken when the CSM clicks the panel button on a todo of
+   *  this source AND no matching per-variant entry exists in
+   *  `action_by_variant`. `{ kind: "none" }` means no button at all. */
+  default_action: TodoAction;
   /** Per-variant action bindings for sources that fire in variants
-   *  (today: only renewal_milestone at 90/60/30/7 days). Keys are the
-   *  variant string — for renewal_milestone that's
-   *  `String(source_meta.milestone_days)`. Values are outreach
-   *  template ids. When a todo's variant appears here, the panel
-   *  action button uses that template. When absent, falls back to
-   *  `linked_template_id`. Empty map = no per-variant bindings. */
-  linked_template_by_variant?: Record<string, string | null>;
+   *  (renewal_milestone at 90/60/30/7d, slack_assign per playbook
+   *  step, …). Keys are the variant string — for renewal_milestone
+   *  that's `String(source_meta.milestone_days)`; for slack_assign
+   *  it's the step slug. When a todo's variant appears here, the
+   *  panel action button uses that entry. When absent, falls back to
+   *  `default_action`. Empty map = no per-variant bindings. */
+  action_by_variant?: Record<string, TodoAction>;
   /** Free-form admin note surfaced in the settings UI so the reason
    *  behind the wiring is visible ("using T4/rec pitch template for
    *  90d milestone because that's what Juliet sends first"). Not
    *  shown to the CSM. */
   admin_note?: string | null;
+
+  // ─── Legacy fields — email-only shape from before Slack actions ────
+  //
+  // Preserved on the type so on-disk KV rows written by the previous
+  // editor still deserialize. `mergeTodoSourceConfigs` converts them
+  // into `default_action` / `action_by_variant` at read time; downstream
+  // code SHOULD NOT read these directly. Kept optional + undocumented
+  // in the editor so nobody accidentally re-introduces a write path.
+
+  /** @deprecated use `default_action` (kind: "email"). */
+  linked_template_id?: string | null;
+  /** @deprecated use `action_by_variant` (kind: "email"). */
+  linked_template_by_variant?: Record<string, string | null>;
 }
 
 export interface TodoSourceConfigsBlob {
@@ -317,45 +353,45 @@ export const DEFAULT_TODO_SOURCE_CONFIGS: Record<
   renewal_milestone: {
     // Original engine string: `Kick off renewal for ${company}`
     phrasing_template: "Kick off renewal for {{company_name}}",
-    linked_template_id: null,
+    default_action: { kind: "none" },
   },
   renewal_confirmed: {
     // Original engine string: `Verify ${company} renewal went through`
     phrasing_template: "Verify {{company_name}} renewal went through",
-    linked_template_id: null,
+    default_action: { kind: "none" },
   },
   sybill_callrecap: {
     // Sybill titles come straight from the parsed action item; template
     // just echoes the original text.
     phrasing_template: "{{original_text}}",
-    linked_template_id: null,
+    default_action: { kind: "none" },
   },
   slack_assign: {
     // The 16-step playbook titles are step-specific; we echo the
     // original title the engine assembled. Kept in the registry so
     // an admin can prepend "@bot: " or similar without a deploy.
     phrasing_template: "{{original_text}}",
-    linked_template_id: null,
+    default_action: { kind: "none" },
   },
   slack_slash: {
     phrasing_template: "{{original_text}}",
-    linked_template_id: null,
+    default_action: { kind: "none" },
   },
   slack_dm: {
     phrasing_template: "{{original_text}}",
-    linked_template_id: null,
+    default_action: { kind: "none" },
   },
   slack_reaction: {
     phrasing_template: "{{original_text}}",
-    linked_template_id: null,
+    default_action: { kind: "none" },
   },
   scheduled: {
     phrasing_template: "{{original_text}}",
-    linked_template_id: null,
+    default_action: { kind: "none" },
   },
   feature_request: {
     phrasing_template: "{{original_text}}",
-    linked_template_id: null,
+    default_action: { kind: "none" },
   },
 };
 
@@ -368,7 +404,53 @@ export function mergeTodoSourceConfigs(
   for (const source of AUTOMATED_SOURCES) {
     const base = DEFAULT_TODO_SOURCE_CONFIGS[source];
     const override = overrides?.by_source?.[source];
-    out[source] = { ...base, ...(override ?? {}) };
+    const merged: TodoSourceConfig = { ...base, ...(override ?? {}) };
+
+    // Migrate legacy email-only fields into the tagged-union shape.
+    // Rows written by the pre-Slack editor carry `linked_template_id`
+    // (+ optional `linked_template_by_variant`); the new editor writes
+    // `default_action` / `action_by_variant` directly. When both are
+    // present we prefer the new fields (admins have re-saved on the
+    // new editor). Legacy fields are dropped from the returned object
+    // so downstream consumers see a single canonical shape.
+    if (merged.default_action == null) {
+      const legacyId = merged.linked_template_id?.trim();
+      merged.default_action = legacyId
+        ? { kind: "email", template_id: legacyId }
+        : { kind: "none" };
+    }
+    if (
+      merged.action_by_variant == null &&
+      merged.linked_template_by_variant
+    ) {
+      const variantOut: Record<string, TodoAction> = {};
+      for (const [k, tplId] of Object.entries(
+        merged.linked_template_by_variant
+      )) {
+        const trimmed = tplId?.trim();
+        if (trimmed) variantOut[k] = { kind: "email", template_id: trimmed };
+      }
+      if (Object.keys(variantOut).length > 0) merged.action_by_variant = variantOut;
+    }
+    delete merged.linked_template_id;
+    delete merged.linked_template_by_variant;
+    out[source] = merged;
   }
   return out;
+}
+
+/** Resolve the effective action for a todo based on its source's
+ *  config + optional variant key. Variant wins over default; missing
+ *  variant entry falls back to default; default `none` renders no
+ *  button. Kept here (client-safe) so both the runtime button and the
+ *  settings preview can share the same resolution logic. */
+export function resolveTodoAction(
+  cfg: TodoSourceConfig,
+  variantKey: string | null | undefined
+): TodoAction {
+  if (variantKey) {
+    const v = cfg.action_by_variant?.[variantKey];
+    if (v) return v;
+  }
+  return cfg.default_action;
 }
