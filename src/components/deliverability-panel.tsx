@@ -276,6 +276,101 @@ export function DeliverabilityPanel({
     }
   }
 
+  /**
+   * "Outreach made" — clears the post from the alerts list AND drops
+   * an action_log note on the customer's Notes surface so the profile
+   * shows what the outreach was about.
+   *
+   * Optimistically applies the same cleared-state overlay as
+   * setClearedOptimistic (so the row disappears immediately) then
+   * POSTs to /api/deliverability/outreach-made which handles both
+   * side effects server-side. Rolls back the local optimistic clear
+   * if the server rejects; a partial success where the clear lands
+   * but the note write fails still counts as ok (the endpoint returns
+   * log_ok:false but the alert IS gone from the panel).
+   *
+   * `flagSummary` is a compact human string ("critical spam_rate +
+   * warning open_rate"); the client synthesizes it so the endpoint
+   * doesn't have to re-derive severity from the raw alert.
+   */
+  async function markOutreachMade(args: {
+    postId: string;
+    workspaceId: string;
+    subject: string | null;
+    newsletter: string | null;
+    flagSummary: string | null;
+    note: string;
+  }) {
+    setBusyPosts((prev) => {
+      const next = new Set(prev);
+      next.add(args.postId);
+      return next;
+    });
+    const stamp = new Date().toISOString();
+    setData((prev) => ({
+      ...prev,
+      alerts: prev.alerts.map((a) =>
+        a.post.post_id !== args.postId
+          ? a
+          : {
+              ...a,
+              cleared: {
+                cleared_at: stamp,
+                cleared_by: null,
+                reason: args.note
+                  ? `Outreach made: ${args.note}`
+                  : "Outreach made",
+              },
+            }
+      ),
+    }));
+    try {
+      const r = await fetch("/api/deliverability/outreach-made", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          post_id: args.postId,
+          workspace_id: args.workspaceId,
+          subject: args.subject,
+          newsletter: args.newsletter,
+          flag_summary: args.flagSummary,
+          note: args.note,
+        }),
+      });
+      const j = (await r.json().catch(() => ({}))) as {
+        ok?: boolean;
+        log_ok?: boolean;
+        log_error?: string | null;
+        error?: string;
+      };
+      if (!r.ok || !j.ok) {
+        throw new Error(j.error ?? `HTTP ${r.status}`);
+      }
+      if (j.log_ok === false) {
+        window.alert(
+          `Cleared from the list, but the profile note write failed: ${j.log_error ?? "unknown"}. The alert is off the panel; retry from the customer profile if needed.`
+        );
+      }
+    } catch (e) {
+      // Roll back the optimistic clear so the row reappears.
+      setData((prev) => ({
+        ...prev,
+        alerts: prev.alerts.map((a) =>
+          a.post.post_id !== args.postId ? a : { ...a, cleared: null }
+        ),
+      }));
+      window.alert(
+        `Outreach-made failed: ${e instanceof Error ? e.message : "unknown"}`
+      );
+    } finally {
+      setBusyPosts((prev) => {
+        const next = new Set(prev);
+        next.delete(args.postId);
+        return next;
+      });
+    }
+  }
+
   async function setClearedOptimistic(
     postId: string,
     cleared: boolean,
@@ -995,6 +1090,27 @@ export function DeliverabilityPanel({
                                             })
                                         : undefined
                                     }
+                                    onOutreachMade={
+                                      // Only offer the shortcut when we
+                                      // can resolve a workspace_id to
+                                      // hang the action_log note off of.
+                                      // Non-mapped alerts (rare) fall
+                                      // back to just Clear.
+                                      customer?.workspace_id
+                                        ? (note) =>
+                                            void markOutreachMade({
+                                              postId: alert.post.post_id,
+                                              workspaceId:
+                                                customer.workspace_id!,
+                                              subject: alert.post.subject,
+                                              newsletter: alert.post.newsletter,
+                                              flagSummary: summarizeFlags(
+                                                alert.flags
+                                              ),
+                                              note,
+                                            })
+                                        : undefined
+                                    }
                                   />
                                 ))}
                               </tbody>
@@ -1159,6 +1275,18 @@ function metricSeverityClass(
   return "";
 }
 
+/** Compact "critical spam_rate + warning open_rate" string used to
+ *  seed the auto-generated action_log note when the CSM hits
+ *  "Outreach made" without typing a custom note. Returns null when
+ *  the alert has no flags so the note reader doesn't see an awkward
+ *  trailing separator. */
+function summarizeFlags(flags: RedFlag[]): string | null {
+  if (flags.length === 0) return null;
+  return flags
+    .map((f) => `${f.severity} ${f.metric}`)
+    .join(" + ");
+}
+
 function publicationAccent(
   flagged: boolean,
   critical: boolean,
@@ -1181,6 +1309,7 @@ function PublicationAlertRows({
   onToggleExpanded,
   onClear,
   onDraft,
+  onOutreachMade,
 }: {
   alert: DeliverabilityAlert;
   targetDate: string;
@@ -1191,6 +1320,9 @@ function PublicationAlertRows({
   onToggleExpanded: () => void;
   onClear: (cleared: boolean, reason?: string) => void;
   onDraft?: () => void;
+  /** Present only when the alert maps to a known workspace_id (so the
+   *  parent can drop the action_log note). Absent → button hidden. */
+  onOutreachMade?: (note: string) => void;
 }) {
   const flagged = alert.flags.length > 0;
   const cleared = Boolean(alert.cleared);
@@ -1333,6 +1465,28 @@ function PublicationAlertRows({
                 className="px-2 py-1 text-xs border border-border-strong rounded-md hover:bg-canvas"
               >
                 Draft
+              </button>
+            ) : null}
+            {onOutreachMade && flagged && !cleared ? (
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => {
+                  // Free-text prompt for "what was the outreach
+                  // about". Empty is fine — the endpoint synthesizes
+                  // a default from the flag summary when the CSM
+                  // skips it.
+                  const note =
+                    window.prompt(
+                      "What was this outreach about? (Optional — leave blank to just log the flag summary.)"
+                    ) ?? "";
+                  onOutreachMade(note.trim());
+                }}
+                title="Log outreach on the customer profile and clear this alert from the list."
+                aria-label="Mark outreach made"
+                className="px-2 py-1 text-xs border border-emerald-400 dark:border-emerald-500/50 rounded-md bg-emerald-50 dark:bg-emerald-500/10 text-emerald-900 dark:text-emerald-200 hover:bg-emerald-100 dark:hover:bg-emerald-500/20 disabled:opacity-50"
+              >
+                {busy ? "…" : "✓ Outreach made"}
               </button>
             ) : null}
             {flagged ? (
