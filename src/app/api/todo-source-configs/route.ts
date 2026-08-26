@@ -1,18 +1,25 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { loadEffectiveTodoSourceConfigs } from "@/lib/data/todo-source-configs";
+import type { TodoAction } from "@/lib/data/todo-source-configs-types";
 
 export const dynamic = "force-dynamic";
 
 /**
  * GET /api/todo-source-configs
  *
- * Public (session-auth) read of the effective todo-source config
- * registry. Used by PersonalTodosPanel to decide whether to render
- * the "Draft outreach" action button on each todo. Returns only what
- * the panel needs — the linked_template_id per source — not phrasing
+ * Public (session-auth) read of the effective todo-source action
+ * registry. Used by PersonalTodosPanel to decide whether — and how —
+ * to render an action button on each todo. Returns only the fields
+ * the panel needs (default_action + action_by_variant), not phrasing
  * templates or admin notes (which are admin-only via
  * /api/settings/todo-source-configs).
+ *
+ * The Slack `message_template` is intentionally included in the
+ * response so the panel could preview it before sending; the endpoint
+ * that actually POSTs the Slack message (/api/todo-actions/slack)
+ * re-reads the registry server-side so a compromised client can't
+ * spray arbitrary channels.
  */
 export async function GET() {
   const session = await auth();
@@ -21,20 +28,17 @@ export async function GET() {
     return NextResponse.json({ error: "Sign in required" }, { status: 401 });
   }
   const effective = await loadEffectiveTodoSourceConfigs();
-  // Trim to just what the panel needs — the fallback template id
-  // AND the per-variant map (used for renewal_milestone's 90/60/30/7
-  // per-stage bindings).
   const bindings: Record<
     string,
     {
-      linked_template_id: string | null;
-      linked_template_by_variant?: Record<string, string | null>;
+      default_action: TodoAction;
+      action_by_variant?: Record<string, TodoAction>;
     }
   > = {};
   for (const [source, cfg] of Object.entries(effective)) {
     bindings[source] = {
-      linked_template_id: cfg.linked_template_id,
-      linked_template_by_variant: cfg.linked_template_by_variant,
+      default_action: cfg.default_action,
+      action_by_variant: cfg.action_by_variant,
     };
   }
   return NextResponse.json({ bindings });
