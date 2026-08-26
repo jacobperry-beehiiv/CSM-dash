@@ -88,6 +88,12 @@ export interface CustomerOverride {
   tech_stack?: string[];
   tech_stack_updated_at?: string;
   tech_stack_updated_by?: string;
+  /** CSM-set free-text notes on the customer's stack. Plain string, so
+   *  unlike the two arrays above it goes through applyField — where an
+   *  empty string clears it. */
+  tech_stack_notes?: string;
+  tech_stack_notes_updated_at?: string;
+  tech_stack_notes_updated_by?: string;
 }
 
 export type OverrideMap = Record<string, CustomerOverride>;
@@ -151,6 +157,9 @@ export async function setOverride(
   applyField("prior_esp_updated_by");
   applyField("tech_stack_updated_at");
   applyField("tech_stack_updated_by");
+  applyField("tech_stack_notes");
+  applyField("tech_stack_notes_updated_at");
+  applyField("tech_stack_notes_updated_by");
   // prior_esp and tech_stack are arrays — an empty / omitted array
   // clears the field, otherwise it REPLACES the prior selection
   // (multi-select edits send the full desired set, not a delta).
@@ -243,6 +252,7 @@ export function applyOverride(
     // undefined here since these never come from the snapshot.)
     prior_esp: ov.prior_esp ?? customer.prior_esp,
     tech_stack: ov.tech_stack ?? customer.tech_stack,
+    tech_stack_notes: ov.tech_stack_notes ?? customer.tech_stack_notes,
   };
   // Spread bag values onto the customer. Each entry's `value`
   // replaces the corresponding Customer field; null clears it. Type
