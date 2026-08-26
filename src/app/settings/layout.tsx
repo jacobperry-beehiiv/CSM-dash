@@ -58,6 +58,14 @@ export default async function SettingsLayout({
         "Phrasing + linked outreach template for every automated todo source (renewal milestones, Sybill recaps, etc.).",
     });
   }
+  if (await isFeatureEnabledFor("upgrade-analysis", email)) {
+    extras.push({
+      href: "/settings/upgrade-analysis",
+      label: "Upgrade Analysis thresholds",
+      description:
+        "Tune the D&C Upgrade Analysis scorecard bands — complaint rates, deferral bands, engagement floors, escalation rules.",
+    });
+  }
   return (
     <>
       <div className="mb-6">
