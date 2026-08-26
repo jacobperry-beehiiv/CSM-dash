@@ -155,6 +155,38 @@ export interface NetworkCounters {
    *  replica). The UI reminds the user Slack search is the
    *  authoritative source for network mapping. */
   network_map_incomplete: true;
+  /** Snapshot Spamhaus DBL lookups for the publication's resolved
+   *  sending domains at scan time. Empty when no domain could be
+   *  resolved (the pillar renders "not checked" in that case). A
+   *  listing on any domain is a hold-verdict contributor via the
+   *  spamhaus_listed rule; unknown status is treated as amber, not
+   *  red, so DNS glitches don't misclassify.
+   *
+   *  Persisted with the scan result so re-opening a cached report
+   *  shows the same snapshot; a Re-run (force) requeries. */
+  spamhaus_checks: SpamhausDblCheck[];
+}
+
+/** Client-safe mirror of the SpamhausCheck shape from
+ *  `src/lib/integrations/spamhaus.ts`. Re-declared here (instead of
+ *  imported) because this types module is used by client components
+ *  that must not pull in `node:dns`. Kept structurally identical so
+ *  the pillar can assign the integration result directly. */
+export interface SpamhausDblCheck {
+  domain: string;
+  status: "clean" | "listed" | "unknown";
+  code: string | null;
+  category:
+    | "spam"
+    | "phish"
+    | "malware"
+    | "botnet"
+    | "redirector"
+    | "abused_legit"
+    | "bad_query"
+    | "unknown"
+    | null;
+  reason: string | null;
 }
 
 // ─── Slack signals (populated by Pillar-8 sibling; see slack-search.ts) ──
@@ -178,7 +210,10 @@ export type EscalationReason =
   | "multiple_amber"
   | "aup_prohibited_use"
   | "slack_prior_decision"
-  | "composite_complaint_threshold";
+  | "composite_complaint_threshold"
+  /** At least one sending domain is on the Spamhaus DBL. Category
+   *  determines severity via the spamhaus_botnet_treatment config. */
+  | "spamhaus_dbl_listed";
 
 export interface EscalationVerdict {
   needed: boolean;

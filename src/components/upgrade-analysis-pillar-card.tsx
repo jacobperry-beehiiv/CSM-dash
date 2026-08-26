@@ -48,7 +48,7 @@ const PILLAR_DESCRIPTIONS: Record<PillarKey, string> = {
   provider:
     "Per-provider complaint rates. Comcast has its own red line — pub-attributable signal.",
   network:
-    "Organization flags on this org (AUP, ip_already_used). Slack search intentionally deferred to PR 2.",
+    "Organization flags on this org (AUP, ip_already_used) plus a Spamhaus DBL snapshot for the publication's sending domains. Slack search intentionally deferred to PR 2.",
 };
 
 const SCORE_STYLES: Record<PillarScore, { label: string; classes: string }> = {
@@ -245,6 +245,38 @@ function PillarCounters({
   // network
   const n = report.pillars.network;
   const activeFlags = n.org_flags.filter((f) => !f.deleted_at);
+  const spamhausChecks = n.spamhaus_checks ?? [];
+  const spamhausListed = spamhausChecks.filter((c) => c.status === "listed");
+  const spamhausUnknown = spamhausChecks.filter((c) => c.status === "unknown");
+  // Summary cell for the Spamhaus row — one of four states:
+  //   • no domain resolvable / feature disabled → "Not checked"
+  //   • listed → "Listed · N of M"  (red)
+  //   • unknown for at least one → "Partial · N unresolvable"  (amber)
+  //   • all clean → "Clean · M checked"  (green)
+  let spamhausSummary: React.ReactNode = null;
+  if (spamhausChecks.length === 0) {
+    spamhausSummary = (
+      <span className="text-subtle italic">Not checked</span>
+    );
+  } else if (spamhausListed.length > 0) {
+    spamhausSummary = (
+      <span className="text-red-700 dark:text-red-300 font-semibold">
+        Listed · {spamhausListed.length} of {spamhausChecks.length}
+      </span>
+    );
+  } else if (spamhausUnknown.length > 0) {
+    spamhausSummary = (
+      <span className="text-amber-700 dark:text-amber-300">
+        Partial · {spamhausUnknown.length} unresolvable
+      </span>
+    );
+  } else {
+    spamhausSummary = (
+      <span className="text-emerald-700 dark:text-emerald-300">
+        Clean · {spamhausChecks.length} checked
+      </span>
+    );
+  }
   return (
     <div className="text-xs">
       <dl className="grid grid-cols-2 gap-x-4 gap-y-1">
@@ -255,6 +287,7 @@ function PillarCounters({
         <Row label="IP already used">
           {n.ip_already_used_active ? "Yes" : "No"}
         </Row>
+        <Row label="Spamhaus DBL">{spamhausSummary}</Row>
         <Row label="Network map">
           {n.network_map_incomplete ? "Incomplete (Slack read pending)" : "Full"}
         </Row>
@@ -270,6 +303,30 @@ function PillarCounters({
               <span>set {new Date(f.created_at).toISOString().slice(0, 10)}</span>
             </li>
           ))}
+        </ul>
+      ) : null}
+      {spamhausChecks.length > 0 ? (
+        <ul className="mt-2 space-y-0.5">
+          {spamhausChecks.map((c) => {
+            const tone =
+              c.status === "listed"
+                ? "text-red-700 dark:text-red-300"
+                : c.status === "unknown"
+                  ? "text-amber-700 dark:text-amber-300"
+                  : "text-subtle";
+            return (
+              <li key={c.domain} className={`text-[10px] ${tone}`}>
+                <code className="bg-surface-2 px-1 rounded">{c.domain}</code>{" "}
+                <span>
+                  {c.status === "listed"
+                    ? `listed (${c.category ?? "unknown"})`
+                    : c.status === "unknown"
+                      ? `unresolvable — ${c.reason ?? "unknown error"}`
+                      : "clean"}
+                </span>
+              </li>
+            );
+          })}
         </ul>
       ) : null}
     </div>

@@ -79,7 +79,9 @@ export async function runUpgradeAnalysis(
     runAcquisitionPillar(input.publicationId, orgId, cfg),
     runFunnelPillar(input.publicationId, cfg),
     runProviderPillar(input.publicationId, cfg),
-    orgId ? runNetworkPillar(orgId) : Promise.resolve(emptyNetwork()),
+    orgId
+      ? runNetworkPillar(orgId, input.publicationId)
+      : Promise.resolve(emptyNetwork()),
   ]);
 
   // ─── Score each pillar ─────────────────────────────────────────────
@@ -167,5 +169,8 @@ function emptyNetwork() {
     aup_prohibited_use_active: false,
     ip_already_used_active: false,
     network_map_incomplete: true as const,
+    // No pub id resolved → no Spamhaus lookup either. The card
+    // renders "not checked" for this state.
+    spamhaus_checks: [],
   };
 }
