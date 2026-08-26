@@ -181,7 +181,6 @@ export function CompanyNotes({ workspaceId }: Props) {
   return (
     <CollapsibleSection
       title="Notes"
-      defaultOpen
       trailing={
         count > 0 ? (
           <span className="text-xs text-muted font-normal normal-case">
