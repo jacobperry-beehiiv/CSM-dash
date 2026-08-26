@@ -100,8 +100,20 @@ export const SOURCE_METADATA: Record<
      *  the variants are the four milestone-day values the engine
      *  fires at. Every variant is optional — leaving one unset means
      *  the source's fallback `linked_template_id` applies (or no
-     *  button when that's null too). */
-    variant_actions?: Array<{ key: string; label: string }>;
+     *  button when that's null too).
+     *
+     *  Optional `group` field lets the editor render section headers
+     *  when a source has many variants that naturally cluster (e.g.
+     *  `slack_assign` has 16 onboarding steps + 4 live steps —
+     *  rendering them under one flat list would be a scroll wall).
+     *  When `group` is unset, variants render inline. When two or
+     *  more variants share a group name, the editor emits one header
+     *  before the first variant in that group. */
+    variant_actions?: Array<{
+      key: string;
+      label: string;
+      group?: string;
+    }>;
   }
 > = {
   renewal_milestone: {
@@ -135,12 +147,124 @@ export const SOURCE_METADATA: Record<
     supports_original_text: true,
   },
   slack_assign: {
-    label: "Slack `@bot assign` onboarding step",
+    label: "Slack `@bot assign` playbook step",
     description:
-      "Scheduled from the @bot assign onboarding playbook (16 timed steps).",
+      "Scheduled from the @bot assign playbook — either the onboarding sequence (17 timed steps from handoff → 90-day flip) or the shorter live/warm-book sequence (4 steps). Each step can bind its own outreach template so the action button on an onboarding kickoff todo opens a different draft than a 90-day check-in todo.",
     supports_milestone: false,
     supports_prior_stage: false,
     supports_original_text: true,
+    // Keys match the `step_key` slug on each TodoTemplate entry in
+    // src/lib/integrations/slack-assign.ts. Never renumber existing
+    // keys — a rename here strands any admin binding at
+    // /settings/todo-automation. Groups drive the section headers
+    // in the editor UI.
+    variant_actions: [
+      {
+        key: "onboarding:confirm_handoff",
+        label: "Confirm handoff message",
+        group: "Onboarding playbook (17 steps)",
+      },
+      {
+        key: "onboarding:no_pkg_sales_timeline",
+        label: "(No-pkg) Sales timeline check",
+        group: "Onboarding playbook (17 steps)",
+      },
+      {
+        key: "onboarding:with_pkg_internal_sync",
+        label: "(With-pkg) Internal sync w/ AE + SE",
+        group: "Onboarding playbook (17 steps)",
+      },
+      {
+        key: "onboarding:watch_intro_email",
+        label: "Watch for CSM intro email",
+        group: "Onboarding playbook (17 steps)",
+      },
+      {
+        key: "onboarding:internal_setup_hubspot",
+        label: "Internal setup + HubSpot fields",
+        group: "Onboarding playbook (17 steps)",
+      },
+      {
+        key: "onboarding:schedule_kickoff",
+        label: "Schedule kickoff call",
+        group: "Onboarding playbook (17 steps)",
+      },
+      {
+        key: "onboarding:prep_kickoff",
+        label: "Prep kickoff (breakdown + deck)",
+        group: "Onboarding playbook (17 steps)",
+      },
+      {
+        key: "onboarding:run_kickoff",
+        label: "Run kickoff call",
+        group: "Onboarding playbook (17 steps)",
+      },
+      {
+        key: "onboarding:post_kickoff",
+        label: "Post-kickoff follow-up",
+        group: "Onboarding playbook (17 steps)",
+      },
+      {
+        key: "onboarding:migration_plan",
+        label: "Build migration plan + CWUP",
+        group: "Onboarding playbook (17 steps)",
+      },
+      {
+        key: "onboarding:run_training",
+        label: "Run training session",
+        group: "Onboarding playbook (17 steps)",
+      },
+      {
+        key: "onboarding:post_training",
+        label: "Post-training follow-up",
+        group: "Onboarding playbook (17 steps)",
+      },
+      {
+        key: "onboarding:no_pkg_14_day",
+        label: "(No-pkg) 14-day check-in",
+        group: "Onboarding playbook (17 steps)",
+      },
+      {
+        key: "onboarding:no_pkg_30_day",
+        label: "(No-pkg) 30-day check-in",
+        group: "Onboarding playbook (17 steps)",
+      },
+      {
+        key: "onboarding:no_pkg_60_day",
+        label: "(No-pkg) 60-day check-in + pre-audit",
+        group: "Onboarding playbook (17 steps)",
+      },
+      {
+        key: "onboarding:run_90_day",
+        label: "Run 90-day check-in",
+        group: "Onboarding playbook (17 steps)",
+      },
+      {
+        key: "onboarding:post_90_day",
+        label: "Post-90-day: CSAT + flip to Live",
+        group: "Onboarding playbook (17 steps)",
+      },
+      {
+        key: "live:get_up_to_speed",
+        label: "Get up to speed on the account",
+        group: "Live playbook (4 steps)",
+      },
+      {
+        key: "live:intro_call",
+        label: "Schedule intro call",
+        group: "Live playbook (4 steps)",
+      },
+      {
+        key: "live:confirm_drive",
+        label: "Confirm Drive folder + tracking",
+        group: "Live playbook (4 steps)",
+      },
+      {
+        key: "live:first_30_day",
+        label: "First 30-day check-in",
+        group: "Live playbook (4 steps)",
+      },
+    ],
   },
   slack_slash: {
     label: "Slack /todo slash command",

@@ -90,6 +90,14 @@ export interface SlackSourceMeta {
    *  render "went from Follow Up Sent → Renewal Confirmed" if we
    *  ever surface it. */
   prior_lifecycle_stage?: string;
+  /** For source === "slack_assign": the stable playbook step key
+   *  (e.g. "onboarding:confirm_handoff", "live:intro_call") that
+   *  identifies which template in ONBOARDING_PLAYBOOK / LIVE_PLAYBOOK
+   *  spawned this todo. Read by the personal-todos action button to
+   *  look up a per-step outreach template binding from the todo-
+   *  source-configs registry — same shape as renewal_milestone's
+   *  per-stage bindings, keyed by this string instead of days. */
+  playbook_step?: string;
 }
 
 export interface PersonalTodo {
