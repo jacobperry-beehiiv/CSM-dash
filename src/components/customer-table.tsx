@@ -40,6 +40,7 @@ import { buildBulkDrafts } from "@/lib/templates/bulk-drafts";
 import { BulkDraftsModal, type BulkDraft } from "./bulk-drafts-modal";
 import { MappedFieldEditor } from "./mapped-field-editor";
 import { MAPPABLE_DASHBOARD_FIELDS } from "@/lib/data/field-mappings-types";
+import { techStackChoices } from "@/lib/data/profile-field-options-types";
 
 type SortKey = keyof CustomerWithMetrics | "features_enabled";
 type SortDir = "asc" | "desc";
@@ -464,16 +465,30 @@ export function CustomerTable({
     }
     return m;
   }, [initialCustomers, priorEspOptions]);
+  // The Tech Stack dropdown offers its own options PLUS every Prior ESP
+  // name — matching the editor in the detail panel, so a value a CSM
+  // can tag is always a value they can filter on. Prior ESP and Tech
+  // Stack remain separate fields reading separate data; only this
+  // choice list is widened. Zero-count entries are fine here: both
+  // profile filters already pass disableZeroCounts={false}.
+  const techFilterOptions = useMemo(
+    () =>
+      techStackChoices({
+        priorEsp: priorEspOptions,
+        techStack: techStackOptions,
+      }),
+    [priorEspOptions, techStackOptions]
+  );
   const techCounts = useMemo(() => {
     const m: Record<string, number> = {};
-    for (const o of techStackOptions) {
+    for (const o of techFilterOptions) {
       const target = o.toLowerCase();
       m[o] = initialCustomers.filter((c) =>
         (c.tech_stack ?? []).some((s) => s.toLowerCase() === target)
       ).length;
     }
     return m;
-  }, [initialCustomers, techStackOptions]);
+  }, [initialCustomers, techFilterOptions]);
 
   function toggleSort(key: SortKey) {
     if (sortKey === key) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
@@ -531,6 +546,12 @@ export function CustomerTable({
       { header: "Risk level", pick: (c) => c.property_risk_level ?? "" },
       { header: "Risk detail", pick: (c) => c.property_risk_level_detail ?? "" },
       { header: "Engagement", pick: (c) => c.company_engagement ?? "" },
+      // Profile fields — useful for reporting even though they're only
+      // *editable* on the customer detail panel. Semicolon-joined: the
+      // values themselves are comma-free (the API strips commas so the
+      // filters can round-trip through a comma-joined URL param).
+      { header: "Prior ESP", pick: (c) => (c.prior_esp ?? []).join("; ") },
+      { header: "Tech stack", pick: (c) => (c.tech_stack ?? []).join("; ") },
     ];
     const header = columns.map((col) => csvEscape(col.header)).join(",");
     const rows = filtered.map((c) =>
@@ -940,13 +961,13 @@ export function CustomerTable({
             onClear={() => setPriorEspRaw("")}
           />
         ) : null}
-        {techStackOptions.length > 0 ? (
+        {techFilterOptions.length > 0 ? (
           <MultiSelectFilter
             label="Tech stack"
             emptyLabel="All"
             className="w-40 justify-between"
             disableZeroCounts={false}
-            options={techStackOptions.map((o) => ({
+            options={techFilterOptions.map((o) => ({
               value: o,
               label: o,
               count: techCounts[o] ?? 0,

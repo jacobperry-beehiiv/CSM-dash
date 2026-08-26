@@ -1,4 +1,10 @@
 import { kvGet, kvSet } from "../storage/kv";
+import type { ProfileFieldOptions } from "./profile-field-options-types";
+
+// Re-exported so server callers can keep importing the type (and the
+// Tech Stack union helper) from this module.
+export type { ProfileFieldOptions };
+export { techStackChoices } from "./profile-field-options-types";
 
 /**
  * Shared, admin-managed option lists for the two per-customer profile
@@ -46,11 +52,6 @@ export const DEFAULT_TECH_STACK_OPTIONS: string[] = [
   "Circle",
   "Discord",
 ];
-
-export interface ProfileFieldOptions {
-  priorEsp: string[];
-  techStack: string[];
-}
 
 /**
  * Normalize an option list: trim, collapse whitespace, drop empties,

@@ -1,7 +1,10 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { loadOverrides, setOverride } from "@/lib/data/customer-overrides";
-import { loadProfileFieldOptions } from "@/lib/data/profile-field-options";
+import {
+  loadProfileFieldOptions,
+  techStackChoices,
+} from "@/lib/data/profile-field-options";
 import {
   invalidateCustomerCache,
   loadCustomers,
@@ -65,7 +68,15 @@ interface PostBody {
    *  admin-managed list's casing (values not in the list are kept as-is
    *  so previously-selected options survive an admin removing them). */
   tech_stack?: string[] | null;
+  /** CSM-set free-text "Tech Stack Notes". Trimmed; an empty string (or
+   *  null) clears it. Audit fields are stamped from the session
+   *  viewer's email, same as the other CSM-owned fields. */
+  tech_stack_notes?: string | null;
 }
+
+/** Character cap for the free-text Tech Stack Notes field. Mirrored by
+ *  the textarea's maxLength in profile-fields-section.tsx. */
+const TECH_STACK_NOTES_MAX = 2000;
 
 export async function POST(req: Request) {
   try {
@@ -156,11 +167,41 @@ export async function POST(req: Request) {
         patch.prior_esp_updated_by = list.length ? stamp : undefined;
       }
       if ("tech_stack" in body) {
-        const list = canonList(body.tech_stack, options.techStack);
+        // Canonicalise against the same widened list the picker offers
+        // (Tech Stack's own options + every Prior ESP name) — otherwise
+        // an ESP-sourced pick like "Mailchimp" isn't found in
+        // options.techStack and skips the casing-snap.
+        const list = canonList(body.tech_stack, techStackChoices(options));
         patch.tech_stack = list.length ? list : undefined;
         patch.tech_stack_updated_at = list.length ? new Date().toISOString() : undefined;
         patch.tech_stack_updated_by = list.length ? stamp : undefined;
       }
+    }
+
+    // Tech Stack Notes — free text, so no option list to canonicalise
+    // against. Handled outside the block above so a notes-only save
+    // doesn't pay for the option-list read.
+    if ("tech_stack_notes" in body) {
+      // Capped because this is the first unbounded free-text value in
+      // the single global customer-overrides blob, and EVERY override
+      // write (lifecycle dropdowns, mapped-field edits, CSM refresh)
+      // read-modify-writes that whole blob. Unbounded notes would
+      // inflate the payload of unrelated saves app-wide. The textarea
+      // carries the same maxLength, so a CSM can't type past it and
+      // get silently truncated here.
+      const trimmed = (body.tech_stack_notes?.trim() || "").slice(
+        0,
+        TECH_STACK_NOTES_MAX
+      );
+      // applyField() treats "" as "delete the key", which is exactly
+      // the clear semantics we want here.
+      patch.tech_stack_notes = trimmed || undefined;
+      patch.tech_stack_notes_updated_at = trimmed
+        ? new Date().toISOString()
+        : undefined;
+      patch.tech_stack_notes_updated_by = trimmed
+        ? session?.user?.email?.toLowerCase() ?? undefined
+        : undefined;
     }
 
     const map = await setOverride(body.workspace_id, patch);

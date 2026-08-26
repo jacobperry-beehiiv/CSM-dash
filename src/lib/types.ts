@@ -159,6 +159,13 @@ export interface Customer {
    * holds single string values.
    */
   tech_stack?: string[] | null;
+  /**
+   * CSM-set free-text notes about the customer's stack — the context a
+   * multi-select can't carry ("still dual-sending from Sailthru until
+   * Q3", "Zapier hooks feed their CRM"). Override-only, same KV as
+   * prior_esp / tech_stack. Free text, so there's no option list.
+   */
+  tech_stack_notes?: string | null;
 }
 
 export interface HubSpotContactRef {

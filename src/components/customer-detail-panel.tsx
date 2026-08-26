@@ -18,6 +18,7 @@ import { CopyButton } from "./copy-button";
 import { CsmRefreshRow } from "./csm-refresh-row";
 import { HubSpotLinkBadge } from "./hubspot-link-badge";
 import { MappedFieldEditor } from "./mapped-field-editor";
+import { ProfileFieldsSection } from "./profile-fields-section";
 import { StatusBadge } from "./status-badge";
 import { MAPPABLE_DASHBOARD_FIELDS } from "@/lib/data/field-mappings-types";
 import { stripeCustomerUrl } from "@/lib/links";
@@ -260,6 +261,21 @@ export function CustomerDetailPanel({
               />
             }
             block
+          />
+        </Section>
+        {/* CSM-owned stack fields. Override-backed (never from
+         *  Metabase/HubSpot), so they save straight to the
+         *  customer-overrides KV and survive the twice-daily snapshot
+         *  refresh. Same component renders on /account/[id], which
+         *  shares no layout code with this panel. Sits between Status
+         *  and Dates because it's account context a CSM reads
+         *  alongside risk, not a date. */}
+        <Section title="Tech & Prior ESP">
+          <ProfileFieldsSection
+            workspaceId={c.workspace_id}
+            priorEsp={c.prior_esp}
+            techStack={c.tech_stack}
+            techStackNotes={c.tech_stack_notes}
           />
         </Section>
         <Section title="Dates">
