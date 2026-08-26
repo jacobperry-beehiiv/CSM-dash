@@ -1,12 +1,14 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type {
   OverallVerdict,
   PillarKey,
   UpgradeAnalysisReport,
 } from "@/lib/engines/upgrade-analysis/types";
 import { UpgradeAnalysisPillarCard } from "./upgrade-analysis-pillar-card";
+import { useWorkspacePublications } from "@/lib/hooks/customer-publications-cache";
+import { fmtNumber } from "./format";
 
 /**
  * D&C Upgrade Analysis panel — mounts under a customer row via
@@ -324,5 +326,104 @@ function VerdictChip({ verdict }: { verdict: OverallVerdict }) {
     >
       {s.label}
     </span>
+  );
+}
+
+/**
+ * Workspace-scoped wrapper — the pillar SQL scores a single
+ * publication, but the customer-detail-panel mount only knows the
+ * workspace_id (organization). Enterprise customers can own many
+ * publications, and the score for "flagship newsletter" differs from
+ * "internal test publication," so we render a picker and let the CSM
+ * pick which pub to score.
+ *
+ * Behavior:
+ *  - Fetches the workspace's publications via the shared cache hook
+ *    (same source of truth the "Publications" section below uses, so
+ *    no duplicate round-trip).
+ *  - Defaults the selection to the largest publication by subscribers
+ *    — that's almost always the one D&C would want to score first.
+ *  - Renders the picker inline in the panel header when the workspace
+ *    has more than one publication; hides it for single-pub workspaces
+ *    (auto-selected).
+ *  - Delegates to the underlying `UpgradeAnalysisPanel` once a
+ *    publication is selected, passing workspaceId as `organizationId`
+ *    so the network pillar runs against the right org.
+ */
+export function UpgradeAnalysisPanelForWorkspace({
+  workspaceId,
+}: {
+  workspaceId: string;
+}) {
+  const state = useWorkspacePublications(workspaceId);
+  const pubs = Array.isArray(state) ? state : null;
+  const error = state instanceof Error ? state.message : null;
+
+  // Default = largest by subscribers. Falls back to the first entry
+  // when subscribers are all null (e.g. a fresh workspace).
+  const defaultPubId = useMemo(() => {
+    if (!pubs || pubs.length === 0) return null;
+    const sorted = [...pubs].sort(
+      (a, b) => (b.subscribers ?? 0) - (a.subscribers ?? 0)
+    );
+    return sorted[0]?.publication_id ?? null;
+  }, [pubs]);
+
+  const [selectedPubId, setSelectedPubId] = useState<string | null>(null);
+  const effectivePubId = selectedPubId ?? defaultPubId;
+
+  if (error) {
+    return (
+      <div className="rounded-lg border border-border bg-surface-2 p-4 text-xs text-red-700 dark:text-red-300">
+        D&amp;C Upgrade Analysis unavailable — publications list failed to
+        load: {error}
+      </div>
+    );
+  }
+  if (pubs === null) {
+    return (
+      <div className="rounded-lg border border-border bg-surface-2 p-4 text-xs text-muted">
+        Loading publications for D&amp;C Upgrade Analysis…
+      </div>
+    );
+  }
+  if (pubs.length === 0) {
+    return (
+      <div className="rounded-lg border border-border bg-surface-2 p-4 text-xs text-muted">
+        D&amp;C Upgrade Analysis can&rsquo;t run — no publications found
+        under this workspace.
+      </div>
+    );
+  }
+  if (!effectivePubId) return null;
+
+  return (
+    <div className="space-y-2">
+      {pubs.length > 1 ? (
+        <label className="flex items-center gap-2 text-xs text-muted">
+          <span className="text-subtle">Scan publication:</span>
+          <select
+            value={effectivePubId}
+            onChange={(e) => setSelectedPubId(e.currentTarget.value)}
+            className="flex-1 max-w-md text-xs px-2 py-1 rounded border border-border bg-surface"
+          >
+            {pubs.map((p) => (
+              <option key={p.publication_id} value={p.publication_id}>
+                {p.publication_name || p.publication_id}
+                {p.subscribers != null ? ` — ${fmtNumber(p.subscribers)} subs` : ""}
+              </option>
+            ))}
+          </select>
+        </label>
+      ) : null}
+      <UpgradeAnalysisPanel
+        // Remount the inner panel when the selection changes so its
+        // cached-scan probe re-runs against the newly-picked pub id
+        // instead of the previous one.
+        key={effectivePubId}
+        publicationId={effectivePubId}
+        organizationId={workspaceId}
+      />
+    </div>
   );
 }

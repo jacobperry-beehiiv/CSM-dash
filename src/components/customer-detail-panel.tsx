@@ -20,7 +20,7 @@ import { HubSpotLinkBadge } from "./hubspot-link-badge";
 import { MappedFieldEditor } from "./mapped-field-editor";
 import { ProfileFieldsSection } from "./profile-fields-section";
 import { StatusBadge } from "./status-badge";
-import { UpgradeAnalysisPanel } from "./upgrade-analysis-panel";
+import { UpgradeAnalysisPanelForWorkspace } from "./upgrade-analysis-panel";
 import { MAPPABLE_DASHBOARD_FIELDS } from "@/lib/data/field-mappings-types";
 import { stripeCustomerUrl } from "@/lib/links";
 
@@ -84,7 +84,7 @@ export function CustomerDetailPanel({
   return (
     <div className="space-y-4">
       {upgradeAnalysisEnabled && c.workspace_id ? (
-        <UpgradeAnalysisPanel publicationId={c.workspace_id} />
+        <UpgradeAnalysisPanelForWorkspace workspaceId={c.workspace_id} />
       ) : null}
       {topSlot}
 
