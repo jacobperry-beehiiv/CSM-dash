@@ -9,8 +9,7 @@ import { AccountOutreach } from "@/components/account-outreach";
 import { HubSpotContactsSection } from "@/components/hubspot-contacts-section";
 import { CustomerSignalsSection } from "@/components/customer-signals-section";
 import { CustomerPublicationsList } from "@/components/customer-publications-list";
-import { AccountProfileFields } from "@/components/account-profile-fields";
-import { loadProfileFieldOptions } from "@/lib/data/profile-field-options";
+import { ProfileFieldsSection } from "@/components/profile-fields-section";
 
 export const dynamic = "force-dynamic";
 
@@ -34,10 +33,6 @@ export default async function AccountPage({
   // posted via /api/customer-signals. Empty array when nothing's been
   // posted yet — the section renders a friendly empty state.
   const signals = c.workspace_id ? await listSignals(c.workspace_id) : [];
-
-  // Shared, admin-managed option lists for the Prior ESP / Tech Stack
-  // editors below.
-  const profileOptions = await loadProfileFieldOptions();
 
   const utilPct =
     c.percent_of_max_subs != null
@@ -94,13 +89,17 @@ export default async function AccountPage({
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
-        <AccountProfileFields
-          workspaceId={c.workspace_id}
-          priorEsp={c.prior_esp ?? null}
-          techStack={c.tech_stack ?? null}
-          priorEspOptions={profileOptions.priorEsp}
-          techStackOptions={profileOptions.techStack}
-        />
+        {/* Same editable rows the customer detail panel renders, so
+         *  the two surfaces can't drift. The card chrome is this
+         *  page's; the rows inside are shared. */}
+        <Section title="Tech & Prior ESP">
+          <ProfileFieldsSection
+            workspaceId={c.workspace_id}
+            priorEsp={c.prior_esp}
+            techStack={c.tech_stack}
+            techStackNotes={c.tech_stack_notes}
+          />
+        </Section>
         <Section title="Status">
           <Row label="Company status" value={c.property_company_status ?? "—"} />
           <Row label="Engagement" value={c.company_engagement ?? "—"} />
