@@ -20,6 +20,12 @@ const SECTIONS: Array<{ href: string; label: string; description: string }> = [
     description: "Subjects, rich-text bodies, tags.",
   },
   {
+    href: "/settings/merge-tags",
+    label: "Your merge tags",
+    description:
+      "Per-CSM {{name}} tags a shared template can substitute — e.g. your scheduling link.",
+  },
+  {
     href: "/settings/tiers",
     label: "Enterprise tiers",
     description: "Subscriber-tier ladder + pricing.",

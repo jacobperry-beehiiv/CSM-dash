@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile, unlink } from "node:fs/promises";
+import { mkdir, readdir, readFile, writeFile, unlink } from "node:fs/promises";
 import path from "node:path";
 import { isDemoMode } from "../demo/mode";
 
@@ -109,6 +109,65 @@ export async function kvDelete(key: string): Promise<void> {
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
   }
+}
+
+/**
+ * Enumerate every key beginning with `prefix`. Rare — most stores
+ * know their exact key up front, but per-CSM stores that need a
+ * cross-CSM read-side (e.g. "which tag names are already registered
+ * by any CSM?") need to scan.
+ *
+ * Backend behavior:
+ *   - Postgres: `SELECT key FROM csm_kv WHERE key LIKE prefix||'%'`.
+ *   - File: scans data/<prefix parent> for entries whose sanitized
+ *     filename (see fileFor) matches the prefix. Filenames sanitize
+ *     `:` and other non-`[a-z0-9._/-]` characters to `_`, so the
+ *     scan matches against the sanitized shape of `prefix`.
+ *
+ * Order is unspecified. Values are NOT returned — callers should
+ * kvGet each key they care about. Meant for small (dozens of) key
+ * sets; do not use for O(customer) scans.
+ */
+export async function kvListPrefix(prefix: string): Promise<string[]> {
+  if (backend() === "postgres") {
+    await ensureSchema();
+    const sql = await pg();
+    const rows = await sql<{ key: string }[]>`
+      SELECT key FROM csm_kv WHERE key LIKE ${prefix + "%"}
+    `;
+    return rows.map((r) => r.key);
+  }
+  // File backend: sanitized filenames use `_` in place of `:`, `@`,
+  // etc. Reverse the mapping isn't possible in general, so we walk
+  // the parent directory of the sanitized prefix and match the
+  // sanitized shape. Every read caller in this codebase uses the
+  // ORIGINAL (unsanitized) key going forward — file names are an
+  // implementation detail of the local dev backend only.
+  const sanitizedPrefix = prefix.replace(/[^a-z0-9._/-]/gi, "_");
+  const dataDir = path.join(process.cwd(), "data");
+  const parent = path.dirname(path.join(dataDir, sanitizedPrefix));
+  const basePrefix = path.basename(sanitizedPrefix);
+  let entries: string[];
+  try {
+    entries = await readdir(parent);
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw e;
+  }
+  // We can't perfectly recover the original key from a sanitized
+  // filename, so this returns the sanitized form. All current callers
+  // treat kvListPrefix output as an opaque set of storage keys they
+  // pass to kvGet, which works fine because kvGet re-sanitizes on
+  // the file backend. The invariant we rely on: sanitization is
+  // idempotent — passing a sanitized key back through fileFor yields
+  // the same filename.
+  const relParent = path.relative(dataDir, parent);
+  return entries
+    .filter((f) => f.endsWith(".json") && f.startsWith(basePrefix))
+    .map((f) => {
+      const stem = f.slice(0, -".json".length);
+      return relParent ? `${relParent}/${stem}` : stem;
+    });
 }
 
 /** True when running against managed Postgres rather than local files. */

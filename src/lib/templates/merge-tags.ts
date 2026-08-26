@@ -60,6 +60,22 @@ export interface MergeContext {
    *  send_name is unknown — the conditional-block syntax
    *  `{{#send_name}}…{{/send_name}}` (handled in applyMergeTags)
    *  drops the wrapping copy on absent values. */
+  /** Per-CSM customizable merge tags. Populated from the KV store
+   *  keyed on the signed-in CSM's email — see
+   *  loadPerCsmMergeTagsMap in `../data/per-csm-merge-tags.ts`.
+   *
+   *  Callers thread this in on any render path that has a CSM
+   *  identity: OutreachModal + MergeTagLibrary fetch it client-side
+   *  via useCustomMergeTags(); bulk-draft build helpers accept it
+   *  as an option so their calling routes can load it from the
+   *  session on the server.
+   *
+   *  Substitution is a LAST-RESORT fallback in the merge-tag
+   *  interpolator — a custom tag can never shadow a built-in one.
+   *  Motivating case: `{{scheduling_text}}` — a shared template can
+   *  reference the token and each CSM's stored copy (Calendly link,
+   *  "grab time here" blurb, whatever) fills in at render time. */
+  custom_tags?: Record<string, string>;
   deliverability?: {
     publication_name?: string | null;
     send_name?: string | null;
@@ -667,8 +683,16 @@ export function applyMergeTags(
   // calls; cache once for consistency).
   const resolveToken = (token: string): string | null => {
     const tag = TAG_INDEX.get(token);
-    if (!tag) return null;
-    return tag.resolve(customer, ctx);
+    if (tag) return tag.resolve(customer, ctx);
+    // Per-CSM custom tags are consulted ONLY when the built-in
+    // registry misses — so a poorly-chosen custom tag name can never
+    // shadow a system tag (defense-in-depth alongside the save-side
+    // guard in per-csm-merge-tags.ts). Unknown tokens still return
+    // null so they render as-is in the preview, making typos visible.
+    if (ctx.custom_tags && Object.prototype.hasOwnProperty.call(ctx.custom_tags, token)) {
+      return ctx.custom_tags[token] ?? "";
+    }
+    return null;
   };
 
   // Pass 1: conditional sections. We match {{#NAME}}…{{/NAME}}

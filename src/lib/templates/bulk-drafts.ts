@@ -67,6 +67,14 @@ export interface BuildBulkDraftsInput {
    *  MergeContext alongside ladder + adGap. Missing entries fall
    *  through to ctx defaults (which themselves fall through to "—"). */
   extraContextFor?: (c: Customer) => Partial<MergeContext>;
+  /** Signed-in CSM's custom merge tags — folded into every per-row
+   *  MergeContext so shared templates that reference the sender's
+   *  own tags (`{{scheduling_text}}`, etc.) resolve for whoever is
+   *  drafting. Load client-side from useCustomMergeTags() before
+   *  calling. `undefined` (or empty map) skips the fallback path
+   *  and the tokens render as-is in the preview — same behavior as
+   *  the built-in registry missing on an unknown token. */
+  customTags?: Record<string, string>;
   /** When set, group customers into BCC batches instead of one draft
    *  per customer. Each batch becomes one draft with `to` =
    *  `bccBatchTo` and owner emails in BCC (Below $3.5K past-due). */
@@ -109,6 +117,7 @@ export function buildBulkDrafts(input: BuildBulkDraftsInput): BulkDraft[] {
     bccLookup,
     trackingIdFor,
     extraContextFor,
+    customTags,
     bccBatchSize,
     bccBatchTo,
     auditLabel,
@@ -122,6 +131,7 @@ export function buildBulkDrafts(input: BuildBulkDraftsInput): BulkDraft[] {
       adGapByOrg,
       trackingIdFor,
       extraContextFor,
+      customTags,
       batchSize: bccBatchSize,
       toEmail: (bccBatchTo ?? "").trim(),
       auditLabel,
@@ -141,8 +151,12 @@ export function buildBulkDrafts(input: BuildBulkDraftsInput): BulkDraft[] {
     const bcc = bccLookup?.(c) ?? null;
     const composeUrl =
       usesAdGap && adGap
-        ? composeUrlWithAdGap(tpl, c, ladder, adGap, { cc, bcc })
-        : composeUrlForTemplate(tpl, c, ladder, { cc, bcc });
+        ? composeUrlWithAdGap(tpl, c, ladder, adGap, {
+            cc,
+            bcc,
+            customTags,
+          })
+        : composeUrlForTemplate(tpl, c, ladder, { cc, bcc, customTags });
     if (!composeUrl) continue;
     // Merge per-row extra context (e.g. Past Due passes
     // past_due_month / past_due_reason) into the base ctx so MONTH /
@@ -150,7 +164,12 @@ export function buildBulkDrafts(input: BuildBulkDraftsInput): BulkDraft[] {
     // adGap are computed locally and shouldn't be overridden, but
     // the row-specific entries can supply anything else.
     const extras: Partial<MergeContext> = extraContextFor?.(c) ?? {};
-    const ctx: MergeContext = { ladder, adGap, ...extras };
+    const ctx: MergeContext = {
+      ladder,
+      adGap,
+      custom_tags: customTags,
+      ...extras,
+    };
     const subject = applyMergeTags(tpl.subject, c, ctx);
     const body_html = applyMergeTags(tpl.body_html, c, ctx);
     const body_text = htmlToText(body_html);
@@ -239,6 +258,7 @@ function buildBccBatchDrafts(args: {
   adGapByOrg?: Record<string, AdGapReport | null>;
   trackingIdFor?: (c: Customer) => string | null;
   extraContextFor?: (c: Customer) => Partial<MergeContext>;
+  customTags?: Record<string, string>;
   batchSize: number;
   toEmail: string;
   auditLabel?: string;
@@ -250,6 +270,7 @@ function buildBccBatchDrafts(args: {
     adGapByOrg,
     trackingIdFor,
     extraContextFor,
+    customTags,
     batchSize,
     toEmail,
     auditLabel,
@@ -277,7 +298,12 @@ function buildBccBatchDrafts(args: {
         ? adGapByOrg?.[anchor.workspace_id] ?? null
         : null;
     const extras: Partial<MergeContext> = extraContextFor?.(anchor) ?? {};
-    const ctx: MergeContext = { ladder, adGap, ...extras };
+    const ctx: MergeContext = {
+      ladder,
+      adGap,
+      custom_tags: customTags,
+      ...extras,
+    };
     const subject = applyMergeTags(tpl.subject, anchor, ctx);
     const body_html = applyMergeTags(tpl.body_html, anchor, ctx);
     const body_text = htmlToText(body_html);
