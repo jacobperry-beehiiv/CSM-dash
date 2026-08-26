@@ -17,6 +17,7 @@ import type { Customer } from "@/lib/types";
 import { TabBar } from "@/components/tab-bar";
 import { ProactiveOutreachPanel } from "@/components/am/proactive-outreach-panel";
 import { PastDuePanel } from "@/components/am/past-due-panel";
+import { isFeatureEnabledFor } from "@/lib/auth/feature-flags";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 120;
@@ -54,9 +55,19 @@ function utilPct(c: Customer): number | null {
 async function ProactiveOutreachTab({
   enterpriseRows,
   csms,
+  allCustomers,
+  upgradeAnalysisEnabled,
+  csm,
 }: {
   enterpriseRows: Customer[];
   csms: string[];
+  /** Full customer book — passed through to the D&C review queue
+   *  under the Approaching Enterprise sub-tab so scan rows can join
+   *  workspace_name / owner_email. Kept scoped to the viewer's csm
+   *  filter downstream. */
+  allCustomers: Customer[];
+  upgradeAnalysisEnabled: boolean;
+  csm: string | null;
 }) {
   // Approaching-Enterprise rows come from Metabase q13268 — fetched
   // here in the server component so the panel renders against a
@@ -80,6 +91,9 @@ async function ProactiveOutreachTab({
         enterpriseRows={enterpriseRows}
         approachingRows={approachingRows}
         csms={csms}
+        allCustomers={allCustomers}
+        upgradeAnalysisEnabled={upgradeAnalysisEnabled}
+        csm={csm}
       />
     </>
   );
@@ -158,6 +172,14 @@ export default async function AmPage({
     csms = uniqueCsms(all);
     const session = await auth();
     csm = resolveCsmFilter(sp.csm, all, session?.user?.email);
+    // D&C Upgrade Analysis surfaces (row panel above expanded row
+    // detail + review queue) live under the Approaching Enterprise
+    // sub-tab. Not applicable to accounts that are already Enterprise,
+    // so no wiring under the Enterprise-approaching-cap sub-tab.
+    const upgradeAnalysisEnabled = await isFeatureEnabledFor(
+      "upgrade-analysis",
+      session?.user?.email ?? null
+    );
 
     if (tab === "proactive") {
       // Enterprise cohort: customers near or over their sub cap. CSM
@@ -180,6 +202,9 @@ export default async function AmPage({
           <ProactiveOutreachTab
             enterpriseRows={enterpriseCohort}
             csms={csms}
+            allCustomers={all}
+            upgradeAnalysisEnabled={upgradeAnalysisEnabled}
+            csm={csm}
           />
         </Suspense>
       );
