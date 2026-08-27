@@ -9,8 +9,9 @@
  * results into the scan report.
  *
  * ─── Why the USER token ────────────────────────────────────────
- * `search.messages` requires a `search:read` scope, which Slack
- * ONLY grants to user tokens (`xoxp-…`), never bot tokens. The
+ * `search.messages` requires the `search:read.public` (and
+ * optionally `search:read.private`) User Token Scopes. Slack
+ * ONLY grants these to user tokens (`xoxp-…`), never bot tokens. The
  * upgrade-analysis scan runs as the logged-in CSM's session, but
  * we deliberately share a single dedicated user token (from
  * SLACK_USER_TOKEN) so the search matches the same corpus for

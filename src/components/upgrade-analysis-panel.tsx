@@ -489,15 +489,19 @@ function SlackEmptyState({
             Set{" "}
             <code className="bg-surface-2 px-1 rounded">SLACK_USER_TOKEN</code>{" "}
             in Vercel envs (user token with{" "}
-            <code className="bg-surface-2 px-1 rounded">search:read</code>) and
-            redeploy.
+            <code className="bg-surface-2 px-1 rounded">search:read.public</code>
+            {" "}and{" "}
+            <code className="bg-surface-2 px-1 rounded">search:read.private</code>
+            ) and redeploy.
           </>
         ) : status === "auth_error" ? (
           <>
             The shipped token is missing{" "}
-            <code className="bg-surface-2 px-1 rounded">search:read</code> or
-            was rotated. Add the scope to the app manifest&rsquo;s user token
-            scopes, reinstall, and update{" "}
+            <code className="bg-surface-2 px-1 rounded">search:read.public</code>
+            {" / "}
+            <code className="bg-surface-2 px-1 rounded">search:read.private</code>
+            {" "}or was rotated. Add both to the app&rsquo;s User Token
+            Scopes, reinstall, and update{" "}
             <code className="bg-surface-2 px-1 rounded">SLACK_USER_TOKEN</code>
             .
           </>
