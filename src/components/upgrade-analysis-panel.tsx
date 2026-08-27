@@ -7,6 +7,7 @@ import type {
   UpgradeAnalysisReport,
 } from "@/lib/engines/upgrade-analysis/types";
 import { UpgradeAnalysisPillarCard } from "./upgrade-analysis-pillar-card";
+import { UpgradeAnalysisSnapshotTile } from "./upgrade-analysis-snapshot-tile";
 import { useWorkspacePublications } from "@/lib/hooks/customer-publications-cache";
 import { fmtNumber } from "./format";
 
@@ -236,6 +237,16 @@ export function UpgradeAnalysisPanel({
                 </div>
               </div>
             </div>
+          ) : null}
+
+          {/* D&C-aligned snapshot — fixed 7-metric flag table, above
+              the pillar cards. Uses the same source-of-truth funnel
+              counters the pillars read, but computes ratios against
+              `sent` per the D&C spec rather than `delivered`. */}
+          {report.deliverability_snapshot ? (
+            <UpgradeAnalysisSnapshotTile
+              snapshot={report.deliverability_snapshot}
+            />
           ) : null}
 
           {/* Pillar cards. 2-up on desktop, stacked on narrow. */}

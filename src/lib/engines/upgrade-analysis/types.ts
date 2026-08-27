@@ -84,6 +84,13 @@ export interface AcquisitionCounters {
 export interface FunnelCounters {
   window_days: number;
   rows_evt: number;
+  /** Total send events (`sum(is_send)`). Added for the D&C-aligned
+   *  Deliverability Snapshot tile — five of the seven D&C ratios use
+   *  `sent` as the denominator. The existing pillar-scoring rules
+   *  keep computing rates off `deliv` because their thresholds were
+   *  tuned against delivered; the snapshot uses `sent` per the D&C
+   *  spec instead. */
+  sent: number;
   deliv: number;
   opens: number;
   v_opens: number;
@@ -96,6 +103,65 @@ export interface FunnelCounters {
   hard_b: number;
   spam: number;
   uniq_subs: number;
+  /** Unsubscribe count from Postgres over the same lookback window.
+   *  Sourced separately from the ClickHouse funnel row because
+   *  unsubscribe events aren't emitted into the sendgrid stream —
+   *  the customer's action lives on the `subscriptions` row's
+   *  `unsubscribed_at` timestamp. Zero when the lookup fails
+   *  (fail-open); the tile shows "—" for unsubscribe rate in that
+   *  case rather than a misleading 0%. */
+  unsubs: number;
+}
+
+/**
+ * D&C-aligned Deliverability Snapshot — a fixed 7-metric summary that
+ * mirrors the "Thresholds applied" table used by the deliverability-
+ * quick-screen and enterprise-upgrade-prescreening skills. Deliberately
+ * separate from the tunable pillar scoring: the snapshot's thresholds
+ * are fixed because D&C treats them as the industry-standard flag lines,
+ * and every one uses the denominators the skills document (sent for
+ * five of them, delivered for open + spam). Assembled in
+ * `computeDeliverabilitySnapshot` in rules.ts; does NOT contribute
+ * directly to pillar verdicts.
+ */
+export type DeliverabilitySnapshotStatus =
+  | "clean"
+  | "flagged"
+  | "low_volume"
+  | "no_data";
+
+export interface DeliverabilitySnapshotRow {
+  key:
+    | "open_rate"
+    | "delivery_rate"
+    | "hard_bounce_rate"
+    | "soft_bounce_rate"
+    | "unsubscribe_rate"
+    | "spam_rate"
+    | "deferral_rate";
+  label: string;
+  /** Human-readable formula, matches the D&C spec verbatim. */
+  formula: string;
+  /** Computed ratio (0–1). Null when the denominator is 0 (or when the
+   *  unsubscribe query failed for the unsubscribe row). */
+  value: number | null;
+  /** Flag threshold as a ratio (0–1). */
+  threshold: number;
+  /** True when `value` meets or breaches the flag threshold. False when
+   *  clean; null when `value` is null (undefined signal, don't render
+   *  a chip). */
+  flagged: boolean | null;
+}
+
+export interface DeliverabilitySnapshot {
+  window_days: number;
+  sent: number;
+  delivered: number;
+  status: DeliverabilitySnapshotStatus;
+  rows: DeliverabilitySnapshotRow[];
+  /** Count of rows with `flagged: true` — used by the tile header for
+   *  the "N of 7 flagged" summary chip. */
+  flagged_count: number;
 }
 
 /** Pillar 6 — provider concentration + rejection reason class breakdown. */
@@ -210,6 +276,11 @@ export interface UpgradeAnalysisReport {
   };
 
   slack_signals: SlackSearchHit[];
+
+  /** D&C-aligned 7-metric snapshot rendered as a summary tile above
+   *  the pillar cards. Fixed thresholds, not scored into pillar
+   *  verdicts. See `computeDeliverabilitySnapshot` in rules.ts. */
+  deliverability_snapshot: DeliverabilitySnapshot;
 
   pillar_scores: Record<PillarKey, PillarScore>;
   escalation: EscalationVerdict;
