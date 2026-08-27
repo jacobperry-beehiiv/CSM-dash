@@ -12,6 +12,7 @@ import { UpgradeAnalysisSnapshotTile } from "./upgrade-analysis-snapshot-tile";
 import { UpgradeAnalysisDateWindowPicker } from "./upgrade-analysis-date-window-picker";
 import { useWorkspacePublications } from "@/lib/hooks/customer-publications-cache";
 import { fmtNumber } from "./format";
+import { zendeskSearchUrl } from "@/lib/links";
 
 /**
  * D&C Upgrade Analysis panel — mounts under a customer row via
@@ -45,6 +46,9 @@ interface Props {
    *  cached report exists. Default true; set false to keep the
    *  panel in the "Run analysis" CTA state until the user clicks. */
   autoLoad?: boolean;
+  /** Customer's owner email — powers the Zendesk history quick-link.
+   *  Null when unknown; the button hides in that case. */
+  ownerEmail?: string | null;
 }
 
 interface ApiResponse {
@@ -90,7 +94,9 @@ export function UpgradeAnalysisPanel({
   organizationId,
   initial,
   autoLoad = true,
+  ownerEmail = null,
 }: Props) {
+  const zendeskUrl = zendeskSearchUrl(ownerEmail ?? null);
   const [report, setReport] = useState<UpgradeAnalysisReport | null>(
     initial?.report ?? null
   );
@@ -139,6 +145,7 @@ export function UpgradeAnalysisPanel({
           body: JSON.stringify({
             publicationId,
             organizationId,
+            ownerEmail,
             force: opts.force ?? false,
             ...windowBody,
           }),
@@ -165,7 +172,7 @@ export function UpgradeAnalysisPanel({
         setLoading(false);
       }
     },
-    [publicationId, organizationId, window]
+    [publicationId, organizationId, ownerEmail, window]
   );
 
   // On mount, check for an existing cached scan without forcing a
@@ -222,6 +229,17 @@ export function UpgradeAnalysisPanel({
           </div>
         </div>
         <div className="flex items-center gap-1.5">
+          {zendeskUrl ? (
+            <a
+              href={zendeskUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="text-xs px-2.5 py-1 rounded border border-border bg-surface hover:bg-surface-2 flex items-center gap-1"
+              title={`Search Zendesk tickets for ${ownerEmail}`}
+            >
+              🎫 <span>Zendesk history</span>
+            </a>
+          ) : null}
           {report ? (
             <button
               type="button"
@@ -308,41 +326,12 @@ export function UpgradeAnalysisPanel({
             ))}
           </div>
 
-          {/* Slack matches — placeholder for PR 2. Renders the section
-              header + a small note so reviewers know the read isn't
-              running yet, rather than mistake absence for "checked
-              Slack, nothing found." */}
-          <div className="rounded-md border border-border bg-surface p-3">
-            <p className="text-xs font-semibold uppercase tracking-wide text-subtle">
-              Slack search
-            </p>
-            {report.slack_signals.length > 0 ? (
-              <ul className="mt-1 space-y-1">
-                {report.slack_signals.map((s, i) => (
-                  <li key={i} className="text-xs">
-                    <a
-                      href={s.permalink}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="underline decoration-dotted text-indigo-600 dark:text-indigo-400"
-                    >
-                      Matched &quot;{s.matched_term}&quot;
-                    </a>
-                    <span className="text-muted"> — {s.snippet}</span>
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p className="mt-1 text-xs text-muted italic">
-                Slack search integration not shipped yet — verify prior
-                D&amp;C decisions manually in{" "}
-                <code className="bg-surface-2 px-1 rounded">
-                  #deliverability
-                </code>{" "}
-                before actioning.
-              </p>
-            )}
-          </div>
+          {/* Slack matches — auto-populated via the shared user-token
+              search from `slack-search.ts`. Grouped by channel, newest
+              first within each group; empty when nothing matched or
+              when SLACK_USER_TOKEN isn't configured (helper is
+              fail-open). */}
+          <UpgradeAnalysisSlackMatches signals={report.slack_signals} />
 
           {/* Footer meta. */}
           <div className="flex items-center justify-between text-[10px] text-muted">
@@ -374,6 +363,97 @@ export function UpgradeAnalysisPanel({
       ) : null}
     </div>
   );
+}
+
+/**
+ * Grouped Slack matches, rendered as a small card below the pillars.
+ * The empty state distinguishes "we ran the read and got nothing"
+ * from "no read shipped yet" — after the switch to the auto-fetch,
+ * empty means no matches, which is itself useful signal.
+ */
+function UpgradeAnalysisSlackMatches({
+  signals,
+}: {
+  signals: UpgradeAnalysisReport["slack_signals"];
+}) {
+  // Group by channel_id → keep the newest-first order within each
+  // channel (the engine already sorted the array). A Map preserves
+  // insertion order which corresponds to newest-across-all-channels
+  // first, so channels with the most-recent hit surface at the top.
+  const grouped = new Map<
+    string,
+    { channelName: string | undefined; hits: typeof signals }
+  >();
+  for (const hit of signals) {
+    const bucket = grouped.get(hit.channel_id);
+    if (bucket) {
+      bucket.hits.push(hit);
+    } else {
+      grouped.set(hit.channel_id, {
+        channelName: hit.channel_name,
+        hits: [hit],
+      });
+    }
+  }
+
+  return (
+    <div className="rounded-md border border-border bg-surface p-3">
+      <div className="flex items-center gap-2">
+        <p className="text-xs font-semibold uppercase tracking-wide text-subtle">
+          Slack search
+        </p>
+        {signals.length > 0 ? (
+          <span className="inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold bg-indigo-500/10 text-indigo-700 dark:text-indigo-300 border border-indigo-500/30">
+            {signals.length} match{signals.length === 1 ? "" : "es"}
+          </span>
+        ) : null}
+      </div>
+      {signals.length === 0 ? (
+        <p className="mt-1 text-xs text-muted italic">
+          No prior D&amp;C decisions found in Slack for this pub. (If{" "}
+          <code className="bg-surface-2 px-1 rounded">SLACK_USER_TOKEN</code>{" "}
+          isn&rsquo;t configured, the search silently returns empty — check
+          Vercel envs when a scan you expect to match shows zero.)
+        </p>
+      ) : (
+        <div className="mt-2 space-y-2">
+          {Array.from(grouped.entries()).map(([channelId, group]) => (
+            <div key={channelId}>
+              <p className="text-[10px] uppercase tracking-wide text-subtle">
+                #{group.channelName ?? channelId}
+              </p>
+              <ul className="mt-0.5 space-y-1">
+                {group.hits.map((h) => (
+                  <li key={h.ts} className="text-xs leading-snug">
+                    <a
+                      href={h.permalink}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="underline decoration-dotted text-indigo-600 dark:text-indigo-400 mr-1"
+                    >
+                      ↗ {formatSlackTs(h.ts)}
+                    </a>
+                    <span className="text-subtle italic mr-1">
+                      matched &quot;{h.matched_term}&quot;
+                    </span>
+                    <span className="text-muted">— {h.snippet}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Slack's `ts` is a UNIX epoch (float). Render as a short date so
+ *  reviewers can eyeball recency without opening every permalink. */
+function formatSlackTs(ts: string): string {
+  const seconds = Number.parseFloat(ts);
+  if (!Number.isFinite(seconds)) return ts;
+  return new Date(seconds * 1000).toLocaleDateString();
 }
 
 function VerdictChip({ verdict }: { verdict: OverallVerdict }) {
@@ -410,8 +490,13 @@ function VerdictChip({ verdict }: { verdict: OverallVerdict }) {
  */
 export function UpgradeAnalysisPanelForWorkspace({
   workspaceId,
+  ownerEmail = null,
 }: {
   workspaceId: string;
+  /** Owner email surfaced to the inner panel as the anchor for the
+   *  Zendesk history button — D&C's next tab after they read the
+   *  scorecard. Null when we don't have it (button is hidden). */
+  ownerEmail?: string | null;
 }) {
   const state = useWorkspacePublications(workspaceId);
   const pubs = Array.isArray(state) ? state : null;
@@ -481,6 +566,7 @@ export function UpgradeAnalysisPanelForWorkspace({
         key={effectivePubId}
         publicationId={effectivePubId}
         organizationId={workspaceId}
+        ownerEmail={ownerEmail}
       />
     </div>
   );
