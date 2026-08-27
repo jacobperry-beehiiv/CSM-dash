@@ -303,6 +303,19 @@ export function UpgradeAnalysisPanel({
             </div>
           ) : null}
 
+          {/* Slack matches — surfaced high, right below escalation.
+              Prior D&C decisions in Slack are the single most
+              actionable signal on the panel; hiding it under the
+              pillar grid buries the lede. Auto-populated via the
+              shared user-token search from `slack-search.ts`.
+              Grouped by channel, newest-first; empty state carries
+              a diagnostic reason (not_configured / auth_error /
+              etc.) so config problems are obvious. */}
+          <UpgradeAnalysisSlackMatches
+            signals={report.slack_signals}
+            outcome={report.slack_search ?? null}
+          />
+
           {/* D&C-aligned snapshot — fixed 7-metric flag table, above
               the pillar cards. Uses the same source-of-truth funnel
               counters the pillars read, but computes ratios against
@@ -314,7 +327,9 @@ export function UpgradeAnalysisPanel({
             />
           ) : null}
 
-          {/* Pillar cards. 2-up on desktop, stacked on narrow. */}
+          {/* Pillar cards — collapsed by default; the score chip is
+              usually all a reviewer needs at a glance, expand for
+              the counters. 2-up on desktop, stacked on narrow. */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
             {PILLAR_ORDER.map((k) => (
               <UpgradeAnalysisPillarCard
@@ -325,16 +340,6 @@ export function UpgradeAnalysisPanel({
               />
             ))}
           </div>
-
-          {/* Slack matches — auto-populated via the shared user-token
-              search from `slack-search.ts`. Grouped by channel, newest
-              first within each group; empty when nothing matched or
-              when SLACK_USER_TOKEN isn't configured (helper is
-              fail-open). */}
-          <UpgradeAnalysisSlackMatches
-            signals={report.slack_signals}
-            outcome={report.slack_search ?? null}
-          />
 
           {/* Footer meta. */}
           <div className="flex items-center justify-between text-[10px] text-muted">

@@ -79,12 +79,21 @@ function num(n: number | null | undefined): string {
 }
 
 export function UpgradeAnalysisPillarCard({ pillarKey, score, report }: Props) {
-  const [expanded, setExpanded] = useState(false);
+  // Whole card body defaults collapsed — six cards worth of counter
+  // grids and provider tables was a lot of vertical noise before the
+  // reviewer opted in. The score chip alone is often all D&C needs.
+  const [open, setOpen] = useState(false);
+  const [showRaw, setShowRaw] = useState(false);
   const style = SCORE_STYLES[score];
 
   return (
-    <div className="rounded-md border border-border bg-surface p-3">
-      <div className="flex items-start justify-between gap-2">
+    <div className="rounded-md border border-border bg-surface">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className="w-full text-left p-3 flex items-start justify-between gap-2 hover:bg-surface-2"
+      >
         <div>
           <div className="flex items-center gap-2">
             <span className="text-xs font-semibold uppercase tracking-wide text-subtle">
@@ -96,29 +105,40 @@ export function UpgradeAnalysisPillarCard({ pillarKey, score, report }: Props) {
               {style.label}
             </span>
           </div>
-          <p className="text-xs text-muted mt-0.5">
-            {PILLAR_DESCRIPTIONS[pillarKey]}
-          </p>
+          {open ? (
+            <p className="text-xs text-muted mt-0.5">
+              {PILLAR_DESCRIPTIONS[pillarKey]}
+            </p>
+          ) : null}
         </div>
-      </div>
-
-      {/* Top-line counters, pillar-specific. */}
-      <div className="mt-2 text-sm">
-        <PillarCounters pillarKey={pillarKey} report={report} />
-      </div>
-
-      <button
-        type="button"
-        onClick={() => setExpanded((e) => !e)}
-        className="mt-2 text-xs text-muted hover:text-fg underline underline-offset-2"
-      >
-        {expanded ? "Hide raw counters" : "Show raw counters"}
+        <span
+          aria-hidden="true"
+          className={`text-subtle text-xs transition-transform ${open ? "rotate-180" : ""}`}
+        >
+          ▾
+        </span>
       </button>
 
-      {expanded ? (
-        <pre className="mt-2 text-[10px] leading-tight bg-surface-2 border border-border rounded p-2 overflow-x-auto max-h-80 overflow-y-auto">
-          {JSON.stringify(report.pillars[pillarKey], null, 2)}
-        </pre>
+      {open ? (
+        <div className="px-3 pb-3">
+          <div className="mt-1 text-sm">
+            <PillarCounters pillarKey={pillarKey} report={report} />
+          </div>
+
+          <button
+            type="button"
+            onClick={() => setShowRaw((v) => !v)}
+            className="mt-2 text-xs text-muted hover:text-fg underline underline-offset-2"
+          >
+            {showRaw ? "Hide raw counters" : "Show raw counters"}
+          </button>
+
+          {showRaw ? (
+            <pre className="mt-2 text-[10px] leading-tight bg-surface-2 border border-border rounded p-2 overflow-x-auto max-h-80 overflow-y-auto">
+              {JSON.stringify(report.pillars[pillarKey], null, 2)}
+            </pre>
+          ) : null}
+        </div>
       ) : null}
     </div>
   );
