@@ -9,16 +9,15 @@
  * results into the scan report.
  *
  * ─── Which token ───────────────────────────────────────────────
- * Slack now supports `search.messages` via bot token scopes
- * (`search:read.public`, `search:read.private`, etc.) — historically
- * this was user-token-only, which is why the older env is called
- * SLACK_USER_TOKEN. The helper prefers SLACK_USER_TOKEN when set
- * (broadest corpus, includes DMs) and falls back to SLACK_BOT_TOKEN
- * (already wired for the app's other Slack integrations). With the
- * bot token, the search corpus is public channels + any private
- * channels the bot has been invited to; DMs are excluded. For D&C
- * use (mostly public #deliverability, etc.), the bot-token path
- * covers the essential surface with no extra setup.
+ * Slack's `search.messages` endpoint requires a USER token
+ * (`xoxp-…`) with the `search:read` scope. Bot tokens are rejected
+ * with `not_allowed_token_type` (verified in prod), and the
+ * `search:read.public` bot scope that appears in the app config
+ * UI does not actually enable this endpoint. The helper reads
+ * SLACK_USER_TOKEN as the primary env var. As a defensive
+ * convenience it also reads SLACK_BOT_TOKEN, but only to detect
+ * "user forgot to set the user token" — a bot token is treated as
+ * `not_configured` because calling Slack would guaranteed-fail.
  *
  * Fail-open posture — same as the Spamhaus helper: any Slack API
  * error resolves to `[]` with a warn so a Slack outage doesn't
@@ -118,12 +117,25 @@ export async function searchSlackMessages(
   query: string,
   opts?: { count?: number; matchedTerm?: string }
 ): Promise<SlackSearchResult> {
-  // Prefer the user token if set (broader corpus), fall back to the
-  // bot token (which the app already has for the other Slack
-  // integrations). Bot tokens work with the `search:read.public`
-  // scope, no reinstall dance required.
-  const token = process.env.SLACK_USER_TOKEN ?? process.env.SLACK_BOT_TOKEN;
+  // Slack's `search.messages` endpoint still only accepts USER
+  // tokens (`xoxp-…`). Bot tokens are rejected with
+  // `not_allowed_token_type`, and the `search:read.public` bot
+  // scope that appears in the app config UI does NOT actually
+  // enable the endpoint. Skip the call entirely when we only have
+  // a bot token — cheaper than burning a Slack API call for
+  // guaranteed failure, and the diagnostic banner reads more
+  // clearly.
+  const preferred = process.env.SLACK_USER_TOKEN;
+  const fallback = process.env.SLACK_BOT_TOKEN;
+  const token = preferred ?? fallback;
   if (!token) return { hits: [], status: "not_configured" };
+  if (!preferred && fallback && !fallback.startsWith("xoxp-")) {
+    return {
+      hits: [],
+      status: "not_configured",
+      detail: "user_token_required",
+    };
+  }
   const q = query.trim();
   if (!q) return { hits: [], status: "no_query" };
 
