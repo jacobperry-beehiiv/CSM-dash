@@ -1,15 +1,17 @@
 import { kvGet, kvSet } from "../storage/kv";
 import type {
+  AnalysisWindow,
   StoredUpgradeAnalysis,
   UpgradeAnalysisReport,
 } from "../engines/upgrade-analysis/types";
 
 /**
  * KV store for D&C Upgrade Analysis reports. Blob is keyed by
- * publication_id — one row per pub, holding the latest scan + its
- * timestamp. Report volume is small (dozens to hundreds of pubs),
- * so we keep everything in one KV row for a single-read
- * render on the review-queue tab.
+ * `${publication_id}${window_suffix}` — a "Last 7 days" scan does
+ * not collide with a "Last 30 days" scan for the same pub. The
+ * unsuffixed key form (`pub_id` alone) is what the config-default
+ * scan writes, matching v1's behavior so existing entries stay
+ * addressable.
  *
  * No module-level cache — a warm isolate on Vercel could otherwise
  * serve a stale scan to a CSM whose colleague just re-ran the
@@ -17,6 +19,18 @@ import type {
  */
 
 const KEY = "csm:upgrade-analysis:v1";
+
+/** Suffix appended to the KV key for scans that ran over a non-
+ *  default window. `AnalysisWindow` shapes map to:
+ *    lookback → `:L{days}`
+ *    range    → `:R{start}_{end}`
+ *  Absent window (config default) → empty string, matching v1.
+ */
+export function windowSuffix(window: AnalysisWindow | null | undefined): string {
+  if (!window) return "";
+  if (window.kind === "lookback") return `:L${window.lookback_days}`;
+  return `:R${window.start_date}_${window.end_date}`;
+}
 
 interface Blob {
   reports: Record<string, StoredUpgradeAnalysis>;
@@ -43,15 +57,20 @@ export async function loadAllUpgradeAnalyses(): Promise<StoredUpgradeAnalysis[]>
   return Object.values(blob.reports);
 }
 
-/** Fetch one pub's stored scan, or null when we've never scanned it. */
+/** Fetch one pub's stored scan for a specific window, or null when
+ *  we've never scanned it under that window. `window` omitted =
+ *  the config-default entry (unsuffixed key, v1 layout). */
 export async function loadUpgradeAnalysis(
-  publicationId: string
+  publicationId: string,
+  window?: AnalysisWindow | null
 ): Promise<StoredUpgradeAnalysis | null> {
   const blob = await loadBlob();
-  return blob.reports[publicationId] ?? null;
+  return blob.reports[publicationId + windowSuffix(window)] ?? null;
 }
 
-/** Upsert a fresh report, stamping `last_scanned_at`. */
+/** Upsert a fresh report, stamping `last_scanned_at`. The KV key is
+ *  derived from the report's stamped `analysis_window` so scans over
+ *  different windows for the same pub don't clobber each other. */
 export async function saveUpgradeAnalysis(
   report: UpgradeAnalysisReport
 ): Promise<StoredUpgradeAnalysis> {
@@ -60,7 +79,7 @@ export async function saveUpgradeAnalysis(
     report,
     last_scanned_at: new Date().toISOString(),
   };
-  blob.reports[report.pub_id] = stored;
+  blob.reports[report.pub_id + windowSuffix(report.analysis_window)] = stored;
   await saveBlob(blob);
   return stored;
 }

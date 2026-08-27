@@ -10,6 +10,22 @@
  * (link endpoint analysis) are deferred — see the plan.
  */
 
+// ─── Analysis window ─────────────────────────────────────────────────────
+
+/** Analysis window override. The engine picks this over the config's
+ *  default `funnel_window_days` / `provider_window_days` when set.
+ *  Two mutually-exclusive shapes:
+ *   - `{ lookback_days }` — a rolling window ending at "now".
+ *   - `{ start_date, end_date }` — an explicit YYYY-MM-DD range.
+ *
+ *  Both shapes flow through pillar SQL and are stamped on the report
+ *  so the tile / cards can render "over the last N days" or the
+ *  explicit date range. When absent the engine falls back to the
+ *  config's default lookback per pillar. */
+export type AnalysisWindow =
+  | { kind: "lookback"; lookback_days: number }
+  | { kind: "range"; start_date: string; end_date: string };
+
 // ─── Pillar keys ─────────────────────────────────────────────────────────
 
 /** MVP pillars — six of the nine D&C investigates. Numbering follows
@@ -281,6 +297,13 @@ export interface UpgradeAnalysisReport {
    *  the pillar cards. Fixed thresholds, not scored into pillar
    *  verdicts. See `computeDeliverabilitySnapshot` in rules.ts. */
   deliverability_snapshot: DeliverabilitySnapshot;
+
+  /** The window this scan ran over. Stamped on the report so the UI
+   *  can render "Last 30 days" / an explicit range in its subheader
+   *  and match what the tile summarizes. Null when the scan used
+   *  the config default (which is itself an implicit lookback and
+   *  known to the pillar counters via `window_days`). */
+  analysis_window: AnalysisWindow | null;
 
   pillar_scores: Record<PillarKey, PillarScore>;
   escalation: EscalationVerdict;

@@ -23,6 +23,7 @@ import type { UpgradeAnalysisConfig } from "../../data/upgrade-analysis-config-t
 import type {
   AcquisitionChannelRow,
   AcquisitionCounters,
+  AnalysisWindow,
   DeferralReasonRow,
   FunnelCounters,
   IdentityCounters,
@@ -32,6 +33,63 @@ import type {
   ProviderRow,
 } from "./types";
 import { looksSuspiciousLabel } from "./rules";
+
+// ─── Window helpers ──────────────────────────────────────────────────────
+
+/** Given a preferred window and a config default lookback, produce
+ *  both the ClickHouse timestamp filter and the effective day count.
+ *  The two shapes:
+ *   - lookback: `timestamp >= now() - INTERVAL N DAY`
+ *   - range:   `timestamp BETWEEN start 00:00 AND end 23:59:59`
+ *
+ *  The day count is the tile subheader source. For explicit ranges
+ *  we compute the inclusive whole-day span; for lookback it's the
+ *  literal `lookback_days`. When no window override is passed, the
+ *  config's per-pillar default lookback wins. */
+function resolveWindow(
+  window: AnalysisWindow | undefined,
+  fallbackLookbackDays: number
+): { clause: string; effectiveDays: number } {
+  if (!window) {
+    return {
+      clause: `\`timestamp\` >= now() - INTERVAL ${fallbackLookbackDays} DAY`,
+      effectiveDays: fallbackLookbackDays,
+    };
+  }
+  if (window.kind === "lookback") {
+    return {
+      clause: `\`timestamp\` >= now() - INTERVAL ${window.lookback_days} DAY`,
+      effectiveDays: window.lookback_days,
+    };
+  }
+  // Range — bracket to midnight-to-midnight and count inclusive days.
+  const start = window.start_date;
+  const end = window.end_date;
+  const startMs = Date.parse(`${start}T00:00:00Z`);
+  const endMs = Date.parse(`${end}T00:00:00Z`);
+  const effectiveDays =
+    Number.isFinite(startMs) && Number.isFinite(endMs) && endMs >= startMs
+      ? Math.max(1, Math.round((endMs - startMs) / 86_400_000) + 1)
+      : fallbackLookbackDays;
+  return {
+    clause: `\`timestamp\` >= toDateTime('${start} 00:00:00') AND \`timestamp\` <= toDateTime('${end} 23:59:59')`,
+    effectiveDays,
+  };
+}
+
+/** Postgres-flavored variant of `resolveWindow` for the unsubscribe
+ *  count. `subscriptions.unsubscribed_at` is a timestamp with time
+ *  zone. Uses the standard PG interval syntax rather than ClickHouse. */
+function resolveWindowPg(
+  window: AnalysisWindow | undefined,
+  fallbackLookbackDays: number
+): string {
+  if (!window || window.kind === "lookback") {
+    const days = window ? window.lookback_days : fallbackLookbackDays;
+    return `unsubscribed_at >= now() - INTERVAL '${days} days'`;
+  }
+  return `unsubscribed_at >= '${window.start_date} 00:00:00' AND unsubscribed_at <= '${window.end_date} 23:59:59'`;
+}
 
 // ─── Utilities ───────────────────────────────────────────────────────────
 
@@ -350,15 +408,17 @@ interface Pillar34UnsubRaw {
 
 async function fetchUnsubCount(
   pubId: string,
-  windowDays: number
+  window: AnalysisWindow | undefined,
+  fallbackLookbackDays: number
 ): Promise<number> {
   try {
+    const windowClause = resolveWindowPg(window, fallbackLookbackDays);
     const sql = `
       SELECT COUNT(*)::int AS unsubs
       FROM subscriptions
       WHERE publication_id = ${q(pubId)}
         AND unsubscribed_at IS NOT NULL
-        AND unsubscribed_at >= now() - INTERVAL '${windowDays} days'
+        AND ${windowClause}
     `;
     const rows = (await withTimeout(
       runNativeQuery(DB.POSTGRES, sql) as Promise<unknown[]>,
@@ -378,9 +438,13 @@ async function fetchUnsubCount(
 
 export async function runFunnelPillar(
   pubId: string,
-  cfg: UpgradeAnalysisConfig
+  cfg: UpgradeAnalysisConfig,
+  window?: AnalysisWindow
 ): Promise<FunnelCounters> {
-  const windowDays = cfg.volume.funnel_window_days;
+  const { clause, effectiveDays } = resolveWindow(
+    window,
+    cfg.volume.funnel_window_days
+  );
   // NOTE: `is_send` is the totals column — every row in `sendgrid_v1`
   // is by definition a send event, so `sum(is_send)` gives us the
   // `sent` counter the D&C snapshot needs. Falls back to `rows_evt`
@@ -403,7 +467,7 @@ export async function runFunnelPillar(
       uniqExact(\`subscriber_id\`) AS uniq_subs
     FROM default.sendgrid_v1
     WHERE publication_id = ${q(pubId)}
-      AND \`timestamp\` >= now() - INTERVAL ${windowDays} DAY
+      AND ${clause}
   `;
   // Fan out: ClickHouse funnel + Postgres unsub count run in parallel
   // so the pillar's wall-clock stays close to the slower of the two.
@@ -414,12 +478,12 @@ export async function runFunnelPillar(
       [] as unknown[],
       "funnel"
     ) as Promise<Pillar34Raw[]>,
-    fetchUnsubCount(pubId, windowDays),
+    fetchUnsubCount(pubId, window, cfg.volume.funnel_window_days),
   ]);
   const r = rows[0] ?? ({} as Partial<Pillar34Raw>);
   const rowsEvt = Number(r.rows_evt ?? 0);
   return {
-    window_days: windowDays,
+    window_days: effectiveDays,
     rows_evt: rowsEvt,
     // `sent` should equal rows_evt for the sendgrid stream; use the
     // sum if present, else fall back so a stale schema doesn't leave
@@ -462,9 +526,13 @@ interface Pillar6KumoRaw {
 
 export async function runProviderPillar(
   pubId: string,
-  cfg: UpgradeAnalysisConfig
+  cfg: UpgradeAnalysisConfig,
+  window?: AnalysisWindow
 ): Promise<ProviderCounters> {
-  const windowDays = cfg.volume.provider_window_days;
+  const { clause, effectiveDays } = resolveWindow(
+    window,
+    cfg.volume.provider_window_days
+  );
 
   const providerSql = `
     SELECT \`email_domain\` AS dom,
@@ -474,7 +542,7 @@ export async function runProviderPillar(
       round(sum(\`is_deferred\`) / nullIf(sum(\`is_delivered\`), 0) * 100, 1) AS defer_pct
     FROM default.sendgrid_v1
     WHERE publication_id = ${q(pubId)}
-      AND \`timestamp\` >= now() - INTERVAL ${windowDays} DAY
+      AND ${clause}
       AND \`email_domain\` != ''
     GROUP BY dom
     ORDER BY deliv DESC
@@ -508,7 +576,7 @@ export async function runProviderPillar(
       countIf(\`event\` = 'deferred') AS total_deferrals
     FROM default.sendgrid_v1
     WHERE publication_id = ${q(pubId)}
-      AND \`timestamp\` >= now() - INTERVAL ${windowDays} DAY
+      AND ${clause}
   `;
 
   const [providerRaw, reasonRaw, kumoRaw] = await Promise.all([
@@ -573,7 +641,7 @@ export async function runProviderPillar(
       : 0;
 
   return {
-    window_days: windowDays,
+    window_days: effectiveDays,
     providers,
     deferral_reasons,
     kumo_share_of_deferrals,

@@ -1,6 +1,7 @@
 "use client";
 
 import type {
+  AnalysisWindow,
   DeliverabilitySnapshot,
   DeliverabilitySnapshotRow,
 } from "@/lib/engines/upgrade-analysis/types";
@@ -28,6 +29,10 @@ import type {
 
 interface Props {
   snapshot: DeliverabilitySnapshot;
+  /** The window this scan actually ran over. Used to render an
+   *  explicit date range in the subheader when the CSM picked a
+   *  Custom range; the preset lookbacks just show the day count. */
+  analysisWindow?: AnalysisWindow | null;
 }
 
 function pct(value: number, digits = 2): string {
@@ -48,8 +53,18 @@ function formatThreshold(row: DeliverabilitySnapshotRow): string {
   return `≥ ${value}`;
 }
 
-export function UpgradeAnalysisSnapshotTile({ snapshot }: Props) {
+export function UpgradeAnalysisSnapshotTile({
+  snapshot,
+  analysisWindow,
+}: Props) {
   const { status, window_days, sent, delivered, rows, flagged_count } = snapshot;
+  // Subheader: an explicit range wins over the day count so the CSM
+  // sees exactly what they asked for; presets keep the "last N days"
+  // phrasing.
+  const windowText =
+    analysisWindow?.kind === "range"
+      ? `${analysisWindow.start_date} → ${analysisWindow.end_date}`
+      : `last ${window_days} days`;
 
   const headerChip =
     status === "flagged" ? (
@@ -79,8 +94,8 @@ export function UpgradeAnalysisSnapshotTile({ snapshot }: Props) {
             {headerChip}
           </h3>
           <p className="text-xs text-muted mt-0.5">
-            D&amp;C-standard 7-metric flag table over the last{" "}
-            <strong>{window_days} days</strong>. Fixed thresholds — matches
+            D&amp;C-standard 7-metric flag table over the{" "}
+            <strong>{windowText}</strong>. Fixed thresholds — matches
             the deliverability-quick-screen and prescreening skills.
           </p>
         </div>
