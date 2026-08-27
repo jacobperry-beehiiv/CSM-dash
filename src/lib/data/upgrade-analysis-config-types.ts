@@ -134,14 +134,26 @@ export const DEFAULT_UPGRADE_ANALYSIS_CONFIG: UpgradeAnalysisConfig = {
   escalation: {
     escalate_on_pillar: "red",
     amber_pillars_to_escalate: 2,
+    // Terms fed to the escalation rule that inspects Slack matches
+    // for a prior D&C decision. When any hit's snippet contains one
+    // of these (case-insensitive; matched via
+    // `computeEscalation` → `slack_prior_decision`), the panel adds
+    // an escalation reason. Values are D&C's own vocabulary from
+    // the Skill Logic Breakdown — extend from the Threshold Editor
+    // settings page if D&C invents a new phrase.
     slack_escalation_terms: [
       "do not upgrade",
       "do not scale",
       "offboard",
+      "offboarded",
       "aup_prohibited_use",
       "reactivate",
       "list wash",
       "already offboarded",
+      "blocked",
+      "suspended",
+      "abuse",
+      "spam complaint",
     ],
   },
 };

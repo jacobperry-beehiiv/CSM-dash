@@ -19,6 +19,7 @@
 
 import { loadUpgradeAnalysisConfig } from "../data/upgrade-analysis-config";
 import type { UpgradeAnalysisConfig } from "../data/upgrade-analysis-config-types";
+import { slackSearchForUpgradeAnalysis } from "../integrations/slack-search";
 import {
   acquisitionHasSuspiciousLabels,
   runAcquisitionPillar,
@@ -58,9 +59,16 @@ export interface RunUpgradeAnalysisInput {
   /** Session email of whoever triggered the scan. Stamped on the
    *  report + used to attribute the action-log entry. */
   triggeredBy?: string | null;
-  /** Optional Slack signals to fold into the escalation rules —
-   *  populated by v2's slack-search.ts. Empty array in v1. */
+  /** Optional Slack signals to fold into the escalation rules. When
+   *  omitted, the engine auto-runs `slackSearchForUpgradeAnalysis`
+   *  against pub_id, ownerEmail, and pub_name — the same three-query
+   *  read D&C does by hand. Pass an explicit `[]` (or an override
+   *  array) to bypass the auto-fetch, e.g. for tests. */
   slackSignals?: SlackSearchHit[];
+  /** Owner email — powers the auto Slack search's second query
+   *  ("abuse mentions of this email"). Optional; skipped when
+   *  absent. */
+  ownerEmail?: string | null;
   /** Optional override of the loaded threshold config. Test-only. */
   config?: UpgradeAnalysisConfig;
   /** Optional analysis window override — see AnalysisWindow. When
@@ -84,11 +92,28 @@ export async function runUpgradeAnalysis(
   // Fan out the rest in parallel. Each pillar times out independently
   // (see PILLAR_TIMEOUT_MS in pillars.ts) so one slow query doesn't
   // brick the scan.
-  const [acquisition, funnel, provider, network] = await Promise.all([
+  //
+  // Slack search runs in parallel with the pillars because it's a
+  // wholly-separate integration (Slack API, not Metabase) — folding
+  // it into Promise.all keeps the scan's wall-clock roughly bounded
+  // by the slowest pillar rather than serializing after them. When
+  // the caller passed explicit `slackSignals` we honor that verbatim
+  // and skip the auto-fetch (test-friendly).
+  const explicitSignals = input.slackSignals;
+  const slackFetch: Promise<SlackSearchHit[]> = explicitSignals
+    ? Promise.resolve(explicitSignals)
+    : slackSearchForUpgradeAnalysis({
+        pubId: input.publicationId,
+        ownerEmail: input.ownerEmail,
+        pubName: identity.name,
+      });
+
+  const [acquisition, funnel, provider, network, slackSignals] = await Promise.all([
     runAcquisitionPillar(input.publicationId, orgId, cfg),
     runFunnelPillar(input.publicationId, cfg, input.window),
     runProviderPillar(input.publicationId, cfg, input.window),
     orgId ? runNetworkPillar(orgId) : Promise.resolve(emptyNetwork()),
+    slackFetch,
   ]);
 
   // ─── Score each pillar ─────────────────────────────────────────────
@@ -128,7 +153,7 @@ export async function runUpgradeAnalysis(
 
   const escalation = computeEscalation({
     pillar_scores,
-    slack_signals: input.slackSignals ?? [],
+    slack_signals: slackSignals,
     network,
     blended_complaint_rate: providerScored.blended_complaint_rate,
     absolute_complaint_count: funnel.spam,
@@ -153,7 +178,7 @@ export async function runUpgradeAnalysis(
       provider,
       network,
     },
-    slack_signals: input.slackSignals ?? [],
+    slack_signals: slackSignals,
     deliverability_snapshot: computeDeliverabilitySnapshot(funnel),
     analysis_window: input.window ?? null,
     pillar_scores,
