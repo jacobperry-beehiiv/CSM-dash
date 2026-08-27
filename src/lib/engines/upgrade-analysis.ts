@@ -40,6 +40,7 @@ import {
   worstOf,
 } from "./upgrade-analysis/rules";
 import type {
+  AnalysisWindow,
   PillarKey,
   PillarScore,
   SlackSearchHit,
@@ -62,6 +63,13 @@ export interface RunUpgradeAnalysisInput {
   slackSignals?: SlackSearchHit[];
   /** Optional override of the loaded threshold config. Test-only. */
   config?: UpgradeAnalysisConfig;
+  /** Optional analysis window override — see AnalysisWindow. When
+   *  absent, each pillar falls back to its config-default lookback
+   *  (funnel_window_days / provider_window_days). Threaded verbatim
+   *  into pillars 3 (funnel) and 6 (provider) so a "Last 7 days"
+   *  pick actually re-scopes the ClickHouse query. Stamped on the
+   *  final report as `analysis_window`. */
+  window?: AnalysisWindow;
 }
 
 export async function runUpgradeAnalysis(
@@ -78,8 +86,8 @@ export async function runUpgradeAnalysis(
   // brick the scan.
   const [acquisition, funnel, provider, network] = await Promise.all([
     runAcquisitionPillar(input.publicationId, orgId, cfg),
-    runFunnelPillar(input.publicationId, cfg),
-    runProviderPillar(input.publicationId, cfg),
+    runFunnelPillar(input.publicationId, cfg, input.window),
+    runProviderPillar(input.publicationId, cfg, input.window),
     orgId ? runNetworkPillar(orgId) : Promise.resolve(emptyNetwork()),
   ]);
 
@@ -147,6 +155,7 @@ export async function runUpgradeAnalysis(
     },
     slack_signals: input.slackSignals ?? [],
     deliverability_snapshot: computeDeliverabilitySnapshot(funnel),
+    analysis_window: input.window ?? null,
     pillar_scores,
     escalation,
     overall,

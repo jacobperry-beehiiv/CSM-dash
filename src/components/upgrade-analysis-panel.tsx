@@ -2,12 +2,14 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type {
+  AnalysisWindow,
   OverallVerdict,
   PillarKey,
   UpgradeAnalysisReport,
 } from "@/lib/engines/upgrade-analysis/types";
 import { UpgradeAnalysisPillarCard } from "./upgrade-analysis-pillar-card";
 import { UpgradeAnalysisSnapshotTile } from "./upgrade-analysis-snapshot-tile";
+import { UpgradeAnalysisDateWindowPicker } from "./upgrade-analysis-date-window-picker";
 import { useWorkspacePublications } from "@/lib/hooks/customer-publications-cache";
 import { fmtNumber } from "./format";
 
@@ -99,12 +101,38 @@ export function UpgradeAnalysisPanel({
   const [error, setError] = useState<string | null>(null);
   const [cached, setCached] = useState<boolean>(!!initial);
   const [triggered, setTriggered] = useState(false);
+  // Analysis window — null means "use the config default". Seeded
+  // from the initial report so we render the same window it was
+  // scanned in; a picker click swaps the value + kicks off a fresh
+  // scan (via the picker's onChange → runScan below).
+  const [window, setWindow] = useState<AnalysisWindow | null>(
+    initial?.report.analysis_window ?? null
+  );
 
   const runScan = useCallback(
-    async (opts: { force?: boolean; cachedOnly?: boolean } = {}) => {
+    async (
+      opts: {
+        force?: boolean;
+        cachedOnly?: boolean;
+        window?: AnalysisWindow | null;
+      } = {}
+    ) => {
       setLoading(true);
       setError(null);
+      // Explicitly-passed `window` takes precedence — a picker onChange
+      // fires runScan with the new value before React has re-rendered
+      // the state, so we can't rely on the state variable here.
+      const activeWindow = opts.window !== undefined ? opts.window : window;
       try {
+        // Build the body shape the endpoint expects. Endpoint accepts
+        // either lookback_days OR (start_date, end_date), never both.
+        const windowBody: Record<string, unknown> = {};
+        if (activeWindow?.kind === "lookback") {
+          windowBody.lookback_days = activeWindow.lookback_days;
+        } else if (activeWindow?.kind === "range") {
+          windowBody.start_date = activeWindow.start_date;
+          windowBody.end_date = activeWindow.end_date;
+        }
         const res = await fetch("/api/upgrade-analysis/scan", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -112,6 +140,7 @@ export function UpgradeAnalysisPanel({
             publicationId,
             organizationId,
             force: opts.force ?? false,
+            ...windowBody,
           }),
         });
         const body = (await res.json()) as ApiResponse;
@@ -136,7 +165,7 @@ export function UpgradeAnalysisPanel({
         setLoading(false);
       }
     },
-    [publicationId, organizationId]
+    [publicationId, organizationId, window]
   );
 
   // On mount, check for an existing cached scan without forcing a
@@ -174,6 +203,23 @@ export function UpgradeAnalysisPanel({
             </code>
             .
           </p>
+          {/* Analysis window picker — presets fire a scan immediately;
+              custom mode holds the range until the user hits Apply. */}
+          <div className="mt-2">
+            <UpgradeAnalysisDateWindowPicker
+              value={window}
+              disabled={loading}
+              onChange={(w) => {
+                setWindow(w);
+                // A user-initiated window change should re-scan, but
+                // stay inside the freshness guard — the KV entry for
+                // the new window is a distinct key, so we don't need
+                // to force. Skipping force here also lets the second
+                // click on the same preset serve from cache.
+                void runScan({ window: w });
+              }}
+            />
+          </div>
         </div>
         <div className="flex items-center gap-1.5">
           {report ? (
@@ -246,6 +292,7 @@ export function UpgradeAnalysisPanel({
           {report.deliverability_snapshot ? (
             <UpgradeAnalysisSnapshotTile
               snapshot={report.deliverability_snapshot}
+              analysisWindow={report.analysis_window}
             />
           ) : null}
 
