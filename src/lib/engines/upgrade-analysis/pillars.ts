@@ -30,8 +30,10 @@ import type {
   OrgFlagRow,
   ProviderCounters,
   ProviderRow,
+  SpamhausDblCheck,
 } from "./types";
 import { looksSuspiciousLabel } from "./rules";
+import { checkSpamhausDBLBatch } from "../../integrations/spamhaus";
 
 // ─── Utilities ───────────────────────────────────────────────────────────
 
@@ -532,7 +534,10 @@ interface Pillar8Raw {
   deleted_at: string | null;
 }
 
-export async function runNetworkPillar(orgId: string): Promise<NetworkCounters> {
+export async function runNetworkPillar(
+  orgId: string,
+  pubId: string
+): Promise<NetworkCounters> {
   const sql = `
     SELECT organization_id, flag, created_at, deleted_at
     FROM organization_flags
@@ -557,6 +562,14 @@ export async function runNetworkPillar(orgId: string): Promise<NetworkCounters> 
   const isActive = (f: OrgFlagRow, name: string) =>
     f.flag === name && !f.deleted_at;
 
+  // Spamhaus DBL snapshot for the publication's resolved sending
+  // domains. Both the domain resolution and the DNS lookup are fail-
+  // open — either an unavailable column or a DNS blip returns an
+  // empty / "unknown" result, which the rule reads as amber rather
+  // than red. Runs in parallel with the flag query above so it
+  // doesn't extend the pillar's wall-clock.
+  const spamhaus_checks = await runSpamhausDblSnapshot(pubId);
+
   return {
     org_flags,
     aup_prohibited_use_active: org_flags.some((f) => isActive(f, "aup_prohibited_use")),
@@ -565,5 +578,66 @@ export async function runNetworkPillar(orgId: string): Promise<NetworkCounters> 
     // punts network mapping to Slack search (see PR 2). Marking
     // this as always incomplete so the UI reminds the reviewer.
     network_map_incomplete: true,
+    spamhaus_checks,
   };
+}
+
+/**
+ * Resolve the publication's sending domains and query Spamhaus DBL
+ * for each. Fail-open: any error (missing column, Postgres timeout,
+ * DNS blip) collapses to an empty array — the UI reads that as
+ * "not checked" and the pillar keeps its non-Spamhaus score intact.
+ *
+ * Domain candidates are pulled from:
+ *   • `custom_domain` — the customer's own domain when they use one.
+ *   • `email_sender_name` — often "Name <foo@bar.com>" or plain
+ *     "foo@bar.com"; the local-part is stripped and the domain part
+ *     is used.
+ * The Spamhaus helper filters beehiiv-owned domains before it
+ * queries so nothing leaks out.
+ */
+async function runSpamhausDblSnapshot(
+  pubId: string
+): Promise<SpamhausDblCheck[]> {
+  try {
+    const sql = `
+      SELECT custom_domain, email_sender_name
+      FROM publications
+      WHERE id = ${q(pubId)}
+      LIMIT 1
+    `;
+    const rows = (await withTimeout(
+      runNativeQuery(DB.POSTGRES, sql) as Promise<unknown[]>,
+      PILLAR_TIMEOUT_MS,
+      [] as unknown[],
+      "network:spamhaus_domains"
+    )) as Array<{
+      custom_domain: string | null;
+      email_sender_name: string | null;
+    }>;
+    const row = rows[0];
+    if (!row) return [];
+
+    const candidates: string[] = [];
+    if (row.custom_domain) candidates.push(row.custom_domain);
+    if (row.email_sender_name) {
+      // Handles both "Name <foo@bar.com>" and "foo@bar.com" — anything
+      // with an `@` gets its domain extracted. First match wins; a
+      // multi-address sender string (uncommon but possible) is a
+      // pathological case we ignore.
+      const m = row.email_sender_name.match(/@([A-Za-z0-9.\-]+)/);
+      if (m?.[1]) candidates.push(m[1]);
+    }
+    if (candidates.length === 0) return [];
+    return await checkSpamhausDBLBatch(candidates);
+  } catch (e) {
+    // Fail-open: never let a Spamhaus hiccup take down the whole
+    // network pillar. Log so we notice a schema drift, but return
+    // empty results so the report still renders.
+    console.warn(
+      "[upgrade-analysis] Spamhaus DBL snapshot failed:",
+      e instanceof Error ? e.message : e
+    );
+    return [];
+  }
 }

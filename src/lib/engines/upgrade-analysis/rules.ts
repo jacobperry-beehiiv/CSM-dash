@@ -215,11 +215,42 @@ export function scoreNetwork(network: NetworkCounters): PillarScore {
   // the flag was applied for a reason. Historical (`deleted_at`)
   // flags are cleared and don't score.
   if (network.aup_prohibited_use_active) return "red";
+  // Spamhaus DBL — any *listed* domain in the snapshot is a hard red
+  // for the network pillar. Unknown-status entries (query failures)
+  // never promote to red on their own; the pillar keeps its
+  // non-Spamhaus score, and the report footer surfaces "N domains
+  // couldn't be checked" so the reviewer knows to retry.
+  if (spamhausListedDomains(network).length > 0) return "red";
   // `ip_already_used` alone is a raised eyebrow (multi-account
   // fingerprint). Amber; the Slack search hit is what usually
   // corroborates the "operator network" verdict.
   if (network.ip_already_used_active) return "amber";
+  // A Spamhaus lookup that couldn't complete is amber — the
+  // reviewer should retry rather than assume clean.
+  if (spamhausUnknownDomains(network).length > 0) return "amber";
   return "green";
+}
+
+/** Domains whose most-recent Spamhaus DBL lookup returned "listed".
+ *  Exported so the escalation-verdict builder can name them in the
+ *  reason detail without re-walking the counter shape. */
+export function spamhausListedDomains(
+  network: NetworkCounters
+): Array<{ domain: string; category: string }> {
+  return (network.spamhaus_checks ?? [])
+    .filter((c) => c.status === "listed")
+    .map((c) => ({ domain: c.domain, category: c.category ?? "unknown" }));
+}
+
+/** Domains where the lookup itself failed (timeout, DNS refused,
+ *  Postgres column missing). Reader-visible so a stale scan can be
+ *  retried by an admin. */
+export function spamhausUnknownDomains(
+  network: NetworkCounters
+): string[] {
+  return (network.spamhaus_checks ?? [])
+    .filter((c) => c.status === "unknown")
+    .map((c) => c.domain);
 }
 
 // ─── Pillar 1: identity ──────────────────────────────────────────────────
@@ -337,6 +368,21 @@ export function computeEscalation(input: {
     reasons.push({
       code: "aup_prohibited_use",
       detail: "Active aup_prohibited_use flag on this organization",
+    });
+  }
+
+  // Rule: any sending domain listed on the Spamhaus DBL. The
+  // network pillar already scored red, but the reason surfaces the
+  // specific domain(s) + categories in the escalation banner so
+  // D&C sees the "why" without expanding the pillar card.
+  const spamhausListed = spamhausListedDomains(input.network);
+  if (spamhausListed.length > 0) {
+    const label = spamhausListed
+      .map((c) => `${c.domain} (${c.category})`)
+      .join(", ");
+    reasons.push({
+      code: "spamhaus_dbl_listed",
+      detail: `Spamhaus DBL: ${label}`,
     });
   }
 
