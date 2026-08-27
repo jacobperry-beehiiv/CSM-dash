@@ -45,6 +45,7 @@ import type {
   PillarKey,
   PillarScore,
   SlackSearchHit,
+  SlackSearchOutcome,
   UpgradeAnalysisReport,
 } from "./upgrade-analysis/types";
 
@@ -100,21 +101,30 @@ export async function runUpgradeAnalysis(
   // the caller passed explicit `slackSignals` we honor that verbatim
   // and skip the auto-fetch (test-friendly).
   const explicitSignals = input.slackSignals;
-  const slackFetch: Promise<SlackSearchHit[]> = explicitSignals
-    ? Promise.resolve(explicitSignals)
+  const slackFetch: Promise<{
+    hits: SlackSearchHit[];
+    status: SlackSearchOutcome["status"];
+    detail?: string;
+  }> = explicitSignals
+    ? Promise.resolve({ hits: explicitSignals, status: "ok" as const })
     : slackSearchForUpgradeAnalysis({
         pubId: input.publicationId,
         ownerEmail: input.ownerEmail,
         pubName: identity.name,
       });
 
-  const [acquisition, funnel, provider, network, slackSignals] = await Promise.all([
+  const [acquisition, funnel, provider, network, slackResult] = await Promise.all([
     runAcquisitionPillar(input.publicationId, orgId, cfg),
     runFunnelPillar(input.publicationId, cfg, input.window),
     runProviderPillar(input.publicationId, cfg, input.window),
     orgId ? runNetworkPillar(orgId) : Promise.resolve(emptyNetwork()),
     slackFetch,
   ]);
+  const slackSignals = slackResult.hits;
+  const slackSearchOutcome: SlackSearchOutcome = {
+    status: slackResult.status,
+    detail: slackResult.detail,
+  };
 
   // ─── Score each pillar ─────────────────────────────────────────────
 
@@ -179,6 +189,7 @@ export async function runUpgradeAnalysis(
       network,
     },
     slack_signals: slackSignals,
+    slack_search: slackSearchOutcome,
     deliverability_snapshot: computeDeliverabilitySnapshot(funnel),
     analysis_window: input.window ?? null,
     pillar_scores,

@@ -250,6 +250,26 @@ export interface SlackSearchHit {
   matched_term: string;
 }
 
+/** Diagnostic status for the Slack read on a scan. `ok` means at
+ *  least one query completed cleanly — an empty hits array under
+ *  `ok` is a real "no matches" result. Anything else means the
+ *  search couldn't run and the UI should say so rather than
+ *  showing an ambiguous empty state. */
+export type SlackSearchStatus =
+  | "ok"
+  | "not_configured"
+  | "auth_error"
+  | "http_error"
+  | "timeout"
+  | "no_query";
+
+export interface SlackSearchOutcome {
+  status: SlackSearchStatus;
+  /** Raw Slack error string (e.g. `missing_scope`) or HTTP status when
+   *  the status is non-ok. Undefined on `ok`. */
+  detail?: string;
+}
+
 // ─── Escalation ──────────────────────────────────────────────────────────
 
 /** Reason enum — every escalation reason surfaced to the UI must map
@@ -292,6 +312,11 @@ export interface UpgradeAnalysisReport {
   };
 
   slack_signals: SlackSearchHit[];
+
+  /** Slack read diagnostic — see `SlackSearchStatus`. Present on new
+   *  scans; older cached scans may not have it, so consumers treat
+   *  its absence as `ok`. */
+  slack_search: SlackSearchOutcome | null;
 
   /** D&C-aligned 7-metric snapshot rendered as a summary tile above
    *  the pillar cards. Fixed thresholds, not scored into pillar

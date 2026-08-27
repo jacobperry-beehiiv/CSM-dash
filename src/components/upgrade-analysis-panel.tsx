@@ -331,7 +331,10 @@ export function UpgradeAnalysisPanel({
               first within each group; empty when nothing matched or
               when SLACK_USER_TOKEN isn't configured (helper is
               fail-open). */}
-          <UpgradeAnalysisSlackMatches signals={report.slack_signals} />
+          <UpgradeAnalysisSlackMatches
+            signals={report.slack_signals}
+            outcome={report.slack_search ?? null}
+          />
 
           {/* Footer meta. */}
           <div className="flex items-center justify-between text-[10px] text-muted">
@@ -373,9 +376,15 @@ export function UpgradeAnalysisPanel({
  */
 function UpgradeAnalysisSlackMatches({
   signals,
+  outcome,
 }: {
   signals: UpgradeAnalysisReport["slack_signals"];
+  outcome: UpgradeAnalysisReport["slack_search"];
 }) {
+  // Older cached scans predate `slack_search`; treat absence as
+  // "ok" so we don't wrongly claim a config problem.
+  const status = outcome?.status ?? "ok";
+  const detail = outcome?.detail;
   // Group by channel_id → keep the newest-first order within each
   // channel (the engine already sorted the array). A Map preserves
   // insertion order which corresponds to newest-across-all-channels
@@ -409,12 +418,7 @@ function UpgradeAnalysisSlackMatches({
         ) : null}
       </div>
       {signals.length === 0 ? (
-        <p className="mt-1 text-xs text-muted italic">
-          No prior D&amp;C decisions found in Slack for this pub. (If{" "}
-          <code className="bg-surface-2 px-1 rounded">SLACK_USER_TOKEN</code>{" "}
-          isn&rsquo;t configured, the search silently returns empty — check
-          Vercel envs when a scan you expect to match shows zero.)
-        </p>
+        <SlackEmptyState status={status} detail={detail} />
       ) : (
         <div className="mt-2 space-y-2">
           {Array.from(grouped.entries()).map(([channelId, group]) => (
@@ -444,6 +448,65 @@ function UpgradeAnalysisSlackMatches({
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+/** Diagnostic empty state — makes it obvious WHY the section is
+ *  empty (real "no matches" vs. a config problem the user can fix). */
+function SlackEmptyState({
+  status,
+  detail,
+}: {
+  status: NonNullable<UpgradeAnalysisReport["slack_search"]>["status"];
+  detail?: string;
+}) {
+  if (status === "ok" || status === "no_query") {
+    return (
+      <p className="mt-1 text-xs text-muted italic">
+        No prior D&amp;C decisions found in Slack for this pub.
+      </p>
+    );
+  }
+  const cls =
+    status === "not_configured"
+      ? "border-slate-500/40 bg-slate-500/10 text-slate-800 dark:text-slate-200"
+      : "border-amber-500/40 bg-amber-500/10 text-amber-800 dark:text-amber-200";
+  return (
+    <div className={`mt-1 rounded border ${cls} p-2 text-xs`}>
+      <p className="font-semibold">
+        {status === "not_configured"
+          ? "Slack search not configured"
+          : status === "auth_error"
+            ? `Slack search failed — auth (${detail ?? "unknown"})`
+            : status === "timeout"
+              ? "Slack search timed out"
+              : `Slack search failed (${detail ?? "unknown"})`}
+      </p>
+      <p className="mt-0.5 opacity-90">
+        {status === "not_configured" ? (
+          <>
+            Set{" "}
+            <code className="bg-surface-2 px-1 rounded">SLACK_USER_TOKEN</code>{" "}
+            in Vercel envs (user token with{" "}
+            <code className="bg-surface-2 px-1 rounded">search:read</code>) and
+            redeploy.
+          </>
+        ) : status === "auth_error" ? (
+          <>
+            The shipped token is missing{" "}
+            <code className="bg-surface-2 px-1 rounded">search:read</code> or
+            was rotated. Add the scope to the app manifest&rsquo;s user token
+            scopes, reinstall, and update{" "}
+            <code className="bg-surface-2 px-1 rounded">SLACK_USER_TOKEN</code>
+            .
+          </>
+        ) : status === "timeout" ? (
+          <>Slack API didn&rsquo;t respond in time. Re-run the scan.</>
+        ) : (
+          <>Slack API returned an error. Re-run the scan; if it persists, check the app&rsquo;s OAuth page.</>
+        )}
+      </p>
     </div>
   );
 }

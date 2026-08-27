@@ -445,14 +445,16 @@ export async function runFunnelPillar(
     window,
     cfg.volume.funnel_window_days
   );
-  // NOTE: `is_send` is the totals column — every row in `sendgrid_v1`
-  // is by definition a send event, so `sum(is_send)` gives us the
-  // `sent` counter the D&C snapshot needs. Falls back to `rows_evt`
-  // (count()) at read-time if is_send happens to be null on old rows,
-  // which is safe because rows_evt matches sent 1:1 for this stream.
+  // NOTE: rows in `sendgrid_v1` are individual SendGrid events
+  // (processed / delivered / opened / clicked / bounced / …). To
+  // count sends, we count `event = 'processed'` — SendGrid emits
+  // one 'processed' per accepted send. The read-time fallback in
+  // the mapper below handles pubs whose stream doesn't carry
+  // 'processed' rows (falls back to delivered + bounced, which is
+  // the terminal-state sum of what was actually sent).
   const sql = `
     SELECT count() AS rows_evt,
-      sum(\`is_send\`) AS sent,
+      countIf(\`event\` = 'processed') AS sent,
       sum(\`is_delivered\`) AS deliv,
       sum(\`is_opened\`) AS opens,
       sum(\`is_verified_opened\`) AS v_opens,
@@ -482,14 +484,21 @@ export async function runFunnelPillar(
   ]);
   const r = rows[0] ?? ({} as Partial<Pillar34Raw>);
   const rowsEvt = Number(r.rows_evt ?? 0);
+  const processed = Number(r.sent ?? 0);
+  const delivered = Number(r.deliv ?? 0);
+  const softBounced = Number(r.soft_b ?? 0);
+  const hardBounced = Number(r.hard_b ?? 0);
+  // Prefer the SendGrid `processed` count when present. When the
+  // stream doesn't carry 'processed' rows for a pub (some ingest
+  // paths drop them), fall back to delivered + bounced — every
+  // sent message terminates in one of those states.
+  const sent =
+    processed > 0 ? processed : delivered + softBounced + hardBounced;
   return {
     window_days: effectiveDays,
     rows_evt: rowsEvt,
-    // `sent` should equal rows_evt for the sendgrid stream; use the
-    // sum if present, else fall back so a stale schema doesn't leave
-    // the D&C snapshot with a zeroed denominator.
-    sent: Number(r.sent ?? rowsEvt),
-    deliv: Number(r.deliv ?? 0),
+    sent,
+    deliv: delivered,
     opens: Number(r.opens ?? 0),
     v_opens: Number(r.v_opens ?? 0),
     mach_opens: Number(r.mach_opens ?? 0),
@@ -497,8 +506,8 @@ export async function runFunnelPillar(
     clicks: Number(r.clicks ?? 0),
     v_clicks: Number(r.v_clicks ?? 0),
     deferred: Number(r.deferred ?? 0),
-    soft_b: Number(r.soft_b ?? 0),
-    hard_b: Number(r.hard_b ?? 0),
+    soft_b: softBounced,
+    hard_b: hardBounced,
     spam: Number(r.spam ?? 0),
     uniq_subs: Number(r.uniq_subs ?? 0),
     unsubs,
