@@ -180,6 +180,45 @@ export interface DeliverabilitySnapshot {
   flagged_count: number;
 }
 
+// ─── Workspace-scoped snapshot (all pubs under an org) ───────────────────
+
+/** One row of the workspace-wide D&C snapshot table: the raw counters
+ *  used for the seven ratios, plus a computed per-pub
+ *  DeliverabilitySnapshot. Rows are emitted for every publication
+ *  under the workspace, including pubs that didn't send in the window
+ *  (they render as "no_data" per the snapshot's own status). */
+export interface WorkspaceSnapshotPubRow {
+  pub_id: string;
+  /** Display name from the publications row. May be null for a
+   *  half-created pub; the UI falls back to the pub id. */
+  name: string | null;
+  /** Total subscribers on this pub — used as a scale hint in the row
+   *  header. Null when the count query didn't return this pub. */
+  subscribers: number | null;
+  /** The raw counters used to compute the ratios. Preserved on the
+   *  row so the UI can render "N sent" alongside the ratio cells. */
+  funnel: FunnelCounters;
+  /** The seven-metric snapshot for this specific pub. Same shape used
+   *  by the single-pub tile. */
+  snapshot: DeliverabilitySnapshot;
+}
+
+export interface WorkspaceSnapshot {
+  organization_id: string;
+  window_days: number;
+  analysis_window: AnalysisWindow | null;
+  /** Aggregate row on top of the table — summed counters across every
+   *  pub in the workspace, then the same 7 ratios computed against
+   *  the totals. Not a straight average of per-pub rates; the D&C
+   *  spec is denominator-weighted. */
+  aggregate: DeliverabilitySnapshot;
+  /** Aggregate raw counters — surfaced so the UI can render totals
+   *  above the table (e.g. "workspace sent 3.2M · delivered 3.1M"). */
+  aggregate_funnel: FunnelCounters;
+  rows: WorkspaceSnapshotPubRow[];
+  generated_at: string;
+}
+
 /** Pillar 6 — provider concentration + rejection reason class breakdown. */
 export interface ProviderRow {
   dom: string;
