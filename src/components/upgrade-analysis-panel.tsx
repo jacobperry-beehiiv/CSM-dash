@@ -486,24 +486,24 @@ function SlackEmptyState({
       <p className="mt-0.5 opacity-90">
         {status === "not_configured" ? (
           <>
-            Set{" "}
-            <code className="bg-surface-2 px-1 rounded">SLACK_USER_TOKEN</code>{" "}
-            in Vercel envs (user token with{" "}
+            Set either{" "}
+            <code className="bg-surface-2 px-1 rounded">SLACK_BOT_TOKEN</code>{" "}
+            (bot token with{" "}
             <code className="bg-surface-2 px-1 rounded">search:read.public</code>
-            {" "}and{" "}
-            <code className="bg-surface-2 px-1 rounded">search:read.private</code>
-            ) and redeploy.
+            {" "}scope) or{" "}
+            <code className="bg-surface-2 px-1 rounded">SLACK_USER_TOKEN</code>{" "}
+            (user token with{" "}
+            <code className="bg-surface-2 px-1 rounded">search:read</code>
+            ) in Vercel envs and redeploy.
           </>
         ) : status === "auth_error" ? (
           <>
-            The shipped token is missing{" "}
+            The shipped token is missing a search scope or was rotated.
+            For the bot token: add{" "}
             <code className="bg-surface-2 px-1 rounded">search:read.public</code>
-            {" / "}
-            <code className="bg-surface-2 px-1 rounded">search:read.private</code>
-            {" "}or was rotated. Add both to the app&rsquo;s User Token
-            Scopes, reinstall, and update{" "}
-            <code className="bg-surface-2 px-1 rounded">SLACK_USER_TOKEN</code>
-            .
+            {" "}to Bot Token Scopes and reinstall. For a user token: add{" "}
+            <code className="bg-surface-2 px-1 rounded">search:read</code>{" "}
+            to User Token Scopes, reinstall, and update the env.
           </>
         ) : status === "timeout" ? (
           <>Slack API didn&rsquo;t respond in time. Re-run the scan.</>

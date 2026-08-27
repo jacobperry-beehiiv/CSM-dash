@@ -8,17 +8,17 @@
  * path that runs those same searches automatically and folds the
  * results into the scan report.
  *
- * ─── Why the USER token ────────────────────────────────────────
- * `search.messages` requires the `search:read.public` (and
- * optionally `search:read.private`) User Token Scopes. Slack
- * ONLY grants these to user tokens (`xoxp-…`), never bot tokens. The
- * upgrade-analysis scan runs as the logged-in CSM's session, but
- * we deliberately share a single dedicated user token (from
- * SLACK_USER_TOKEN) so the search matches the same corpus for
- * every CSM regardless of their own channel membership. Without
- * the env var set, the helper returns [] — the panel then
- * renders its "no prior D&C decisions found" empty state, same
- * as it would for a scan that ran and found nothing.
+ * ─── Which token ───────────────────────────────────────────────
+ * Slack now supports `search.messages` via bot token scopes
+ * (`search:read.public`, `search:read.private`, etc.) — historically
+ * this was user-token-only, which is why the older env is called
+ * SLACK_USER_TOKEN. The helper prefers SLACK_USER_TOKEN when set
+ * (broadest corpus, includes DMs) and falls back to SLACK_BOT_TOKEN
+ * (already wired for the app's other Slack integrations). With the
+ * bot token, the search corpus is public channels + any private
+ * channels the bot has been invited to; DMs are excluded. For D&C
+ * use (mostly public #deliverability, etc.), the bot-token path
+ * covers the essential surface with no extra setup.
  *
  * Fail-open posture — same as the Spamhaus helper: any Slack API
  * error resolves to `[]` with a warn so a Slack outage doesn't
@@ -34,7 +34,7 @@ import type { SlackSearchHit } from "../engines/upgrade-analysis/types";
  *  the ambiguous "no matches" empty state. */
 export type SlackSearchStatus =
   | "ok"
-  | "not_configured" // SLACK_USER_TOKEN missing
+  | "not_configured" // neither SLACK_USER_TOKEN nor SLACK_BOT_TOKEN is set
   | "auth_error" // token present but scope wrong / rotated
   | "http_error" // Slack API returned 5xx or a non-auth failure
   | "timeout" // request exceeded SEARCH_TIMEOUT_MS
@@ -118,7 +118,11 @@ export async function searchSlackMessages(
   query: string,
   opts?: { count?: number; matchedTerm?: string }
 ): Promise<SlackSearchResult> {
-  const token = process.env.SLACK_USER_TOKEN;
+  // Prefer the user token if set (broader corpus), fall back to the
+  // bot token (which the app already has for the other Slack
+  // integrations). Bot tokens work with the `search:read.public`
+  // scope, no reinstall dance required.
+  const token = process.env.SLACK_USER_TOKEN ?? process.env.SLACK_BOT_TOKEN;
   if (!token) return { hits: [], status: "not_configured" };
   const q = query.trim();
   if (!q) return { hits: [], status: "no_query" };
