@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import type {
   AnalysisWindow,
   DeliverabilitySnapshot,
@@ -85,25 +86,44 @@ export function UpgradeAnalysisSnapshotTile({
       </span>
     );
 
+  const [open, setOpen] = useState(false);
+
   return (
-    <div className="rounded-lg border border-border bg-surface p-4">
-      <div className="flex items-start justify-between gap-2 flex-wrap">
+    <div className="rounded-lg border border-border bg-surface">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className="w-full text-left p-4 flex items-start justify-between gap-2 flex-wrap hover:bg-surface-2"
+      >
         <div>
           <h3 className="text-sm font-semibold text-fg flex items-center gap-2">
             Deliverability snapshot
             {headerChip}
           </h3>
-          <p className="text-xs text-muted mt-0.5">
-            D&amp;C-standard 7-metric flag table over the{" "}
-            <strong>{windowText}</strong>. Fixed thresholds — matches
-            the deliverability-quick-screen and prescreening skills.
-          </p>
+          {open ? (
+            <p className="text-xs text-muted mt-0.5">
+              D&amp;C-standard 7-metric flag table over the{" "}
+              <strong>{windowText}</strong>. Fixed thresholds — matches
+              the deliverability-quick-screen and prescreening skills.
+            </p>
+          ) : null}
         </div>
-        <div className="text-[10px] text-subtle text-right whitespace-nowrap">
-          {sent.toLocaleString()} sent · {delivered.toLocaleString()} delivered
+        <div className="flex items-center gap-2">
+          <div className="text-[10px] text-subtle text-right whitespace-nowrap">
+            {sent.toLocaleString()} sent · {delivered.toLocaleString()} delivered
+          </div>
+          <span
+            aria-hidden="true"
+            className={`text-subtle text-xs transition-transform ${open ? "rotate-180" : ""}`}
+          >
+            ▾
+          </span>
         </div>
-      </div>
+      </button>
 
+      {open ? (
+        <div className="px-4 pb-4">
       {status === "no_data" ? (
         <div className="mt-3 text-xs text-muted">
           The publication didn&apos;t send anything in this window. Widen
@@ -167,6 +187,8 @@ export function UpgradeAnalysisSnapshotTile({
           </table>
         </div>
       )}
+        </div>
+      ) : null}
     </div>
   );
 }

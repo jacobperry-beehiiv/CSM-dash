@@ -10,6 +10,7 @@ import type {
 import { UpgradeAnalysisPillarCard } from "./upgrade-analysis-pillar-card";
 import { UpgradeAnalysisSnapshotTile } from "./upgrade-analysis-snapshot-tile";
 import { UpgradeAnalysisDateWindowPicker } from "./upgrade-analysis-date-window-picker";
+import { UpgradeAnalysisWorkspaceSnapshot } from "./upgrade-analysis-workspace-snapshot";
 import { useWorkspacePublications } from "@/lib/hooks/customer-publications-cache";
 import { fmtNumber } from "./format";
 import { zendeskSearchUrl } from "@/lib/links";
@@ -385,6 +386,7 @@ function UpgradeAnalysisSlackMatches({
   // "ok" so we don't wrongly claim a config problem.
   const status = outcome?.status ?? "ok";
   const detail = outcome?.detail;
+  const [open, setOpen] = useState(false);
   // Group by channel_id → keep the newest-first order within each
   // channel (the engine already sorted the array). A Map preserves
   // insertion order which corresponds to newest-across-all-channels
@@ -406,17 +408,36 @@ function UpgradeAnalysisSlackMatches({
   }
 
   return (
-    <div className="rounded-md border border-border bg-surface p-3">
-      <div className="flex items-center gap-2">
-        <p className="text-xs font-semibold uppercase tracking-wide text-subtle">
-          Slack search
-        </p>
-        {signals.length > 0 ? (
-          <span className="inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold bg-indigo-500/10 text-indigo-700 dark:text-indigo-300 border border-indigo-500/30">
-            {signals.length} match{signals.length === 1 ? "" : "es"}
-          </span>
-        ) : null}
-      </div>
+    <div className="rounded-md border border-border bg-surface">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className="w-full text-left p-3 flex items-center justify-between gap-2 hover:bg-surface-2"
+      >
+        <div className="flex items-center gap-2">
+          <p className="text-xs font-semibold uppercase tracking-wide text-subtle">
+            Slack search
+          </p>
+          {signals.length > 0 ? (
+            <span className="inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold bg-indigo-500/10 text-indigo-700 dark:text-indigo-300 border border-indigo-500/30">
+              {signals.length} match{signals.length === 1 ? "" : "es"}
+            </span>
+          ) : status !== "ok" && status !== "no_query" ? (
+            <span className="inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-500/10 text-amber-700 dark:text-amber-300 border border-amber-500/30">
+              needs setup
+            </span>
+          ) : null}
+        </div>
+        <span
+          aria-hidden="true"
+          className={`text-subtle text-xs transition-transform ${open ? "rotate-180" : ""}`}
+        >
+          ▾
+        </span>
+      </button>
+      {open ? (
+        <div className="px-3 pb-3">
       {signals.length === 0 ? (
         <SlackEmptyState status={status} detail={detail} />
       ) : (
@@ -448,6 +469,8 @@ function UpgradeAnalysisSlackMatches({
           ))}
         </div>
       )}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -621,7 +644,16 @@ export function UpgradeAnalysisPanelForWorkspace({
   if (!effectivePubId) return null;
 
   return (
-    <div className="space-y-2">
+    <div className="space-y-3">
+      {/* Workspace-wide D&C snapshot: 7-metric table across every
+          pub in the workspace + an aggregate row. Sits at the top
+          so the reviewer sees the whole book of business before
+          drilling into a single pub. Fetches its own data from the
+          workspace-snapshot endpoint on mount. */}
+      <UpgradeAnalysisWorkspaceSnapshot
+        workspaceId={workspaceId}
+        analysisWindow={null}
+      />
       {pubs.length > 1 ? (
         <label className="flex items-center gap-2 text-xs text-muted">
           <span className="text-subtle">Scan publication:</span>
