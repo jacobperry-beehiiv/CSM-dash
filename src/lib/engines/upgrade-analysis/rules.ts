@@ -28,6 +28,9 @@
  */
 
 import type {
+  DeliverabilitySnapshot,
+  DeliverabilitySnapshotRow,
+  DeliverabilitySnapshotStatus,
   EscalationReason,
   FunnelCounters,
   NetworkCounters,
@@ -388,4 +391,247 @@ export function computeOverall(
   if (hasRed) return "hold";
   if (escalation_needed || hasAmber) return "review_needed";
   return "clear";
+}
+
+// ─── D&C Deliverability Snapshot (fixed thresholds) ──────────────────────
+
+/** Below this many sends over the window, we don't compute rates —
+ *  the denominator is too small to be meaningful (a monthly newsletter
+ *  with 30 sends in a 30-day window would show wildly noisy rates).
+ *  Matches the deliverability-quick-screen "LOW VOLUME" guard.  */
+const SNAPSHOT_LOW_VOLUME_THRESHOLD = 100;
+
+/** Fixed D&C flag thresholds — deliberately not tunable. These are
+ *  the same lines used by the deliverability-quick-screen and
+ *  enterprise-upgrade-prescreening skills, and the whole point of the
+ *  snapshot tile is that it shows the industry-standard read
+ *  regardless of what the pillar config has been drifted to. */
+const SNAPSHOT_THRESHOLDS = {
+  open_rate: 0.2, // < 20% flags (opens/delivered)
+  delivery_rate: 0.95, // ≤ 95% flags (delivered/sent)
+  hard_bounce_rate: 0.02, // ≥ 2% flags (hard_bounces/sent)
+  soft_bounce_rate: 0.03, // ≥ 3% flags (soft_bounces/sent)
+  unsubscribe_rate: 0.005, // ≥ 0.5% flags (unsubscribes/sent)
+  spam_rate: 0.003, // ≥ 0.3% flags (spam_reports/delivered)
+  deferral_rate: 0.1, // ≥ 10% flags (deferrals/sent)
+} as const;
+
+/**
+ * Build the 7-row D&C snapshot from raw funnel counters. Pure
+ * function; no config parameter because the snapshot's thresholds
+ * are fixed by D&C convention (open at <20%, spam at ≥0.3%, …).
+ *
+ * Status states:
+ *   - `no_data`     — `sent === 0`; the pub didn't send anything in
+ *                     the window. Rows still render (all values null,
+ *                     no chips).
+ *   - `low_volume`  — `0 < sent < 100`; raw counts render but rates
+ *                     are suppressed to avoid noise on a tiny
+ *                     denominator.
+ *   - `flagged`     — at least one row breaches its threshold.
+ *   - `clean`       — every ratio is safe.
+ *
+ * The unsubscribe row uses `funnel.unsubs`, which is 0 when the
+ * Postgres query failed; the row is emitted with a null `value` in
+ * that case so the tile renders "—" instead of a misleading 0%.
+ */
+export function computeDeliverabilitySnapshot(
+  funnel: FunnelCounters
+): DeliverabilitySnapshot {
+  const sent = funnel.sent;
+  const delivered = funnel.deliv;
+
+  if (sent === 0) {
+    return {
+      window_days: funnel.window_days,
+      sent: 0,
+      delivered: 0,
+      status: "no_data",
+      rows: snapshotRowsLowVolume(funnel), // still emit shape, all-null values
+      flagged_count: 0,
+    };
+  }
+
+  const isLowVolume = sent < SNAPSHOT_LOW_VOLUME_THRESHOLD;
+  if (isLowVolume) {
+    return {
+      window_days: funnel.window_days,
+      sent,
+      delivered,
+      status: "low_volume",
+      rows: snapshotRowsLowVolume(funnel),
+      flagged_count: 0,
+    };
+  }
+
+  const rows: DeliverabilitySnapshotRow[] = [
+    // Open Rate uses delivered as denominator per D&C spec (matches
+    // opens/delivered convention). Flags when BELOW threshold.
+    snapshotRow(
+      "open_rate",
+      "Open Rate",
+      "opens / delivered",
+      safeRate(funnel.opens, delivered),
+      SNAPSHOT_THRESHOLDS.open_rate,
+      "below"
+    ),
+    snapshotRow(
+      "delivery_rate",
+      "Delivery Rate",
+      "delivered / sent",
+      safeRate(delivered, sent),
+      SNAPSHOT_THRESHOLDS.delivery_rate,
+      "at_or_below"
+    ),
+    snapshotRow(
+      "hard_bounce_rate",
+      "Hard Bounce Rate",
+      "hard_bounces / sent",
+      safeRate(funnel.hard_b, sent),
+      SNAPSHOT_THRESHOLDS.hard_bounce_rate,
+      "at_or_above"
+    ),
+    snapshotRow(
+      "soft_bounce_rate",
+      "Soft Bounce Rate",
+      "soft_bounces / sent",
+      safeRate(funnel.soft_b, sent),
+      SNAPSHOT_THRESHOLDS.soft_bounce_rate,
+      "at_or_above"
+    ),
+    // Unsubscribe row: value is null when the Postgres unsub query
+    // came back with 0 AND we can't distinguish "no unsubs" from
+    // "query failed" — err on the side of showing "—" instead of
+    // "0.0% clean" which would be misleading. In practice the funnel
+    // pillar returns 0 on both, so we treat 0 as "unknown for the
+    // purposes of flagging". Cleaner approach in a v2 would be to
+    // pass a distinct null through the type.
+    snapshotRow(
+      "unsubscribe_rate",
+      "Unsubscribe Rate",
+      "unsubscribes / sent",
+      funnel.unsubs > 0 ? safeRate(funnel.unsubs, sent) : null,
+      SNAPSHOT_THRESHOLDS.unsubscribe_rate,
+      "at_or_above"
+    ),
+    snapshotRow(
+      "spam_rate",
+      "Spam Reported Rate",
+      "spam_reports / delivered",
+      safeRate(funnel.spam, delivered),
+      SNAPSHOT_THRESHOLDS.spam_rate,
+      "at_or_above"
+    ),
+    snapshotRow(
+      "deferral_rate",
+      "Deferral Rate",
+      "deferrals / sent",
+      safeRate(funnel.deferred, sent),
+      SNAPSHOT_THRESHOLDS.deferral_rate,
+      "at_or_above"
+    ),
+  ];
+
+  const flagged_count = rows.filter((r) => r.flagged === true).length;
+  const status: DeliverabilitySnapshotStatus =
+    flagged_count > 0 ? "flagged" : "clean";
+
+  return {
+    window_days: funnel.window_days,
+    sent,
+    delivered,
+    status,
+    rows,
+    flagged_count,
+  };
+}
+
+/** Emit the 7 rows with all-null values — used for the low-volume /
+ *  no-data states so the tile can still render the row scaffolding
+ *  (matching the D&C spec's habit of showing raw counts + a status
+ *  banner rather than blank space). */
+function snapshotRowsLowVolume(
+  _funnel: FunnelCounters
+): DeliverabilitySnapshotRow[] {
+  const zero = (
+    key: DeliverabilitySnapshotRow["key"],
+    label: string,
+    formula: string,
+    threshold: number
+  ): DeliverabilitySnapshotRow => ({
+    key,
+    label,
+    formula,
+    value: null,
+    threshold,
+    flagged: null,
+  });
+  return [
+    zero("open_rate", "Open Rate", "opens / delivered", SNAPSHOT_THRESHOLDS.open_rate),
+    zero(
+      "delivery_rate",
+      "Delivery Rate",
+      "delivered / sent",
+      SNAPSHOT_THRESHOLDS.delivery_rate
+    ),
+    zero(
+      "hard_bounce_rate",
+      "Hard Bounce Rate",
+      "hard_bounces / sent",
+      SNAPSHOT_THRESHOLDS.hard_bounce_rate
+    ),
+    zero(
+      "soft_bounce_rate",
+      "Soft Bounce Rate",
+      "soft_bounces / sent",
+      SNAPSHOT_THRESHOLDS.soft_bounce_rate
+    ),
+    zero(
+      "unsubscribe_rate",
+      "Unsubscribe Rate",
+      "unsubscribes / sent",
+      SNAPSHOT_THRESHOLDS.unsubscribe_rate
+    ),
+    zero(
+      "spam_rate",
+      "Spam Reported Rate",
+      "spam_reports / delivered",
+      SNAPSHOT_THRESHOLDS.spam_rate
+    ),
+    zero(
+      "deferral_rate",
+      "Deferral Rate",
+      "deferrals / sent",
+      SNAPSHOT_THRESHOLDS.deferral_rate
+    ),
+  ];
+}
+
+/** Row builder that folds the flag direction into a single boolean.
+ *  Three D&C directions:
+ *    - `below`         — flag when `value < threshold` (Open Rate).
+ *    - `at_or_below`   — flag when `value <= threshold` (Delivery Rate).
+ *    - `at_or_above`   — flag when `value >= threshold` (everything else). */
+function snapshotRow(
+  key: DeliverabilitySnapshotRow["key"],
+  label: string,
+  formula: string,
+  value: number | null,
+  threshold: number,
+  direction: "below" | "at_or_below" | "at_or_above"
+): DeliverabilitySnapshotRow {
+  let flagged: boolean | null = null;
+  if (value != null) {
+    if (direction === "below") flagged = value < threshold;
+    else if (direction === "at_or_below") flagged = value <= threshold;
+    else flagged = value >= threshold;
+  }
+  return { key, label, formula, value, threshold, flagged };
+}
+
+function safeRate(num: number, denom: number): number {
+  if (!Number.isFinite(num) || !Number.isFinite(denom) || denom === 0) {
+    return 0;
+  }
+  return num / denom;
 }

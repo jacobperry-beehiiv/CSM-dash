@@ -28,6 +28,7 @@ import {
   runProviderPillar,
 } from "./upgrade-analysis/pillars";
 import {
+  computeDeliverabilitySnapshot,
   computeEscalation,
   computeOverall,
   engagementTruth,
@@ -145,6 +146,7 @@ export async function runUpgradeAnalysis(
       network,
     },
     slack_signals: input.slackSignals ?? [],
+    deliverability_snapshot: computeDeliverabilitySnapshot(funnel),
     pillar_scores,
     escalation,
     overall,

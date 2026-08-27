@@ -322,6 +322,7 @@ export function acquisitionHasSuspiciousLabels(
 
 interface Pillar34Raw {
   rows_evt: number;
+  sent: number;
   deliv: number;
   opens: number;
   v_opens: number;
@@ -336,13 +337,58 @@ interface Pillar34Raw {
   uniq_subs: number;
 }
 
+/** Postgres unsubscribe count for the same lookback window as the
+ *  funnel. Runs as its own query because unsubscribe events don't
+ *  appear in the ClickHouse `sendgrid_v1` stream — the customer's
+ *  action lives on the `subscriptions` row's `unsubscribed_at`
+ *  timestamp. Fails open (returns 0) on error so the funnel pillar
+ *  still emits a report; the snapshot tile renders "—" for the
+ *  unsubscribe rate when this happens rather than a misleading 0%. */
+interface Pillar34UnsubRaw {
+  unsubs: number;
+}
+
+async function fetchUnsubCount(
+  pubId: string,
+  windowDays: number
+): Promise<number> {
+  try {
+    const sql = `
+      SELECT COUNT(*)::int AS unsubs
+      FROM subscriptions
+      WHERE publication_id = ${q(pubId)}
+        AND unsubscribed_at IS NOT NULL
+        AND unsubscribed_at >= now() - INTERVAL '${windowDays} days'
+    `;
+    const rows = (await withTimeout(
+      runNativeQuery(DB.POSTGRES, sql) as Promise<unknown[]>,
+      PILLAR_TIMEOUT_MS,
+      [] as unknown[],
+      "funnel:unsubs"
+    )) as Pillar34UnsubRaw[];
+    return Number(rows[0]?.unsubs ?? 0);
+  } catch (e) {
+    console.warn(
+      "[upgrade-analysis] unsub count query failed:",
+      e instanceof Error ? e.message : e
+    );
+    return 0;
+  }
+}
+
 export async function runFunnelPillar(
   pubId: string,
   cfg: UpgradeAnalysisConfig
 ): Promise<FunnelCounters> {
   const windowDays = cfg.volume.funnel_window_days;
+  // NOTE: `is_send` is the totals column — every row in `sendgrid_v1`
+  // is by definition a send event, so `sum(is_send)` gives us the
+  // `sent` counter the D&C snapshot needs. Falls back to `rows_evt`
+  // (count()) at read-time if is_send happens to be null on old rows,
+  // which is safe because rows_evt matches sent 1:1 for this stream.
   const sql = `
     SELECT count() AS rows_evt,
+      sum(\`is_send\`) AS sent,
       sum(\`is_delivered\`) AS deliv,
       sum(\`is_opened\`) AS opens,
       sum(\`is_verified_opened\`) AS v_opens,
@@ -359,16 +405,26 @@ export async function runFunnelPillar(
     WHERE publication_id = ${q(pubId)}
       AND \`timestamp\` >= now() - INTERVAL ${windowDays} DAY
   `;
-  const rows = (await withTimeout(
-    runNativeQuery(DB.CLICKHOUSE_MAIN, sql) as Promise<unknown[]>,
-    PILLAR_TIMEOUT_MS,
-    [] as unknown[],
-    "funnel"
-  )) as Pillar34Raw[];
+  // Fan out: ClickHouse funnel + Postgres unsub count run in parallel
+  // so the pillar's wall-clock stays close to the slower of the two.
+  const [rows, unsubs] = await Promise.all([
+    withTimeout(
+      runNativeQuery(DB.CLICKHOUSE_MAIN, sql) as Promise<unknown[]>,
+      PILLAR_TIMEOUT_MS,
+      [] as unknown[],
+      "funnel"
+    ) as Promise<Pillar34Raw[]>,
+    fetchUnsubCount(pubId, windowDays),
+  ]);
   const r = rows[0] ?? ({} as Partial<Pillar34Raw>);
+  const rowsEvt = Number(r.rows_evt ?? 0);
   return {
     window_days: windowDays,
-    rows_evt: Number(r.rows_evt ?? 0),
+    rows_evt: rowsEvt,
+    // `sent` should equal rows_evt for the sendgrid stream; use the
+    // sum if present, else fall back so a stale schema doesn't leave
+    // the D&C snapshot with a zeroed denominator.
+    sent: Number(r.sent ?? rowsEvt),
     deliv: Number(r.deliv ?? 0),
     opens: Number(r.opens ?? 0),
     v_opens: Number(r.v_opens ?? 0),
@@ -381,6 +437,7 @@ export async function runFunnelPillar(
     hard_b: Number(r.hard_b ?? 0),
     spam: Number(r.spam ?? 0),
     uniq_subs: Number(r.uniq_subs ?? 0),
+    unsubs,
   };
 }
 
