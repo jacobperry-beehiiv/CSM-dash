@@ -63,6 +63,7 @@ export async function POST(req: Request) {
     lookback_days?: number;
     start_date?: string;
     end_date?: string;
+    ownerEmail?: string;
   } = {};
   try {
     body = (await req.json()) as typeof body;
@@ -163,6 +164,10 @@ export async function POST(req: Request) {
       triggeredBy: email,
       config: cfg,
       window,
+      // Owner email drives the Slack search's second query. Client
+      // sends it in the POST body; safe to trust (session-authed
+      // and only used to construct a Slack search string).
+      ownerEmail: body.ownerEmail ?? null,
     });
     const stored = await saveUpgradeAnalysis(report);
 
