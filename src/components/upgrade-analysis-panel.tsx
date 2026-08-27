@@ -12,6 +12,7 @@ import { UpgradeAnalysisSnapshotTile } from "./upgrade-analysis-snapshot-tile";
 import { UpgradeAnalysisDateWindowPicker } from "./upgrade-analysis-date-window-picker";
 import { useWorkspacePublications } from "@/lib/hooks/customer-publications-cache";
 import { fmtNumber } from "./format";
+import { zendeskSearchUrl } from "@/lib/links";
 
 /**
  * D&C Upgrade Analysis panel — mounts under a customer row via
@@ -45,6 +46,9 @@ interface Props {
    *  cached report exists. Default true; set false to keep the
    *  panel in the "Run analysis" CTA state until the user clicks. */
   autoLoad?: boolean;
+  /** Customer's owner email — powers the Zendesk history quick-link.
+   *  Null when unknown; the button hides in that case. */
+  ownerEmail?: string | null;
 }
 
 interface ApiResponse {
@@ -90,7 +94,9 @@ export function UpgradeAnalysisPanel({
   organizationId,
   initial,
   autoLoad = true,
+  ownerEmail = null,
 }: Props) {
+  const zendeskUrl = zendeskSearchUrl(ownerEmail ?? null);
   const [report, setReport] = useState<UpgradeAnalysisReport | null>(
     initial?.report ?? null
   );
@@ -222,6 +228,17 @@ export function UpgradeAnalysisPanel({
           </div>
         </div>
         <div className="flex items-center gap-1.5">
+          {zendeskUrl ? (
+            <a
+              href={zendeskUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="text-xs px-2.5 py-1 rounded border border-border bg-surface hover:bg-surface-2 flex items-center gap-1"
+              title={`Search Zendesk tickets for ${ownerEmail}`}
+            >
+              🎫 <span>Zendesk history</span>
+            </a>
+          ) : null}
           {report ? (
             <button
               type="button"
@@ -410,8 +427,13 @@ function VerdictChip({ verdict }: { verdict: OverallVerdict }) {
  */
 export function UpgradeAnalysisPanelForWorkspace({
   workspaceId,
+  ownerEmail = null,
 }: {
   workspaceId: string;
+  /** Owner email surfaced to the inner panel as the anchor for the
+   *  Zendesk history button — D&C's next tab after they read the
+   *  scorecard. Null when we don't have it (button is hidden). */
+  ownerEmail?: string | null;
 }) {
   const state = useWorkspacePublications(workspaceId);
   const pubs = Array.isArray(state) ? state : null;
@@ -481,6 +503,7 @@ export function UpgradeAnalysisPanelForWorkspace({
         key={effectivePubId}
         publicationId={effectivePubId}
         organizationId={workspaceId}
+        ownerEmail={ownerEmail}
       />
     </div>
   );

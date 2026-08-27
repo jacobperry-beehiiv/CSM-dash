@@ -84,7 +84,10 @@ export function CustomerDetailPanel({
   return (
     <div className="space-y-4">
       {upgradeAnalysisEnabled && c.workspace_id ? (
-        <UpgradeAnalysisPanelForWorkspace workspaceId={c.workspace_id} />
+        <UpgradeAnalysisPanelForWorkspace
+          workspaceId={c.workspace_id}
+          ownerEmail={c.owner_email ?? null}
+        />
       ) : null}
       {topSlot}
 

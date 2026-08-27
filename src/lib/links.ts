@@ -83,6 +83,34 @@ export function stripeCustomerUrl(
 }
 
 /**
+ * Zendesk agent-search deep-link for a customer email. Renders the
+ * ticket-search results view — same URL the D&C skill uses to pull
+ * a customer's full support footprint before deciding on an upgrade.
+ * Path pattern (`/agent/search/1?copy&type=ticket&q=<email>`) is
+ * lifted verbatim from Richard's playbook so a "Zendesk history"
+ * click lands on the exact view D&C would open by hand.
+ *
+ * Instance host defaults to beehiiv's help subdomain; override via
+ * NEXT_PUBLIC_ZENDESK_URL if the workspace is ever migrated.
+ */
+const DEFAULT_ZENDESK_URL = "https://beehiivhelp.zendesk.com";
+
+export function zendeskSearchUrl(
+  email: string | null | undefined
+): string | null {
+  if (!email) return null;
+  const trimmed = email.trim();
+  if (!trimmed) return null;
+  const base = process.env.NEXT_PUBLIC_ZENDESK_URL ?? DEFAULT_ZENDESK_URL;
+  const params = new URLSearchParams({
+    copy: "",
+    type: "ticket",
+    q: trimmed,
+  });
+  return `${base}/agent/search/1?${params.toString()}`;
+}
+
+/**
  * Slack deep-link for a channel ID. Returns the archives URL which
  * works in both the web client and the native app (Slack redirects to
  * the app via custom URL scheme when installed). Workspace subdomain
