@@ -476,7 +476,9 @@ function SlackEmptyState({
     <div className={`mt-1 rounded border ${cls} p-2 text-xs`}>
       <p className="font-semibold">
         {status === "not_configured"
-          ? "Slack search not configured"
+          ? detail === "user_token_required"
+            ? "Slack search needs a user token"
+            : "Slack search not configured"
           : status === "auth_error"
             ? `Slack search failed — auth (${detail ?? "unknown"})`
             : status === "timeout"
@@ -485,17 +487,28 @@ function SlackEmptyState({
       </p>
       <p className="mt-0.5 opacity-90">
         {status === "not_configured" ? (
-          <>
-            Set either{" "}
-            <code className="bg-surface-2 px-1 rounded">SLACK_BOT_TOKEN</code>{" "}
-            (bot token with{" "}
-            <code className="bg-surface-2 px-1 rounded">search:read.public</code>
-            {" "}scope) or{" "}
-            <code className="bg-surface-2 px-1 rounded">SLACK_USER_TOKEN</code>{" "}
-            (user token with{" "}
-            <code className="bg-surface-2 px-1 rounded">search:read</code>
-            ) in Vercel envs and redeploy.
-          </>
+          detail === "user_token_required" ? (
+            <>
+              A bot token is set, but Slack&rsquo;s{" "}
+              <code className="bg-surface-2 px-1 rounded">search.messages</code>{" "}
+              endpoint only accepts user tokens (
+              <code className="bg-surface-2 px-1 rounded">xoxp-…</code>). Add{" "}
+              <code className="bg-surface-2 px-1 rounded">search:read</code>{" "}
+              to the app&rsquo;s User Token Scopes, reinstall to get an{" "}
+              <code className="bg-surface-2 px-1 rounded">xoxp-</code> token,
+              and set{" "}
+              <code className="bg-surface-2 px-1 rounded">SLACK_USER_TOKEN</code>{" "}
+              in Vercel.
+            </>
+          ) : (
+            <>
+              Set{" "}
+              <code className="bg-surface-2 px-1 rounded">SLACK_USER_TOKEN</code>{" "}
+              (user token with{" "}
+              <code className="bg-surface-2 px-1 rounded">search:read</code>) in
+              Vercel envs and redeploy.
+            </>
+          )
         ) : status === "auth_error" ? (
           <>
             The shipped token is missing a search scope or was rotated.
