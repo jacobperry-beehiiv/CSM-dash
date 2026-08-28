@@ -69,6 +69,10 @@ interface Props {
    *  The panel itself only fetches on demand; leaving it off just
    *  hides the CTA rather than saving API cost. */
   upgradeAnalysisEnabled?: boolean;
+  /** Mount the per-customer Recent News section. Gated behind the
+   *  `news-feed` feature flag — noisy for CSMs who don't follow
+   *  their book externally. Off by default. */
+  newsEnabled?: boolean;
 }
 
 export function CustomerDetailPanel({
@@ -80,6 +84,7 @@ export function CustomerDetailPanel({
   gmailScopeMissing,
   gmailMatch,
   upgradeAnalysisEnabled = false,
+  newsEnabled = false,
 }: Props) {
   return (
     <div className="space-y-4">
@@ -447,8 +452,10 @@ export function CustomerDetailPanel({
       {/* Recent news — Google News headlines scoped to this
        *  customer + categorized into structure / staffing / sales-
        *  funding signals. Cached daily by the news-refresh cron;
-       *  Refresh button bypasses on demand. */}
-      {c.workspace_id ? (
+       *  Refresh button bypasses on demand. Gated on the
+       *  `news-feed` feature flag — noisy for CSMs who don't
+       *  follow their book externally. */}
+      {newsEnabled && c.workspace_id ? (
         <CustomerNewsSection workspaceId={c.workspace_id} />
       ) : null}
 

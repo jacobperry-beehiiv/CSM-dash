@@ -11,59 +11,25 @@ export default async function SettingsLayout({
 }) {
   const session = await auth();
   const email = session?.user?.email ?? null;
-  // Flag-gated nav entries are computed server-side so the sidebar
-  // never renders a link the viewer can't reach.
+  // Every flag-gated sub-page lives under one consolidated "Features"
+  // sidebar entry so the sidebar doesn't grow one line per feature.
+  // The Features hub page renders per-feature cards conditionally on
+  // the viewer's eligibility (same visibility envelope as before).
   const extras: Array<{ href: string; label: string; description: string }> = [];
-  if (await isFeatureEnabledFor("gmail-draft-labels", email)) {
+  const hasAnyFeatureAccess =
+    (await isFeatureEnabledFor("gmail-draft-labels", email)) ||
+    (await isFeatureEnabledFor("customer-folders-sweep", email)) ||
+    (await isFeatureEnabledFor("wins-opportunities", email)) ||
+    (await isFeatureEnabledFor("upgrade-analysis", email)) ||
+    (await isFeatureEnabledFor("sybill-ingest", email)) ||
+    isProfileOptionsAdmin(email) ||
+    isAdmin(email);
+  if (hasAnyFeatureAccess) {
     extras.push({
-      href: "/settings/gmail-labels",
-      label: "Gmail customer labels",
+      href: "/settings/features",
+      label: "Feature settings",
       description:
-        "Map each customer in your book to the Gmail label you already use, so dashboard drafts auto-tag in your inbox.",
-    });
-  }
-  if (await isFeatureEnabledFor("customer-folders-sweep", email)) {
-    extras.push({
-      href: "/settings/customer-folders",
-      label: "Customer folders sweep",
-      description:
-        "Scan the shared Drive parent, match folders to customers, and backfill HubSpot's customer_folder property.",
-    });
-  }
-  if (await isFeatureEnabledFor("wins-opportunities", email)) {
-    extras.push({
-      href: "/settings/wins",
-      label: "Wins detection thresholds",
-      description:
-        "Tune the per-rule thresholds the daily wins-detection engine scores against. Overrides layer over shipped defaults; blank fields fall through.",
-    });
-  }
-  // Admin-only: curate the shared Prior ESP / Tech Stack option lists.
-  if (isProfileOptionsAdmin(email)) {
-    extras.push({
-      href: "/settings/profile-fields",
-      label: "Prior ESP & Tech Stack",
-      description:
-        "Manage the shared option lists for the Prior ESP and Tech Stack account fields.",
-    });
-  }
-  // Super-admin only: the automated-todo phrasing + action registry.
-  // A wrong action binding fires on real customer outreach so we
-  // stay in the tight admin allowlist here.
-  if (isAdmin(email)) {
-    extras.push({
-      href: "/settings/todo-automation",
-      label: "Todo automation",
-      description:
-        "Phrasing + linked outreach template for every automated todo source (renewal milestones, Sybill recaps, etc.).",
-    });
-  }
-  if (await isFeatureEnabledFor("upgrade-analysis", email)) {
-    extras.push({
-      href: "/settings/upgrade-analysis",
-      label: "Upgrade Analysis thresholds",
-      description:
-        "Tune the D&C Upgrade Analysis scorecard bands — complaint rates, deferral bands, engagement floors, escalation rules.",
+        "Hub for gated feature settings — Gmail labels, wins thresholds, D&C Upgrade Analysis, and more (only the ones enabled for you appear).",
     });
   }
   return (

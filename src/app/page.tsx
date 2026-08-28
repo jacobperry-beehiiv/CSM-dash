@@ -69,6 +69,10 @@ export default async function MissionControl({
     "sybill-ingest",
     viewerEmail
   );
+  const newsFeedEnabled = await isFeatureEnabledFor(
+    "news-feed",
+    viewerEmail
+  );
   const headingMascot =
     mascots.length > 0
       ? mascots[Math.floor(Math.random() * mascots.length)]
@@ -105,7 +109,7 @@ export default async function MissionControl({
 
       <TeamTasksPanel />
       <PersonalTodosPanel sybillIngestEnabled={sybillIngestEnabled} />
-      <BookNewsPanel viewerCsmHandle={csm} />
+      {newsFeedEnabled ? <BookNewsPanel viewerCsmHandle={csm} /> : null}
       <FeatureUpdatesPanel />
     </>
   );
