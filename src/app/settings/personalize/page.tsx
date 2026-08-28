@@ -6,6 +6,7 @@ import {
   type FontKey,
   type Personalization,
 } from "@/lib/data/personalization-types";
+import TeamMascotsPage from "../team-mascots/page";
 
 /**
  * /settings/personalize — per-user dashboard customization.
@@ -344,20 +345,20 @@ export default function PersonalizePage() {
 
       <section className="bg-surface rounded-xl border border-border shadow-card p-5 text-xs text-muted space-y-2 max-w-prose">
         <p>
-          <strong className="text-fg">Business Mode.</strong> Click the
-          &ldquo;Business Mode&rdquo; pill in the header (top-right) to
-          temporarily hide your customizations and show the default
-          look. The setting is per-device (localStorage) and
-          intentionally non-persistent across reloads-after-clear-data
-          — use it when screen-sharing a customer-facing demo.
-        </p>
-        <p>
           <strong className="text-fg">Who sees this.</strong> Only you.
           Customizations are scoped to your email; other viewers see
           the default look. The page is gated to CSMs with Gmail
           connected — non-CSMs land on the explainer above.
         </p>
       </section>
+
+      {/* Team mascots — moved here from its own sidebar entry. Shares
+          the personalization page's "make it yours" surface: your
+          own theme + the team pet photos that ride along in the
+          header logo + to-do celebrations. */}
+      <div className="mt-10 pt-8 border-t border-border">
+        <TeamMascotsPage />
+      </div>
     </div>
   );
 }

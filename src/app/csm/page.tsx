@@ -21,8 +21,7 @@ import { QbrChartsTab } from "@/components/qbr-charts/qbr-charts-tab";
 import type { WorkspaceOption } from "@/components/qbr-charts/workspace-picker";
 import { WinsList } from "@/components/wins-list";
 import { JulietFlagList } from "@/components/juliet-flag-list";
-import { RenewalPanel } from "@/components/renewal-panel";
-import { RenewalCalendarPanel } from "@/components/renewal-calendar-panel";
+import { RenewalsWithCalendar } from "@/components/renewals-with-calendar";
 import { isAdmin } from "@/lib/auth/admin";
 import { isFeatureEnabledFor } from "@/lib/auth/feature-flags";
 import { loadWinsBlob } from "@/lib/data/wins-store";
@@ -37,7 +36,6 @@ const BASE_TABS = [
   { id: "deliverability", label: "Deliverability" },
   { id: "at-risk", label: "At-risk" },
   { id: "renewals", label: "Renewals" },
-  { id: "renewal-calendar", label: "Renewal Calendar" },
   { id: "juliet", label: "Flagged for Juliet" },
   { id: "qbr-charts", label: "QBR Charts" },
 ];
@@ -166,26 +164,18 @@ export default async function CsmPage({
           isAdmin={admin}
         />
       );
-    } else if (tab === "renewals") {
-      // Renewals came back to /csm — CSMs own their renewals now
-      // (previously routed to /am). Uses the same filter shape as
-      // the rest of /csm: viewer's CSM scope by default, ?csm=all
-      // for the team-wide view Juliet/Priya use for pacing across
-      // the whole book. Book is filterCustomers(all, { csm }) so
-      // it includes both Enterprise + Growth, and RenewalPanel's
-      // internal cadence filter drops monthly customers anyway.
+    } else if (tab === "renewals" || tab === "renewal-calendar") {
+      // Renewals + Calendar are nested under one tab. The old
+      // `?tab=renewal-calendar` deep-link still works and lands on
+      // the calendar sub-view.
       const renewalsBook = filterCustomers(all, { csm });
       body = (
-        <RenewalPanel
+        <RenewalsWithCalendar
           customers={renewalsBook}
           csms={csms}
           showTeamRollup={sp.csm === "all"}
+          initialView={tab === "renewal-calendar" ? "calendar" : "list"}
         />
-      );
-    } else if (tab === "renewal-calendar") {
-      const renewalsBook = filterCustomers(all, { csm });
-      body = (
-        <RenewalCalendarPanel customers={renewalsBook} csms={csms} />
       );
     } else if (tab === "juliet") {
       // Team-wide queue — always show every flagged workspace,

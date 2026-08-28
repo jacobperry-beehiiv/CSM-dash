@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { templateTeam, type StoredTemplate } from "@/lib/templates/types";
 import { TemplateEditor } from "@/components/template-editor";
 import { MergeTagLibrary } from "@/components/merge-tag-library";
+import MergeTagsPage from "../merge-tags/page";
 
 type Mode = { kind: "list" } | { kind: "edit"; id: string } | { kind: "new" };
 type TemplateTeamTab = "csm" | "am";
@@ -183,36 +184,51 @@ export default function TemplatesPage() {
           {search ? " match your search" : ""}.
         </p>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {filtered.map((t) => (
-            <button
-              key={t.id}
-              onClick={() => setMode({ kind: "edit", id: t.id })}
-              className="text-left rounded-xl border border-border bg-surface shadow-card p-4 hover:border-border-strong hover:bg-canvas/50"
-            >
-              <h3 className="font-semibold text-fg">{t.label}</h3>
-              {t.blurb ? (
-                <p className="text-xs text-muted mt-1">{t.blurb}</p>
-              ) : null}
-              <div className="text-xs text-muted mt-2">Subject</div>
-              <div className="text-sm text-fg mt-0.5 truncate">
-                {t.subject}
-              </div>
-              <div className="mt-3">
+        <div className="rounded-lg border border-border bg-surface divide-y divide-border">
+          {filtered.map((t) => {
+            const team = templateTeam(t);
+            return (
+              <button
+                key={t.id}
+                onClick={() => setMode({ kind: "edit", id: t.id })}
+                className="w-full text-left px-3 py-2 hover:bg-canvas/50 flex items-center gap-3"
+              >
                 <span
-                  className={`text-[10px] px-1.5 py-0.5 rounded font-semibold border ${
-                    templateTeam(t) === "am"
+                  className={`shrink-0 text-[10px] px-1.5 py-0.5 rounded font-semibold border ${
+                    team === "am"
                       ? "bg-purple-100 dark:bg-purple-500/20 text-purple-800 dark:text-purple-200 border-purple-300 dark:border-purple-500/40"
                       : "bg-indigo-100 dark:bg-indigo-500/20 text-indigo-800 dark:text-indigo-200 border-indigo-300 dark:border-indigo-500/40"
                   }`}
                 >
-                  {templateTeam(t) === "am" ? "AM" : "CSM"}
+                  {team === "am" ? "AM" : "CSM"}
                 </span>
-              </div>
-            </button>
-          ))}
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-baseline gap-2">
+                    <span className="font-medium text-fg truncate">
+                      {t.label}
+                    </span>
+                    {t.blurb ? (
+                      <span className="text-xs text-muted truncate">
+                        · {t.blurb}
+                      </span>
+                    ) : null}
+                  </div>
+                  <div className="text-xs text-subtle truncate">
+                    {t.subject}
+                  </div>
+                </div>
+              </button>
+            );
+          })}
         </div>
       )}
+
+      {/* Per-CSM merge tags — moved here from its own sidebar entry so
+          template editing and the per-CSM `{{tag}}` values a template
+          might reference live in one place. */}
+      <div className="mt-10 pt-8 border-t border-border">
+        <MergeTagsPage />
+      </div>
     </>
   );
 }

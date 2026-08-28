@@ -17,7 +17,8 @@ export type FeatureId =
   | "customer-folders-sweep"
   | "sybill-ingest"
   | "wins-opportunities"
-  | "upgrade-analysis";
+  | "upgrade-analysis"
+  | "news-feed";
 
 /** Per-feature gate state. Defaults to "unrestricted" — everyone who
  *  passes the feature's own eligibility check (e.g. CSM with Gmail
@@ -97,6 +98,14 @@ export const FEATURE_METADATA: ReadonlyArray<FeatureMetadata> = [
     eligibility_note:
       "Endpoint is session-auth only (no cron in v1). ClickHouse/Postgres queries are relatively expensive — the 24h freshness guard prevents accidental repeat-scans.",
   },
+  {
+    id: "news-feed",
+    label: "Recent news panels",
+    description:
+      "Home-page Recent News panel + per-customer news section on the detail panel. Reads Google News RSS on a daily sweep — noisy for CSMs who don't follow their book externally, so gated.",
+    eligibility_note:
+      "Independent of the daily sweep — the sweep still runs and populates KV; this only controls whether the two panels render.",
+  },
 ];
 
 /** Safe defaults — every feature ships unrestricted. New flags
@@ -136,6 +145,13 @@ export const DEFAULT_FLAGS: AdminFlags = {
     // before opening to AMs; UI + Slack search integration land in
     // PR 2/3 and expand the allowlist.
     "upgrade-analysis": {
+      restricted: true,
+      allowed_emails: ["jacob.perry@beehiiv.com"],
+    },
+    // Ships dark — was previously always-on. Existing panels
+    // migrated behind this flag on the cleanup pass; flip on for
+    // CSMs who actually want the news feed.
+    "news-feed": {
       restricted: true,
       allowed_emails: ["jacob.perry@beehiiv.com"],
     },

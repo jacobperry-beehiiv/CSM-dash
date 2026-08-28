@@ -17,13 +17,8 @@ const SECTIONS: Array<{ href: string; label: string; description: string }> = [
   {
     href: "/settings/templates",
     label: "Outreach templates",
-    description: "Subjects, rich-text bodies, tags.",
-  },
-  {
-    href: "/settings/merge-tags",
-    label: "Your merge tags",
     description:
-      "Per-CSM {{name}} tags a shared template can substitute — e.g. your scheduling link.",
+      "Subjects, rich-text bodies + your per-CSM merge tags for shared templates (e.g. scheduling link).",
   },
   {
     href: "/settings/tiers",
@@ -62,19 +57,13 @@ const SECTIONS: Array<{ href: string; label: string; description: string }> = [
     href: "/settings/personalize",
     label: "Personalize",
     description:
-      "Dashboard name, accent color, font, logo. CSMs with Gmail connected only.",
+      "Dashboard name, accent color, font, logo, team mascot photos. CSMs with Gmail connected only.",
   },
   {
     href: "/settings/migration-warmup",
     label: "Migration warm-up",
     description:
       "Open-rate threshold, batch-size percentages, and the per-approach max-week caps the schedule generator uses.",
-  },
-  {
-    href: "/settings/team-mascots",
-    label: "Team mascots",
-    description:
-      "Upload pet photos for the header logo + to-do celebration rotation. Any CSM can add their own.",
   },
 ];
 

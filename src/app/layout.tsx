@@ -8,10 +8,7 @@ import { ThemeToggle } from "@/components/theme-toggle";
 import { UserMenu } from "@/components/user-menu";
 import { BeehiivLogo } from "@/components/beehiiv-logo";
 import { ReportIssueButton } from "@/components/report-issue-button";
-import {
-  BusinessModeToggle,
-  PersonalizationProvider,
-} from "@/components/personalization-provider";
+import { PersonalizationProvider } from "@/components/personalization-provider";
 import { PersonalizedHeader } from "@/components/personalized-header";
 import { CsmTeamLogo } from "@/components/csm-team-logo";
 import { MascotsProvider } from "@/components/mascots-provider";
@@ -48,7 +45,6 @@ export async function generateMetadata(): Promise<Metadata> {
 const NAV = [
   { href: "/csm", label: "CSM" },
   { href: "/am", label: "AM" },
-  { href: "/ad-gap", label: "Ad Gap" },
   { href: "/feature-requests", label: "Feature requests" },
   { href: "/csm/migration-warmup", label: "Migration warm-up" },
   { href: "/settings", label: "Settings" },
@@ -183,7 +179,6 @@ export default async function RootLayout({
               </div>
               <div className="flex items-center gap-3">
                 <SnapshotMeta />
-                <BusinessModeToggle />
                 <ThemeToggle />
                 <UserMenu />
               </div>
