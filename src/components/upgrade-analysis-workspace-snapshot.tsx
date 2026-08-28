@@ -28,6 +28,13 @@ import { fmtNumber } from "./format";
 interface Props {
   workspaceId: string;
   analysisWindow: AnalysisWindow | null;
+  /** Owner email surfaced in the D&C escalation draft. Optional —
+   *  when absent the draft omits the Owner line rather than
+   *  rendering "unknown". */
+  ownerEmail?: string | null;
+  /** Human-readable org / workspace name for the draft header. Falls
+   *  back to the workspace id when omitted. */
+  workspaceName?: string | null;
 }
 
 const METRIC_LABELS: Record<DeliverabilitySnapshotRow["key"], string> = {
@@ -71,6 +78,8 @@ function cellTone(row: DeliverabilitySnapshotRow): string {
 export function UpgradeAnalysisWorkspaceSnapshot({
   workspaceId,
   analysisWindow,
+  ownerEmail = null,
+  workspaceName = null,
 }: Props) {
   const [state, setState] = useState<
     | { kind: "loading" }
@@ -175,7 +184,12 @@ export function UpgradeAnalysisWorkspaceSnapshot({
               {state.message}
             </div>
           ) : (
-            <SnapshotTable snapshot={state.snapshot} />
+            <SnapshotTable
+              snapshot={state.snapshot}
+              workspaceId={workspaceId}
+              workspaceName={workspaceName}
+              ownerEmail={ownerEmail}
+            />
           )}
         </div>
       ) : null}
@@ -219,7 +233,17 @@ function SummaryChip({ snapshot }: { snapshot: DeliverabilitySnapshot }) {
   );
 }
 
-function SnapshotTable({ snapshot }: { snapshot: WorkspaceSnapshot }) {
+function SnapshotTable({
+  snapshot,
+  workspaceId,
+  workspaceName,
+  ownerEmail,
+}: {
+  snapshot: WorkspaceSnapshot;
+  workspaceId: string;
+  workspaceName: string | null;
+  ownerEmail: string | null;
+}) {
   // Sort pubs by sent volume desc so the D&C reviewer sees the pubs
   // that matter most first. No-send pubs sink to the bottom.
   const sorted = [...snapshot.rows].sort(
@@ -241,6 +265,9 @@ function SnapshotTable({ snapshot }: { snapshot: WorkspaceSnapshot }) {
                 {METRIC_LABELS[k]}
               </th>
             ))}
+            {/* Actions column — only used when a row has a Draft
+                Slack button (flagged status). Header stays blank. */}
+            <th className="py-1 w-24" />
           </tr>
         </thead>
         <tbody>
@@ -248,9 +275,20 @@ function SnapshotTable({ snapshot }: { snapshot: WorkspaceSnapshot }) {
             snapshot={snapshot.aggregate}
             sent={snapshot.aggregate_funnel.sent}
             pubCount={snapshot.rows.length}
+            workspaceId={workspaceId}
+            workspaceName={workspaceName}
+            ownerEmail={ownerEmail}
+            allRows={snapshot.rows}
+            windowText={windowText(snapshot)}
           />
           {sorted.map((row) => (
-            <PubRow key={row.pub_id} row={row} />
+            <PubRow
+              key={row.pub_id}
+              row={row}
+              workspaceName={workspaceName}
+              ownerEmail={ownerEmail}
+              windowText={windowText(snapshot)}
+            />
           ))}
         </tbody>
       </table>
@@ -262,10 +300,20 @@ function AggregateRow({
   snapshot,
   sent,
   pubCount,
+  workspaceId,
+  workspaceName,
+  ownerEmail,
+  allRows,
+  windowText: winText,
 }: {
   snapshot: DeliverabilitySnapshot;
   sent: number;
   pubCount: number;
+  workspaceId: string;
+  workspaceName: string | null;
+  ownerEmail: string | null;
+  allRows: WorkspaceSnapshotPubRow[];
+  windowText: string;
 }) {
   const byKey = new Map(snapshot.rows.map((r) => [r.key, r]));
   return (
@@ -291,11 +339,37 @@ function AggregateRow({
           </td>
         );
       })}
+      <td className="py-1.5 text-right">
+        {snapshot.status === "flagged" ? (
+          <DraftSlackButton
+            getMessage={() =>
+              buildWorkspaceEscalationMessage({
+                workspaceId,
+                workspaceName,
+                ownerEmail,
+                windowText: winText,
+                aggregate: snapshot,
+                allRows,
+              })
+            }
+          />
+        ) : null}
+      </td>
     </tr>
   );
 }
 
-function PubRow({ row }: { row: WorkspaceSnapshotPubRow }) {
+function PubRow({
+  row,
+  workspaceName,
+  ownerEmail,
+  windowText: winText,
+}: {
+  row: WorkspaceSnapshotPubRow;
+  workspaceName: string | null;
+  ownerEmail: string | null;
+  windowText: string;
+}) {
   const byKey = new Map(row.snapshot.rows.map((r) => [r.key, r]));
   const name = row.name?.trim() || row.pub_id;
   const noSend = row.snapshot.status === "no_data";
@@ -331,6 +405,178 @@ function PubRow({ row }: { row: WorkspaceSnapshotPubRow }) {
           </td>
         );
       })}
+      <td className="py-1 text-right">
+        {row.snapshot.status === "flagged" ? (
+          <DraftSlackButton
+            getMessage={() =>
+              buildPubEscalationMessage({
+                pubRow: row,
+                workspaceName,
+                ownerEmail,
+                windowText: winText,
+              })
+            }
+          />
+        ) : null}
+      </td>
     </tr>
   );
+}
+
+/**
+ * Small button that copies a pre-formatted D&C escalation message
+ * to the clipboard. Deliberately doesn't post to Slack directly —
+ * the CSM opens the right channel + reviews the draft themselves,
+ * matching how Richard's #dc-review posts get authored today.
+ * "Copied" state clears after ~2s.
+ */
+function DraftSlackButton({
+  getMessage,
+}: {
+  getMessage: () => string;
+}) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      type="button"
+      onClick={async () => {
+        try {
+          await navigator.clipboard.writeText(getMessage());
+          setCopied(true);
+          setTimeout(() => setCopied(false), 2000);
+        } catch {
+          // Clipboard write can fail (permissions / non-secure
+          // context). Fall back to a prompt so the user still gets
+          // the text.
+          window.prompt("Copy this D&C escalation draft:", getMessage());
+        }
+      }}
+      title="Copy a D&C escalation draft for this row to the clipboard"
+      className="text-[10px] px-2 py-0.5 rounded border border-border bg-surface hover:bg-surface-2 whitespace-nowrap"
+    >
+      {copied ? "Copied ✓" : "Draft Slack"}
+    </button>
+  );
+}
+
+// ─── Message templates ──────────────────────────────────────────────────
+
+/** Format one row's cell value for the message body. */
+function fmtRateForMessage(row: DeliverabilitySnapshotRow): string {
+  if (row.value == null) return "—";
+  const digits =
+    row.key === "spam_rate" || row.key === "hard_bounce_rate" ? 3 : 2;
+  return `${(row.value * 100).toFixed(digits)}%`;
+}
+
+/** Format one row's threshold with the direction glyph. */
+function fmtThresholdForMessage(row: DeliverabilitySnapshotRow): string {
+  const digits = row.key === "spam_rate" ? 3 : 2;
+  const value = `${(row.threshold * 100).toFixed(digits)}%`;
+  if (row.key === "open_rate") return `< ${value}`;
+  if (row.key === "delivery_rate") return `≤ ${value}`;
+  return `≥ ${value}`;
+}
+
+/** Human label for a metric row in the message body. */
+const METRIC_LABELS_LONG: Record<DeliverabilitySnapshotRow["key"], string> = {
+  open_rate: "Open rate",
+  delivery_rate: "Delivery rate",
+  hard_bounce_rate: "Hard bounce rate",
+  soft_bounce_rate: "Soft bounce rate",
+  unsubscribe_rate: "Unsubscribe rate",
+  spam_rate: "Spam-reported rate",
+  deferral_rate: "Deferral rate",
+};
+
+/** Render the "flagged metrics" block of the escalation message
+ *  as a bulleted list. */
+function flaggedList(snapshot: DeliverabilitySnapshot): string {
+  return snapshot.rows
+    .filter((r) => r.flagged === true)
+    .map(
+      (r) =>
+        `• ${METRIC_LABELS_LONG[r.key]}: ${fmtRateForMessage(r)} (flag at ${fmtThresholdForMessage(r)})`
+    )
+    .join("\n");
+}
+
+/** Escalation draft for a single publication. Follows Richard's
+ *  #dc-review post shape: header + pub / org / owner metadata block
+ *  + concern summary + flagged metrics + ask stub. */
+function buildPubEscalationMessage(args: {
+  pubRow: WorkspaceSnapshotPubRow;
+  workspaceName: string | null;
+  ownerEmail: string | null;
+  windowText: string;
+}): string {
+  const { pubRow, workspaceName, ownerEmail, windowText } = args;
+  const pubName = pubRow.name?.trim() || pubRow.pub_id;
+  const orgLine = workspaceName
+    ? `*Org:* ${workspaceName}`
+    : `*Workspace:* \`${args.pubRow.pub_id.replace(/^pub_/, "")}\``;
+  const ownerLine = ownerEmail ? `*Owner:* ${ownerEmail}` : "";
+  return [
+    `*Enterprise Upgrade Review Request — ${pubName}*`,
+    ``,
+    `*Pub:* \`${pubRow.pub_id}\` (${fmtNumber(pubRow.funnel.sent)} sent · ${windowText})`,
+    orgLine,
+    ownerLine,
+    ``,
+    `*D&C 7-metric snapshot flagged (${pubRow.snapshot.flagged_count} of 7):*`,
+    flaggedList(pubRow.snapshot),
+    ``,
+    `*Ask:* [describe the mechanism you've already checked + what you're asking D&C to weigh in on].`,
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+/** Escalation draft for the whole workspace — used when the
+ *  aggregate row itself is flagged. Includes the workspace-wide
+ *  ratios plus a per-pub table so the reviewer sees which pubs
+ *  are driving the aggregate. */
+function buildWorkspaceEscalationMessage(args: {
+  workspaceId: string;
+  workspaceName: string | null;
+  ownerEmail: string | null;
+  windowText: string;
+  aggregate: DeliverabilitySnapshot;
+  allRows: WorkspaceSnapshotPubRow[];
+}): string {
+  const {
+    workspaceId,
+    workspaceName,
+    ownerEmail,
+    windowText,
+    aggregate,
+    allRows,
+  } = args;
+  const nameOrId = workspaceName?.trim() || workspaceId;
+  const flaggedPubs = allRows
+    .filter((r) => r.snapshot.status === "flagged")
+    .sort((a, b) => b.snapshot.flagged_count - a.snapshot.flagged_count);
+  const pubBlock = flaggedPubs.length
+    ? `\n*Pubs driving the aggregate:*\n${flaggedPubs
+        .map(
+          (r) =>
+            `• ${r.name?.trim() || r.pub_id}: \`${r.pub_id}\` — ${r.snapshot.flagged_count} of 7 flagged (${fmtNumber(r.funnel.sent)} sent)`
+        )
+        .join("\n")}`
+    : "";
+  const ownerLine = ownerEmail ? `*Owner:* ${ownerEmail}` : "";
+  return [
+    `*Enterprise Upgrade Review Request — ${nameOrId} (${allRows.length} pubs)*`,
+    ``,
+    `Workspace-wide aggregate over the ${windowText} tripped ${aggregate.flagged_count} of 7 D&C flag thresholds.`,
+    ownerLine,
+    ``,
+    `*Aggregate ratios flagged:*`,
+    flaggedList(aggregate),
+    pubBlock,
+    ``,
+    `*Ask:* [describe the mechanism you've already checked + what you're asking D&C to weigh in on].`,
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
