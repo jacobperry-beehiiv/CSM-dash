@@ -198,7 +198,7 @@ export function CustomerDetailPanel({
        *  others stay collapsed until needed. HubSpot company contacts
        *  live inside Contact rather than as a sibling section. */}
       <div className="space-y-4">
-        <Section title="Status" defaultOpen>
+        <Section title="Status" defaultOpen columns={2}>
           <Row label="Plan" value={c.stripe_plan ?? "—"} />
           <Row
             label="Status"
@@ -297,7 +297,7 @@ export function CustomerDetailPanel({
             techStackNotes={c.tech_stack_notes}
           />
         </Section>
-        <Section title="Dates">
+        <Section title="Dates" columns={2}>
           <Row label="Renewal" value={fmtDate(c.renewal_date)} />
           <Row label="Next invoice" value={fmtDate(c.next_invoice ?? null)} />
           <Row label="Last send" value={fmtDate(c.last_send)} />
@@ -506,12 +506,26 @@ function Section({
   children,
   defaultOpen = false,
   trailing,
+  columns = 1,
 }: {
   title: string;
   children: React.ReactNode;
   defaultOpen?: boolean;
   trailing?: React.ReactNode;
+  /** Layout for the body:
+   *   - 1 (default) → single-column divided list. Right for long
+   *     free-text rows (Notes, HubSpot contacts, publication
+   *     tables).
+   *   - 2 → two-column grid on md+, single column on narrow. Cuts
+   *     vertical dead space for sections that pack lots of small
+   *     rows (Dates, Contact, Status). Rows still render as their
+   *     usual "label · value" shape; only the OUTER wrap changes. */
+  columns?: 1 | 2;
 }) {
+  const bodyClass =
+    columns === 2
+      ? "px-4 py-2 grid grid-cols-1 md:grid-cols-2 md:gap-x-8"
+      : "divide-y divide-border/60 px-4 p-2";
   return (
     <CollapsibleSection
       title={title}
@@ -519,11 +533,11 @@ function Section({
       trailing={trailing}
       bodyClassName=""
     >
-      {/* divide-y instead of space-y-N: each row gets a thin border
-       *  above + py-2 padding inside, so the rows breathe AND read as
-       *  a list. Wrapper is a div (not dl) so mixed content like the
-       *  HubSpot contacts block can sit alongside Row items. */}
-      <div className="divide-y divide-border/60 px-4 p-2">{children}</div>
+      {/* Body wrapper — `divide-y` list for the default, a 2-column
+       *  grid for the compact variant. In grid mode the top-row
+       *  borders on the first pair are stripped so the section's own
+       *  border-top doesn't double up. */}
+      <div className={bodyClass}>{children}</div>
     </CollapsibleSection>
   );
 }
@@ -545,8 +559,9 @@ function Row({
   // padding so a Section doesn't double up on chrome above/below
   // the first/last row. Padding inside rows is what gives the
   // section its rhythm; padding around the section is the
-  // CollapsibleSection's job.
-  const padClass = "py-2 first:pt-0 last:pb-0";
+  // CollapsibleSection's job. Tightened from py-2 → py-1.5 to
+  // cut vertical dead space on the panel.
+  const padClass = "py-1.5 first:pt-0 last:pb-0";
   if (block) {
     return (
       <div className={`text-sm space-y-1.5 ${padClass}`}>
