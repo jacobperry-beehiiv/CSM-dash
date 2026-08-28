@@ -621,12 +621,17 @@ function VerdictChip({ verdict }: { verdict: OverallVerdict }) {
 export function UpgradeAnalysisPanelForWorkspace({
   workspaceId,
   ownerEmail = null,
+  workspaceName = null,
 }: {
   workspaceId: string;
   /** Owner email surfaced to the inner panel as the anchor for the
    *  Zendesk history button — D&C's next tab after they read the
    *  scorecard. Null when we don't have it (button is hidden). */
   ownerEmail?: string | null;
+  /** Human-readable workspace / org name used in the D&C
+   *  escalation-draft messages. Falls back to the workspace id
+   *  when null. */
+  workspaceName?: string | null;
 }) {
   const state = useWorkspacePublications(workspaceId);
   const pubs = Array.isArray(state) ? state : null;
@@ -686,6 +691,8 @@ export function UpgradeAnalysisPanelForWorkspace({
       <UpgradeAnalysisWorkspaceSnapshot
         workspaceId={workspaceId}
         analysisWindow={analysisWindow}
+        ownerEmail={ownerEmail}
+        workspaceName={workspaceName}
       />
       {pubs.length > 1 ? (
         <label className="flex items-center gap-2 text-xs text-muted">

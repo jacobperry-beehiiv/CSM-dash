@@ -92,6 +92,7 @@ export function CustomerDetailPanel({
         <UpgradeAnalysisPanelForWorkspace
           workspaceId={c.workspace_id}
           ownerEmail={c.owner_email ?? null}
+          workspaceName={c.workspace_name ?? null}
         />
       ) : null}
       {topSlot}
