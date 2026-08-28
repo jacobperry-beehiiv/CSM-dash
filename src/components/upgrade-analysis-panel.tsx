@@ -50,6 +50,14 @@ interface Props {
   /** Customer's owner email — powers the Zendesk history quick-link.
    *  Null when unknown; the button hides in that case. */
   ownerEmail?: string | null;
+  /** Controlled analysis window. When provided together with
+   *  `onAnalysisWindowChange`, the picker becomes a controlled
+   *  component and the parent owns the state — this is how the
+   *  workspace wrapper shares one window across the per-pub panel
+   *  and the workspace snapshot table. When omitted the panel keeps
+   *  its own internal state (existing standalone behavior). */
+  analysisWindow?: AnalysisWindow | null;
+  onAnalysisWindowChange?: (w: AnalysisWindow | null) => void;
 }
 
 interface ApiResponse {
@@ -96,6 +104,8 @@ export function UpgradeAnalysisPanel({
   initial,
   autoLoad = true,
   ownerEmail = null,
+  analysisWindow: controlledWindow,
+  onAnalysisWindowChange,
 }: Props) {
   const zendeskUrl = zendeskSearchUrl(ownerEmail ?? null);
   const [report, setReport] = useState<UpgradeAnalysisReport | null>(
@@ -112,9 +122,26 @@ export function UpgradeAnalysisPanel({
   // from the initial report so we render the same window it was
   // scanned in; a picker click swaps the value + kicks off a fresh
   // scan (via the picker's onChange → runScan below).
-  const [window, setWindow] = useState<AnalysisWindow | null>(
+  //
+  // When the parent passes `analysisWindow` + `onAnalysisWindowChange`
+  // (workspace wrapper case) the picker becomes controlled — parent
+  // state wins and `setWindow` calls forward to the parent. Legacy
+  // callers that don't pass the props keep the local-state
+  // behavior. `window` below is the effective value the runScan
+  // callback and picker read; `setWindow` writes wherever state
+  // actually lives.
+  const [internalWindow, setInternalWindow] = useState<AnalysisWindow | null>(
     initial?.report.analysis_window ?? null
   );
+  const isControlled = onAnalysisWindowChange !== undefined;
+  const window = isControlled ? controlledWindow ?? null : internalWindow;
+  const setWindow = (w: AnalysisWindow | null) => {
+    if (isControlled) {
+      onAnalysisWindowChange!(w);
+    } else {
+      setInternalWindow(w);
+    }
+  };
 
   const runScan = useCallback(
     async (
@@ -617,6 +644,12 @@ export function UpgradeAnalysisPanelForWorkspace({
 
   const [selectedPubId, setSelectedPubId] = useState<string | null>(null);
   const effectivePubId = selectedPubId ?? defaultPubId;
+  // Shared analysis window — one picker on the per-pub panel drives
+  // both the per-pub scan AND the workspace snapshot table above.
+  // The inner panel treats these as its controlled props.
+  const [analysisWindow, setAnalysisWindow] = useState<AnalysisWindow | null>(
+    null
+  );
 
   if (error) {
     return (
@@ -652,7 +685,7 @@ export function UpgradeAnalysisPanelForWorkspace({
           workspace-snapshot endpoint on mount. */}
       <UpgradeAnalysisWorkspaceSnapshot
         workspaceId={workspaceId}
-        analysisWindow={null}
+        analysisWindow={analysisWindow}
       />
       {pubs.length > 1 ? (
         <label className="flex items-center gap-2 text-xs text-muted">
@@ -679,6 +712,11 @@ export function UpgradeAnalysisPanelForWorkspace({
         publicationId={effectivePubId}
         organizationId={workspaceId}
         ownerEmail={ownerEmail}
+        // Share the analysis window with the workspace snapshot above —
+        // picking "Last 7 days" on the per-pub picker re-scopes both
+        // surfaces in one click.
+        analysisWindow={analysisWindow}
+        onAnalysisWindowChange={setAnalysisWindow}
       />
     </div>
   );
