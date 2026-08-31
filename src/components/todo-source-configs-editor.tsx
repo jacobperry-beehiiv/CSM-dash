@@ -5,6 +5,8 @@ import {
   AUTOMATED_SOURCES,
   SLACK_CHANNEL_MSG_MAX_LEN,
   SOURCE_METADATA,
+  TODO_OFFSET_DAYS_MAX,
+  TODO_OFFSET_DAYS_MIN,
   type AutomatedSource,
   type TodoAction,
   type TodoSourceConfig,
@@ -311,6 +313,74 @@ export function TodoSourceConfigsEditor({
             </div>
 
             <div>
+              <div className="text-xs font-medium text-fg mb-1">
+                Timing (days from anchor)
+              </div>
+              <div className="text-[10px] text-muted mb-2">
+                Negative = earlier, 0 = on the anchor day, positive = later.
+                Leave blank to keep the engine&rsquo;s default logic.
+                {meta.variant_actions
+                  ? " Source-level values below act as the fallback when a stage doesn't have its own override."
+                  : ""}
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <OffsetInput
+                  label="Due offset"
+                  value={cfg.due_offset_days ?? null}
+                  onChange={(n) => setField(source, { due_offset_days: n })}
+                />
+                <OffsetInput
+                  label="Surface offset"
+                  value={cfg.surface_offset_days ?? null}
+                  onChange={(n) => setField(source, { surface_offset_days: n })}
+                />
+              </div>
+              {meta.variant_actions ? (
+                <div className="mt-3 space-y-1">
+                  {meta.variant_actions.map((v) => {
+                    const entry = cfg.timing_by_variant?.[v.key] ?? {};
+                    return (
+                      <div
+                        key={v.key}
+                        className="grid grid-cols-[1fr_auto_auto] gap-2 items-center text-xs"
+                      >
+                        <span className="text-muted truncate">{v.label}</span>
+                        <OffsetInput
+                          label="Due"
+                          compact
+                          value={entry.due_offset_days ?? null}
+                          onChange={(n) =>
+                            setField(source, {
+                              timing_by_variant: mergeVariantTiming(
+                                cfg.timing_by_variant,
+                                v.key,
+                                { due_offset_days: n }
+                              ),
+                            })
+                          }
+                        />
+                        <OffsetInput
+                          label="Surface"
+                          compact
+                          value={entry.surface_offset_days ?? null}
+                          onChange={(n) =>
+                            setField(source, {
+                              timing_by_variant: mergeVariantTiming(
+                                cfg.timing_by_variant,
+                                v.key,
+                                { surface_offset_days: n }
+                              ),
+                            })
+                          }
+                        />
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : null}
+            </div>
+
+            <div>
               <label className="text-xs font-medium text-fg block mb-1">
                 Admin note (why this wiring)
               </label>
@@ -524,5 +594,94 @@ function ActionEditor({
       ) : null}
     </div>
   );
+}
+
+// ─── Offset input ────────────────────────────────────────────────────────
+//
+// Integer field for `due_offset_days` / `surface_offset_days`. Blank
+// (parsed as null) means "engine default"; a signed integer means an
+// explicit override, clamped by the API to the registry's bounds
+// (TODO_OFFSET_DAYS_MIN..MAX). Compact mode drops the visible label so
+// per-variant rows can pack two inputs onto one line.
+
+interface OffsetInputProps {
+  label: string;
+  value: number | null;
+  onChange: (n: number | null) => void;
+  /** When true, hides the label text and shrinks the field width so it
+   *  can sit beside a variant label on a single grid row. */
+  compact?: boolean;
+}
+
+function OffsetInput({ label, value, onChange, compact }: OffsetInputProps) {
+  return (
+    <label
+      className={
+        compact ? "flex items-center gap-1 text-xs" : "block text-xs"
+      }
+    >
+      <span className={compact ? "text-muted" : "block mb-1 text-fg font-medium"}>
+        {label}
+      </span>
+      <input
+        type="number"
+        step={1}
+        min={TODO_OFFSET_DAYS_MIN}
+        max={TODO_OFFSET_DAYS_MAX}
+        value={value ?? ""}
+        placeholder="—"
+        onChange={(e) => {
+          const raw = e.currentTarget.value.trim();
+          if (raw === "") {
+            onChange(null);
+            return;
+          }
+          const n = Math.floor(Number(raw));
+          if (!Number.isFinite(n)) return;
+          onChange(n);
+        }}
+        className={
+          compact
+            ? "w-16 text-xs px-2 py-1 rounded border border-border bg-surface"
+            : "w-full text-sm px-2 py-1 rounded border border-border bg-surface"
+        }
+      />
+    </label>
+  );
+}
+
+// Immutable patch helper for the per-variant timing map. Setting a
+// field to null drops it; when a variant entry ends up empty, the
+// entire key gets stripped so the editor's dirty-check treats "no
+// override" and "explicit null on every field" as equivalent.
+function mergeVariantTiming(
+  existing: TodoSourceConfig["timing_by_variant"] | undefined,
+  variantKey: string,
+  patch: { due_offset_days?: number | null; surface_offset_days?: number | null }
+): TodoSourceConfig["timing_by_variant"] {
+  const next: NonNullable<TodoSourceConfig["timing_by_variant"]> = {
+    ...(existing ?? {}),
+  };
+  const prev = next[variantKey] ?? {};
+  const merged: {
+    due_offset_days?: number | null;
+    surface_offset_days?: number | null;
+  } = { ...prev };
+  if ("due_offset_days" in patch) {
+    if (patch.due_offset_days == null) delete merged.due_offset_days;
+    else merged.due_offset_days = patch.due_offset_days;
+  }
+  if ("surface_offset_days" in patch) {
+    if (patch.surface_offset_days == null) delete merged.surface_offset_days;
+    else merged.surface_offset_days = patch.surface_offset_days;
+  }
+  const hasAny =
+    merged.due_offset_days != null || merged.surface_offset_days != null;
+  if (hasAny) {
+    next[variantKey] = merged;
+  } else {
+    delete next[variantKey];
+  }
+  return next;
 }
 

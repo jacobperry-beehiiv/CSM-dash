@@ -12,6 +12,7 @@ import {
   applyTemplate,
   loadEffectiveTodoSourceConfigs,
 } from "../data/todo-source-configs";
+import { resolveTodoTiming } from "../data/todo-source-configs-types";
 import {
   contractRenewalDate,
   daysUntilRenewal,
@@ -167,19 +168,52 @@ function fallbackTitleFor(
   return `Check in on ${name} renewal (${milestone}d out)`;
 }
 
+function shiftYmd(baseYmd: string, days: number): string {
+  // Base is already a YYYY-MM-DD from `utcYmd`; hydrate at UTC-midnight
+  // so the day-count arithmetic never crosses a DST boundary.
+  const d = new Date(`${baseYmd}T00:00:00Z`);
+  if (isNaN(d.getTime())) return baseYmd;
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+function shiftIsoByDays(baseIso: string, days: number): string {
+  const d = new Date(baseIso);
+  if (isNaN(d.getTime())) return baseIso;
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString();
+}
+
 function buildTodo(
   c: Customer,
   milestone: Milestone,
   renewalIso: string,
-  registryTitle: string | null
+  registryTitle: string | null,
+  timing: { due_offset_days: number | null; surface_offset_days: number | null }
 ): PersonalTodo {
-  const now = new Date().toISOString();
+  const now = new Date();
+  const nowIso = now.toISOString();
+  // Default anchors: due_date = the renewal-date YMD; surface_at = null
+  // (surface immediately). Admin offsets shift each anchor by N days:
+  // due_offset_days moves the due_date away from the renewal date,
+  // surface_offset_days schedules the todo to appear that many days
+  // relative to "right now" (positive = surface later, negative =
+  // still surface immediately since we can't go into the past).
+  const baseDue = utcYmd(renewalIso);
+  const due_date =
+    timing.due_offset_days != null
+      ? shiftYmd(baseDue, timing.due_offset_days)
+      : baseDue;
+  let surface_at: string | null = null;
+  if (timing.surface_offset_days != null && timing.surface_offset_days > 0) {
+    surface_at = shiftIsoByDays(nowIso, timing.surface_offset_days);
+  }
   return {
     id: newTodoId(),
     title: registryTitle?.trim() || fallbackTitleFor(c, milestone),
     details: null,
-    due_date: utcYmd(renewalIso),
-    surface_at: null,
+    due_date,
+    surface_at,
     priority: milestone <= 30 ? "high" : "medium",
     source: "renewal_milestone",
     source_meta: {
@@ -188,8 +222,8 @@ function buildTodo(
     },
     completed_at: null,
     remind_via_slack: true,
-    created_at: now,
-    updated_at: now,
+    created_at: nowIso,
+    updated_at: nowIso,
   };
 }
 
@@ -286,6 +320,14 @@ export async function runRenewalMilestoneSweep(
             milestone_days: milestone,
           }
         );
+        // Resolve per-milestone timing overrides (variant → source →
+        // engine default). `variantKey` matches the value stashed on
+        // `source_meta.milestone_days` — String(milestone) — which is
+        // what the settings editor stores under `timing_by_variant`.
+        const timing = resolveTodoTiming(
+          sourceConfigs.renewal_milestone,
+          String(milestone)
+        );
         const outcome = await fireMilestone({
           customer: c,
           milestone,
@@ -296,6 +338,7 @@ export async function runRenewalMilestoneSweep(
           channelId,
           csmEmail,
           registryTitle,
+          timing,
           dryRun: opts.dryRun === true,
         });
         result.fired.push(outcome);
@@ -327,6 +370,10 @@ async function fireMilestone(args: {
    *  already substituted). buildTodo falls back to the historical
    *  per-milestone phrasing when this is empty. */
   registryTitle: string;
+  /** Resolved due/surface offsets for this milestone. Nulls preserve
+   *  the engine defaults (due = renewal date, surface = immediately);
+   *  numbers shift each anchor by that many days. */
+  timing: { due_offset_days: number | null; surface_offset_days: number | null };
   dryRun: boolean;
 }): Promise<FireResult> {
   const {
@@ -338,6 +385,7 @@ async function fireMilestone(args: {
     settings,
     channelId,
     csmEmail,
+    timing,
     dryRun,
   } = args;
   const workspaceId = c.workspace_id!;
@@ -428,7 +476,13 @@ async function fireMilestone(args: {
 
   let todoCreated = false;
   if (!dryRun) {
-    const todo = buildTodo(c, milestone, renewalIso, args.registryTitle);
+    const todo = buildTodo(
+      c,
+      milestone,
+      renewalIso,
+      args.registryTitle,
+      timing
+    );
     await applyTodoOps(userKeyFromEmail(csmEmail), [{ type: "add", todo }]);
     todoCreated = true;
 

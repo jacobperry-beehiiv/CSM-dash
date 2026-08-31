@@ -94,6 +94,33 @@ export interface TodoSourceConfig {
    *  shown to the CSM. */
   admin_note?: string | null;
 
+  /** Default offset (in whole days) applied to the todo's `due_date`
+   *  relative to whatever anchor the source's engine uses. For
+   *  `renewal_milestone` the anchor is the milestone date itself, so
+   *  `+0` means "due on the day", `-3` means "due three days before",
+   *  `+7` means "due a week after". For sources like `sybill_callrecap`
+   *  the anchor is creation-day. `null` (default) means the engine
+   *  keeps its shipped-default logic — the config only overrides when
+   *  an admin has typed a number. Kept as a small integer bounded by
+   *  the editor UI to keep KV size trivial. */
+  due_offset_days?: number | null;
+  /** Same shape as `due_offset_days` but for the todo's `surface_at`
+   *  timestamp (i.e. when the todo becomes visible in the CSM's
+   *  active list — creating a todo with `surface_at` in the future
+   *  scheduled it to appear later). Negative offsets bring the todo
+   *  forward; positive offsets push it back. `null` = engine default. */
+  surface_offset_days?: number | null;
+  /** Per-variant timing overrides. Keys match the same variant scheme
+   *  as `action_by_variant`. Only the fields the admin set on the
+   *  variant are stored; missing fields fall through to the source-
+   *  level `due_offset_days` / `surface_offset_days`, which in turn
+   *  fall through to the engine default. Empty map / undefined = no
+   *  per-variant overrides. */
+  timing_by_variant?: Record<
+    string,
+    { due_offset_days?: number | null; surface_offset_days?: number | null }
+  >;
+
   // ─── Legacy fields — email-only shape from before Slack actions ────
   //
   // Preserved on the type so on-disk KV rows written by the previous
@@ -454,3 +481,28 @@ export function resolveTodoAction(
   }
   return cfg.default_action;
 }
+
+/** Resolve the effective due / surface offsets for a todo, falling
+ *  through variant → source-level → null. Engines call this at
+ *  todo-creation time to decide whether to shift their default
+ *  timestamps. `null` on both fields means "engine keeps its shipped
+ *  logic," which is the safe posture for sources that don't have an
+ *  admin override written. */
+export function resolveTodoTiming(
+  cfg: TodoSourceConfig,
+  variantKey: string | null | undefined
+): { due_offset_days: number | null; surface_offset_days: number | null } {
+  const variant = variantKey ? cfg.timing_by_variant?.[variantKey] : undefined;
+  return {
+    due_offset_days:
+      (variant?.due_offset_days ?? cfg.due_offset_days) ?? null,
+    surface_offset_days:
+      (variant?.surface_offset_days ?? cfg.surface_offset_days) ?? null,
+  };
+}
+
+/** Bounds enforced by the editor + `merge` on save. Wide enough for
+ *  a full renewal cycle in either direction, tight enough that a
+ *  typo can't schedule a todo years out. */
+export const TODO_OFFSET_DAYS_MIN = -365;
+export const TODO_OFFSET_DAYS_MAX = 365;

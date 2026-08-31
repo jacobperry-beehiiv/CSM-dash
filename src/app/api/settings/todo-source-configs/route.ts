@@ -9,6 +9,8 @@ import {
   AUTOMATED_SOURCES,
   DEFAULT_TODO_SOURCE_CONFIGS,
   SLACK_CHANNEL_MSG_MAX_LEN,
+  TODO_OFFSET_DAYS_MAX,
+  TODO_OFFSET_DAYS_MIN,
   type TodoSourceConfig,
   type TodoSourceConfigsBlob,
   type TodoAction,
@@ -148,6 +150,47 @@ export async function PUT(req: Request) {
     }
     const noVariants = Object.keys(variantActions).length === 0;
 
+    // Normalize integer offsets. `null`/absent → "no override";
+    // anything else gets parsed, floored, and clamped to the
+    // registry's bounds. A NaN or out-of-range value drops silently
+    // to null so a fat-fingered save can't schedule a todo years out.
+    const normalizeOffset = (raw: unknown): number | null => {
+      if (raw === null || raw === undefined || raw === "") return null;
+      const n = Math.floor(Number(raw));
+      if (!Number.isFinite(n)) return null;
+      if (n < TODO_OFFSET_DAYS_MIN || n > TODO_OFFSET_DAYS_MAX) return null;
+      return n;
+    };
+    const dueOffset = normalizeOffset(override.due_offset_days);
+    const surfaceOffset = normalizeOffset(override.surface_offset_days);
+
+    // Per-variant timing overrides — same shape as actions: drop
+    // entries where both fields are null so we don't persist "no
+    // override" as an explicit map key.
+    const variantTiming: TodoSourceConfig["timing_by_variant"] = {};
+    if (
+      override.timing_by_variant &&
+      typeof override.timing_by_variant === "object"
+    ) {
+      for (const [variant, raw] of Object.entries(
+        override.timing_by_variant as Record<string, unknown>
+      )) {
+        if (!raw || typeof raw !== "object") continue;
+        const entry = raw as {
+          due_offset_days?: unknown;
+          surface_offset_days?: unknown;
+        };
+        const d = normalizeOffset(entry.due_offset_days);
+        const s = normalizeOffset(entry.surface_offset_days);
+        if (d === null && s === null) continue;
+        variantTiming[variant] = {
+          ...(d !== null ? { due_offset_days: d } : {}),
+          ...(s !== null ? { surface_offset_days: s } : {}),
+        };
+      }
+    }
+    const noVariantTiming = Object.keys(variantTiming).length === 0;
+
     // Drop the entry entirely if every field matches the shipped
     // default. String equality for the phrasing template; deep-ish
     // equality for the default_action (kind + one payload field).
@@ -158,7 +201,10 @@ export async function PUT(req: Request) {
       normalizedDefault.kind === defaults.default_action.kind &&
       normalizedDefault.kind === "none";
     const noNote = !override.admin_note?.trim();
-    if (sameTemplate && sameDefault && noNote && noVariants) continue;
+    const noTiming =
+      dueOffset === null && surfaceOffset === null && noVariantTiming;
+    if (sameTemplate && sameDefault && noNote && noVariants && noTiming)
+      continue;
 
     cleaned[source] = {
       phrasing_template:
@@ -169,6 +215,9 @@ export async function PUT(req: Request) {
       default_action: normalizedDefault,
       action_by_variant: noVariants ? undefined : variantActions,
       admin_note: override.admin_note?.trim() || null,
+      ...(dueOffset !== null ? { due_offset_days: dueOffset } : {}),
+      ...(surfaceOffset !== null ? { surface_offset_days: surfaceOffset } : {}),
+      ...(noVariantTiming ? {} : { timing_by_variant: variantTiming }),
     };
   }
 
