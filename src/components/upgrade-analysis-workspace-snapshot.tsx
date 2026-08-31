@@ -250,48 +250,126 @@ function SnapshotTable({
     (a, b) => b.funnel.sent - a.funnel.sent
   );
 
+  // Selection state for the bulk-copy affordance. Stored as a Set of
+  // raw pub_ids (the strings the workspace-snapshot endpoint
+  // returned) so header-checkbox / row-checkbox / copy-selected all
+  // agree on identity without any prefix-normalization.
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [copied, setCopied] = useState(false);
+
+  const allIds = sorted.map((r) => r.pub_id);
+  const allSelected =
+    allIds.length > 0 && allIds.every((id) => selected.has(id));
+
+  function toggleOne(pubId: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(pubId)) next.delete(pubId);
+      else next.add(pubId);
+      return next;
+    });
+  }
+  function toggleAll() {
+    if (allSelected) setSelected(new Set());
+    else setSelected(new Set(allIds));
+  }
+
+  async function copySelected() {
+    // Emit in the table's current sort order — makes the copied list
+    // read the same as what the CSM sees on-screen. Strip the `pub_`
+    // prefix so the output pastes cleanly into Metabase / SQL where
+    // the raw uuid is expected — matching the existing
+    // CopyPubIdsButton's default format on the AM tabs.
+    const ordered = allIds.filter((id) => selected.has(id));
+    const raw = ordered.map((id) => (id.startsWith("pub_") ? id.slice(4) : id));
+    const text = raw.join(",");
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      window.prompt(
+        `Copy ${raw.length} publication ID${raw.length === 1 ? "" : "s"}:`,
+        text
+      );
+    }
+  }
+
   return (
-    <div className="mt-2 overflow-x-auto">
-      <table className="w-full text-xs">
-        <thead>
-          <tr className="text-subtle border-b border-border/60">
-            <th className="text-left font-medium py-1 pr-2">Publication</th>
-            <th className="text-right font-medium py-1 pr-2">Sent</th>
-            {METRIC_ORDER.map((k) => (
-              <th
-                key={k}
-                className="text-right font-medium py-1 pr-2 whitespace-nowrap"
-              >
-                {METRIC_LABELS[k]}
+    <div className="mt-2">
+      <div className="flex items-center justify-between gap-2 mb-1">
+        <span className="text-[11px] text-subtle">
+          {selected.size > 0
+            ? `${selected.size} of ${sorted.length} selected`
+            : `${sorted.length} publication${sorted.length === 1 ? "" : "s"}`}
+        </span>
+        <button
+          type="button"
+          onClick={copySelected}
+          disabled={selected.size === 0}
+          className="text-[11px] px-2 py-0.5 rounded border border-border bg-surface hover:bg-surface-2 disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap"
+          title="Copy the selected publication IDs to the clipboard as a comma-separated list"
+        >
+          {copied
+            ? "Copied ✓"
+            : `📋 Copy pub IDs${
+                selected.size > 0 ? ` (${selected.size})` : ""
+              }`}
+        </button>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="text-subtle border-b border-border/60">
+              <th className="py-1 pr-2 w-6">
+                <input
+                  type="checkbox"
+                  aria-label="Select all publications"
+                  checked={allSelected}
+                  onChange={toggleAll}
+                  className="cursor-pointer"
+                />
               </th>
-            ))}
-            {/* Actions column — only used when a row has a Draft
-                Slack button (flagged status). Header stays blank. */}
-            <th className="py-1 w-24" />
-          </tr>
-        </thead>
-        <tbody>
-          <AggregateRow
-            snapshot={snapshot.aggregate}
-            sent={snapshot.aggregate_funnel.sent}
-            pubCount={snapshot.rows.length}
-            workspaceId={workspaceId}
-            workspaceName={workspaceName}
-            ownerEmail={ownerEmail}
-            allRows={snapshot.rows}
-            windowText={windowText(snapshot)}
-          />
-          {sorted.map((row) => (
-            <PubRow
-              key={row.pub_id}
-              row={row}
+              <th className="text-left font-medium py-1 pr-2">Publication</th>
+              <th className="text-right font-medium py-1 pr-2">Sent</th>
+              {METRIC_ORDER.map((k) => (
+                <th
+                  key={k}
+                  className="text-right font-medium py-1 pr-2 whitespace-nowrap"
+                >
+                  {METRIC_LABELS[k]}
+                </th>
+              ))}
+              {/* Actions column — used by the row-level Draft Slack
+                  button when flagged. Header stays blank. */}
+              <th className="py-1 w-24" />
+            </tr>
+          </thead>
+          <tbody>
+            <AggregateRow
+              snapshot={snapshot.aggregate}
+              sent={snapshot.aggregate_funnel.sent}
+              pubCount={snapshot.rows.length}
+              workspaceId={workspaceId}
               workspaceName={workspaceName}
               ownerEmail={ownerEmail}
+              allRows={snapshot.rows}
               windowText={windowText(snapshot)}
             />
-          ))}
-        </tbody>
-      </table>
+            {sorted.map((row) => (
+              <PubRow
+                key={row.pub_id}
+                row={row}
+                workspaceName={workspaceName}
+                ownerEmail={ownerEmail}
+                windowText={windowText(snapshot)}
+                selected={selected.has(row.pub_id)}
+                onToggle={() => toggleOne(row.pub_id)}
+              />
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
@@ -318,6 +396,10 @@ function AggregateRow({
   const byKey = new Map(snapshot.rows.map((r) => [r.key, r]));
   return (
     <tr className="border-b-2 border-border bg-surface-2/60 font-semibold">
+      {/* Empty checkbox cell — the aggregate row isn't itself a
+          publication so it doesn't participate in the bulk-copy
+          selection. Keeps the column count aligned. */}
+      <td className="py-1.5" />
       <td className="py-1.5 pr-2 text-fg">
         <span className="uppercase tracking-wide text-[10px] text-subtle mr-1">
           Workspace ({pubCount})
@@ -364,11 +446,15 @@ function PubRow({
   workspaceName,
   ownerEmail,
   windowText: winText,
+  selected,
+  onToggle,
 }: {
   row: WorkspaceSnapshotPubRow;
   workspaceName: string | null;
   ownerEmail: string | null;
   windowText: string;
+  selected: boolean;
+  onToggle: () => void;
 }) {
   const byKey = new Map(row.snapshot.rows.map((r) => [r.key, r]));
   const name = row.name?.trim() || row.pub_id;
@@ -376,6 +462,15 @@ function PubRow({
   const lowVol = row.snapshot.status === "low_volume";
   return (
     <tr className="border-b border-border/40">
+      <td className="py-1 pr-2">
+        <input
+          type="checkbox"
+          aria-label={`Select ${name}`}
+          checked={selected}
+          onChange={onToggle}
+          className="cursor-pointer"
+        />
+      </td>
       <td className="py-1 pr-2 text-fg">
         <div className="flex flex-col leading-tight">
           <span className="truncate max-w-[240px]">{name}</span>
@@ -489,21 +584,55 @@ const METRIC_LABELS_LONG: Record<DeliverabilitySnapshotRow["key"], string> = {
   deferral_rate: "Deferral rate",
 };
 
-/** Render the "flagged metrics" block of the escalation message
- *  as a bulleted list. */
-function flaggedList(snapshot: DeliverabilitySnapshot): string {
-  return snapshot.rows
-    .filter((r) => r.flagged === true)
+/** Human "which of the 7 are clean" summary — surfaced in the
+ *  message so the reviewer sees the negative space, not just the
+ *  flagged metrics. Richard's post explicitly calls out
+ *  "Everything else is clean across all five: opens 34-41%,
+ *  delivery >99%, …" — that context is what turns a raw flag
+ *  dump into a real read. */
+function cleanSummary(snapshot: DeliverabilitySnapshot): string {
+  const clean = snapshot.rows.filter((r) => r.flagged === false);
+  if (clean.length === 0) return "";
+  return clean
     .map(
-      (r) =>
-        `• ${METRIC_LABELS_LONG[r.key]}: ${fmtRateForMessage(r)} (flag at ${fmtThresholdForMessage(r)})`
+      (r) => `${METRIC_LABELS_LONG[r.key].toLowerCase()} ${fmtRateForMessage(r)}`
     )
-    .join("\n");
+    .join(", ");
 }
 
-/** Escalation draft for a single publication. Follows Richard's
- *  #dc-review post shape: header + pub / org / owner metadata block
- *  + concern summary + flagged metrics + ask stub. */
+/** One-liner describing what flagged, phrased like a person would.
+ *  Callers append their own "here's what I think is going on"
+ *  paragraph in the placeholder below. */
+function flaggedPhrase(snapshot: DeliverabilitySnapshot, windowText: string): string {
+  const flagged = snapshot.rows.filter((r) => r.flagged === true);
+  if (flagged.length === 0) return "";
+  const parts = flagged
+    .map(
+      (r) =>
+        `${METRIC_LABELS_LONG[r.key].toLowerCase()} at ${fmtRateForMessage(r)} (flags at ${fmtThresholdForMessage(r)})`
+    );
+  return `Over the ${windowText}, ${joinList(parts)} on the D&C snapshot.`;
+}
+
+/** Grammatical join — "a", "a and b", "a, b, and c". Uses the Oxford
+ *  comma because it matches how the reference post reads. */
+function joinList(parts: string[]): string {
+  if (parts.length === 0) return "";
+  if (parts.length === 1) return parts[0];
+  if (parts.length === 2) return `${parts[0]} and ${parts[1]}`;
+  return `${parts.slice(0, -1).join(", ")}, and ${parts[parts.length - 1]}`;
+}
+
+/** Escalation draft for a single publication. Modeled on Richard's
+ *  #dc-review post shape: a lede that summarizes what I've observed
+ *  in prose, a compact metadata block, a "concerns" section that
+ *  reads like a person laying out their read of each flag (with a
+ *  placeholder for the mechanism the CSM has already checked), a
+ *  "what's clean" line for negative space, and a conversational
+ *  ask phrased as an actual question. The placeholders are the
+ *  spots where the CSM adds one-to-two sentences of their own
+ *  investigation — they're what turn the scaffold from a dump into
+ *  a real message.  */
 function buildPubEscalationMessage(args: {
   pubRow: WorkspaceSnapshotPubRow;
   workspaceName: string | null;
@@ -512,30 +641,53 @@ function buildPubEscalationMessage(args: {
 }): string {
   const { pubRow, workspaceName, ownerEmail, windowText } = args;
   const pubName = pubRow.name?.trim() || pubRow.pub_id;
-  const orgLine = workspaceName
-    ? `*Org:* ${workspaceName}`
-    : `*Workspace:* \`${args.pubRow.pub_id.replace(/^pub_/, "")}\``;
-  const ownerLine = ownerEmail ? `*Owner:* ${ownerEmail}` : "";
+  const orgLine = workspaceName ? `*Org:* ${workspaceName}` : "";
+  const ownerLine = ownerEmail
+    ? `*Owner:* <mailto:${ownerEmail}|${ownerEmail}>`
+    : "";
+  const metadata = [
+    `*Pub:* ${pubName} — \`${pubRow.pub_id}\` (${fmtNumber(pubRow.funnel.sent)} sent · ${windowText})`,
+    [orgLine, ownerLine].filter(Boolean).join(" | "),
+  ].filter(Boolean);
+
+  const flaggedRows = pubRow.snapshot.rows.filter((r) => r.flagged === true);
+  const concernBlocks = flaggedRows
+    .map((r, i) => {
+      const num = flaggedRows.length > 1 ? ` ${i + 1}` : "";
+      return `> *Concern${num} — ${METRIC_LABELS_LONG[r.key]}:* ${METRIC_LABELS_LONG[r.key]} is running at *${fmtRateForMessage(r)}* against a D&C flag line of ${fmtThresholdForMessage(r)}. _[Say what you've already checked here — daily distribution, whether it looks like a spike vs. sustained baseline, what the customer told you about their sending model, anything corroborating or contradicting the number.]_`;
+    })
+    .join("\n>\n");
+
+  const cleanLine = cleanSummary(pubRow.snapshot);
+  const cleanBlock = cleanLine
+    ? `> *Everything else looks clean:* ${cleanLine} — no Slack or AUP compliance history.`
+    : "";
+
+  const lede = `${flaggedPhrase(pubRow.snapshot, windowText)} Wanted a read from D&C on whether this is upgrade-blocking or a case where the customer's sending model is naturally higher-noise but not non-compliant.`;
+
   return [
     `*Enterprise Upgrade Review Request — ${pubName}*`,
     ``,
-    `*Pub:* \`${pubRow.pub_id}\` (${fmtNumber(pubRow.funnel.sent)} sent · ${windowText})`,
-    orgLine,
-    ownerLine,
+    lede,
     ``,
-    `*D&C 7-metric snapshot flagged (${pubRow.snapshot.flagged_count} of 7):*`,
-    flaggedList(pubRow.snapshot),
+    ...metadata,
     ``,
-    `*Ask:* [describe the mechanism you've already checked + what you're asking D&C to weigh in on].`,
+    concernBlocks,
+    cleanBlock ? `>` : "",
+    cleanBlock,
+    cleanBlock ? `>` : "",
+    `> *Ask:* Given _[the customer's stated list-hygiene practice, or the mechanism you've verified]_, does D&C read this as an upgrade blocker, or is the pattern explainable by the sending model on its own?`,
   ]
-    .filter(Boolean)
+    .filter((line) => line !== undefined && line !== null)
     .join("\n");
 }
 
-/** Escalation draft for the whole workspace — used when the
- *  aggregate row itself is flagged. Includes the workspace-wide
- *  ratios plus a per-pub table so the reviewer sees which pubs
- *  are driving the aggregate. */
+/** Workspace-wide escalation — the shape Richard's actual post
+ *  used for the 5-pub Woodford Newsletters case. Lede describes
+ *  the pattern across pubs in prose; pubs are listed inline with
+ *  their identifiers; thread block walks the reviewer through the
+ *  concerns, the corroborating clean signals, and closes with a
+ *  question. */
 function buildWorkspaceEscalationMessage(args: {
   workspaceId: string;
   workspaceName: string | null;
@@ -553,30 +705,69 @@ function buildWorkspaceEscalationMessage(args: {
     allRows,
   } = args;
   const nameOrId = workspaceName?.trim() || workspaceId;
-  const flaggedPubs = allRows
-    .filter((r) => r.snapshot.status === "flagged")
-    .sort((a, b) => b.snapshot.flagged_count - a.snapshot.flagged_count);
-  const pubBlock = flaggedPubs.length
-    ? `\n*Pubs driving the aggregate:*\n${flaggedPubs
+  const flaggedPubs = allRows.filter((r) => r.snapshot.status === "flagged");
+  const totalPubs = allRows.length;
+
+  const pubsInline = flaggedPubs.length
+    ? flaggedPubs
+        .map((r) => `${r.name?.trim() || r.pub_id}: \`${r.pub_id}\``)
+        .join(", ")
+    : allRows
+        .slice(0, 5)
+        .map((r) => `${r.name?.trim() || r.pub_id}: \`${r.pub_id}\``)
+        .join(", ");
+
+  const orgLine = `*Org:* ${nameOrId}`;
+  const ownerLine = ownerEmail
+    ? `*Owner:* <mailto:${ownerEmail}|${ownerEmail}>`
+    : "";
+
+  const flaggedRows = aggregate.rows.filter((r) => r.flagged === true);
+  const scope =
+    flaggedPubs.length > 0
+      ? `across ${flaggedPubs.length === totalPubs ? "all" : flaggedPubs.length} of the ${totalPubs} pubs`
+      : `on the workspace-wide aggregate`;
+
+  const lede = `${flaggedPhrase(aggregate, windowText)} Pattern is ${scope}. Wanted a read from D&C on whether the disclosed acquisition/sending model is just naturally higher-churn or something more concerning on our side.`;
+
+  const concernBlocks = flaggedRows
+    .map((r, i) => {
+      const num = flaggedRows.length > 1 ? ` ${i + 1}` : "";
+      return `> *Concern${num} — ${METRIC_LABELS_LONG[r.key]}:* Aggregate ${METRIC_LABELS_LONG[r.key].toLowerCase()} is *${fmtRateForMessage(r)}* against a D&C flag line of ${fmtThresholdForMessage(r)}. _[Note whether it's sustained low-grade across every pub or driven by one or two, whether the customer's questionnaire explains it, and how you read the mechanism.]_`;
+    })
+    .join("\n>\n");
+
+  const cleanLine = cleanSummary(aggregate);
+  const cleanBlock = cleanLine
+    ? `> *What's clean across the workspace:* ${cleanLine} — no Slack or AUP compliance history.`
+    : "";
+
+  const perPubBlock = flaggedPubs.length
+    ? `> *Per-pub flag counts:*\n${flaggedPubs
+        .sort((a, b) => b.snapshot.flagged_count - a.snapshot.flagged_count)
         .map(
           (r) =>
-            `• ${r.name?.trim() || r.pub_id}: \`${r.pub_id}\` — ${r.snapshot.flagged_count} of 7 flagged (${fmtNumber(r.funnel.sent)} sent)`
+            `> • ${r.name?.trim() || r.pub_id}: ${r.snapshot.flagged_count} of 7 flagged (${fmtNumber(r.funnel.sent)} sent)`
         )
         .join("\n")}`
     : "";
-  const ownerLine = ownerEmail ? `*Owner:* ${ownerEmail}` : "";
+
   return [
-    `*Enterprise Upgrade Review Request — ${nameOrId} (${allRows.length} pubs)*`,
+    `*Enterprise Upgrade Review Request — ${nameOrId} (${totalPubs} pubs)*`,
     ``,
-    `Workspace-wide aggregate over the ${windowText} tripped ${aggregate.flagged_count} of 7 D&C flag thresholds.`,
-    ownerLine,
+    lede,
     ``,
-    `*Aggregate ratios flagged:*`,
-    flaggedList(aggregate),
-    pubBlock,
+    `*Pubs:* ${pubsInline}`,
+    [orgLine, ownerLine].filter(Boolean).join(" | "),
     ``,
-    `*Ask:* [describe the mechanism you've already checked + what you're asking D&C to weigh in on].`,
+    concernBlocks,
+    perPubBlock ? `>` : "",
+    perPubBlock,
+    cleanBlock ? `>` : "",
+    cleanBlock,
+    `>`,
+    `> *Ask:* Given _[the customer's stated list-hygiene practice or the mechanism you've verified]_, does D&C see this pattern as an upgrade blocker, or is this a case where the disclosed acquisition/sending model is simply higher-noise by nature but not non-compliant?`,
   ]
-    .filter(Boolean)
+    .filter((line) => line !== undefined && line !== null)
     .join("\n");
 }
