@@ -7,6 +7,7 @@ import {
   SOURCE_METADATA,
   TODO_OFFSET_DAYS_MAX,
   TODO_OFFSET_DAYS_MIN,
+  mergeTagsForSource,
   type AutomatedSource,
   type TodoAction,
   type TodoSourceConfig,
@@ -131,14 +132,26 @@ export function TodoSourceConfigsEditor({
       {AUTOMATED_SOURCES.map((source) => {
         const cfg = effective(source);
         const meta = SOURCE_METADATA[source];
-        const preview = applyTemplateInline(cfg.phrasing_template, {
+        const tags = mergeTagsForSource(meta);
+        // Sample context used for the phrasing preview AND the timing
+        // preview below. Kept in one place so the fictitious values
+        // stay consistent across the card ("Ashton Media" everywhere).
+        const sampleRenewal = "2026-11-30";
+        const previewCtx: Record<string, string | number | undefined> = {
           company_name: "Ashton Media",
+          workspace_name: "Ashton Media",
+          csm_name: "Jacob Perry",
+          owner_email: "sam@ashtonmedia.co",
+          lifecycle_stage: "Live",
+          renewal_date: meta.supports_renewal ? sampleRenewal : undefined,
+          days_until_renewal: meta.supports_renewal ? 90 : undefined,
           milestone_days: meta.supports_milestone ? 30 : undefined,
           prior_stage: meta.supports_prior_stage ? "Follow Up Sent" : undefined,
           original_text: meta.supports_original_text
             ? "Reach out about ad-network rebate"
             : undefined,
-        });
+        };
+        const preview = applyTemplateInline(cfg.phrasing_template, previewCtx);
         return (
           <div
             key={source}
@@ -169,39 +182,31 @@ export function TodoSourceConfigsEditor({
                 }
                 placeholder={defaults[source].phrasing_template}
               />
-              <div className="text-[10px] text-muted mt-1">
-                Supported merge tags:{" "}
-                <code className="bg-surface-2 px-1 rounded">
-                  {"{{company_name}}"}
-                </code>
-                {meta.supports_milestone ? (
-                  <>
-                    ,{" "}
-                    <code className="bg-surface-2 px-1 rounded">
-                      {"{{milestone_days}}"}
-                    </code>
-                  </>
-                ) : null}
-                {meta.supports_prior_stage ? (
-                  <>
-                    ,{" "}
-                    <code className="bg-surface-2 px-1 rounded">
-                      {"{{prior_stage}}"}
-                    </code>
-                  </>
-                ) : null}
-                {meta.supports_original_text ? (
-                  <>
-                    ,{" "}
-                    <code className="bg-surface-2 px-1 rounded">
-                      {"{{original_text}}"}
-                    </code>
-                  </>
-                ) : null}
-                . Default:{" "}
-                <code className="bg-surface-2 px-1 rounded">
-                  {defaults[source].phrasing_template}
-                </code>
+              <div className="text-[10px] text-muted mt-1 space-y-1">
+                <div>
+                  Supported merge tags — click to copy:
+                </div>
+                <div className="flex flex-wrap gap-1">
+                  {tags.map((tag) => (
+                    <button
+                      key={tag.token}
+                      type="button"
+                      title={tag.hint}
+                      onClick={() =>
+                        void navigator.clipboard?.writeText(`{{${tag.token}}}`)
+                      }
+                      className="bg-surface-2 hover:bg-surface-3 px-1.5 py-0.5 rounded font-mono text-[10px] text-fg border border-border/60"
+                    >
+                      {`{{${tag.token}}}`}
+                    </button>
+                  ))}
+                </div>
+                <div>
+                  Default:{" "}
+                  <code className="bg-surface-2 px-1 rounded">
+                    {defaults[source].phrasing_template}
+                  </code>
+                </div>
               </div>
               {preview && preview.trim() !== cfg.phrasing_template.trim() ? (
                 <div className="mt-1 text-[10px] text-muted">
@@ -314,64 +319,101 @@ export function TodoSourceConfigsEditor({
 
             <div>
               <div className="text-xs font-medium text-fg mb-1">
-                Timing (days from anchor)
+                Timing overrides
               </div>
               <div className="text-[10px] text-muted mb-2">
-                Negative = earlier, 0 = on the anchor day, positive = later.
-                Leave blank to keep the engine&rsquo;s default logic.
+                {meta.supports_renewal
+                  ? "“Due date” shifts relative to the customer’s renewal date. “Show todo” shifts relative to the moment the milestone fires (i.e. from now). "
+                  : "“Due date” shifts relative to whatever anchor the source uses (usually the trigger event). “Show todo” shifts relative to the moment the source fires. "}
+                Negative = earlier, 0 = same day, positive = later. Leave
+                blank to keep the shipped default.
                 {meta.variant_actions
-                  ? " Source-level values below act as the fallback when a stage doesn't have its own override."
+                  ? " Source-level values below act as the fallback when a variant doesn’t have its own override."
                   : ""}
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <OffsetInput
-                  label="Due offset"
+                  label={
+                    meta.supports_renewal
+                      ? "Due date — days from renewal date"
+                      : "Due date — days from anchor"
+                  }
                   value={cfg.due_offset_days ?? null}
                   onChange={(n) => setField(source, { due_offset_days: n })}
                 />
                 <OffsetInput
-                  label="Surface offset"
+                  label="Show todo — days from when it fires"
                   value={cfg.surface_offset_days ?? null}
                   onChange={(n) => setField(source, { surface_offset_days: n })}
                 />
               </div>
+              <TimingPreview
+                supportsRenewal={!!meta.supports_renewal}
+                dueOffset={cfg.due_offset_days ?? null}
+                surfaceOffset={cfg.surface_offset_days ?? null}
+                renewalYmd={sampleRenewal}
+              />
               {meta.variant_actions ? (
-                <div className="mt-3 space-y-1">
+                <div className="mt-3 pt-2 border-t border-border/60 space-y-2">
+                  <div className="text-[10px] text-muted italic">
+                    Per-milestone overrides &mdash; blank falls back to the
+                    source-level values above.
+                  </div>
                   {meta.variant_actions.map((v) => {
                     const entry = cfg.timing_by_variant?.[v.key] ?? {};
                     return (
-                      <div
-                        key={v.key}
-                        className="grid grid-cols-[1fr_auto_auto] gap-2 items-center text-xs"
-                      >
-                        <span className="text-muted truncate">{v.label}</span>
-                        <OffsetInput
-                          label="Due"
-                          compact
-                          value={entry.due_offset_days ?? null}
-                          onChange={(n) =>
-                            setField(source, {
-                              timing_by_variant: mergeVariantTiming(
-                                cfg.timing_by_variant,
-                                v.key,
-                                { due_offset_days: n }
-                              ),
-                            })
+                      <div key={v.key} className="space-y-0.5">
+                        <div className="text-[11px] font-medium text-fg">
+                          When customer is {v.label.replace(/^when /i, "")}
+                        </div>
+                        <div className="grid grid-cols-[auto_1fr] gap-2 items-center pl-3">
+                          <span className="text-[10px] text-muted">
+                            Due date &mdash; days from renewal
+                          </span>
+                          <OffsetInput
+                            label=""
+                            compact
+                            value={entry.due_offset_days ?? null}
+                            onChange={(n) =>
+                              setField(source, {
+                                timing_by_variant: mergeVariantTiming(
+                                  cfg.timing_by_variant,
+                                  v.key,
+                                  { due_offset_days: n }
+                                ),
+                              })
+                            }
+                          />
+                          <span className="text-[10px] text-muted">
+                            Show todo &mdash; days from when it fires
+                          </span>
+                          <OffsetInput
+                            label=""
+                            compact
+                            value={entry.surface_offset_days ?? null}
+                            onChange={(n) =>
+                              setField(source, {
+                                timing_by_variant: mergeVariantTiming(
+                                  cfg.timing_by_variant,
+                                  v.key,
+                                  { surface_offset_days: n }
+                                ),
+                              })
+                            }
+                          />
+                        </div>
+                        <TimingPreview
+                          supportsRenewal={!!meta.supports_renewal}
+                          dueOffset={
+                            entry.due_offset_days ?? cfg.due_offset_days ?? null
                           }
-                        />
-                        <OffsetInput
-                          label="Surface"
-                          compact
-                          value={entry.surface_offset_days ?? null}
-                          onChange={(n) =>
-                            setField(source, {
-                              timing_by_variant: mergeVariantTiming(
-                                cfg.timing_by_variant,
-                                v.key,
-                                { surface_offset_days: n }
-                              ),
-                            })
+                          surfaceOffset={
+                            entry.surface_offset_days ??
+                            cfg.surface_offset_days ??
+                            null
                           }
+                          renewalYmd={sampleRenewal}
+                          indent
                         />
                       </div>
                     );
@@ -596,6 +638,88 @@ function ActionEditor({
   );
 }
 
+// ─── Timing preview ──────────────────────────────────────────────────────
+//
+// Renders the resolved due-date and show-day using a fixed sample
+// renewal (2026-11-30) so the admin can see exactly what their offsets
+// evaluate to. Kept purely presentational — computes dates in-place so
+// the editor stays a single-file component.
+
+interface TimingPreviewProps {
+  supportsRenewal: boolean;
+  dueOffset: number | null;
+  surfaceOffset: number | null;
+  renewalYmd: string;
+  /** When true, indent the preview to sit under a variant row's
+   *  inputs. Source-level previews stay flush. */
+  indent?: boolean;
+}
+
+function TimingPreview({
+  supportsRenewal,
+  dueOffset,
+  surfaceOffset,
+  renewalYmd,
+  indent,
+}: TimingPreviewProps) {
+  // Blank offsets both = engine default, so there's nothing worth
+  // previewing. Skip the render to keep the card tight.
+  if (dueOffset == null && surfaceOffset == null) return null;
+
+  // Resolve due date: for renewal-anchored sources, shift the sample
+  // renewal date; for other sources, shift "today" (the moment the
+  // source fires). Same math via shiftYmdDays.
+  const anchorYmd = supportsRenewal ? renewalYmd : todayYmd();
+  const due =
+    dueOffset != null ? formatYmd(shiftYmdDays(anchorYmd, dueOffset)) : "engine default";
+  // Surface anchor is always "the moment the source fires" == today
+  // in the preview. Negative offsets clamp to "immediately" because
+  // we can't surface in the past.
+  let surface: string;
+  if (surfaceOffset == null) surface = "engine default (immediately)";
+  else if (surfaceOffset <= 0) surface = "immediately";
+  else surface = formatYmd(shiftYmdDays(todayYmd(), surfaceOffset));
+
+  return (
+    <div
+      className={`text-[10px] mt-1 italic text-muted ${
+        indent ? "pl-3" : ""
+      }`}
+    >
+      Preview{supportsRenewal ? ` (renewal ${formatYmd(renewalYmd)})` : ""}:
+      due <span className="text-fg not-italic">{due}</span>, appears{" "}
+      <span className="text-fg not-italic">{surface}</span>.
+    </div>
+  );
+}
+
+function todayYmd(): string {
+  const d = new Date();
+  return d.toISOString().slice(0, 10);
+}
+
+function shiftYmdDays(baseYmd: string, days: number): string {
+  const d = new Date(`${baseYmd}T00:00:00Z`);
+  if (isNaN(d.getTime())) return baseYmd;
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+function formatYmd(ymd: string): string {
+  // Human-friendly rendering matches the rest of the app's date
+  // formatting (see components/format.ts) — but that helper is
+  // typed against nullable date-ish input, and we already know we
+  // have a valid YMD. Just render as "Nov 30, 2026".
+  const d = new Date(`${ymd}T00:00:00Z`);
+  if (isNaN(d.getTime())) return ymd;
+  return d.toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    timeZone: "UTC",
+  });
+}
+
 // ─── Offset input ────────────────────────────────────────────────────────
 //
 // Integer field for `due_offset_days` / `surface_offset_days`. Blank
@@ -614,15 +738,24 @@ interface OffsetInputProps {
 }
 
 function OffsetInput({ label, value, onChange, compact }: OffsetInputProps) {
+  // Hide the label when caller passes empty string — variant rows
+  // render their own external label via the grid column to the left.
+  const showLabel = label.length > 0;
   return (
     <label
       className={
         compact ? "flex items-center gap-1 text-xs" : "block text-xs"
       }
     >
-      <span className={compact ? "text-muted" : "block mb-1 text-fg font-medium"}>
-        {label}
-      </span>
+      {showLabel ? (
+        <span
+          className={
+            compact ? "text-muted" : "block mb-1 text-fg font-medium"
+          }
+        >
+          {label}
+        </span>
+      ) : null}
       <input
         type="number"
         step={1}

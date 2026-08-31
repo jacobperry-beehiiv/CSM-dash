@@ -317,6 +317,12 @@ export async function runRenewalMilestoneSweep(
           sourceConfigs.renewal_milestone.phrasing_template,
           {
             company_name: companyLabel(c),
+            workspace_name: c.workspace_name ?? null,
+            csm_name: c.customer_success_manager ?? null,
+            owner_email: c.owner_email ?? null,
+            lifecycle_stage: stage ?? null,
+            renewal_date: utcYmd(renewalIso),
+            days_until_renewal: daysUntil,
             milestone_days: milestone,
           }
         );

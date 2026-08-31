@@ -157,6 +157,10 @@ export const SOURCE_METADATA: Record<
     supports_prior_stage: boolean;
     /** When true, the settings UI advertises `{{original_text}}`. */
     supports_original_text: boolean;
+    /** When true, the settings UI advertises `{{renewal_date}}` +
+     *  `{{days_until_renewal}}`. Only renewal-anchored sources set
+     *  this; other sources don't have a renewal date in scope. */
+    supports_renewal?: boolean;
     /** Variants supported for per-variant action bindings. When set,
      *  the settings editor renders a per-variant template picker
      *  alongside the single fallback dropdown. For renewal_milestone
@@ -186,6 +190,7 @@ export const SOURCE_METADATA: Record<
     supports_milestone: true,
     supports_prior_stage: false,
     supports_original_text: false,
+    supports_renewal: true,
     variant_actions: [
       { key: "90", label: "90 days out" },
       { key: "60", label: "60 days out" },
@@ -200,6 +205,7 @@ export const SOURCE_METADATA: Record<
     supports_milestone: false,
     supports_prior_stage: true,
     supports_original_text: false,
+    supports_renewal: true,
   },
   sybill_callrecap: {
     label: "Sybill call recap action item",
@@ -506,3 +512,63 @@ export function resolveTodoTiming(
  *  typo can't schedule a todo years out. */
 export const TODO_OFFSET_DAYS_MIN = -365;
 export const TODO_OFFSET_DAYS_MAX = 365;
+
+// ─── Merge tag registry (surfaced in the settings UI) ────────────────────
+
+export interface MergeTagDescriptor {
+  /** Handlebars-style token — what the admin writes in the template. */
+  token: string;
+  /** One-line hint that renders next to the tag in the editor. Kept
+   *  short — the editor renders these inline. */
+  hint: string;
+}
+
+/** Tags every source resolves at engine time — the customer is
+ *  always in scope, so these are safe to advertise everywhere. */
+export const UNIVERSAL_MERGE_TAGS: readonly MergeTagDescriptor[] = [
+  { token: "company_name", hint: "customer.company_name (falls back to workspace_name)" },
+  { token: "workspace_name", hint: "customer.workspace_name" },
+  { token: "csm_name", hint: "assigned CSM (from HubSpot)" },
+  { token: "owner_email", hint: "customer's primary contact email" },
+  { token: "lifecycle_stage", hint: "current lifecycle stage" },
+];
+
+/** Return the full effective merge-tag list for a source: universal
+ *  tags plus any source-specific ones opted into via SOURCE_METADATA
+ *  (`supports_*` flags). Used by the settings editor to render the
+ *  helper text under each phrasing template AND by engines that want
+ *  to sanity-check which tags a template can reference. */
+export function mergeTagsForSource(
+  meta: (typeof SOURCE_METADATA)[AutomatedSource]
+): MergeTagDescriptor[] {
+  const out: MergeTagDescriptor[] = [...UNIVERSAL_MERGE_TAGS];
+  if (meta.supports_milestone) {
+    out.push({
+      token: "milestone_days",
+      hint: "90 / 60 / 30 / 7 for renewal_milestone",
+    });
+  }
+  if (meta.supports_prior_stage) {
+    out.push({
+      token: "prior_stage",
+      hint: "lifecycle stage the customer came from",
+    });
+  }
+  if (meta.supports_renewal) {
+    out.push({
+      token: "renewal_date",
+      hint: "customer.contract_renewal (YYYY-MM-DD)",
+    });
+    out.push({
+      token: "days_until_renewal",
+      hint: "integer days from today to renewal",
+    });
+  }
+  if (meta.supports_original_text) {
+    out.push({
+      token: "original_text",
+      hint: "the caller's raw text (Slack body, Sybill bullet, etc.)",
+    });
+  }
+  return out;
+}
