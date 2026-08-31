@@ -63,6 +63,20 @@ export async function getConfigForSource(
  *  changes here — the interface just documents the well-known ones. */
 export interface RenderContext {
   company_name?: string | null;
+  /** Raw workspace_name — falls back to when company_name isn't set. */
+  workspace_name?: string | null;
+  /** Full CSM name (from HubSpot's `customer_success_manager`). */
+  csm_name?: string | null;
+  /** Customer's primary contact email. */
+  owner_email?: string | null;
+  /** Lifecycle stage (Onboarding / Live / Renewal Confirmed / …). */
+  lifecycle_stage?: string | null;
+  /** Contract renewal date — YYYY-MM-DD when available; falls back to
+   *  Stripe next_invoice for accounts without a contract_renewal set
+   *  in HubSpot. Available on renewal-anchored sources. */
+  renewal_date?: string | null;
+  /** Integer days from now to renewal. Negative when past due. */
+  days_until_renewal?: number | null;
   milestone_days?: number | null;
   prior_stage?: string | null;
   /** For slack_* + scheduled + feature_request sources — the original
