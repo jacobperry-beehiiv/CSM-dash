@@ -32,11 +32,17 @@ export default async function TodoAutomationSettingsPage() {
   ]);
 
   // Trim the template list to id + name — that's all the dropdown
-  // needs. Keeps the server → client payload small.
-  const templateOptions = templates.map((t) => ({
-    id: t.id,
-    name: t.label,
-  }));
+  // needs. Keeps the server → client payload small. Sort
+  // alphabetically so the picker is scannable; the store returns
+  // whatever creation order was on disk, which drifts over time.
+  const templateOptions = templates
+    .map((t) => ({
+      id: t.id,
+      name: t.label,
+    }))
+    .sort((a, b) =>
+      a.name.localeCompare(b.name, undefined, { sensitivity: "base" })
+    );
 
   return (
     <div>
