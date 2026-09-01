@@ -46,22 +46,29 @@ export default function TemplatesPage() {
   );
 
   const filtered = useMemo(() => {
-    return list.filter((t) => {
-      const team = templateTeam(t);
-      if (teamTab === "am" && team !== "am") return false;
-      if (teamTab === "csm" && team !== "csm") return false;
-      if (search) {
-        const q = search.toLowerCase();
-        if (
-          !t.label.toLowerCase().includes(q) &&
-          !t.blurb.toLowerCase().includes(q) &&
-          !t.subject.toLowerCase().includes(q)
-        ) {
-          return false;
+    return list
+      .filter((t) => {
+        const team = templateTeam(t);
+        if (teamTab === "am" && team !== "am") return false;
+        if (teamTab === "csm" && team !== "csm") return false;
+        if (search) {
+          const q = search.toLowerCase();
+          if (
+            !t.label.toLowerCase().includes(q) &&
+            !t.blurb.toLowerCase().includes(q) &&
+            !t.subject.toLowerCase().includes(q)
+          ) {
+            return false;
+          }
         }
-      }
-      return true;
-    });
+        return true;
+      })
+      // Case-insensitive sort by label so the list scans alphabetically
+      // regardless of when each template was created. The KV store
+      // returns creation order, which drifts as templates get added.
+      .sort((a, b) =>
+        a.label.localeCompare(b.label, undefined, { sensitivity: "base" })
+      );
   }, [list, teamTab, search]);
 
   if (mode.kind !== "list") {
