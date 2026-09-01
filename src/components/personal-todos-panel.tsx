@@ -649,20 +649,19 @@ function TodoRow({
             </a>
           ) : null}
           {todo.source_meta?.workspace_id ? (
-            // Deep-link into /csm with a `workspace_id` query param.
-            // The customer table reads it, expands the matching row,
-            // and scrolls to it — one click from a todo card to the
-            // customer's expanded profile in the dash. Absent on
-            // slack_assign todos + manual todos with no workspace
-            // metadata (the customer table wouldn't know where to jump).
+            // Link to /account/[workspace_id] — the same "Open full
+            // account view" destination that lives inside the customer
+            // detail panel. One click from a fired todo to the
+            // customer's full account page. Absent on slack_assign +
+            // manual todos with no workspace metadata.
             <a
-              href={`/csm?workspace_id=${encodeURIComponent(
+              href={`/account/${encodeURIComponent(
                 todo.source_meta.workspace_id
               )}`}
               className="text-[11px] text-blue-600 dark:text-blue-400 hover:underline"
-              title="Open this customer's profile in the dashboard"
+              title="Open this customer's full account view"
             >
-              ↗ Open profile
+              ↗ Open full account view
             </a>
           ) : null}
           <TodoActionButton todo={todo} sourceConfigs={sourceConfigs} />
