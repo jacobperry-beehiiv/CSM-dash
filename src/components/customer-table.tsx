@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import type { Customer, CustomerWithMetrics } from "@/lib/types";
 import { StatusBadge } from "./status-badge";
@@ -289,36 +289,6 @@ export function CustomerTable({
     useState<WorkspaceFeatureMatcher | null>(null);
   const [outreachFor, setOutreachFor] = useState<Customer | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  // Deep-link support: /csm?workspace_id=X pre-expands that row and
-  // scrolls it into view. Used by the personal-todos panel's "Open
-  // profile" link so a CSM can jump from a fired renewal-milestone
-  // todo straight to the customer's expanded profile. Runs once per
-  // param change; guarded on a ref so re-mounts don't re-scroll.
-  const deepLinkedRef = useRef<string | null>(null);
-  useEffect(() => {
-    const target = searchParams.get("workspace_id");
-    if (!target || deepLinkedRef.current === target) return;
-    deepLinkedRef.current = target;
-    setExpanded((prev) => {
-      if (prev.has(target)) return prev;
-      const next = new Set(prev);
-      next.add(target);
-      return next;
-    });
-    // Wait one frame for the row to render, then scroll to it. Doing
-    // this synchronously catches the pre-render height. A short
-    // timeout is fine — a missing row also fails silently, which is
-    // the right behavior when the deep-link target is filtered out.
-    const t = window.setTimeout(() => {
-      const el = document.querySelector<HTMLElement>(
-        `tr[data-workspace-id="${CSS.escape(target)}"]`
-      );
-      if (el) {
-        el.scrollIntoView({ behavior: "smooth", block: "center" });
-      }
-    }, 120);
-    return () => window.clearTimeout(t);
-  }, [searchParams]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
   const [bulkMessage, setBulkMessage] = useState<string | null>(null);
@@ -1156,9 +1126,6 @@ export function CustomerTable({
                 <Fragment key={k}>
                   <tr
                     onClick={() => toggleExpanded(k)}
-                    // data-workspace-id hook lets the ?workspace_id=…
-                    // deep-link effect scroll this row into view.
-                    data-workspace-id={c.workspace_id ?? undefined}
                     className={`border-b border-border cursor-pointer transition-colors align-top ${
                       isOpen ? "bg-blue-50 dark:bg-blue-500/40" : "hover:bg-blue-50 dark:bg-blue-500/30"
                     }`}
