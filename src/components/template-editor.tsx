@@ -477,6 +477,45 @@ export function TemplateEditor({
           </div>
           {showMergeMenu ? (
             <div className="mb-2 max-h-48 overflow-auto border border-border rounded-md p-2 bg-canvas grid grid-cols-1 gap-1 text-xs">
+              {/* Signed-in CSM's custom merge tags — surfaced above the
+                * built-in list so they're the first thing the eye lands
+                * on. When the user hasn't registered any (or the fetch
+                * is still in flight), the section stays hidden and the
+                * built-in list takes over as before. */}
+              {customTags && Object.keys(customTags).length > 0 ? (
+                <>
+                  <div className="text-[10px] font-semibold uppercase tracking-wide text-subtle px-2 pt-1 pb-0.5">
+                    Your custom tags
+                  </div>
+                  {Object.entries(customTags).map(([name, value]) => (
+                    <button
+                      key={`custom-${name}`}
+                      type="button"
+                      onClick={() => {
+                        insertMergeTagIntoBody(name);
+                        setShowMergeMenu(false);
+                      }}
+                      className="text-left px-2 py-1 hover:bg-surface rounded"
+                      title={value || undefined}
+                    >
+                      <code className="font-mono text-fg">
+                        {`{{${name}}}`}
+                      </code>{" "}
+                      <span className="text-muted">
+                        —{" "}
+                        {value ? (
+                          <span className="truncate">{value}</span>
+                        ) : (
+                          <span className="italic">empty</span>
+                        )}
+                      </span>
+                    </button>
+                  ))}
+                  <div className="text-[10px] font-semibold uppercase tracking-wide text-subtle px-2 pt-2 pb-0.5 border-t border-border/60 mt-1">
+                    Built-in tags
+                  </div>
+                </>
+              ) : null}
               {MERGE_TAGS.map((t) => (
                 <button
                   key={t.token}
