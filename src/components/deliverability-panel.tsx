@@ -374,15 +374,25 @@ export function DeliverabilityPanel({
   async function setClearedOptimistic(
     postId: string,
     cleared: boolean,
-    reason?: string
+    context?: {
+      workspaceId?: string | null;
+      subject?: string | null;
+      newsletter?: string | null;
+      flagSummary?: string | null;
+    }
   ) {
     setBusyPosts((prev) => {
       const next = new Set(prev);
       next.add(postId);
       return next;
     });
-    // Optimistic patch.
+    // Optimistic patch. Mirror the reason string the server derives
+    // so the "Show cleared" pill reads the same before + after the
+    // round-trip lands.
     const stamp = new Date().toISOString();
+    const optimisticReason = context?.flagSummary
+      ? `Cleared: ${context.flagSummary}`
+      : "Cleared";
     setData((prev) => ({
       ...prev,
       alerts: prev.alerts.map((a) =>
@@ -394,7 +404,7 @@ export function DeliverabilityPanel({
                 ? {
                     cleared_at: stamp,
                     cleared_by: null,
-                    reason: reason ?? null,
+                    reason: cleared ? optimisticReason : null,
                   }
                 : null,
             }
@@ -404,7 +414,15 @@ export function DeliverabilityPanel({
       const r = await fetch("/api/deliverability/clear", {
         method: cleared ? "POST" : "DELETE",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ post_id: postId, reason }),
+        body: JSON.stringify({
+          post_id: postId,
+          // Enrichment fields ignored by the DELETE path but harmless
+          // to include for the POST + Undo symmetry.
+          workspace_id: context?.workspaceId ?? undefined,
+          subject: context?.subject ?? undefined,
+          newsletter: context?.newsletter ?? undefined,
+          flag_summary: context?.flagSummary ?? undefined,
+        }),
       });
       if (!r.ok) {
         const j = (await r.json().catch(() => ({}))) as { error?: string };
@@ -1072,11 +1090,19 @@ export function DeliverabilityPanel({
                                     onToggleExpanded={() =>
                                       togglePost(alert.post.post_id)
                                     }
-                                    onClear={(cleared, reason) =>
+                                    onClear={(cleared) =>
                                       void setClearedOptimistic(
                                         alert.post.post_id,
                                         cleared,
-                                        reason
+                                        {
+                                          workspaceId:
+                                            customer?.workspace_id ?? null,
+                                          subject: alert.post.subject,
+                                          newsletter: alert.post.newsletter,
+                                          flagSummary: summarizeFlags(
+                                            alert.flags
+                                          ),
+                                        }
                                       )
                                     }
                                     onDraft={
@@ -1318,7 +1344,7 @@ function PublicationAlertRows({
   busy: boolean;
   onToggleSelected: () => void;
   onToggleExpanded: () => void;
-  onClear: (cleared: boolean, reason?: string) => void;
+  onClear: (cleared: boolean) => void;
   onDraft?: () => void;
   /** Present only when the alert maps to a known workspace_id (so the
    *  parent can drop the action_log note). Absent → button hidden. */
@@ -1505,14 +1531,8 @@ function PublicationAlertRows({
                 <button
                   type="button"
                   disabled={busy}
-                  onClick={() => {
-                    const reason =
-                      window.prompt(
-                        "Optional reason for clearing this send (visible to the team). Leave blank to skip."
-                      ) ?? "";
-                    onClear(true, reason || undefined);
-                  }}
-                  title="Acknowledge this flagged send and hide it from the active alerts list."
+                  onClick={() => onClear(true)}
+                  title="Acknowledge this flagged send, hide it from the active alerts list, and log a note of the flags to the customer profile."
                   aria-label="Clear flagged send"
                   className="px-2 py-1 text-xs border border-border-strong rounded-md hover:bg-canvas disabled:opacity-50"
                 >
