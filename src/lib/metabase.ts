@@ -229,6 +229,12 @@ export interface MetabaseColumnRaw {
 }
 
 export interface MetabaseParameter {
+  /** Parameter's stable identifier — Metabase's `/api/card/:id/query`
+   *  endpoint requires this on every parameter payload it receives
+   *  (returns 400 "missing required key" without it). Distinct from
+   *  `slug`, which the template-tag target references. Comes from
+   *  the card's parameter definition. */
+  id: string;
   slug: string;
   name?: string;
   type?: string;
@@ -393,11 +399,27 @@ export async function runCard(
   // app-side caching is layered above this in describeCard().
   const params: Record<string, unknown> = {};
   if (Object.keys(provided).length > 0) {
-    params.parameters = Object.entries(provided).map(([slug, value]) => ({
-      type: "category",
-      target: ["variable", ["template-tag", slug]],
-      value,
-    }));
+    // Build the parameter payload keyed on slug, then map each entry
+    // back to its declared parameter (for the `id` field). Metabase's
+    // /api/card/:id/query rejects the request with a 400 "missing
+    // required key" when any parameter object omits `id` — it's a
+    // recent schema tightening that used to be optional. Silently
+    // drop provided slugs whose declared parameter can't be found
+    // (shouldn't happen — we filtered against declaredSlugs above —
+    // but the type-narrowing keeps the cast off).
+    const paramBySlug = new Map(card.parameters.map((p) => [p.slug, p]));
+    params.parameters = Object.entries(provided).flatMap(([slug, value]) => {
+      const declared = paramBySlug.get(slug);
+      if (!declared) return [];
+      return [
+        {
+          id: declared.id,
+          type: "category",
+          target: ["variable", ["template-tag", slug]],
+          value,
+        },
+      ];
+    });
   }
   const res = await metabaseFetch(`/api/card/${questionId}/query`, {
     method: "POST",
