@@ -29,7 +29,18 @@
 
 import { kvGet, kvSet, kvDelete } from "../storage/kv";
 
-const KV_KEY_PREFIX = "csm:slack-user-oauth:v1:";
+/** Singleton KV key. We install into exactly one Slack workspace
+ *  (beehiiv's), so scoping by team_id is unnecessary and was the
+ *  source of a bug where the OAuth callback wrote to
+ *  `…:<slack_team_id>` while readers looked up `…:default` — the
+ *  install succeeded but the settings page said "Not connected."
+ *  The Slack team_id is preserved inside the value for audit; the
+ *  key is fixed so writer and reader always agree. */
+const KV_KEY = "csm:slack-user-oauth:v1";
+/** Legacy per-team prefix used before the singleton refactor.
+ *  loadSlackUserOAuthTokens falls back to scanning it so a row
+ *  written by the pre-fix callback still resolves. */
+const LEGACY_KEY_PREFIX = "csm:slack-user-oauth:v1:";
 
 export interface SlackUserOAuthTokens {
   /** Slack workspace / team id. Used as the KV key discriminator so
@@ -64,37 +75,37 @@ export interface SlackUserOAuthTokens {
   updated_at: string;
 }
 
-export async function loadSlackUserOAuthTokens(
-  teamId: string
-): Promise<SlackUserOAuthTokens | null> {
-  const key = KV_KEY_PREFIX + teamId;
-  return (await kvGet<SlackUserOAuthTokens>(key)) ?? null;
+/** Read the singleton token row. Falls back to scanning the legacy
+ *  per-team key prefix so an install written by the pre-refactor
+ *  callback (which keyed on the actual Slack team_id) still
+ *  resolves — a row found under the legacy prefix is copied to the
+ *  singleton key on the next save. Returns null when nothing is
+ *  stored. */
+export async function loadSlackUserOAuthTokens(): Promise<SlackUserOAuthTokens | null> {
+  const primary = await kvGet<SlackUserOAuthTokens>(KV_KEY);
+  if (primary) return primary;
+  // Legacy fallback — scan the old prefix. The pre-refactor writer
+  // used `${LEGACY_KEY_PREFIX}<slack_team_id>`, so any hit here is a
+  // valid install that just wasn't lookup-able because readers used
+  // a different suffix.
+  const legacyKeys = await import("../storage/kv").then((m) =>
+    m.kvListPrefix(LEGACY_KEY_PREFIX)
+  );
+  for (const key of legacyKeys) {
+    // Skip the singleton key itself if it happens to match the prefix.
+    if (key === KV_KEY) continue;
+    const row = await kvGet<SlackUserOAuthTokens>(key);
+    if (row) return row;
+  }
+  return null;
 }
 
 export async function saveSlackUserOAuthTokens(
   tokens: SlackUserOAuthTokens
 ): Promise<void> {
-  const key = KV_KEY_PREFIX + tokens.team_id;
-  await kvSet<SlackUserOAuthTokens>(key, tokens);
+  await kvSet<SlackUserOAuthTokens>(KV_KEY, tokens);
 }
 
-export async function deleteSlackUserOAuthTokens(
-  teamId: string
-): Promise<void> {
-  const key = KV_KEY_PREFIX + teamId;
-  await kvDelete(key);
-}
-
-/** Default team id used for the singleton install. beehiiv's Slack
- *  workspace id is stable, so we can hardcode a lookup default; a
- *  future multi-tenant install path could pass its own team_id.
- *
- *  Env override: SLACK_USER_OAUTH_TEAM_ID lets us point staging at a
- *  test workspace without a redeploy. Defaults to the string
- *  "default" so on a fresh install the KV key is deterministic — the
- *  callback writes to `csm:slack-user-oauth:v1:<team_id>` using the
- *  team_id it gets back from Slack, and later reads use whatever
- *  this env var points at. */
-export function defaultSlackTeamId(): string {
-  return process.env.SLACK_USER_OAUTH_TEAM_ID?.trim() || "default";
+export async function deleteSlackUserOAuthTokens(): Promise<void> {
+  await kvDelete(KV_KEY);
 }

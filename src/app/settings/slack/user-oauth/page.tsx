@@ -1,9 +1,6 @@
 import { auth } from "@/auth";
 import { isAdmin } from "@/lib/auth/admin";
-import {
-  defaultSlackTeamId,
-  loadSlackUserOAuthTokens,
-} from "@/lib/data/slack-user-oauth-tokens";
+import { loadSlackUserOAuthTokens } from "@/lib/data/slack-user-oauth-tokens";
 import { redirect } from "next/navigation";
 import Link from "next/link";
 
@@ -39,7 +36,7 @@ export default async function SlackUserOAuthSettingsPage({
   if (!isAdmin(email)) redirect("/");
 
   const params = await searchParams;
-  const stored = await loadSlackUserOAuthTokens(defaultSlackTeamId());
+  const stored = await loadSlackUserOAuthTokens();
 
   return (
     <div className="max-w-2xl space-y-5">

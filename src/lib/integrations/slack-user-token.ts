@@ -25,7 +25,6 @@
  */
 
 import {
-  defaultSlackTeamId,
   loadSlackUserOAuthTokens,
   saveSlackUserOAuthTokens,
   type SlackUserOAuthTokens,
@@ -48,18 +47,15 @@ export type GetFreshTokenOutcome =
 
 /** Module-scoped promise so N concurrent callers share the refresh
  *  round-trip. Cleared once the refresh settles (success or failure)
- *  so the next request re-checks the store. Keyed on team_id since
- *  we might one day install into multiple workspaces. */
-const inflight = new Map<string, Promise<GetFreshTokenOutcome>>();
+ *  so the next request re-checks the store. Singleton install → one
+ *  slot is enough. */
+let inflight: Promise<GetFreshTokenOutcome> | null = null;
 
-export async function getFreshSlackUserToken(
-  teamId: string = defaultSlackTeamId()
-): Promise<GetFreshTokenOutcome> {
-  const existing = inflight.get(teamId);
-  if (existing) return existing;
+export async function getFreshSlackUserToken(): Promise<GetFreshTokenOutcome> {
+  if (inflight) return inflight;
 
-  const p = (async (): Promise<GetFreshTokenOutcome> => {
-    const stored = await loadSlackUserOAuthTokens(teamId);
+  inflight = (async (): Promise<GetFreshTokenOutcome> => {
+    const stored = await loadSlackUserOAuthTokens();
     if (!stored) {
       return {
         kind: "not_configured",
@@ -82,11 +78,10 @@ export async function getFreshSlackUserToken(
     return refreshAndPersist(stored);
   })();
 
-  inflight.set(teamId, p);
   try {
-    return await p;
+    return await inflight;
   } finally {
-    inflight.delete(teamId);
+    inflight = null;
   }
 }
 
