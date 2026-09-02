@@ -26,6 +26,7 @@
  */
 
 import type { SlackSearchHit } from "../engines/upgrade-analysis/types";
+import { getFreshSlackUserToken } from "./slack-user-token";
 
 /** Terminal reason the Slack search returned no hits. `ok` = at least
  *  one query ran successfully (even if it matched nothing). The other
@@ -117,25 +118,28 @@ export async function searchSlackMessages(
   query: string,
   opts?: { count?: number; matchedTerm?: string }
 ): Promise<SlackSearchResult> {
-  // Slack's `search.messages` endpoint still only accepts USER
-  // tokens (`xoxp-…`). Bot tokens are rejected with
-  // `not_allowed_token_type`, and the `search:read.public` bot
-  // scope that appears in the app config UI does NOT actually
-  // enable the endpoint. Skip the call entirely when we only have
-  // a bot token — cheaper than burning a Slack API call for
-  // guaranteed failure, and the diagnostic banner reads more
-  // clearly.
-  const preferred = process.env.SLACK_USER_TOKEN;
-  const fallback = process.env.SLACK_BOT_TOKEN;
-  const token = preferred ?? fallback;
-  if (!token) return { hits: [], status: "not_configured" };
-  if (!preferred && fallback && !fallback.startsWith("xoxp-")) {
+  // Resolve a fresh user token via the persisted OAuth pair.
+  // Rotation means we can't just read process.env — Slack expires
+  // access tokens every ~12h and only ever emits the refresh_token
+  // through the OAuth callback (never in a static config UI). The
+  // helper handles refresh + single-flight; we just distinguish
+  // "not connected" from "refresh broke" for the UI banner.
+  const tokenOutcome = await getFreshSlackUserToken();
+  if (tokenOutcome.kind === "not_configured") {
     return {
       hits: [],
       status: "not_configured",
-      detail: "user_token_required",
+      detail: tokenOutcome.detail,
     };
   }
+  if (tokenOutcome.kind === "refresh_failed") {
+    return {
+      hits: [],
+      status: "auth_error",
+      detail: tokenOutcome.detail,
+    };
+  }
+  const token = tokenOutcome.token;
   const q = query.trim();
   if (!q) return { hits: [], status: "no_query" };
 
