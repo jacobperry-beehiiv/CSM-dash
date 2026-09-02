@@ -11,6 +11,8 @@ import { HubSpotContactsList } from "./hubspot-contacts-section";
 import { CustomerPublicationsList } from "./customer-publications-list";
 import { CustomerPaidSubsList } from "./customer-paid-subs-list";
 import { CollapsibleSection } from "./collapsible-section";
+import { ZendeskTicketsChip } from "./zendesk-tickets-chip";
+import { useZendeskSummary } from "@/lib/data/use-zendesk-overlay";
 import { CompanyNotes } from "./am/company-notes";
 import { ReviewStatesSection } from "./am/review-states-section";
 import { CustomerNewsSection } from "./am/customer-news-section";
@@ -282,6 +284,10 @@ export function CustomerDetailPanel({
             }
             block
           />
+          <Row
+            label="Support tickets (30d)"
+            value={<ZendeskTicketsRow workspaceId={c.workspace_id} />}
+          />
         </Section>
         {/* CSM-owned stack fields. Override-backed (never from
          *  Metabase/HubSpot), so they save straight to the
@@ -491,6 +497,23 @@ export function CustomerDetailPanel({
       </div>
     </div>
   );
+}
+
+/** Wrapper that consumes the shared Zendesk overlay hook and renders
+ *  the chip inline in the Status section. Kept adjacent to the panel
+ *  since it's only used here — hoisting to its own file would just
+ *  add indirection without reuse. Returns a muted "—" while the
+ *  overlay loads or when the workspace isn't in the cache. */
+function ZendeskTicketsRow({
+  workspaceId,
+}: {
+  workspaceId: string | null | undefined;
+}) {
+  const summary = useZendeskSummary(workspaceId);
+  if (!workspaceId) {
+    return <span className="text-subtle text-xs">—</span>;
+  }
+  return <ZendeskTicketsChip summary={summary} />;
 }
 
 function Stat({ label, value }: { label: string; value: string }) {
