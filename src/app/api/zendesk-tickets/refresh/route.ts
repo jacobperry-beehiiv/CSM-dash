@@ -48,31 +48,19 @@ export async function POST(req: Request) {
       // (the cron path). Falls through with body = {}.
     }
 
-    // Every scope path resolves through the customer book so we can
-    // pair each workspace_id with its owner_email — the match key
-    // the engine uses. Explicit workspace_ids in the body still get
-    // filtered against the book; a workspace_id we don't know about
-    // has no resolvable email and skips the sweep silently.
-    const all = await loadCustomers();
-    let targets: Array<{ workspace_id: string; owner_email: string | null }>;
+    let workspaceIds: string[];
     if (body.workspace_ids && body.workspace_ids.length > 0) {
-      const wanted = new Set(body.workspace_ids);
-      targets = all
-        .filter((c) => c.workspace_id && wanted.has(c.workspace_id))
-        .map((c) => ({
-          workspace_id: c.workspace_id as string,
-          owner_email: c.owner_email ?? null,
-        }));
+      workspaceIds = body.workspace_ids;
     } else {
+      // Fall back to the customer book. When `csm` is set, scope to
+      // that CSM's workspaces; otherwise the whole book.
+      const all = await loadCustomers();
       const scoped = body.csm ? filterCustomers(all, { csm: body.csm }) : all;
-      targets = scoped
-        .filter((c) => !!c.workspace_id)
-        .map((c) => ({
-          workspace_id: c.workspace_id as string,
-          owner_email: c.owner_email ?? null,
-        }));
+      workspaceIds = scoped
+        .map((c) => c.workspace_id)
+        .filter((id): id is string => !!id);
     }
-    if (targets.length === 0) {
+    if (workspaceIds.length === 0) {
       return NextResponse.json({
         ok: true,
         refreshed: 0,
@@ -80,7 +68,7 @@ export async function POST(req: Request) {
       });
     }
 
-    const blob = await refreshZendeskOverlay(targets, {
+    const blob = await refreshZendeskOverlay(workspaceIds, {
       lookbackDays: body.lookback_days,
     });
 
@@ -105,7 +93,7 @@ export async function POST(req: Request) {
 
     return NextResponse.json({
       ok: true,
-      refreshed: targets.length,
+      refreshed: workspaceIds.length,
       fetched_at: blob.fetched_at,
     });
   } catch (e) {
