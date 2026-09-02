@@ -227,6 +227,45 @@ export async function searchSlackMessages(
   return { hits, status: "ok" };
 }
 
+/** Stopword list — single-word pub names that produce garbage under
+ *  phrase search. These match every Slack chatter about "the weekly
+ *  news", "our daily digest", etc. When one of these is the entire
+ *  pub name, we skip the pub_name query and lean on pub_id + email.
+ *  Kept intentionally small — extend as we see false positives in
+ *  the panel. */
+const PUB_NAME_STOPWORDS = new Set([
+  "news",
+  "newsletter",
+  "daily",
+  "weekly",
+  "monthly",
+  "digest",
+  "brief",
+  "briefing",
+  "update",
+  "updates",
+  "post",
+  "posts",
+  "the",
+  "media",
+  "insider",
+  "report",
+]);
+
+/** True when the pub name is worth phrase-searching. Skips short
+ *  single-word names (a 2-3 char name is basically guaranteed to
+ *  false-positive) and the stopword list. Multi-word names always
+ *  qualify — even something like "The Weekly" is distinctive enough
+ *  as a phrase to be worth the call. */
+function isDistinctivePubName(name: string): boolean {
+  const words = name.split(/\s+/).filter(Boolean);
+  if (words.length > 1) return true;
+  const single = words[0]?.toLowerCase() ?? "";
+  if (single.length <= 3) return false;
+  if (PUB_NAME_STOPWORDS.has(single)) return false;
+  return true;
+}
+
 function truncate(text: string, max: number): string {
   const t = text.replace(/\s+/g, " ").trim();
   if (t.length <= max) return t;
@@ -239,9 +278,18 @@ function truncate(text: string, max: number): string {
  * `topN` matches. Each search is independently fail-open; a single
  * failure doesn't lose the results from the others.
  *
- * pub_name is passed in quoted so multi-word names match as a phrase
- * (`"Sample Publication"`), not as an OR of the individual words.
- * Empty inputs are skipped rather than issuing an empty search.
+ * Every term is quoted before sending. Slack's search tokenizer
+ * breaks on `-`, `@`, `.` and other separators — an unquoted UUID
+ * matches on its dash-separated parts, an unquoted email matches on
+ * the local part OR the domain OR either side of a dot, and an
+ * unquoted single-word pub name matches every mention. Quoting
+ * forces exact-phrase match and cuts noise dramatically.
+ *
+ * pub_name has an extra guard: skip the search when the name is a
+ * short single word (≤ 3 chars) or matches a stopword. A pub
+ * called "News", "Daily", or "The" produces thousands of unrelated
+ * hits and washes out the signal from pub_id + email. pub_id is
+ * always run since UUIDs don't have this problem.
  */
 export async function slackSearchForUpgradeAnalysis(args: {
   pubId: string;
@@ -252,20 +300,25 @@ export async function slackSearchForUpgradeAnalysis(args: {
   const { pubId, ownerEmail, pubName, topN = 30 } = args;
   const searches: Array<Promise<SlackSearchResult>> = [];
 
-  if (pubId.trim())
-    searches.push(searchSlackMessages(pubId.trim(), { matchedTerm: pubId.trim() }));
-  if (ownerEmail?.trim())
+  if (pubId.trim()) {
+    const trimmed = pubId.trim();
     searches.push(
-      searchSlackMessages(ownerEmail.trim(), { matchedTerm: ownerEmail.trim() })
+      searchSlackMessages(`"${trimmed}"`, { matchedTerm: trimmed })
     );
+  }
+  if (ownerEmail?.trim()) {
+    const trimmed = ownerEmail.trim();
+    searches.push(
+      searchSlackMessages(`"${trimmed}"`, { matchedTerm: trimmed })
+    );
+  }
   if (pubName?.trim()) {
-    // Phrase-match multi-word names so a pub called "Media Pulse"
-    // doesn't fire on every message that says "media" OR "pulse".
     const trimmed = pubName.trim();
-    const phrase = /\s/.test(trimmed) ? `"${trimmed}"` : trimmed;
-    searches.push(
-      searchSlackMessages(phrase, { matchedTerm: trimmed })
-    );
+    if (isDistinctivePubName(trimmed)) {
+      searches.push(
+        searchSlackMessages(`"${trimmed}"`, { matchedTerm: trimmed })
+      );
+    }
   }
 
   if (searches.length === 0) {
