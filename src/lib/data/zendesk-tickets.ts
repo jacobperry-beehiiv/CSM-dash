@@ -11,10 +11,22 @@ import { kvGet, kvSet } from "../storage/kv";
  *   • Single KV row keyed `csm:zendesk-tickets:v1`.
  *   • Value: `{ rows: Record<workspace_id, ZendeskSummary>, fetched_at }`.
  *
- * Data source: Metabase's Postgres replica (DB.POSTGRES=2). The
- * `zendesk_tickets` table is keyed on publication_id, so we roll up
- * to workspace via a join on `publications.organization_id`. A
- * workspace with multiple publications aggregates across all of them.
+ * ─── Match key: owner_email ──────────────────────────────────────
+ * We look up tickets by matching the ticket-filer's email to the
+ * customer's owner_email (the primary contact stored in the CSM
+ * dashboard). Explicit product decision, not the publication_id
+ * join we started with — a workspace's owner is the person we want
+ * to know is filing tickets, and joining through publications also
+ * caught tickets from unrelated team members that skewed the count.
+ *
+ * The engine still keys the overlay on workspace_id so the panels
+ * can look up per row without carrying the email through the
+ * customer object graph. Email → workspace mapping happens inside
+ * the sweep (callers pass in {workspace_id, owner_email} pairs).
+ *
+ * Data source: Metabase's Postgres replica (DB.POSTGRES=2). Join
+ * `zendesk_tickets` to `users` on user_id → filter on `users.email`
+ * (citext, so case-insensitive by default).
  *
  * ─── Priority mapping ──────────────────────────────────────────────
  * Zendesk itself has {low, normal, high, urgent}. In production
@@ -25,8 +37,11 @@ import { kvGet, kvSet } from "../storage/kv";
  */
 
 const KEY = "csm:zendesk-tickets:v1";
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/** Loose email shape — enough to keep a bad interpolation from
+ *  breaking the query. Postgres will lower-case-match anyway via
+ *  citext, so we're not enforcing RFC here, just guarding against
+ *  `'; DROP TABLE`-style typos in a customer's owner_email field. */
+const EMAIL_RE = /^[^\s'"@;\\]+@[^\s'"@;\\]+\.[^\s'"@;\\]+$/;
 
 /** Days back the sweep counts against. 30 matches the CSM cadence
  *  for other surfaces (proactive outreach, feature utilization) so
@@ -88,57 +103,68 @@ export async function saveZendeskOverlay(blob: ZendeskBlob): Promise<void> {
 }
 
 /**
- * Sweep counters + recent tickets for a set of workspace ids. One
- * Postgres round-trip regardless of the batch size (Postgres handles
- * a `WHERE ... = ANY(ARRAY[...])` against a few thousand UUIDs
- * comfortably) plus one lighter round-trip for the recent-ticket
- * sample. Merges into whatever's already in the overlay so a partial
- * sweep (e.g. one CSM's book) doesn't wipe the rest.
+ * Sweep counters + recent tickets for a set of {workspace_id,
+ * owner_email} pairs. Matches on owner_email — the ticket-filer's
+ * user record joins to `users.email`, which is compared against
+ * the customer's owner_email from the CSM dashboard. Workspaces
+ * without a resolvable owner_email are skipped (no email → no
+ * match key).
+ *
+ * Two Postgres round-trips: counters + a recent-tickets sample via
+ * a partitioned ROW_NUMBER window. Merges into whatever's already
+ * in the overlay so a partial sweep doesn't wipe the rest.
  */
 export async function refreshZendeskOverlay(
-  workspaceIds: string[],
+  targets: Array<{ workspace_id: string; owner_email: string | null }>,
   opts?: { lookbackDays?: number }
 ): Promise<ZendeskBlob> {
   const lookbackDays = opts?.lookbackDays ?? DEFAULT_LOOKBACK_DAYS;
-  // Guard against SQL injection — runNativeQuery interpolates values
-  // into the query string; a stray non-UUID sneaks a malformed AST
-  // through and breaks parsing at best. Silently drop bad ids so a
-  // caller with mixed data doesn't fail the whole sweep.
-  const clean = Array.from(
-    new Set(workspaceIds.filter((id) => typeof id === "string" && UUID_RE.test(id)))
-  );
-  if (clean.length === 0) {
+  // Build the email → workspace_id map. Emails are lowercased so a
+  // customer with "Foo@Bar.com" and a ticket-user with "foo@bar.com"
+  // still match on the return trip (Postgres's citext handles the
+  // WHERE side; JS is case-sensitive so we normalize here).
+  const emailToWs = new Map<string, string>();
+  const cleanTargets: Array<{ workspace_id: string; email: string }> = [];
+  for (const t of targets) {
+    if (!t.workspace_id || !t.owner_email) continue;
+    const email = t.owner_email.trim().toLowerCase();
+    if (!EMAIL_RE.test(email)) continue;
+    if (emailToWs.has(email)) continue; // Two workspaces sharing one owner
+    emailToWs.set(email, t.workspace_id);
+    cleanTargets.push({ workspace_id: t.workspace_id, email });
+  }
+  if (cleanTargets.length === 0) {
     return loadZendeskOverlay();
   }
-  const arrLit = "ARRAY[" + clean.map((id) => `'${id}'::uuid`).join(",") + "]";
+  const arrLit =
+    "ARRAY[" +
+    cleanTargets.map((t) => `'${t.email.replace(/'/g, "''")}'`).join(",") +
+    "]::citext[]";
+
   const counterSql = `
     SELECT
-      p.organization_id::text AS workspace_id,
+      u.email::text AS owner_email,
       COUNT(*)::int AS total_30d,
       COUNT(*) FILTER (WHERE zt.priority IN ('high','urgent'))::int AS high_priority_30d,
       COUNT(*) FILTER (WHERE zt.priority = 'urgent')::int AS urgent_30d,
       MAX(zt.created_at)::text AS latest_created_at
     FROM zendesk_tickets zt
-    JOIN publications p ON p.id = zt.publication_id
-    WHERE p.organization_id = ANY(${arrLit})
+    JOIN users u ON u.id = zt.user_id
+    WHERE u.email = ANY(${arrLit})
       AND zt.created_at > NOW() - INTERVAL '${lookbackDays} days'
     GROUP BY 1
   `;
   const counterRows = (await runNativeQuery(DB.POSTGRES, counterSql)) as Array<{
-    workspace_id: string;
+    owner_email: string;
     total_30d: number;
     high_priority_30d: number;
     urgent_30d: number;
     latest_created_at: string | null;
   }>;
 
-  // Recent-tickets sample — one query pulls newest N per workspace
-  // via a window function; we then bucket in-memory. Postgres's
-  // partitioned ROW_NUMBER handles the ranking without ambiguity even
-  // when two tickets land on the same second.
   const recentSql = `
     SELECT
-      p.organization_id::text AS workspace_id,
+      zt.owner_email,
       zt.zendesk_id,
       zt.subject,
       zt.priority,
@@ -147,30 +173,31 @@ export async function refreshZendeskOverlay(
     FROM (
       SELECT
         zt.*,
+        u.email::text AS owner_email,
         ROW_NUMBER() OVER (
-          PARTITION BY p.organization_id
+          PARTITION BY u.email
           ORDER BY zt.created_at DESC
         ) AS rn
       FROM zendesk_tickets zt
-      JOIN publications p ON p.id = zt.publication_id
-      WHERE p.organization_id = ANY(${arrLit})
+      JOIN users u ON u.id = zt.user_id
+      WHERE u.email = ANY(${arrLit})
         AND zt.created_at > NOW() - INTERVAL '${lookbackDays} days'
     ) zt
-    JOIN publications p ON p.id = zt.publication_id
     WHERE zt.rn <= ${RECENT_SAMPLE_LIMIT}
     ORDER BY zt.created_at DESC
   `;
   const recentRows = (await runNativeQuery(DB.POSTGRES, recentSql)) as Array<{
-    workspace_id: string;
+    owner_email: string;
     zendesk_id: number;
     subject: string | null;
     priority: string | null;
     status: string | null;
     created_at: string;
   }>;
-  const recentByWs = new Map<string, ZendeskRecentTicket[]>();
+  const recentByEmail = new Map<string, ZendeskRecentTicket[]>();
   for (const r of recentRows) {
-    const list = recentByWs.get(r.workspace_id) ?? [];
+    const email = r.owner_email.toLowerCase();
+    const list = recentByEmail.get(email) ?? [];
     list.push({
       zendesk_id: r.zendesk_id,
       subject: r.subject,
@@ -178,7 +205,7 @@ export async function refreshZendeskOverlay(
       status: r.status,
       created_at: r.created_at,
     });
-    recentByWs.set(r.workspace_id, list);
+    recentByEmail.set(email, list);
   }
 
   const now = new Date().toISOString();
@@ -186,30 +213,32 @@ export async function refreshZendeskOverlay(
   // Overlay merge — start from what's already stored so a partial
   // refresh (one CSM's book, or a manual "refresh this workspace"
   // trigger) doesn't blow away rows outside the current batch. Rows
-  // in `clean` get their new values; a workspace with ZERO tickets
-  // in the window is stamped with total_30d=0 so the chip renders
-  // "no tickets" (a positive "clean" signal, not a stale value).
+  // that matched get their new values keyed by workspace_id; rows
+  // we scanned but that had no tickets in the window get zero-
+  // stamped so the chip reads "no tickets" (a positive "clean"
+  // signal), not a stale value from a previous spike.
   const rows: Record<string, ZendeskSummary> = { ...prior.rows };
-  const seen = new Set(counterRows.map((r) => r.workspace_id));
+  const hitEmails = new Set<string>();
   for (const r of counterRows) {
-    rows[r.workspace_id] = {
-      workspace_id: r.workspace_id,
+    const email = r.owner_email.toLowerCase();
+    hitEmails.add(email);
+    const workspaceId = emailToWs.get(email);
+    if (!workspaceId) continue; // Shouldn't happen — Postgres returned an
+    // email we didn't send, or we lost the mapping. Skip defensively.
+    rows[workspaceId] = {
+      workspace_id: workspaceId,
       total_30d: r.total_30d,
       high_priority_30d: r.high_priority_30d,
       urgent_30d: r.urgent_30d,
       latest_created_at: r.latest_created_at,
-      recent: recentByWs.get(r.workspace_id) ?? [],
+      recent: recentByEmail.get(email) ?? [],
       fetched_at: now,
     };
   }
-  // Workspaces we scanned but that had no tickets — stamp a zero row
-  // so the chip reads "0 tickets in 30d" instead of falling back to
-  // whatever we last knew (which might have been a spike that's now
-  // resolved).
-  for (const id of clean) {
-    if (seen.has(id)) continue;
-    rows[id] = {
-      workspace_id: id,
+  for (const { workspace_id, email } of cleanTargets) {
+    if (hitEmails.has(email)) continue;
+    rows[workspace_id] = {
+      workspace_id,
       total_30d: 0,
       high_priority_30d: 0,
       urgent_30d: 0,
