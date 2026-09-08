@@ -127,6 +127,7 @@ export function CustomerTable({
   csms,
   priorEspOptions = [],
   techStackOptions = [],
+  requestsEnabled = false,
 }: {
   initialCustomers: CustomerWithMetrics[];
   csms: string[];
@@ -134,6 +135,11 @@ export function CustomerTable({
   priorEspOptions?: string[];
   /** Shared admin-managed choices for the Tech Stack filter. */
   techStackOptions?: string[];
+  /** Threaded from /csm/page.tsx after an isFeatureEnabledFor check
+   *  for the `enterprise-requests` flag. Passed straight through to
+   *  the detail panel so the Requests section only renders (and
+   *  only fetches) for viewers with the flag on. */
+  requestsEnabled?: boolean;
 }) {
   const viewerEmail = useViewerEmail();
   // Signed-in CSM's custom merge tags. Threaded into buildBulkDrafts
@@ -287,6 +293,18 @@ export function CustomerTable({
   );
   const [featureMatcher, setFeatureMatcher] =
     useState<WorkspaceFeatureMatcher | null>(null);
+  // Enterprise Request Loop — "Has open Linear FR" chip. When null,
+  // the chip is off (matches every row). When populated, the chip is
+  // on and the set holds the workspace_ids of accounts with at least
+  // one open Linear request. Fetched on demand from
+  // /api/enterprise-requests/open-workspaces the first time the CSM
+  // toggles the chip on — kept cached in state so re-toggling is
+  // instant.
+  const [openRequestIds, setOpenRequestIds] = useState<Set<string> | null>(
+    null
+  );
+  const [openRequestsChipOn, setOpenRequestsChipOn] = useState(false);
+  const [openRequestsLoading, setOpenRequestsLoading] = useState(false);
   const [outreachFor, setOutreachFor] = useState<Customer | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   // Deep-link support: /csm?workspace_id=X pre-expands that row and
@@ -343,6 +361,32 @@ export function CustomerTable({
     []
   );
 
+  // Lazy-fetch the open-requests set the first time the chip goes
+  // on. The endpoint is scoped to the viewer's book by default, so
+  // no `csm` param needed. Re-fetches whenever the chip toggles from
+  // off → on so a fresh sync's data is visible without a page reload.
+  useEffect(() => {
+    if (!openRequestsChipOn || !requestsEnabled) return;
+    let cancelled = false;
+    setOpenRequestsLoading(true);
+    fetch("/api/enterprise-requests/open-workspaces", { cache: "no-store" })
+      .then(async (r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return (await r.json()) as { open_workspace_ids: string[] };
+      })
+      .then((body) => {
+        if (!cancelled) setOpenRequestIds(new Set(body.open_workspace_ids));
+      })
+      .catch((e) => {
+        console.warn("[open-requests] fetch failed", e);
+        if (!cancelled) setOpenRequestIds(new Set());
+      })
+      .finally(() => !cancelled && setOpenRequestsLoading(false));
+    return () => {
+      cancelled = true;
+    };
+  }, [openRequestsChipOn, requestsEnabled]);
+
   const featureWorkspaceIds = useMemo(
     () =>
       initialCustomers
@@ -389,6 +433,11 @@ export function CustomerTable({
     }
     if (featureMatcher) {
       list = list.filter((c) => featureMatcher(c.workspace_id));
+    }
+    if (openRequestsChipOn && openRequestIds) {
+      list = list.filter((c) =>
+        c.workspace_id ? openRequestIds.has(c.workspace_id) : false
+      );
     }
     if (statusFilter) {
       const target = statusFilter.toLowerCase();
@@ -445,6 +494,8 @@ export function CustomerTable({
     initialCustomers,
     search,
     featureMatcher,
+    openRequestsChipOn,
+    openRequestIds,
     statusFilter,
     priorEspSelected,
     techSelected,
@@ -1023,6 +1074,37 @@ export function CustomerTable({
           workspaceIds={featureWorkspaceIds}
           onFilterChange={onFeatureFilterChange}
         />
+        {requestsEnabled ? (
+          <div className="flex flex-wrap items-center gap-2 rounded-xl border border-border bg-surface shadow-card px-4 py-3">
+            <button
+              type="button"
+              onClick={() => {
+                setOpenRequestsChipOn((v) => !v);
+              }}
+              className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md border transition-colors ${
+                openRequestsChipOn
+                  ? "bg-accent text-accent-fg border-accent font-medium"
+                  : "bg-surface text-fg border-border-strong hover:bg-canvas"
+              }`}
+              title="Show only customers with at least one open Linear feature request logged via the request-creator skill."
+            >
+              <span>Has open Linear FR</span>
+              {openRequestsChipOn ? (
+                openRequestsLoading ? (
+                  <span className="inline-block w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin" />
+                ) : openRequestIds ? (
+                  <span className="tabular-nums">
+                    ({openRequestIds.size})
+                  </span>
+                ) : null
+              ) : null}
+            </button>
+            <span className="text-[11px] text-muted">
+              Feature-request tracker — nightly sync from Linear via the
+              Enterprise Request Loop.
+            </span>
+          </div>
+        ) : null}
       </div>
 
       <div className="flex flex-wrap items-center gap-2 px-3 py-2 mb-3 bg-canvas border border-border rounded-md">
@@ -1238,6 +1320,7 @@ export function CustomerTable({
                               : undefined
                           }
                           gmailScopeMissing={gmail.scopeMissing}
+                          requestsEnabled={requestsEnabled}
                         />
                       </td>
                     </tr>

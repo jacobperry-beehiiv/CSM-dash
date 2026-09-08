@@ -104,7 +104,13 @@ export type SlackNotificationKind =
   | "digest_proactive"
   | "digest_renewals"
   | "proactive_outreach"
-  | "feature_request_comment";
+  | "feature_request_comment"
+  /** Enterprise Request Loop — weekly Monday DM per CSM listing
+   *  every shipped-in-the-last-7-days row from their book that
+   *  hasn't been marked Notified yet. Delivered per-CSM DM (uses
+   *  csm_user_ids), so has_destination:false — the settings row
+   *  only carries the on/off + cron toggle. */
+  | "enterprise_requests_digest";
 
 /** Per-notification preference stored in KV. Destination is a Slack
  *  channel ID (C…) or user ID (U…) for a DM. */
@@ -174,6 +180,14 @@ export const SLACK_NOTIFICATION_DEFINITIONS: SlackNotificationDefinition[] = [
     label: "Feature request comment",
     description:
       "DM the submitter when someone else comments on their feature request. Also adds a personal to-do for the submitter.",
+    has_destination: false,
+  },
+  {
+    kind: "enterprise_requests_digest",
+    label: "Enterprise Request Loop — weekly digest",
+    description:
+      "Monday DM per CSM listing every feature request from their book that shipped in the last 7 days and hasn't been marked Notified yet. Deep-links back into /csm?tab=live-this-week so the CSM can draft the outreach in one click.",
+    schedule: "Mondays ~9:30am CT (cron only)",
     has_destination: false,
   },
 ];
@@ -561,6 +575,16 @@ export function resolveSlackNotificationPref(
       };
     }
     case "feature_request_comment":
+      return {
+        enabled: stored?.enabled ?? true,
+        destination: "",
+        cron_enabled: stored?.cron_enabled ?? true,
+      };
+    case "enterprise_requests_digest":
+      // Destination is unused (per-CSM DM resolved from csm_user_ids
+      // at send time). `enabled` defaults to true so the flag-gated
+      // cron actually delivers when admins enable the flag without
+      // needing a second toggle. cron_enabled defaults to true too.
       return {
         enabled: stored?.enabled ?? true,
         destination: "",

@@ -1,0 +1,99 @@
+name: enterprise-requests-sync
+
+# Enterprise Request Loop nightly refresh. Two POSTs in sequence:
+#   1. /api/enterprise-requests/sync         — pulls Linear tickets
+#      with attached customer_needs, matches them to workspaces,
+#      writes the snapshot blob + refreshes the unmatched queue.
+#   2. /api/enterprise-requests/shipped-sweep — reads new #devs-shipped
+#      + #topic-product-changelog messages, promotes matched rows to
+#      Live / Live-possibly-in-beta, appends promotion_history.
+#
+# Ordering matters: sync writes the row set the sweep promotes.
+# Sync must always run — even a preview of the sweep needs an up-to-
+# date snapshot to look up rows against.
+#
+# Required repo secrets:
+#   • CRON_SECRET                       — bearer; same value as Vercel
+#   • DASHBOARD_URL                     — root URL, no trailing slash
+#   • VERCEL_AUTOMATION_BYPASS_SECRET   — deploy-protection bypass
+#
+# The dashboard's env must have:
+#   • LINEAR_API_KEY                    — Linear personal-access token
+#     (lin_api_…) with default scope; see .env.example for how to mint.
+#   • SLACK_BOT_TOKEN                   — already set (existing crons
+#     use it). The bot must be a member of #devs-shipped
+#     (C0AE7EX6C06) and #topic-product-changelog (C093C6MDS1E).
+#
+# Triggers:
+#   • nightly at 12:30 UTC (~ 7:30am ET / 6:30am CT — offset from the
+#     news + review sweeps so we don't stack Metabase load).
+#   • manually via "Run workflow" for backfills / diagnostics.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "30 12 * * *"
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify required secrets are set
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          DASHBOARD_URL: ${{ secrets.DASHBOARD_URL }}
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+        run: |
+          missing=()
+          for v in CRON_SECRET DASHBOARD_URL VERCEL_AUTOMATION_BYPASS_SECRET; do
+            if [ -z "${!v}" ]; then
+              missing+=("$v")
+            fi
+          done
+          if [ "${#missing[@]}" -ne 0 ]; then
+            echo "::error::Missing required repo secret(s): ${missing[*]}"
+            exit 1
+          fi
+          echo "All required secrets present."
+
+      - name: POST /api/enterprise-requests/sync
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          DASHBOARD_URL: ${{ secrets.DASHBOARD_URL }}
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+        run: |
+          set -e
+          response=$(curl -sS -w "\n%{http_code}" -X POST \
+            -H "Authorization: Bearer ${CRON_SECRET}" \
+            -H "x-vercel-protection-bypass: ${VERCEL_AUTOMATION_BYPASS_SECRET}" \
+            -H "Content-Type: application/json" \
+            "${DASHBOARD_URL}/api/enterprise-requests/sync")
+          body=$(echo "$response" | sed '$d')
+          code=$(echo "$response" | tail -n1)
+          echo "HTTP $code"
+          echo "$body"
+          if [ "$code" != "200" ]; then
+            echo "::error::Enterprise Requests sync failed with HTTP $code"
+            exit 1
+          fi
+
+      - name: POST /api/enterprise-requests/shipped-sweep
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          DASHBOARD_URL: ${{ secrets.DASHBOARD_URL }}
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+        run: |
+          set -e
+          response=$(curl -sS -w "\n%{http_code}" -X POST \
+            -H "Authorization: Bearer ${CRON_SECRET}" \
+            -H "x-vercel-protection-bypass: ${VERCEL_AUTOMATION_BYPASS_SECRET}" \
+            -H "Content-Type: application/json" \
+            "${DASHBOARD_URL}/api/enterprise-requests/shipped-sweep")
+          body=$(echo "$response" | sed '$d')
+          code=$(echo "$response" | tail -n1)
+          echo "HTTP $code"
+          echo "$body"
+          if [ "$code" != "200" ]; then
+            echo "::error::Enterprise Requests shipped-sweep failed with HTTP $code"
+            exit 1
+          fi

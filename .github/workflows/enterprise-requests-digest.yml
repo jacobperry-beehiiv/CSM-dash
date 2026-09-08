@@ -1,0 +1,62 @@
+name: enterprise-requests-digest
+
+# Weekly Monday digest for the Enterprise Request Loop. POSTs to
+# /api/enterprise-requests/digest which DMs each CSM the shipped-in-
+# the-last-7-days requests from their book that haven't been marked
+# Notified yet. Deduped by the dm-sent KV blob — a row that already
+# got a ping never appears in a subsequent digest.
+#
+# Required repo secrets: same as enterprise-requests-sync.
+#
+# Trigger:
+#   • Mondays at 14:30 UTC (~ 9:30am CT / 10:30am ET) — matches the
+#     team's Monday-morning rhythm; adjust here if that moves.
+#   • Manual dispatch for out-of-cycle sends.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "30 14 * * 1"
+
+jobs:
+  digest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify required secrets are set
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          DASHBOARD_URL: ${{ secrets.DASHBOARD_URL }}
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+        run: |
+          missing=()
+          for v in CRON_SECRET DASHBOARD_URL VERCEL_AUTOMATION_BYPASS_SECRET; do
+            if [ -z "${!v}" ]; then
+              missing+=("$v")
+            fi
+          done
+          if [ "${#missing[@]}" -ne 0 ]; then
+            echo "::error::Missing required repo secret(s): ${missing[*]}"
+            exit 1
+          fi
+          echo "All required secrets present."
+
+      - name: POST /api/enterprise-requests/digest
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          DASHBOARD_URL: ${{ secrets.DASHBOARD_URL }}
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+        run: |
+          set -e
+          response=$(curl -sS -w "\n%{http_code}" -X POST \
+            -H "Authorization: Bearer ${CRON_SECRET}" \
+            -H "x-vercel-protection-bypass: ${VERCEL_AUTOMATION_BYPASS_SECRET}" \
+            -H "Content-Type: application/json" \
+            "${DASHBOARD_URL}/api/enterprise-requests/digest")
+          body=$(echo "$response" | sed '$d')
+          code=$(echo "$response" | tail -n1)
+          echo "HTTP $code"
+          echo "$body"
+          if [ "$code" != "200" ]; then
+            echo "::error::Enterprise Requests digest failed with HTTP $code"
+            exit 1
+          fi

@@ -16,6 +16,7 @@ import { useZendeskSummary } from "@/lib/data/use-zendesk-overlay";
 import { CompanyNotes } from "./am/company-notes";
 import { ReviewStatesSection } from "./am/review-states-section";
 import { CustomerNewsSection } from "./am/customer-news-section";
+import { CustomerRequestsSection } from "./am/customer-requests-section";
 import { CopyButton } from "./copy-button";
 import { CsmRefreshRow } from "./csm-refresh-row";
 import { HubSpotLinkBadge } from "./hubspot-link-badge";
@@ -75,6 +76,11 @@ interface Props {
    *  `news-feed` feature flag — noisy for CSMs who don't follow
    *  their book externally. Off by default. */
   newsEnabled?: boolean;
+  /** Mount the per-customer Requests section (Enterprise Request
+   *  Loop). Gated behind the `enterprise-requests` flag; off by
+   *  default so a viewer without the flag doesn't see the section
+   *  or trigger the per-workspace fetch. */
+  requestsEnabled?: boolean;
 }
 
 export function CustomerDetailPanel({
@@ -87,6 +93,7 @@ export function CustomerDetailPanel({
   gmailMatch,
   upgradeAnalysisEnabled = false,
   newsEnabled = false,
+  requestsEnabled = false,
 }: Props) {
   return (
     <div className="space-y-4">
@@ -464,6 +471,19 @@ export function CustomerDetailPanel({
        *  follow their book externally. */}
       {newsEnabled && c.workspace_id ? (
         <CustomerNewsSection workspaceId={c.workspace_id} />
+      ) : null}
+
+      {/* Enterprise Request Loop — every Linear ticket this customer
+       *  has a customerNeed against, grouped by shipped-vs-open, with
+       *  a Draft outreach button on Live rows so the CSM can close
+       *  the loop back to the customer. Snapshot is refreshed nightly
+       *  by the enterprise-requests-sync cron; the Slack shipped-sweep
+       *  runs immediately after and promotes rows to Live. */}
+      {requestsEnabled ? (
+        <CustomerRequestsSection
+          customer={c}
+          enabled={requestsEnabled}
+        />
       ) : null}
 
       {/* Manual notes — same KV the CSM profile-page renders from, but

@@ -30,6 +30,26 @@ interface Props {
    *  {{above_or_below}}) resolve to real values. The
    *  deliverability-panel builds this from the flagged alert. */
   deliverability?: MergeContext["deliverability"];
+  /** When set, populates ctx.feature so a "your request just
+   *  shipped" template resolves its {{feature.title}} /
+   *  {{feature.description}} / {{feature.ship_url}} /
+   *  {{feature.ship_date}} / {{feature.beta_caveat}} tags. Passed
+   *  by the Requests section's Draft outreach button + the Live
+   *  This Week tab. Independent of `deliverability` — a template
+   *  can reference both if it wants (though in practice the
+   *  shipped-feature scenario never carries a deliverability
+   *  context and vice versa). */
+  feature?: MergeContext["feature"];
+  /** Optional side-effect fired when the modal completes a Gmail
+   *  send/draft flow. The Enterprise Request Loop uses it to POST
+   *  the paired notify action on the same row, so opening the
+   *  draft stamps drafted_at and confirming send stamps
+   *  notified_at. `state` is:
+   *    - "drafted": Gmail draft creation succeeded
+   *    - "sent": Gmail send succeeded
+   *  The modal fires exactly one of these per successful flow;
+   *  parents that don't care can leave this unset. */
+  onDraftLifecycle?: (state: "drafted" | "sent") => void;
 }
 
 interface GmailStatus {
@@ -58,6 +78,8 @@ export function OutreachModal({
   onClose,
   initialScenario,
   deliverability,
+  feature,
+  onDraftLifecycle,
 }: Props) {
   const viewerEmail = useViewerEmail();
   // Signed-in CSM's custom merge tags — folded into the render
@@ -216,6 +238,7 @@ export function OutreachModal({
     recipient_email:
       recipientEmails.length === 1 ? recipientEmails[0] : null,
     deliverability,
+    feature,
     custom_tags: customTags ?? undefined,
   };
   const subject = template
@@ -273,6 +296,7 @@ export function OutreachModal({
           ? " (sent from your primary address — alias not verified)"
           : "";
       setGmailMessage(`Draft created in ${where}'s Drafts folder${fallbackNote}.`);
+      onDraftLifecycle?.("drafted");
     } catch (e) {
       setGmailMessage(e instanceof Error ? e.message : "Draft creation failed");
     } finally {

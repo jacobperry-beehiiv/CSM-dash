@@ -1,8 +1,10 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import type { Customer } from "@/lib/types";
 import { CollapsibleSection } from "../collapsible-section";
 import { fmtDate } from "../format";
+import { OutreachModal } from "../outreach-modal";
 import type {
   EnterpriseRequestDerivedState,
   EnterpriseRequestRow,
@@ -29,15 +31,15 @@ import { estimateToTShirt } from "@/lib/data/enterprise-requests-types";
  */
 
 interface Props {
-  workspaceId: string | null | undefined;
+  /** Full Customer record — passed so the Draft outreach button can
+   *  hand the same object to the section-owned OutreachModal without
+   *  a second fetch. `workspaceId` is derived from
+   *  `customer.workspace_id` for the API call. */
+  customer: Customer;
   /** Feature-flag gate — threaded from the parent so we can hide the
    *  whole section without unmounting mid-fetch. When false, we
    *  render nothing. */
   enabled: boolean;
-  /** Wire this so the "Draft outreach" button can bubble up to the
-   *  page-owned OutreachModal state (same pattern the deliverability
-   *  panel's Draft button uses). When absent the button is hidden. */
-  onDraftOutreach?: (row: EnterpriseRequestRow) => void;
 }
 
 interface Row extends EnterpriseRequestRow {
@@ -78,13 +80,18 @@ const STATE_BADGE_CLASS: Record<EnterpriseRequestDerivedState, string> = {
 };
 
 export function CustomerRequestsSection({
-  workspaceId,
+  customer,
   enabled,
-  onDraftOutreach,
 }: Props) {
+  const workspaceId = customer.workspace_id;
   const [data, setData] = useState<ApiResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Row currently being drafted-against — powers the section-owned
+  // OutreachModal so we don't need to plumb an opener callback all
+  // the way up to the customer-table client component. The Draft
+  // outreach button opens the modal; onClose clears it.
+  const [draftingRow, setDraftingRow] = useState<Row | null>(null);
 
   useEffect(() => {
     if (!enabled || !workspaceId) return;
@@ -285,34 +292,32 @@ export function CustomerRequestsSection({
                       </div>
                       {(state === "Live" || state === "Live, possibly in beta") ? (
                         <div className="mt-1.5 flex items-center gap-2">
-                          {onDraftOutreach ? (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                onDraftOutreach(row);
-                                // Stamp drafted_at eagerly — the API
-                                // won't roll it back if the CSM
-                                // abandons the modal.
-                                void fetch(
-                                  "/api/enterprise-requests/notify",
-                                  {
-                                    method: "POST",
-                                    headers: {
-                                      "Content-Type": "application/json",
-                                    },
-                                    body: JSON.stringify({
-                                      workspace_id: workspaceId,
-                                      linear_issue_id: row.linear_issue_id,
-                                      action: "drafted",
-                                    }),
-                                  }
-                                );
-                              }}
-                              className="px-2 py-0.5 text-[11px] rounded border border-border-strong hover:bg-canvas"
-                            >
-                              ✉ Draft outreach
-                            </button>
-                          ) : null}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setDraftingRow(row);
+                              // Stamp drafted_at eagerly — the API
+                              // won't roll it back if the CSM
+                              // abandons the modal.
+                              void fetch(
+                                "/api/enterprise-requests/notify",
+                                {
+                                  method: "POST",
+                                  headers: {
+                                    "Content-Type": "application/json",
+                                  },
+                                  body: JSON.stringify({
+                                    workspace_id: workspaceId,
+                                    linear_issue_id: row.linear_issue_id,
+                                    action: "drafted",
+                                  }),
+                                }
+                              );
+                            }}
+                            className="px-2 py-0.5 text-[11px] rounded border border-border-strong hover:bg-canvas"
+                          >
+                            ✉ Draft outreach
+                          </button>
                           <label className="inline-flex items-center gap-1 text-[11px] text-fg cursor-pointer select-none">
                             <input
                               type="checkbox"
@@ -347,6 +352,75 @@ export function CustomerRequestsSection({
           })}
         </div>
       )}
+      {draftingRow ? (
+        <OutreachModal
+          customer={customer}
+          initialScenario="feature-shipped"
+          feature={{
+            title: draftingRow.title,
+            // Linear issue bodies aren't persisted on the row today
+            // (the sync only stores metadata to keep the snapshot
+            // small). The template's {{feature.description}} tag
+            // resolves to empty and its conditional-block wrapper
+            // hides the surrounding paragraph — safe fallback.
+            description: null,
+            ship_url: draftingRow.ship_url ?? draftingRow.url,
+            ship_date: draftingRow.ship_date
+              ? fmtDate(draftingRow.ship_date)
+              : draftingRow.promoted_at
+                ? fmtDate(draftingRow.promoted_at)
+                : null,
+            beta_caveat:
+              draftingRow.derived_state === "Live, possibly in beta"
+                ? "This is currently in beta rollout — happy to share more if you'd like early access."
+                : "",
+          }}
+          onDraftLifecycle={(state) => {
+            // When the CSM actually creates the Gmail draft (not
+            // just opens the modal), we upgrade the row's state
+            // from `drafted` → `notified` on the "sent" event.
+            // Today the modal fires "drafted" on Gmail-draft
+            // creation — that's already the strongest signal the
+            // CSM has committed to sending, so treat both as
+            // notified. The row's notify UI will flip green on
+            // next refetch.
+            if (state === "drafted" || state === "sent") {
+              void fetch("/api/enterprise-requests/notify", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  workspace_id: workspaceId,
+                  linear_issue_id: draftingRow.linear_issue_id,
+                  action: "notified",
+                }),
+              }).then(() => {
+                // Optimistically flip the row locally too, so the
+                // Notified checkbox lights up without a manual
+                // re-render.
+                setData((prev) =>
+                  prev
+                    ? {
+                        ...prev,
+                        rows: prev.rows.map((r) =>
+                          r.linear_issue_id === draftingRow.linear_issue_id
+                            ? {
+                                ...r,
+                                notified: {
+                                  ...r.notified,
+                                  notified_at: new Date().toISOString(),
+                                },
+                              }
+                            : r
+                        ),
+                      }
+                    : prev
+                );
+              });
+            }
+          }}
+          onClose={() => setDraftingRow(null)}
+        />
+      ) : null}
     </CollapsibleSection>
   );
 }
