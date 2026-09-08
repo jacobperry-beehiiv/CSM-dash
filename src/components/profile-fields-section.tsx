@@ -3,7 +3,10 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { MultiSelectFilter } from "./filters";
-import { techStackChoices } from "@/lib/data/profile-field-options-types";
+import {
+  sortProfileFieldOptions,
+  techStackChoices,
+} from "@/lib/data/profile-field-options-types";
 
 /**
  * The three CSM-owned stack fields — Tech Stack, Prior ESP, and
@@ -203,8 +206,13 @@ function MultiSelectRow({
   // Union of the admin list + anything already selected, so a value an
   // admin has since removed stays visible and toggleable instead of
   // being silently dropped on the next edit.
-  const choices = Array.from(
-    new Set([...options, ...Array.from(draft), ...current])
+  //
+  // Sorted at display time (alphabetical, catch-alls pinned last) so
+  // this picker matches the /csm filters and the Settings editor — and
+  // so the tacked-on already-selected values above don't strand
+  // themselves at the end of the list.
+  const choices = sortProfileFieldOptions(
+    Array.from(new Set([...options, ...Array.from(draft), ...current]))
   );
 
   function startEditing() {
@@ -241,6 +249,8 @@ function MultiSelectRow({
           <MultiSelectFilter
             emptyLabel="None selected"
             disableZeroCounts={false}
+            searchable
+            searchPlaceholder={`Search ${label.toLowerCase()}…`}
             options={choices.map((o) => ({ value: o, label: o }))}
             selected={draft}
             onToggle={(value) =>
