@@ -148,8 +148,10 @@ export async function fetchUserDisplayName(
 }
 
 /** Resolve a permalink to the original message. Optional — we degrade
- *  to null on failure so a permalink miss doesn't block the sync. */
-async function fetchPermalink(args: {
+ *  to null on failure so a permalink miss doesn't block the sync.
+ *  Exported so the Enterprise Request Loop's shipped-sweep can enrich
+ *  audit-trail entries with a jump-to-Slack link. */
+export async function fetchPermalink(args: {
   channel: string;
   ts: string;
 }): Promise<string | null> {
