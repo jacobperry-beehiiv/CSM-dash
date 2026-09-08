@@ -9,6 +9,7 @@ import {
   type PerCsmMergeTag,
   type PerCsmMergeTagsResponse,
 } from "@/lib/data/per-csm-merge-tags-types";
+import { resetCustomTagsCache } from "@/lib/data/use-custom-merge-tags";
 
 /**
  * /settings/merge-tags — per-CSM customizable merge tags.
@@ -155,6 +156,15 @@ export default function MergeTagsSettingsPage() {
       const dropped = rows.length - next.length;
       setRows(next);
       setSaved(next);
+      // Bust the tab-shared cache so already-mounted consumers (the
+      // outreach modal opened in another workspace, an unmounted
+      // template editor about to re-mount) pick up the freshly-saved
+      // set on their next render instead of the stale pre-save map.
+      // Without this, adding a new tag then jumping to compose a
+      // draft in the same tab surfaces the token literally as
+      // {{tag_name}} because applyMergeTags falls through the unknown-
+      // token branch.
+      resetCustomTagsCache();
       // Re-fetch registered so a new tag name the viewer just added
       // (or one they removed) reflects in the "registered by any
       // CSM" panel.
