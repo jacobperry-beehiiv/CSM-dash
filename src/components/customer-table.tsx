@@ -41,7 +41,10 @@ import { useCustomMergeTags } from "@/lib/data/use-custom-merge-tags";
 import { BulkDraftsModal, type BulkDraft } from "./bulk-drafts-modal";
 import { MappedFieldEditor } from "./mapped-field-editor";
 import { MAPPABLE_DASHBOARD_FIELDS } from "@/lib/data/field-mappings-types";
-import { techStackChoices } from "@/lib/data/profile-field-options-types";
+import {
+  sortProfileFieldOptions,
+  techStackChoices,
+} from "@/lib/data/profile-field-options-types";
 
 type SortKey = keyof CustomerWithMetrics | "features_enabled";
 type SortDir = "asc" | "desc";
@@ -583,6 +586,19 @@ export function CustomerTable({
       }),
     [priorEspOptions, techStackOptions]
   );
+  // Display order for the two dropdowns: alphabetical, catch-alls
+  // ("Homegrown" / "Other") pinned last. Sorted here at render rather
+  // than in the stored lists so options an admin adds later slot in on
+  // their own — and kept separate from the *counting* lists above,
+  // which key by option value and don't care about order.
+  const priorEspFilterOptions = useMemo(
+    () => sortProfileFieldOptions(priorEspOptions),
+    [priorEspOptions]
+  );
+  const techFilterOptionsSorted = useMemo(
+    () => sortProfileFieldOptions(techFilterOptions),
+    [techFilterOptions]
+  );
   const techCounts = useMemo(() => {
     const m: Record<string, number> = {};
     for (const o of techFilterOptions) {
@@ -1056,7 +1072,9 @@ export function CustomerTable({
             emptyLabel="All"
             className="w-40 justify-between"
             disableZeroCounts={false}
-            options={priorEspOptions.map((o) => ({
+            searchable
+            searchPlaceholder="Search prior ESP…"
+            options={priorEspFilterOptions.map((o) => ({
               value: o,
               label: o,
               count: priorEspCounts[o] ?? 0,
@@ -1072,7 +1090,9 @@ export function CustomerTable({
             emptyLabel="All"
             className="w-40 justify-between"
             disableZeroCounts={false}
-            options={techFilterOptions.map((o) => ({
+            searchable
+            searchPlaceholder="Search tech stack…"
+            options={techFilterOptionsSorted.map((o) => ({
               value: o,
               label: o,
               count: techCounts[o] ?? 0,

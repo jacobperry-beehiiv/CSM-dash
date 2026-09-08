@@ -55,3 +55,53 @@ export function techStackChoices(options: {
   }
   return out;
 }
+
+// ─── Display-time ordering ─────────────────────────────────────────
+
+/**
+ * Catch-all options that belong at the BOTTOM of every picker, in this
+ * order, no matter where they'd fall alphabetically.
+ *
+ * They aren't platform names — they're the "none of the above" escape
+ * hatches, so a CSM scanning for a real ESP shouldn't have to read past
+ * "Homegrown" to reach "HubSpot". Matched case-insensitively so an
+ * admin who typed "other" still gets the pin.
+ */
+const PINNED_LAST = ["homegrown", "other"];
+
+/**
+ * Sort an option list for DISPLAY: case-insensitive alphabetical, with
+ * the PINNED_LAST catch-alls appended in their own fixed order.
+ *
+ * Called at each render site rather than baked into the stored lists,
+ * and deliberately so: options are admin-managed through the Settings
+ * editor, and an entry added there next month should slot into place on
+ * its own instead of landing at the end of an order that was only
+ * correct on the day someone re-sorted KV. It also keeps the stored
+ * value exactly what an admin typed (same principle as
+ * techStackChoices() being a read-time projection).
+ *
+ * `sensitivity: "base"` so casing and accents don't split otherwise
+ * adjacent names ("kit" sorts next to "Kit", not after "Zapier").
+ * Returns a new array; the input is left alone.
+ */
+export function sortProfileFieldOptions(options: string[]): string[] {
+  const rank = (v: string) => {
+    const i = PINNED_LAST.indexOf(v.trim().toLowerCase());
+    // Non-pinned options all share rank -1, so they compare equal here
+    // and fall through to the alphabetical tiebreak below.
+    return i === -1 ? -1 : i;
+  };
+  return [...options].sort((a, b) => {
+    const ra = rank(a);
+    const rb = rank(b);
+    if (ra !== rb) {
+      // Either one is pinned and the other isn't (pinned goes last), or
+      // both are pinned and PINNED_LAST order decides.
+      if (ra === -1) return -1;
+      if (rb === -1) return 1;
+      return ra - rb;
+    }
+    return a.localeCompare(b, undefined, { sensitivity: "base" });
+  });
+}

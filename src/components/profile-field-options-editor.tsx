@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import type { ProfileFieldOptions } from "@/lib/data/profile-field-options";
+import { sortProfileFieldOptions } from "@/lib/data/profile-field-options-types";
 
 /**
  * Admin editor for the two shared option lists (Prior ESP + Tech
@@ -106,6 +107,13 @@ function OptionListEditor({
 }) {
   const [draft, setDraft] = useState("");
 
+  // Display-only ordering — alphabetical with the catch-alls pinned
+  // last, matching the pickers a CSM sees. `values` (what gets PUT) is
+  // left in its stored order on purpose: sorting the saved list would
+  // rewrite KV on the next save for a purely cosmetic reason, and this
+  // way a future addition sorts itself without anyone re-saving.
+  const shown = sortProfileFieldOptions(values);
+
   function add() {
     // Commas are disallowed (they break the /csm filter URL param) — the
     // server strips them too, but reject up-front so the CSM sees why.
@@ -152,11 +160,11 @@ function OptionListEditor({
         </div>
       ) : null}
 
-      {values.length === 0 ? (
+      {shown.length === 0 ? (
         <p className="text-xs text-subtle italic">No options yet.</p>
       ) : (
         <ul className="flex flex-wrap gap-1.5">
-          {values.map((v) => (
+          {shown.map((v) => (
             <li
               key={v}
               className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md text-xs border border-border bg-surface-2 text-fg"

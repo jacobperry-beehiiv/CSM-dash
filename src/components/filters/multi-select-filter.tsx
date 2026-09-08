@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 export interface MultiSelectOption<T extends string = string> {
   value: T;
@@ -17,6 +17,12 @@ export interface MultiSelectOption<T extends string = string> {
  *
  * State is owned by the caller (a Set + onToggle), so the caller decides
  * how selections persist — e.g. URL-synced via a comma-joined param.
+ *
+ * Pass `searchable` to prepend a type-to-filter box (case-insensitive
+ * substring match on the label). It filters in place and never
+ * reorders, so whatever order the caller passed — e.g. the
+ * alphabetical-with-catch-alls-pinned order from
+ * sortProfileFieldOptions() — survives into the filtered results.
  */
 export function MultiSelectFilter<T extends string = string>({
   label,
@@ -26,6 +32,8 @@ export function MultiSelectFilter<T extends string = string>({
   onClear,
   emptyLabel = "All",
   disableZeroCounts = true,
+  searchable = false,
+  searchPlaceholder = "Search options…",
   className,
 }: {
   label?: string;
@@ -39,6 +47,11 @@ export function MultiSelectFilter<T extends string = string>({
   /** When true, options with count 0 render disabled (unless already
    *  selected, so a stale pick can still be removed). */
   disableZeroCounts?: boolean;
+  /** When true, the panel gets a type-to-filter box above the list.
+   *  Worth it once a list runs past a screenful; noise below that. */
+  searchable?: boolean;
+  /** Placeholder for the search box (ignored unless `searchable`). */
+  searchPlaceholder?: string;
   /** Extra classes for the trigger button — e.g. a fixed width so it
    *  lines up with a sibling SelectFilter. */
   className?: string;
@@ -65,6 +78,40 @@ export function MultiSelectFilter<T extends string = string>({
     };
   }, [open]);
 
+  // Search-box state. Lives here rather than in the caller: it's pure
+  // view state (which options are *visible*), not selection state, and
+  // it's meaningless once the panel closes.
+  const [query, setQuery] = useState("");
+  const searchRef = useRef<HTMLInputElement | null>(null);
+
+  // Reset the query every time the panel closes, so reopening always
+  // starts from the full list. Without this a stray filter left behind
+  // on close reads as "an admin deleted half the options" — the same
+  // failure mode the detail-panel editor warns about.
+  useEffect(() => {
+    if (open) {
+      // Focus on open so a CSM can type straight into a long list. The
+      // trigger is a button, so nothing else wants the caret here.
+      searchRef.current?.focus();
+    } else {
+      setQuery("");
+    }
+  }, [open]);
+
+  // Case-insensitive substring match on the LABEL (what's on screen),
+  // not the value — they're identical for the profile pickers, but the
+  // label is what a CSM is reading when they type.
+  //
+  // .filter() preserves order, so the caller's ordering carries through
+  // untouched: with sortProfileFieldOptions() upstream, matches stay
+  // alphabetical and the pinned catch-alls stay at the bottom of
+  // whatever matched, with no re-pinning needed here.
+  const visible = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return options;
+    return options.filter((o) => o.label.toLowerCase().includes(q));
+  }, [options, query]);
+
   const count = selected.size;
   const summary = count === 0 ? emptyLabel : `${count} selected`;
 
@@ -90,13 +137,31 @@ export function MultiSelectFilter<T extends string = string>({
       </button>
       {open ? (
         <div className="absolute z-30 top-full left-0 mt-1 w-56 rounded-md border border-border bg-surface shadow-lg p-2">
+          {searchable && options.length > 0 ? (
+            <input
+              ref={searchRef}
+              type="text"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder={searchPlaceholder}
+              // Escape is left to the panel's document-level handler
+              // (close, which also clears the query) so the key does
+              // one predictable thing everywhere in the filter bar.
+              aria-label={label ? `Search ${label} options` : "Search options"}
+              className="w-full mb-2 px-2 py-1 text-sm border border-border-strong rounded-md bg-surface text-fg placeholder:text-subtle"
+            />
+          ) : null}
           {options.length === 0 ? (
             <p className="text-xs text-subtle italic px-2 py-1">
               No options.
             </p>
+          ) : visible.length === 0 ? (
+            <p className="text-xs text-subtle italic px-2 py-1">
+              No options match &ldquo;{query.trim()}&rdquo;.
+            </p>
           ) : (
             <ul className="space-y-0.5 max-h-64 overflow-y-auto">
-              {options.map((o) => {
+              {visible.map((o) => {
                 const checked = selected.has(o.value);
                 const dim = disableZeroCounts && o.count === 0 && !checked;
                 return (
