@@ -32,7 +32,16 @@ export const maxDuration = 240;
  *     generated_at }
  */
 
-const MAX_PER_REQUEST = 500;
+/** Ceiling on customers per request. The underlying helper already
+ *  batches at 100/req with HubSpot rate-limit-aware pacing (see
+ *  hubspot.ts BATCH_SIZE + INTER_BATCH_DELAY_MS), so this cap exists
+ *  only as a runaway-safety valve — not to protect the API from
+ *  legitimate team-wide book sizes. Raised from 500 → 5000 after
+ *  team-wide resyncs on the /csm page silently truncated books
+ *  larger than 500 accounts. 5000 = 50 batches ≈ 5s of pure API
+ *  time; the file already sets maxDuration=240 to cover the whole
+ *  request including HubSpot pacing delays + KV writes. */
+const MAX_PER_REQUEST = 5000;
 
 export async function POST(req: Request) {
   const session = await auth();
@@ -141,6 +150,11 @@ export async function POST(req: Request) {
   return NextResponse.json({
     ok: true,
     processed: truncated.length,
+    /** Pre-cap count of in-scope customers with a HubSpot company
+     *  link. Surface it separately from `processed` so the client
+     *  can report "processed 4,932 of 5,410" and only flash a
+     *  truncation banner when the two disagree. */
+    total_with_hubspot: customersWithHubspot.length,
     updated,
     no_hubspot_company_id: noHubspot,
     errors,

@@ -166,6 +166,7 @@ export function CustomerTable({
       const j = (await r.json().catch(() => ({}))) as {
         ok?: boolean;
         processed?: number;
+        total_with_hubspot?: number;
         updated?: number;
         no_hubspot_company_id?: number;
         errors?: Array<{ workspace_id: string; reason: string }>;
@@ -182,10 +183,24 @@ export function CustomerTable({
       if ((j.errors?.length ?? 0) > 0) {
         parts.push(`${j.errors!.length} HubSpot misses`);
       }
-      if (j.truncated)
-        parts.push(`(truncated — re-run for the rest)`);
+      // Truncation now names the exact number left unprocessed
+      // instead of the misleading "re-run for the rest" hint (a
+      // re-run slices from the start and re-processes the same
+      // customers). If this ever fires, ping engineering to raise
+      // the cap — a partial-sync workflow doesn't exist yet.
+      if (j.truncated) {
+        const remaining =
+          (j.total_with_hubspot ?? 0) - (j.processed ?? 0);
+        parts.push(
+          `(hit the ${j.processed ?? 0}-customer cap — ${remaining} left unsynced; ask engineering to raise the limit)`
+        );
+      }
+      const scopeSuffix =
+        j.total_with_hubspot != null && !j.truncated
+          ? ` of ${j.total_with_hubspot}`
+          : "";
       setResyncMessage(
-        `Resynced ${j.processed ?? 0} customer${j.processed === 1 ? "" : "s"} from HubSpot — ${parts.join(", ")}.`
+        `Resynced ${j.processed ?? 0}${scopeSuffix} customer${j.processed === 1 ? "" : "s"} from HubSpot — ${parts.join(", ")}.`
       );
       // Re-render so the merged overlay surfaces in every cell.
       router.refresh();
