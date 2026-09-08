@@ -18,7 +18,8 @@ export type FeatureId =
   | "sybill-ingest"
   | "wins-opportunities"
   | "upgrade-analysis"
-  | "news-feed";
+  | "news-feed"
+  | "enterprise-requests";
 
 /** Per-feature gate state. Defaults to "unrestricted" — everyone who
  *  passes the feature's own eligibility check (e.g. CSM with Gmail
@@ -106,6 +107,14 @@ export const FEATURE_METADATA: ReadonlyArray<FeatureMetadata> = [
     eligibility_note:
       "Independent of the daily sweep — the sweep still runs and populates KV; this only controls whether the two panels render.",
   },
+  {
+    id: "enterprise-requests",
+    label: "Enterprise Request Loop",
+    description:
+      "Feature-request tracking end-to-end: nightly Linear sync, per-customer Requests section on the profile, shipped-detection via #devs-shipped + #topic-product-changelog, weekly per-CSM Slack DM of what shipped from their book, Draft Outreach affordance to close the loop, and admin queues for unmatched Linear customers + orphaned shipments. Also adds a “Live This Week” tab on /csm and a “Has open Linear FR” chip on the customer table filter strip.",
+    eligibility_note:
+      "Requires LINEAR_API_KEY in the deployment env. The nightly sync + shipped sweep run regardless of who has the flag; this flag only controls surface visibility (Requests section, /csm tab, chip, admin pages).",
+  },
 ];
 
 /** Safe defaults — every feature ships unrestricted. New flags
@@ -152,6 +161,14 @@ export const DEFAULT_FLAGS: AdminFlags = {
     // migrated behind this flag on the cleanup pass; flip on for
     // CSMs who actually want the news feed.
     "news-feed": {
+      restricted: true,
+      allowed_emails: ["jacob.perry@beehiiv.com"],
+    },
+    // Ships dark — validate the sync + shipped-detection quality on
+    // Jacob's book before opening to the wider CS team. Widen via
+    // /admin/flags once the profile Requests section and Live This
+    // Week queue are behaving.
+    "enterprise-requests": {
       restricted: true,
       allowed_emails: ["jacob.perry@beehiiv.com"],
     },

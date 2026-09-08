@@ -20,6 +20,7 @@ import { DeliverabilityLoading } from "@/components/deliverability-loading";
 import { QbrChartsTab } from "@/components/qbr-charts/qbr-charts-tab";
 import type { WorkspaceOption } from "@/components/qbr-charts/workspace-picker";
 import { WinsList } from "@/components/wins-list";
+import { LiveThisWeek } from "@/components/csm/live-this-week";
 import { JulietFlagList } from "@/components/juliet-flag-list";
 import { RenewalsWithCalendar } from "@/components/renewals-with-calendar";
 import { isAdmin } from "@/lib/auth/admin";
@@ -105,10 +106,22 @@ export default async function CsmPage({
     "wins-opportunities",
     viewerEmail
   );
+  // Enterprise Request Loop flag — controls the per-customer Requests
+  // section on the detail panel, the "Live This Week" tab entry, and
+  // the "Has open Linear FR" filter chip on the book view. Resolved
+  // once so the tab strip and the tab bodies branch off the same
+  // value (same shape as winsEnabled).
+  const requestsEnabled = await isFeatureEnabledFor(
+    "enterprise-requests",
+    viewerEmail
+  );
   const TABS = [
     ...BASE_TABS,
     ...(winsEnabled
       ? [{ id: "wins" as const, label: "Wins & Opportunities" }]
+      : []),
+    ...(requestsEnabled
+      ? [{ id: "live-this-week" as const, label: "Live This Week" }]
       : []),
   ];
 
@@ -127,6 +140,7 @@ export default async function CsmPage({
           csms={csms}
           priorEspOptions={profileOptions.priorEsp}
           techStackOptions={profileOptions.techStack}
+          requestsEnabled={requestsEnabled}
         />
       );
     } else if (tab === "at-risk") {
@@ -190,6 +204,27 @@ export default async function CsmPage({
         .filter((c) => c.workspace_id && flaggedIds.has(c.workspace_id))
         .map((c) => ({ customer: c, flag: flagMap[c.workspace_id as string] }));
       body = <JulietFlagList rows={rows} />;
+    } else if (tab === "live-this-week") {
+      if (!requestsEnabled) {
+        body = (
+          <div className="text-sm text-muted italic">
+            Enterprise Request Loop isn&apos;t enabled for this account yet.
+          </div>
+        );
+      } else {
+        // Build the workspace-id → Customer map from the CSM-scoped
+        // book so the Draft outreach button opens with the full
+        // Customer object (needed for the merge-tag + recipient
+        // picker) without a second fetch. Filter by CSM up-front —
+        // an admin viewing another CSM's queue still gets that
+        // CSM's book scoped in.
+        const scoped = filterCustomers(all, { csm });
+        const byWs: Record<string, import("@/lib/types").Customer> = {};
+        for (const c of scoped) {
+          if (c.workspace_id) byWs[c.workspace_id] = c;
+        }
+        body = <LiveThisWeek csmParam={csm} customersByWorkspace={byWs} />;
+      }
     } else if (tab === "wins") {
       if (!winsEnabled) {
         body = (

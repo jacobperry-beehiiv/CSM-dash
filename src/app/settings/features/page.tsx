@@ -71,6 +71,20 @@ export default async function FeaturesSettingsPage() {
         "Manual sync button that pulls call-recap action items from Sybill emails in your Gmail into your personal to-do list.",
     });
   }
+  if (await isFeatureEnabledFor("enterprise-requests", email)) {
+    cards.push({
+      href: "/settings/enterprise-requests/unmatched",
+      title: "Enterprise Request Loop — unmatched customers",
+      description:
+        "Admin queue: Linear customers that couldn't be resolved to a workspace on the nightly sync. Approve a match or skip the row.",
+    });
+    cards.push({
+      href: "/settings/enterprise-requests/orphans",
+      title: "Enterprise Request Loop — orphaned shipments",
+      description:
+        "Admin queue: shipped-channel hits (>14 days old) that never matched a snapshot row. Mark as live, not customer-facing, or leave pending.",
+    });
+  }
   if (isProfileOptionsAdmin(email)) {
     cards.push({
       href: "/settings/profile-fields",

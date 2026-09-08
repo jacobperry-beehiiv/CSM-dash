@@ -76,6 +76,32 @@ export interface MergeContext {
    *  reference the token and each CSM's stored copy (Calendly link,
    *  "grab time here" blurb, whatever) fills in at render time. */
   custom_tags?: Record<string, string>;
+  /** Feature-shipped outreach context. Filled by the Requests
+   *  section's Draft outreach button (from the profile) and the
+   *  Live This Week tab's per-row Draft outreach button. Populates
+   *  `{{feature.title}}`, `{{feature.description}}`, `{{feature.ship_url}}`,
+   *  `{{feature.ship_date}}`, `{{feature.beta_caveat}}` in the
+   *  shipped-feature outreach template.
+   *
+   *  Each field is independently optional so a template that
+   *  references `{{feature.description}}` still renders cleanly
+   *  when the Linear ticket has no description body — the
+   *  conditional-block syntax `{{#feature.description}}…{{/feature.description}}`
+   *  hides wrapping copy on absent values. */
+  feature?: {
+    title?: string | null;
+    description?: string | null;
+    ship_url?: string | null;
+    /** Pre-formatted human date, e.g. "Sep 4". Callers format
+     *  before passing so we don't have to guess the CSM's locale
+     *  intent here. */
+    ship_date?: string | null;
+    /** Non-empty only when the row is in the "Live, possibly in
+     *  beta" bucket. Pre-composed one-line sentence the template
+     *  can drop in as-is (e.g. "This is currently in beta rollout
+     *  — happy to share more if you'd like early access."). */
+    beta_caveat?: string | null;
+  };
   deliverability?: {
     publication_name?: string | null;
     send_name?: string | null;
@@ -647,6 +673,54 @@ export const MERGE_TAGS: MergeTag[] = [
       "Sender's job title. Defaults to \"Customer Success Manager\" when unset.",
     resolve: (_, ctx) =>
       ctx.deliverability?.sender_title?.trim() || "Customer Success Manager",
+  },
+
+  // ─── Feature-shipped template (Enterprise Request Loop) ───────────
+  //
+  // Populates the "your request just shipped" outreach template — the
+  // one CSMs draft from the Requests section on the customer profile
+  // and from the Live This Week tab. All resolve via ctx.feature —
+  // when the caller opens the modal without a feature context (or
+  // for a template that references these tokens outside the shipped
+  // flow), each returns an empty string so `{{#feature.title}}…
+  // {{/feature.title}}` conditional wrappers hide dependent copy
+  // cleanly. Match the deliverability-tags convention: empty string
+  // (not "—") so the conditional-block logic in applyMergeTags
+  // works as intended.
+  {
+    token: "feature.title",
+    label: "Feature — Linear title",
+    description:
+      "The Linear ticket title for the request that shipped. Set by the caller (Draft outreach launcher on a Live/Live-possibly-in-beta row).",
+    resolve: (_, ctx) => ctx.feature?.title?.trim() || "",
+  },
+  {
+    token: "feature.description",
+    label: "Feature — description body",
+    description:
+      "Free-text description of what shipped. Callers typically pass the Linear issue body verbatim; leave blank if there's nothing sensible to send to a customer.",
+    resolve: (_, ctx) => ctx.feature?.description?.trim() || "",
+  },
+  {
+    token: "feature.ship_url",
+    label: "Feature — ship link",
+    description:
+      "Deep link to the changelog post, PR, or Linear-issue URL — whichever the shipped-sweep engine attached. Renders as a plain URL; wrap in <a href=\"{{feature.ship_url}}\"> in the template if you want a hyperlink.",
+    resolve: (_, ctx) => ctx.feature?.ship_url?.trim() || "",
+  },
+  {
+    token: "feature.ship_date",
+    label: "Feature — ship date",
+    description:
+      "Pre-formatted human date (e.g. \"Sep 4\"). Callers format before passing so the tag doesn't have to guess the CSM's locale intent.",
+    resolve: (_, ctx) => ctx.feature?.ship_date?.trim() || "",
+  },
+  {
+    token: "feature.beta_caveat",
+    label: "Feature — beta caveat sentence",
+    description:
+      "One-line sentence surfaced when the row is in the \"Live, possibly in beta\" bucket — e.g. \"This is currently in beta rollout — happy to share more if you'd like early access.\" Empty for straight-Live rows so a template that always references the tag reads cleanly.",
+    resolve: (_, ctx) => ctx.feature?.beta_caveat?.trim() || "",
   },
 ];
 

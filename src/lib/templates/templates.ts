@@ -16,7 +16,14 @@ export type TemplateScenario =
   | "growth-push-under-tier"
   | "escalation-yellow-red"
   | "approaching-ent"
-  | "general-checkin";
+  | "general-checkin"
+  /** Enterprise Request Loop — Draft outreach for a request that
+   *  just shipped. Opens from the Requests section on the customer
+   *  profile + the "Live This Week" tab, with a `feature.*` merge
+   *  context populated from the shipped request row. Not selected
+   *  by suggestTemplates (never auto-suggested); the launcher sets
+   *  it explicitly via initialScenario. */
+  | "feature-shipped";
 
 export function suggestTemplates(c: Customer): TemplateScenario[] {
   const out: TemplateScenario[] = [];
