@@ -73,6 +73,12 @@ export default async function FeaturesSettingsPage() {
   }
   if (await isFeatureEnabledFor("enterprise-requests", email)) {
     cards.push({
+      href: "/settings/enterprise-requests",
+      title: "Enterprise Request Loop — resync + status",
+      description:
+        "Trigger the Linear sync, #devs-shipped/changelog sweep, and #enterprise-bugs-and-fr intake sweep on demand. Preview or send the weekly per-CSM digest. Shows last-run timestamps + snapshot health.",
+    });
+    cards.push({
       href: "/settings/enterprise-requests/unmatched",
       title: "Enterprise Request Loop — unmatched customers",
       description:
