@@ -282,6 +282,32 @@ export function CustomerRequestsSection({
                                 </a>
                               </>
                             ) : null}
+                            {row.slack_intake?.permalink ? (
+                              <>
+                                {" · "}
+                                <a
+                                  href={row.slack_intake.permalink}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="text-blue-600 dark:text-blue-400 hover:underline"
+                                  title={
+                                    row.slack_intake.body_preview
+                                      ? `Discussed on #enterprise-bugs-and-feature-requests: ${row.slack_intake.body_preview}`
+                                      : "Discussed on #enterprise-bugs-and-feature-requests"
+                                  }
+                                >
+                                  💬 Slack thread
+                                </a>
+                              </>
+                            ) : null}
+                            {row.intake_source === "slack_intake" ? (
+                              <span
+                                className="ml-1.5 rounded border border-border-strong px-1 py-0.5 text-[9px] uppercase tracking-wide text-subtle"
+                                title="Picked up from a Slack post — a Linear customer_need hasn't been attached yet."
+                              >
+                                Slack-only
+                              </span>
+                            ) : null}
                           </div>
                         </div>
                         <span

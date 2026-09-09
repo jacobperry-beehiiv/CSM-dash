@@ -97,3 +97,24 @@ jobs:
             echo "::error::Enterprise Requests shipped-sweep failed with HTTP $code"
             exit 1
           fi
+
+      - name: POST /api/enterprise-requests/slack-intake-sweep
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          DASHBOARD_URL: ${{ secrets.DASHBOARD_URL }}
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+        run: |
+          set -e
+          response=$(curl -sS -w "\n%{http_code}" -X POST \
+            -H "Authorization: Bearer ${CRON_SECRET}" \
+            -H "x-vercel-protection-bypass: ${VERCEL_AUTOMATION_BYPASS_SECRET}" \
+            -H "Content-Type: application/json" \
+            "${DASHBOARD_URL}/api/enterprise-requests/slack-intake-sweep")
+          body=$(echo "$response" | sed '$d')
+          code=$(echo "$response" | tail -n1)
+          echo "HTTP $code"
+          echo "$body"
+          if [ "$code" != "200" ]; then
+            echo "::error::Enterprise Requests slack-intake-sweep failed with HTTP $code"
+            exit 1
+          fi

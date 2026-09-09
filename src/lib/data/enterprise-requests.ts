@@ -8,6 +8,7 @@ import type {
   OrphanedShipmentsBlob,
   OrphanedShipment,
   ShippedCursorBlob,
+  SlackIntakeCursorBlob,
 } from "./enterprise-requests-types";
 
 /**
@@ -208,6 +209,31 @@ export async function saveShippedCursor(
   };
   await kvSet<ShippedCursorBlob>(SHIPPED_CURSOR_KEY, next);
   return next;
+}
+
+// ─── Slack intake cursor (#enterprise-bugs-and-feature-requests) ───
+
+const SLACK_INTAKE_CURSOR_KEY = "csm:enterprise-requests-slack-intake-cursor:v1";
+
+const EMPTY_SLACK_INTAKE_CURSOR: SlackIntakeCursorBlob = {
+  intake_ts: null,
+  updated_at: new Date(0).toISOString(),
+};
+
+export async function loadSlackIntakeCursor(): Promise<SlackIntakeCursorBlob> {
+  return (
+    (await kvGet<SlackIntakeCursorBlob>(SLACK_INTAKE_CURSOR_KEY)) ??
+    EMPTY_SLACK_INTAKE_CURSOR
+  );
+}
+
+export async function saveSlackIntakeCursor(
+  intakeTs: string | null
+): Promise<void> {
+  await kvSet<SlackIntakeCursorBlob>(SLACK_INTAKE_CURSOR_KEY, {
+    intake_ts: intakeTs,
+    updated_at: new Date().toISOString(),
+  });
 }
 
 // ─── Orphaned shipments (>14d old, unmatched) ───────────────────────

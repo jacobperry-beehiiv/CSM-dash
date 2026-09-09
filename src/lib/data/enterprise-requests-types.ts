@@ -46,6 +46,38 @@ export type PromotionSource =
   | "linear_state" // Linear state → Dismissed/Canceled (→ Not planned)
   | "manual"; // CSM/admin manually stamped via the exception queue
 
+/** Where a row entered the snapshot. Rows from the nightly Linear
+ *  sync are "customer_needs" — the canonical path. Rows we picked up
+ *  from a Slack post in #enterprise-bugs-and-feature-requests that
+ *  matched a customer signal + Linear URL are "slack_intake" — these
+ *  fill the gap where a CSM posted about a request in Slack but
+ *  didn't attach a customer_need in Linear. The two paths reconcile
+ *  on subsequent syncs: if a customer_need shows up later, the
+ *  Linear sync overwrites the slack_intake row with the full
+ *  customer-needs metadata (keeping the slack_intake block intact
+ *  as extra context — see runEnterpriseRequestsSync's prior-row
+ *  merge). */
+export type IntakeSource = "customer_needs" | "slack_intake";
+
+/** Slack-post metadata for a row that either originated from or is
+ *  additionally referenced in #enterprise-bugs-and-feature-requests.
+ *  Displayed on the profile Requests row as a "Discussed on Slack ↗"
+ *  jump link. */
+export interface SlackIntakeMeta {
+  channel_id: string;
+  ts: string;
+  permalink: string | null;
+  submitter_email: string | null;
+  submitter_slack_id: string | null;
+  posted_at: string;
+  body_preview: string;
+  /** How the message resolved to this workspace — publication_id
+   *  (`pub_<uuid>` or bare UUID after "Publication ID:"), owner
+   *  email from a `User Email:` field, or a `mailto:` link. Kept
+   *  around so the admin queue can eyeball a mis-match. */
+  matched_via: "publication_id" | "owner_email" | "domain";
+}
+
 export interface PromotionHistoryEntry {
   from_state: EnterpriseRequestDerivedState;
   to_state: EnterpriseRequestDerivedState;
@@ -99,6 +131,15 @@ export interface EnterpriseRequestRow {
   ship_url: string | null;
   ship_date: string | null;
   promotion_history: PromotionHistoryEntry[];
+  /** How this row entered the snapshot. Absent on rows that predate
+   *  the slack-intake sweep — those default to "customer_needs" on
+   *  read for backward compatibility. */
+  intake_source?: IntakeSource;
+  /** Optional link back to the Slack post that mentioned this
+   *  request. Populated when the slack-intake sweep finds a match;
+   *  never cleared by the Linear sync (the sync merges this block
+   *  forward from the prior snapshot). */
+  slack_intake?: SlackIntakeMeta | null;
 }
 
 /** A Linear customer that couldn't be resolved to a dash workspace.
@@ -165,6 +206,17 @@ export interface ManualMap {
 export interface ShippedCursorBlob {
   devs_shipped_ts: string | null;
   changelog_ts: string | null;
+  updated_at: string;
+}
+
+/** Cursor blob for the #enterprise-bugs-and-feature-requests intake
+ *  sweep. Separate from the shipped cursor because the two sweeps
+ *  can run at different cadences (the intake sweep is idempotent
+ *  and re-reads for annotations even on already-processed messages
+ *  when a new Linear ticket URL gets edited into an existing post,
+ *  so the cursor is a soft floor not a hard barrier). */
+export interface SlackIntakeCursorBlob {
+  intake_ts: string | null;
   updated_at: string;
 }
 
