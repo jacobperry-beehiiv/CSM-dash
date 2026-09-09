@@ -77,7 +77,13 @@ export function buildRollupTokens(args: {
   let link = "";
   if (args.deepLinkBase && args.csmHandle) {
     const sep = args.deepLinkBase.includes("?") ? "&" : "?";
-    link = `${args.deepLinkBase}${sep}csm=${encodeURIComponent(args.csmHandle)}`;
+    // `&review=needs_review` pre-applies the destination tab's
+    // review-state filter so the CSM lands directly on the rows the
+    // rollup is counting, not the full book. Static param — the same
+    // rollup semantics always want the "needs review" slice.
+    // Also drops a pre-existing stray `,"` that had crept onto the
+    // URL and was being sent to Slack verbatim.
+    link = `${args.deepLinkBase}${sep}csm=${encodeURIComponent(args.csmHandle)}&review=needs_review`;
   }
   return {
     csm_mention: mention,
