@@ -36,6 +36,7 @@ type Endpoint =
   | "sync"
   | "shipped-sweep"
   | "slack-intake-sweep"
+  | "slack-intake-sweep-backfill"
   | "digest"
   | "digest-dry-run";
 
@@ -53,7 +54,12 @@ const ENDPOINTS: Record<Endpoint, { path: string; label: string; help: string }>
   "slack-intake-sweep": {
     path: "/api/enterprise-requests/slack-intake-sweep",
     label: "3. Sweep #enterprise-bugs-and-feature-requests",
-    help: "Links Slack posts to snapshot rows via Publication ID / User Email. Injects any Linear ticket that was posted but not yet attached as a customer_need.",
+    help: "Links Slack posts to snapshot rows via Publication ID / User Email. Injects any Linear ticket that was posted but not yet attached as a customer_need. Uses the stored cursor — only walks new posts since the last run.",
+  },
+  "slack-intake-sweep-backfill": {
+    path: "/api/enterprise-requests/slack-intake-sweep?backfill=1",
+    label: "3b. Backfill entire channel history",
+    help: "Same as #3 but ignores the cursor and walks the ENTIRE visible channel history (up to ~5000 messages). Use after a parser fix so historic skill posts get re-processed. Idempotent — re-processing an already-seen row is a no-op.",
   },
   "digest-dry-run": {
     path: "/api/enterprise-requests/digest?dryRun=1",
@@ -173,10 +179,21 @@ export function ResyncControls() {
         </button>
       </div>
 
-      {(["sync", "shipped-sweep", "slack-intake-sweep"] as const).map((k) => (
+      {(
+        [
+          "sync",
+          "shipped-sweep",
+          "slack-intake-sweep",
+          "slack-intake-sweep-backfill",
+        ] as const
+      ).map((k) => (
         <div
           key={k}
-          className="rounded-xl border border-border bg-surface shadow-card p-4 space-y-2"
+          className={`rounded-xl border shadow-card p-4 space-y-2 ${
+            k === "slack-intake-sweep-backfill"
+              ? "border-amber-400 dark:border-amber-500/60 bg-amber-50/40 dark:bg-amber-500/5"
+              : "border-border bg-surface"
+          }`}
         >
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0 flex-1">
@@ -191,7 +208,11 @@ export function ResyncControls() {
               disabled={states[k].running || chainRunning}
               className="shrink-0 px-3 py-1.5 text-xs rounded border border-border-strong hover:bg-canvas disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              {states[k].running ? "Running…" : "Run now"}
+              {states[k].running
+                ? "Running…"
+                : k === "slack-intake-sweep-backfill"
+                  ? "Run backfill"
+                  : "Run now"}
             </button>
           </div>
           <StatusCard state={states[k]} />

@@ -44,10 +44,17 @@ import type { Customer } from "../types";
  */
 
 const INTAKE_CHANNEL_ID = "C0907JQRXM0";
-/** Cap per sweep. The channel has ~2 posts/day; 300 covers a rare
- *  weekend backlog and worst-case a two-week catch-up window
- *  without a runaway loop. */
+/** Cap per incremental sweep. The channel has ~2 posts/day; 300
+ *  covers a rare weekend backlog and worst-case a two-week catch-up
+ *  window without a runaway loop. */
 const MAX_MESSAGES_PER_SWEEP = 300;
+/** Cap for a `backfill: true` run — walks the entire visible
+ *  channel history. Slack's `conversations.history` pages at 100
+ *  per round-trip, and 5000 covers years of the channel's typical
+ *  volume without wedging the endpoint's 240s maxDuration budget.
+ *  Sized so we can catch the entire skill-post backlog after a
+ *  parser bug fix in one click. */
+const MAX_MESSAGES_BACKFILL = 5000;
 
 export interface SlackIntakeResult {
   processed: number;
@@ -59,7 +66,21 @@ export interface SlackIntakeResult {
   skipped_no_linear_url: number;
   skipped_unresolvable: number;
   cursor_advanced_to: string | null;
+  /** True when the caller asked for a full-history backfill (cursor
+   *  ignored). Echoed on the response so an admin eyeballing the
+   *  settings status card can tell which mode ran. */
+  backfill: boolean;
   ok: boolean;
+}
+
+export interface RunSlackIntakeSweepOptions {
+  /** Ignore the stored cursor and walk the entire visible channel
+   *  history (up to MAX_MESSAGES_BACKFILL). Use after a parser bug
+   *  fix or the first-time bootstrap so the sweep doesn't leave
+   *  historic posts unprocessed. The cursor still advances to the
+   *  newest ts seen, so a subsequent incremental run resumes
+   *  correctly. */
+  backfill?: boolean;
 }
 
 const UUID_RE =
@@ -228,7 +249,10 @@ function buildRowFromLinear(
   };
 }
 
-export async function runSlackIntakeSweep(): Promise<SlackIntakeResult> {
+export async function runSlackIntakeSweep(
+  opts: RunSlackIntakeSweepOptions = {}
+): Promise<SlackIntakeResult> {
+  const backfill = Boolean(opts.backfill);
   const [customers, snapshot, cursor] = await Promise.all([
     loadCustomers(),
     loadEnterpriseRequestsSnapshot(),
@@ -238,8 +262,16 @@ export async function runSlackIntakeSweep(): Promise<SlackIntakeResult> {
 
   const messages = await fetchChannelMessages({
     channelId: INTAKE_CHANNEL_ID,
-    oldestTs: cursor.intake_ts,
-    maxMessages: MAX_MESSAGES_PER_SWEEP,
+    // Backfill deliberately drops the cursor so we re-walk every
+    // visible message. The parser is idempotent on annotation and
+    // Linear ticket injection (existing rows are matched by
+    // linear_identifier + workspace_id), so re-processing an
+    // already-seen post costs one no-op annotation + zero Linear
+    // lookups. Safe to click any time after a parser fix.
+    oldestTs: backfill ? null : cursor.intake_ts,
+    maxMessages: backfill
+      ? MAX_MESSAGES_BACKFILL
+      : MAX_MESSAGES_PER_SWEEP,
   });
 
   const result: SlackIntakeResult = {
@@ -252,6 +284,7 @@ export async function runSlackIntakeSweep(): Promise<SlackIntakeResult> {
     skipped_no_linear_url: 0,
     skipped_unresolvable: 0,
     cursor_advanced_to: cursor.intake_ts,
+    backfill,
     ok: true,
   };
 
