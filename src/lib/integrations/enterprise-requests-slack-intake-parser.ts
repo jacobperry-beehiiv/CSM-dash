@@ -29,21 +29,34 @@
 const LINEAR_URL_RE =
   /https?:\/\/linear\.app\/beehiiv\/issue\/([A-Z]{2,5}-\d+)(?:[/|>\s"'\]]|$)/gi;
 
-/** `Publication ID: 3947764a-828d-4759-b488-b60e362c33fc — AI Report`
- *  (from the skill template) OR bare `pub_<uuid>` mentions inline
- *  ("- pub_beb94e7c-..."). Both resolve to a publication_id we can
- *  look up in the pub2ws map. */
+/** Structured `Publication ID` line — the skill posts this on its
+ *  own line, with the label wrapped in literal backticks (Slack
+ *  renders backticks as inline <code>) and the value on the LINE
+ *  BELOW, followed by an em-dash + publication name:
+ *
+ *      `Publication ID`
+ *      3947764a-828d-4759-b488-b60e362c33fc — AI Report
+ *
+ *  Also tolerates: no backticks (hand-authored), colon-form
+ *  ("Publication ID:"), and either bare UUID or `pub_<uuid>` form.
+ *  `\s*` matches the newline between label and value in JS regex,
+ *  and the `[*_`]?` bookends catch backtick / bold / italic
+ *  variants a future skill iteration might use. */
 const PUB_ID_LINE_RE =
-  /Publication\s*ID\s*:?\s*(?:`)?(?:pub_)?([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:`)?/i;
+  /[*_`]?Publication\s*ID[*_`]?\s*:?\s*[*_`]?(?:pub_)?([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})[*_`]?/i;
 const PUB_ID_INLINE_RE =
   /pub_([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/gi;
 
-/** `User Email: <mailto:sam@hengeveld.me|sam@hengeveld.me>` — Slack
- *  wraps mailtos in `<mailto:x|x>` in API payloads. Also matches
- *  `User Email: sam@hengeveld.me` (unwrapped) for hand-authored
- *  posts. */
+/** Structured `User Email` line from the skill:
+ *
+ *      `User Email`
+ *      <mailto:sam@hengeveld.me|sam@hengeveld.me>
+ *
+ *  Slack wraps mailtos as `<mailto:x|x>` in API payloads. Also
+ *  tolerates unwrapped `User Email: sam@…` for hand-authored posts
+ *  and bold/italic label variants. */
 const USER_EMAIL_LINE_RE =
-  /User\s*Email\s*:?\s*(?:<mailto:)?([^\s>|<]+@[^\s>|<]+?)(?:\||>|$)/i;
+  /[*_`]?User\s*Email[*_`]?\s*:?\s*(?:<mailto:)?([^\s>|<]+@[^\s>|<]+?)(?:\||>|$)/i;
 
 /** Any `<mailto:...>` link, regardless of surrounding label. Kept as
  *  a fallback for messages that don't use the "User Email:" prefix. */
