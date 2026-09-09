@@ -4,7 +4,10 @@ import type { ProfileFieldOptions } from "./profile-field-options-types";
 // Re-exported so server callers can keep importing the type (and the
 // Tech Stack union helper) from this module.
 export type { ProfileFieldOptions };
-export { techStackChoices } from "./profile-field-options-types";
+export {
+  techStackChoices,
+  sortProfileFieldOptions,
+} from "./profile-field-options-types";
 
 /**
  * Shared, admin-managed option lists for the two per-customer profile

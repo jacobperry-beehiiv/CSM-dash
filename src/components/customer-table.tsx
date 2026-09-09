@@ -41,7 +41,10 @@ import { useCustomMergeTags } from "@/lib/data/use-custom-merge-tags";
 import { BulkDraftsModal, type BulkDraft } from "./bulk-drafts-modal";
 import { MappedFieldEditor } from "./mapped-field-editor";
 import { MAPPABLE_DASHBOARD_FIELDS } from "@/lib/data/field-mappings-types";
-import { techStackChoices } from "@/lib/data/profile-field-options-types";
+import {
+  sortProfileFieldOptions,
+  techStackChoices,
+} from "@/lib/data/profile-field-options-types";
 
 type SortKey = keyof CustomerWithMetrics | "features_enabled";
 type SortDir = "asc" | "desc";
@@ -172,6 +175,7 @@ export function CustomerTable({
       const j = (await r.json().catch(() => ({}))) as {
         ok?: boolean;
         processed?: number;
+        total_with_hubspot?: number;
         updated?: number;
         no_hubspot_company_id?: number;
         errors?: Array<{ workspace_id: string; reason: string }>;
@@ -188,10 +192,24 @@ export function CustomerTable({
       if ((j.errors?.length ?? 0) > 0) {
         parts.push(`${j.errors!.length} HubSpot misses`);
       }
-      if (j.truncated)
-        parts.push(`(truncated — re-run for the rest)`);
+      // Truncation now names the exact number left unprocessed
+      // instead of the misleading "re-run for the rest" hint (a
+      // re-run slices from the start and re-processes the same
+      // customers). If this ever fires, ping engineering to raise
+      // the cap — a partial-sync workflow doesn't exist yet.
+      if (j.truncated) {
+        const remaining =
+          (j.total_with_hubspot ?? 0) - (j.processed ?? 0);
+        parts.push(
+          `(hit the ${j.processed ?? 0}-customer cap — ${remaining} left unsynced; ask engineering to raise the limit)`
+        );
+      }
+      const scopeSuffix =
+        j.total_with_hubspot != null && !j.truncated
+          ? ` of ${j.total_with_hubspot}`
+          : "";
       setResyncMessage(
-        `Resynced ${j.processed ?? 0} customer${j.processed === 1 ? "" : "s"} from HubSpot — ${parts.join(", ")}.`
+        `Resynced ${j.processed ?? 0}${scopeSuffix} customer${j.processed === 1 ? "" : "s"} from HubSpot — ${parts.join(", ")}.`
       );
       // Re-render so the merged overlay surfaces in every cell.
       router.refresh();
@@ -567,6 +585,19 @@ export function CustomerTable({
         techStack: techStackOptions,
       }),
     [priorEspOptions, techStackOptions]
+  );
+  // Display order for the two dropdowns: alphabetical, catch-alls
+  // ("Homegrown" / "Other") pinned last. Sorted here at render rather
+  // than in the stored lists so options an admin adds later slot in on
+  // their own — and kept separate from the *counting* lists above,
+  // which key by option value and don't care about order.
+  const priorEspFilterOptions = useMemo(
+    () => sortProfileFieldOptions(priorEspOptions),
+    [priorEspOptions]
+  );
+  const techFilterOptionsSorted = useMemo(
+    () => sortProfileFieldOptions(techFilterOptions),
+    [techFilterOptions]
   );
   const techCounts = useMemo(() => {
     const m: Record<string, number> = {};
@@ -1041,7 +1072,9 @@ export function CustomerTable({
             emptyLabel="All"
             className="w-40 justify-between"
             disableZeroCounts={false}
-            options={priorEspOptions.map((o) => ({
+            searchable
+            searchPlaceholder="Search prior ESP…"
+            options={priorEspFilterOptions.map((o) => ({
               value: o,
               label: o,
               count: priorEspCounts[o] ?? 0,
@@ -1057,7 +1090,9 @@ export function CustomerTable({
             emptyLabel="All"
             className="w-40 justify-between"
             disableZeroCounts={false}
-            options={techFilterOptions.map((o) => ({
+            searchable
+            searchPlaceholder="Search tech stack…"
+            options={techFilterOptionsSorted.map((o) => ({
               value: o,
               label: o,
               count: techCounts[o] ?? 0,
