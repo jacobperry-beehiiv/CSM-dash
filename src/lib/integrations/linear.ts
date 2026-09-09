@@ -212,6 +212,70 @@ export async function fetchIssuesWithCustomerNeedsPage(
   };
 }
 
+/** Fetch a single issue by its identifier (e.g. "REQ-2207"). Used by
+ *  the Slack-intake sweep to resolve tickets that were posted to
+ *  #enterprise-bugs-and-feature-requests but never got a customer_need
+ *  attached in Linear — those don't show up in
+ *  `fetchAllIssuesWithCustomerNeeds`, so we look them up
+ *  individually. Returns null on any 404-shape response (unknown
+ *  identifier, or the ticket lives in a team the API key can't
+ *  see). Uses the same `issues.filter` shape, keyed on the
+ *  `identifier` field. */
+export async function fetchIssueByIdentifier(
+  identifier: string
+): Promise<LinearIssue | null> {
+  const trimmed = identifier.trim();
+  if (!trimmed) return null;
+  const query = /* GraphQL */ `
+    query IssueByIdentifier($identifier: String!) {
+      issues(first: 1, filter: { identifier: { eq: $identifier } }) {
+        nodes {
+          id
+          identifier
+          title
+          url
+          state {
+            name
+            type
+          }
+          labels {
+            nodes {
+              name
+            }
+          }
+          estimate
+          project {
+            id
+            name
+          }
+          completedAt
+          customerNeeds {
+            nodes {
+              id
+              body
+              createdAt
+              creator {
+                email
+              }
+              customer {
+                id
+                name
+                externalIds
+                domains
+                revenue
+              }
+            }
+          }
+        }
+      }
+    }
+  `;
+  const res = await callLinear<IssuesPageResponse>(query, {
+    identifier: trimmed,
+  });
+  return res.data?.issues?.nodes?.[0] ?? null;
+}
+
 /** Walk every page of issues-with-needs and return the concatenated
  *  list. Consumer typically calls this once per sync run. Guards
  *  against a pathological Linear pagination bug by capping at 200

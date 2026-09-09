@@ -254,6 +254,14 @@ export async function runEnterpriseRequestsSync(): Promise<SyncResult> {
         row.ship_url = priorRow.ship_url;
         row.ship_date = priorRow.ship_date;
         row.promotion_history = priorRow.promotion_history;
+        // Carry forward the slack-intake annotation. The Slack-sweep
+        // stamps this on any row it can link to a Slack post; a
+        // customer_needs sync should never wipe that context. Also
+        // preserve intake_source: once a customer_need shows up in
+        // Linear, this row is now dual-sourced — mark it as
+        // customer_needs (the canonical path) but keep the slack
+        // block for the profile UI.
+        row.slack_intake = priorRow.slack_intake ?? null;
         // If the shipped sweep had already promoted this row past
         // the Linear-native derived state, keep it. A Linear state
         // change (e.g. reopened for a follow-up) shouldn't demote
@@ -265,6 +273,10 @@ export async function runEnterpriseRequestsSync(): Promise<SyncResult> {
           row.derived_state = priorRow.derived_state;
         }
       }
+      // Any row that flows out of the customer_needs sync is
+      // canonically customer_needs, regardless of whether the
+      // Slack-sweep discovered it first.
+      row.intake_source = "customer_needs";
       const bucket = rows[workspaceId] ?? {};
       bucket[issue.id] = row;
       rows[workspaceId] = bucket;
