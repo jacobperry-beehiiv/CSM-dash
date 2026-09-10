@@ -231,6 +231,19 @@ export interface SettingsShape {
   slack: SlackSettings;
   am?: AmSettings;
   personal_todos?: PersonalTodosSettings;
+  access?: AccessSettings;
+}
+
+/** Access-control settings. Currently just an allowlist of emails
+ *  that should be treated as CSM team members even when they have
+ *  no assigned customers in the book — e.g. managers, sales
+ *  engineers, or a CS lead who acts on other CSMs' books but
+ *  doesn't own accounts of their own. Admins are always CSM team
+ *  regardless; this list layers on top. */
+export interface AccessSettings {
+  /** Lowercased emails. Case-insensitive on read; the settings API
+   *  normalizes on save. Order doesn't matter. */
+  extra_csm_emails?: string[];
 }
 
 /** Global config for the personal to-do list feature. All CSMs share
@@ -474,6 +487,10 @@ export const DEFAULTS: SettingsShape = {
     // phantom todos for teammates celebrating with :slay-party:.
     // Re-enable from /settings/slack when scoped correctly.
     reactions_enabled: false,
+  },
+  access: {
+    // Empty by default — admins add via /settings/access.
+    extra_csm_emails: [],
   },
 };
 

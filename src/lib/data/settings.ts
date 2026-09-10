@@ -114,6 +114,19 @@ function merge(partial: Partial<SettingsShape>): SettingsShape {
       ...DEFAULTS.personal_todos,
       ...(partial.personal_todos ?? {}),
     },
+    // Access allowlist — normalize to lowercase + dedupe on read so
+    // downstream consumers can just do an .includes() with the
+    // lowercased viewer email. Same "must be wired into merge()"
+    // gotcha as personal_todos above.
+    access: {
+      extra_csm_emails: Array.from(
+        new Set(
+          (partial.access?.extra_csm_emails ?? [])
+            .map((e) => (typeof e === "string" ? e.trim().toLowerCase() : ""))
+            .filter((e) => e.length > 0)
+        )
+      ).sort(),
+    },
   };
 }
 
