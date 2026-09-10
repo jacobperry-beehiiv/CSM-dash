@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { NextResponse, after } from "next/server";
 import { auth } from "@/auth";
 import { loadOverrides, setOverride } from "@/lib/data/customer-overrides";
 import {
@@ -226,26 +226,41 @@ export async function POST(req: Request) {
       const priorNorm = priorLifecycleStage ?? "";
       const changed = nextStage !== priorNorm;
       if (changed) {
+        // Capture per-request context in locals so the after() closure
+        // holds THIS request's values. Otherwise a warm isolate can
+        // stitch a suspended fire-and-forget from an earlier request
+        // onto the next request's execution and post the wrong prior
+        // → next pair (the bug that produced "b → c firing a → b").
+        const workspaceIdSnap = body.workspace_id;
+        const priorSnap = priorLifecycleStage;
+        const nextSnap = nextStage || null;
+        const actorSnap = session?.user?.email ?? null;
         if (
           nextStage === RENEWAL_CONFIRMED_STAGE &&
           priorLifecycleStage !== RENEWAL_CONFIRMED_STAGE
         ) {
-          // Fire-and-forget wrapper so a Slack outage or a slow
-          // personal-todos KV write doesn't stretch the user's
-          // save-lifecycle click into a spinner. Errors log to console
-          // but don't fail the response — the write already succeeded.
-          void runRenewalConfirmedSideEffects({
-            workspaceId: body.workspace_id,
-            priorStage: priorLifecycleStage,
-            actorEmail: session?.user?.email ?? null,
-          });
+          // Vercel-safe post-response work — `after()` guarantees the
+          // callback runs to completion after the response ships,
+          // instead of the plain `void` pattern that could get killed
+          // when the isolate suspends mid-await (which was leaving
+          // stale Slack posts queued to the next request's turn on
+          // the event loop).
+          after(() =>
+            runRenewalConfirmedSideEffects({
+              workspaceId: workspaceIdSnap,
+              priorStage: priorSnap,
+              actorEmail: actorSnap,
+            })
+          );
         } else {
-          void runLifecycleChangeSideEffects({
-            workspaceId: body.workspace_id,
-            priorStage: priorLifecycleStage,
-            nextStage: nextStage || null,
-            actorEmail: session?.user?.email ?? null,
-          });
+          after(() =>
+            runLifecycleChangeSideEffects({
+              workspaceId: workspaceIdSnap,
+              priorStage: priorSnap,
+              nextStage: nextSnap,
+              actorEmail: actorSnap,
+            })
+          );
         }
       }
     }
