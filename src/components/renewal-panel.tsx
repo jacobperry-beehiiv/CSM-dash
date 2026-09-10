@@ -21,15 +21,8 @@ import {
   type SettingsShape,
 } from "@/lib/data/settings-types";
 import type { OverrideMap } from "@/lib/data/customer-overrides";
-import type {
-  ReviewState,
-  ReviewStatesMap,
-} from "@/lib/data/review-states-types";
-import { needsReview } from "@/lib/data/review-states-types";
 import { BulkEmailLauncher } from "./am/bulk-email-launcher";
 import { CopyPubIdsButton } from "./am/copy-pub-ids-button";
-import { ReviewStateCell } from "./am/review-state-cell";
-import { BulkReviewStateActions } from "./am/bulk-review-state-actions";
 import { PingSelectedButton } from "./am/ping-selected-button";
 import { RenewalsRollupSummary } from "./renewals-rollup-summary";
 import {
@@ -156,11 +149,6 @@ export function RenewalPanel({
   const [lifecycleOptions, setLifecycleOptions] = useState<string[]>(
     DEFAULT_LIFECYCLE_STAGES
   );
-  // Per-workflow review-state map. Drives the Review dropdown +
-  // the ?needs_review filter that scopes the panel to rows still
-  // pending action (reach_out / no decision).
-  const [reviewStates, setReviewStates] = useState<ReviewStatesMap>({});
-  const [needsReviewFilter, setNeedsReviewFilter] = useUrlSearch("needs_review");
   const [lifecycleFilter, setLifecycleFilter] = useUrlSearch("lifecycle");
   useEffect(() => {
     fetch("/api/customer-overrides")
@@ -174,38 +162,7 @@ export function RenewalPanel({
         setLifecycleOptions(resolveLifecycleStages(s));
       })
       .catch(() => {});
-    fetch("/api/review-states")
-      .then((r) => (r.ok ? r.json() : null))
-      .then((j) => j && setReviewStates(j as ReviewStatesMap))
-      .catch(() => {});
   }, []);
-
-  /** Apply the dropdown's new state to the local map so the next
-   *  render reflects the change without waiting for a refetch. */
-  const onReviewChange = useCallback(
-    (workspaceId: string, next: ReviewState | null) => {
-      setReviewStates((prev) => {
-        const map = { ...prev };
-        const current = { ...(map[workspaceId] ?? {}) };
-        if (next === null) {
-          delete current.renewals;
-        } else {
-          current.renewals = {
-            state: next,
-            set_at: new Date().toISOString(),
-            set_by: null,
-          };
-        }
-        if (Object.keys(current).length === 0) {
-          delete map[workspaceId];
-        } else {
-          map[workspaceId] = current;
-        }
-        return map;
-      });
-    },
-    []
-  );
 
   const setLifecycle = useCallback(
     async (workspaceId: string, stage: string) => {
@@ -385,17 +342,6 @@ export function RenewalPanel({
         return pubs.some((p) => p.toLowerCase().includes(q));
       });
     }
-    // ?needs_review=1 scopes to rows still pending action (no
-    // decision or explicitly "reach_out"). Drops "skip" + "done"
-    // so a CSM clicking the digest link sees only what's left
-    // to triage.
-    if (needsReviewFilter === "1") {
-      list = list.filter((c) =>
-        c.workspace_id
-          ? needsReview(reviewStates[c.workspace_id], "renewals")
-          : true
-      );
-    }
     if (lifecycleFilter) {
       if (lifecycleFilter === "__unset__") {
         list = list.filter((c) => !lifecycleStage(c));
@@ -412,8 +358,6 @@ export function RenewalPanel({
     intervalFilter,
     search,
     ws2pubs,
-    needsReviewFilter,
-    reviewStates,
     lifecycleFilter,
     overrides,
     featureMatcher,
@@ -545,11 +489,6 @@ export function RenewalPanel({
           Clear
         </button>
         <CopyPubIdsButton workspaceIds={selectedWorkspaceIds} />
-        <BulkReviewStateActions
-          workspaceIds={selectedWorkspaceIds}
-          workflow="renewals"
-          onApplied={setReviewStates}
-        />
         <PingSelectedButton
           workspaceIds={selectedWorkspaceIds}
           workflow="renewals"
@@ -589,7 +528,6 @@ export function RenewalPanel({
                 <col className="w-[10%]" />
                 <col className="w-[6%]" />
                 <col className="w-[10%]" />
-                <col className="w-[10%]" />
                 <col className="w-[9%] hidden lg:table-cell" />
                 {/* Actions — stacked Stripe / HubSpot / Draft. */}
                 <col className="w-[12%]" />
@@ -607,7 +545,6 @@ export function RenewalPanel({
                   <th className="px-3 py-2 font-medium">Contract renewal</th>
                   <th className="px-3 py-2 font-medium">Days</th>
                   <th className="px-3 py-2 font-medium">Lifecycle</th>
-                  <th className="px-3 py-2 font-medium">Review</th>
                   <th className="px-3 py-2 font-medium hidden lg:table-cell">CSM</th>
                   <th className="px-3 py-2 font-medium"></th>
                 </tr>
@@ -712,22 +649,6 @@ export function RenewalPanel({
                             </span>
                           )}
                         </td>
-                        <td className="px-3 py-2">
-                          <ReviewStateCell
-                            workspaceId={c.workspace_id}
-                            workflow="renewals"
-                            current={
-                              c.workspace_id
-                                ? reviewStates[c.workspace_id]
-                                : undefined
-                            }
-                            onChange={(next) => {
-                              if (c.workspace_id) {
-                                onReviewChange(c.workspace_id, next);
-                              }
-                            }}
-                          />
-                        </td>
                         <td className="px-3 py-2 text-muted hidden lg:table-cell break-words">
                           {c.customer_success_manager?.replace(/_/g, " ") ?? "—"}
                         </td>
@@ -741,7 +662,7 @@ export function RenewalPanel({
                       </tr>
                       {isOpen && (
                         <tr className="bg-blue-50 dark:bg-blue-500/20 border-b border-border">
-                          <td colSpan={12} className="px-6 py-4">
+                          <td colSpan={11} className="px-6 py-4">
                             <CustomerDetailPanel customer={c} />
                           </td>
                         </tr>
