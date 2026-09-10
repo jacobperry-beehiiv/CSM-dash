@@ -354,6 +354,15 @@ export interface AmSettings {
    * to a fallback channel.
    */
   renewals_slack_channel_id?: string;
+  /** Slack user ID to @-mention on the 30-day milestone reply
+   *  whenever the customer's lifecycle_stage isn't yet "Renewal
+   *  Confirmed" — the escalation surface. Set to Juliet's user id
+   *  today (she owns triage on the 30-day mark); admins swap it via
+   *  /settings/slack when ownership changes. Must be a Slack user id
+   *  (`U…` / `W…`), not a handle — the message wraps it as
+   *  `<@USER_ID>` so Slack renders the mention. Blank disables the
+   *  escalation ping. */
+  renewal_30d_triage_user_id?: string;
 }
 
 /** Built-in status list. The first two names ("Pinged" and
@@ -480,6 +489,7 @@ export const DEFAULTS: SettingsShape = {
     onboarding_drive_template_folder_id: "",
     onboarding_drive_template_folder_id_no_op: "",
     renewals_slack_channel_id: "",
+    renewal_30d_triage_user_id: "",
   },
   personal_todos: {
     trigger_emoji: DEFAULT_TODO_TRIGGER_EMOJI,
