@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
-import { isCsmTeamMember } from "@/lib/auth/csm-team";
 import { loadCustomers } from "@/lib/data/load-customers";
 import { loadSettings } from "@/lib/data/settings";
 import { loadOverrides } from "@/lib/data/customer-overrides";
@@ -91,9 +90,12 @@ export async function POST(req: Request) {
   if (!email) {
     return NextResponse.json({ error: "Sign in required." }, { status: 401 });
   }
-  if (!(await isCsmTeamMember(email))) {
-    return NextResponse.json({ error: "CSM team only" }, { status: 403 });
-  }
+  // No CSM-team gate — anyone signed in can fire the ping. The
+  // renewals channel is a shared workspace surface (all sends
+  // land in the same configured channel with the actor's email
+  // stamped in the message), so limiting to isCsmTeamMember was
+  // over-scoped for a workflow non-CSMs (leads, sales engineers)
+  // also need to run.
 
   let body: Body;
   try {
