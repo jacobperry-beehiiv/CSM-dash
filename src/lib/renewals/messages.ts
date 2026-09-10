@@ -145,6 +145,46 @@ export function buildRenewalConfirmedReply(args: {
 }
 
 /**
+ * Generic lifecycle-stage transition reply — posted into the pricing
+ * thread whenever a CSM changes a customer's lifecycle_stage to
+ * anything OTHER than "Renewal Confirmed" (that transition has its
+ * own specialized reply + verification todo via
+ * buildRenewalConfirmedReply). Handles four transition shapes:
+ *
+ *   • unset → stage         "Lifecycle stage set: <stage>"
+ *   • stage → different     "Lifecycle stage: <prior> → <next>"
+ *   • stage → cleared       "Lifecycle stage cleared (was <prior>)"
+ *   • unset → cleared       — no-op, caller shouldn't fire this
+ *
+ * Keeps the thread audit trail complete without duplicating the
+ * "Renewal Confirmed" celebration message on every routine stage
+ * bump (Follow Up Sent → Call Scheduled, etc.).
+ */
+export function buildLifecycleChangeReply(args: {
+  customer: Customer;
+  priorStage: string | null;
+  nextStage: string | null;
+  actorDisplay: string;
+}): string {
+  const { customer: c, priorStage, nextStage, actorDisplay } = args;
+  const link = customerDeepLink(c);
+  let headline: string;
+  if (!priorStage && nextStage) {
+    headline = `:arrow_right: *Lifecycle stage set: ${nextStage}* — ${companyLabel(c)}`;
+  } else if (priorStage && nextStage) {
+    headline = `:arrow_right: *Lifecycle stage: ${priorStage} → ${nextStage}* — ${companyLabel(c)}`;
+  } else {
+    // priorStage && !nextStage — CSM cleared the dropdown.
+    headline = `:arrow_right: *Lifecycle stage cleared* — ${companyLabel(c)} (was *${priorStage}*)`;
+  }
+  return [
+    headline,
+    `Updated by ${actorDisplay}.`,
+    `<${link}|Open in dashboard ↗>`,
+  ].join("\n");
+}
+
+/**
  * Threaded reply posted when a CSM manually fires the "📣 Slack"
  * button from the renewals panel on an account that ALREADY has a
  * pricing thread. Kept lightweight — the parent kickoff already

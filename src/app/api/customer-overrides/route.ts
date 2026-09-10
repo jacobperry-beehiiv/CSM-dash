@@ -18,7 +18,10 @@ import {
   type PersonalTodo,
 } from "@/lib/personal-todos/types";
 import { contractRenewalDate } from "@/lib/renewals/date";
-import { buildRenewalConfirmedReply } from "@/lib/renewals/messages";
+import {
+  buildLifecycleChangeReply,
+  buildRenewalConfirmedReply,
+} from "@/lib/renewals/messages";
 import { renderTodoTitle } from "@/lib/data/todo-source-configs";
 
 export const dynamic = "force-dynamic";
@@ -207,25 +210,43 @@ export async function POST(req: Request) {
     const map = await setOverride(body.workspace_id, patch);
     invalidateCustomerCache();
 
-    // CSM-owned renewals: fire the "Renewal Confirmed" side effects
-    // when the lifecycle_stage transitioned from anything-else to
-    // "Renewal Confirmed" on THIS request. Idempotent — the prior
-    // value gate stops a re-save from re-firing.
+    // CSM-owned renewals: fire lifecycle-stage transition side effects
+    // when the value changed on THIS request. Two paths:
+    //   • → "Renewal Confirmed" fires the specialized celebration
+    //     side effects (thread post + verification todo + action_log)
+    //     via runRenewalConfirmedSideEffects (unchanged).
+    //   • Any other transition (unset → stage, stage → different
+    //     stage, stage → cleared) posts a generic "Lifecycle stage
+    //     updated" reply into the pricing thread + drops an
+    //     action_log entry so the customer profile records the move.
+    // Both paths are idempotent on the prior-value gate — a re-save
+    // with no change doesn't re-fire.
     if ("lifecycle_stage" in body) {
       const nextStage = body.lifecycle_stage?.trim() || "";
-      if (
-        nextStage === RENEWAL_CONFIRMED_STAGE &&
-        priorLifecycleStage !== RENEWAL_CONFIRMED_STAGE
-      ) {
-        // Fire-and-forget wrapper so a Slack outage or a slow
-        // personal-todos KV write doesn't stretch the user's
-        // save-lifecycle click into a spinner. Errors log to console
-        // but don't fail the response — the write already succeeded.
-        void runRenewalConfirmedSideEffects({
-          workspaceId: body.workspace_id,
-          priorStage: priorLifecycleStage,
-          actorEmail: session?.user?.email ?? null,
-        });
+      const priorNorm = priorLifecycleStage ?? "";
+      const changed = nextStage !== priorNorm;
+      if (changed) {
+        if (
+          nextStage === RENEWAL_CONFIRMED_STAGE &&
+          priorLifecycleStage !== RENEWAL_CONFIRMED_STAGE
+        ) {
+          // Fire-and-forget wrapper so a Slack outage or a slow
+          // personal-todos KV write doesn't stretch the user's
+          // save-lifecycle click into a spinner. Errors log to console
+          // but don't fail the response — the write already succeeded.
+          void runRenewalConfirmedSideEffects({
+            workspaceId: body.workspace_id,
+            priorStage: priorLifecycleStage,
+            actorEmail: session?.user?.email ?? null,
+          });
+        } else {
+          void runLifecycleChangeSideEffects({
+            workspaceId: body.workspace_id,
+            priorStage: priorLifecycleStage,
+            nextStage: nextStage || null,
+            actorEmail: session?.user?.email ?? null,
+          });
+        }
       }
     }
 
@@ -382,6 +403,102 @@ async function runRenewalConfirmedSideEffects(args: {
   } catch (e) {
     console.error(
       "[customer-overrides] renewal-confirmed side effects threw",
+      {
+        workspaceId,
+        error: e instanceof Error ? e.message : String(e),
+      }
+    );
+  }
+}
+
+/**
+ * Non-Renewal-Confirmed lifecycle transitions — post a lightweight
+ * update reply into the pricing thread (when one exists) + drop an
+ * action_log entry so the customer profile records the move. Skips
+ * the thread post silently when no pricing thread has been opened
+ * for the workspace yet; still writes the action_log so the audit
+ * trail on the profile is complete.
+ */
+async function runLifecycleChangeSideEffects(args: {
+  workspaceId: string;
+  priorStage: string | null;
+  nextStage: string | null;
+  actorEmail: string | null;
+}): Promise<void> {
+  const { workspaceId, priorStage, nextStage, actorEmail } = args;
+  const humanActor = actorEmail?.trim().toLowerCase() ?? null;
+
+  try {
+    const [customers, thread] = await Promise.all([
+      loadCustomers(),
+      getRenewalThread(workspaceId),
+    ]);
+    const customer = customers.find((c) => c.workspace_id === workspaceId);
+    if (!customer) {
+      console.warn(
+        "[customer-overrides] lifecycle-change side effects: customer not found",
+        { workspaceId, priorStage, nextStage, actorEmail: humanActor }
+      );
+      return;
+    }
+
+    // ── 1. Post update reply into the saved pricing thread ──────
+    if (thread?.channel_id && thread.thread_ts) {
+      try {
+        await postSlackThreadReply({
+          channelId: thread.channel_id,
+          threadTs: thread.thread_ts,
+          text: buildLifecycleChangeReply({
+            customer,
+            priorStage: priorStage || null,
+            nextStage: nextStage || null,
+            actorDisplay: humanActor ?? "the CSM",
+          }),
+        });
+      } catch (e) {
+        console.warn(
+          "[customer-overrides] lifecycle-change thread reply failed",
+          {
+            workspaceId,
+            error: e instanceof Error ? e.message : String(e),
+          }
+        );
+      }
+    }
+
+    // ── 2. Action log entry on the customer's Notes timeline ────
+    try {
+      const label = !priorStage
+        ? `Lifecycle stage set: ${nextStage ?? "(cleared)"}`
+        : !nextStage
+          ? `Lifecycle stage cleared (was ${priorStage})`
+          : `Lifecycle stage: ${priorStage} → ${nextStage}`;
+      await appendActionLog([
+        {
+          workspace_id: workspaceId,
+          text: label,
+          created_by: humanActor ?? undefined,
+          action_kind: "lifecycle_stage_changed",
+          metadata: {
+            prior_stage: priorStage,
+            new_stage: nextStage,
+            thread_ts: thread?.thread_ts ?? null,
+            channel_id: thread?.channel_id ?? null,
+          },
+        },
+      ]);
+    } catch (e) {
+      console.warn(
+        "[customer-overrides] lifecycle-change action_log failed",
+        {
+          workspaceId,
+          error: e instanceof Error ? e.message : String(e),
+        }
+      );
+    }
+  } catch (e) {
+    console.error(
+      "[customer-overrides] lifecycle-change side effects threw",
       {
         workspaceId,
         error: e instanceof Error ? e.message : String(e),
