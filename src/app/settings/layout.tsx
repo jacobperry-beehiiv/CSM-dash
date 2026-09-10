@@ -32,6 +32,17 @@ export default async function SettingsLayout({
         "Hub for gated feature settings — Gmail labels, wins thresholds, D&C Upgrade Analysis, and more (only the ones enabled for you appear).",
     });
   }
+  // Admin-only "Access allowlist" entry — promotes non-CSM emails to
+  // CSM-team access (leads, sales engineers). Hidden from everyone
+  // else's sidebar.
+  if (isAdmin(email)) {
+    extras.push({
+      href: "/settings/access",
+      label: "Access allowlist",
+      description:
+        "Emails to treat as CSM team members even when they don't have assigned customers.",
+    });
+  }
   return (
     <>
       <div className="mb-6">
