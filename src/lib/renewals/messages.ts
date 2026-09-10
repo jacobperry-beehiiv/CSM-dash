@@ -143,3 +143,35 @@ export function buildRenewalConfirmedReply(args: {
     `<${link}|Open in dashboard ↗>`,
   ].join("\n");
 }
+
+/**
+ * Threaded reply posted when a CSM manually fires the "📣 Slack"
+ * button from the renewals panel on an account that ALREADY has a
+ * pricing thread. Kept lightweight — the parent kickoff already
+ * carries the full context — but names the CSM who pinged plus the
+ * current lifecycle stage / days-to-renewal for scannability so a
+ * teammate reading the thread doesn't have to click back to the
+ * dashboard just to see why it fired.
+ */
+export function buildRenewalManualPingReply(args: {
+  customer: Customer;
+  settings: SettingsShape;
+  renewalIso: string | null;
+  lifecycleStage: string | null;
+  actorDisplay: string;
+}): string {
+  const { customer: c, settings, renewalIso, lifecycleStage, actorDisplay } =
+    args;
+  const link = customerDeepLink(c);
+  const daysLine = renewalIso
+    ? `Renewal on *${formatRenewalDate(renewalIso)}*.`
+    : `No contract renewal date set.`;
+  const stageLine = lifecycleStage ? `Current stage: *${lifecycleStage}*.` : "";
+  return [
+    `:bell: Manual ping from ${actorDisplay} — ${csmMention(c, settings)} take a look.`,
+    [daysLine, stageLine].filter(Boolean).join(" "),
+    `<${link}|Open in dashboard ↗>`,
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
