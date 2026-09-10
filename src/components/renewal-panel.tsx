@@ -30,7 +30,7 @@ import { BulkEmailLauncher } from "./am/bulk-email-launcher";
 import { CopyPubIdsButton } from "./am/copy-pub-ids-button";
 import { ReviewStateCell } from "./am/review-state-cell";
 import { BulkReviewStateActions } from "./am/bulk-review-state-actions";
-import { PingSelectedButton } from "./am/ping-selected-button";
+import { RenewalSlackPingButton } from "./am/renewal-slack-ping-button";
 import { RenewalsRollupSummary } from "./renewals-rollup-summary";
 import {
   billingPeriodSuffix,
@@ -550,10 +550,11 @@ export function RenewalPanel({
           workflow="renewals"
           onApplied={setReviewStates}
         />
-        <PingSelectedButton
-          workspaceIds={selectedWorkspaceIds}
-          workflow="renewals"
-        />
+        {/* Bulk Slack fire — walks each selected workspace and either
+            posts a kickoff (new thread) or a ping in the existing
+            thread. Serialized on the server to stay under Slack's
+            per-channel rate limit. */}
+        <RenewalSlackPingButton workspaceIds={selectedWorkspaceIds} />
         <div className="flex-1" />
         <BulkEmailLauncher
           customers={selectedCustomers}
@@ -731,12 +732,28 @@ export function RenewalPanel({
                         <td className="px-3 py-2 text-muted hidden lg:table-cell break-words">
                           {c.customer_success_manager?.replace(/_/g, " ") ?? "—"}
                         </td>
-                        <td className="px-3 py-2">
-                          <RowActions
-                            customer={c}
-                            onDraft={setOutreachFor}
-                            primaryAction="stripe"
-                          />
+                        <td
+                          className="px-3 py-2"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <div className="flex flex-col gap-1 items-stretch">
+                            <RowActions
+                              customer={c}
+                              onDraft={setOutreachFor}
+                              primaryAction="stripe"
+                            />
+                            {/* Per-row Slack fire — same endpoint as
+                                the bulk button, just called with a
+                                single-element workspace_ids array.
+                                Compact styling so it doesn't blow up
+                                the row height. */}
+                            {c.workspace_id ? (
+                              <RenewalSlackPingButton
+                                workspaceIds={[c.workspace_id]}
+                                compact
+                              />
+                            ) : null}
+                          </div>
                         </td>
                       </tr>
                       {isOpen && (
