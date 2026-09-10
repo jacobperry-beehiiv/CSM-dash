@@ -19,10 +19,31 @@ import { isAdmin } from "./admin";
  * celebration sweep — and API routes that CSMs share. Non-CSM
  * viewers (sales, marketing, demo accounts) see the default look
  * and get 403 on those routes.
+ *
+ * ─── Caching ───────────────────────────────────────────────────────
+ * ONLY positive verdicts are cached, and only for a short 60s window.
+ *
+ * Why: Vercel's serverless isolates each hold their own module-scope
+ * cache. A prior 5-min cache of negative verdicts across many warm
+ * isolates meant that a just-promoted user (added to the allowlist
+ * via /settings/access) had to wait up to 5 minutes for the "false"
+ * verdict to expire in whichever isolate their next request landed
+ * on — the invalidateCsmTeamCache() call inside the settings API
+ * only busts the ONE isolate that handled the PUT. Not caching
+ * negative verdicts means a promoted user picks up on their very
+ * next request, no matter which isolate serves it.
+ *
+ * The underlying loadCustomers() (memoized) + loadSettings() (single
+ * small KV read) cost is trivial, so paying it per negative check
+ * is fine.
  */
 
-const cache = new Map<string, { expires: number; isCsm: boolean }>();
-const CACHE_TTL_MS = 5 * 60 * 1000;
+const positiveCache = new Map<string, number>();
+/** Short enough that a demoted user gets locked out quickly across
+ *  isolates without an explicit invalidation call, but long enough
+ *  to absorb the burst of checks a single page load triggers.
+ *  60s is a middle ground. */
+const POSITIVE_TTL_MS = 60 * 1000;
 
 export async function isCsmTeamMember(
   email: string | null | undefined
@@ -32,8 +53,8 @@ export async function isCsmTeamMember(
   if (!key) return false;
   if (isAdmin(key)) return true;
   const now = Date.now();
-  const cached = cache.get(key);
-  if (cached && cached.expires > now) return cached.isCsm;
+  const expiresAt = positiveCache.get(key);
+  if (expiresAt && expiresAt > now) return true;
 
   let isCsm = false;
   try {
@@ -55,18 +76,24 @@ export async function isCsmTeamMember(
   } catch {
     isCsm = false;
   }
-  cache.set(key, { expires: now + CACHE_TTL_MS, isCsm });
+  if (isCsm) {
+    // Cache only the positive verdict so a single page load's burst
+    // of checks reuses one lookup. Negative verdicts stay uncached
+    // so a just-promoted user picks up on the next request.
+    positiveCache.set(key, now + POSITIVE_TTL_MS);
+  }
   return isCsm;
 }
 
-/** Bust the cached result for one email — call from the settings
- *  API's PUT handler so a just-added allowlist member doesn't wait
- *  5 min for the cached "not a CSM" verdict to expire. Passing
- *  `null` clears every entry (useful on bulk-list overwrite). */
+/** Bust the cached positive verdict for one email — call from the
+ *  settings API's PUT handler so a just-demoted member doesn't stay
+ *  authorized for another 60s (in the one isolate that handled the
+ *  PUT). Passing `null` clears every entry. Note: the "just added"
+ *  case doesn't need this because negative verdicts are never cached. */
 export function invalidateCsmTeamCache(email?: string | null): void {
   if (email == null) {
-    cache.clear();
+    positiveCache.clear();
     return;
   }
-  cache.delete(email.trim().toLowerCase());
+  positiveCache.delete(email.trim().toLowerCase());
 }
