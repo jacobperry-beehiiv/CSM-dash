@@ -363,7 +363,7 @@ export const DEFAULT_PROACTIVE_OUTREACH_STATUSES: string[] = [
  *  auto-applies these. Admins manage the list at /settings/slack. */
 export const DEFAULT_LIFECYCLE_STAGES: string[] = [
   "Mid-Year",
-  "CSM Aligned",
+  "AM Aligned",
   "First Outreach Sent",
   "Follow Up Sent",
   "Call Scheduled",

@@ -1249,7 +1249,7 @@ function LifecycleStagesSection({
       inputPlaceholder="New stage (e.g. Renewal at risk)"
       addLabel="+ Add stage"
       emptyHint="No stages configured — dropdown will fall back to the built-in defaults."
-      restoreTitle="Reset to the built-in list — Mid-Year, CSM Aligned, First Outreach Sent, Follow Up Sent, Call Scheduled, Pricing Negotiation, Renewal Confirmed, Renewal Lost."
+      restoreTitle="Reset to the built-in list — Mid-Year, AM Aligned, First Outreach Sent, Follow Up Sent, Call Scheduled, Pricing Negotiation, Renewal Confirmed, Renewal Lost."
       onChange={onChange}
     />
   );
