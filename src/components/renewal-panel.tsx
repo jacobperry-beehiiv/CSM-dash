@@ -21,6 +21,10 @@ import {
   type SettingsShape,
 } from "@/lib/data/settings-types";
 import type { OverrideMap } from "@/lib/data/customer-overrides";
+import {
+  needsReview,
+  type ReviewStatesMap,
+} from "@/lib/data/review-states-types";
 import { BulkEmailLauncher } from "./am/bulk-email-launcher";
 import { CopyPubIdsButton } from "./am/copy-pub-ids-button";
 import { PingSelectedButton } from "./am/ping-selected-button";
@@ -149,6 +153,13 @@ export function RenewalPanel({
   const [lifecycleOptions, setLifecycleOptions] = useState<string[]>(
     DEFAULT_LIFECYCLE_STAGES
   );
+  // Per-workflow review-state map — powers the ?needs_review=1 URL
+  // filter that the Slack rollup + digest links deep-link into.
+  // The per-row Review dropdown and bulk-actions were removed from
+  // this panel, but the map itself stays because the digest CTA
+  // relies on the filter still scoping the list.
+  const [reviewStates, setReviewStates] = useState<ReviewStatesMap>({});
+  const [needsReviewFilter] = useUrlSearch("needs_review");
   const [lifecycleFilter, setLifecycleFilter] = useUrlSearch("lifecycle");
   useEffect(() => {
     fetch("/api/customer-overrides")
@@ -161,6 +172,10 @@ export function RenewalPanel({
         const s = (j as SettingsShape | null)?.am?.lifecycle_stages;
         setLifecycleOptions(resolveLifecycleStages(s));
       })
+      .catch(() => {});
+    fetch("/api/review-states")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => j && setReviewStates(j as ReviewStatesMap))
       .catch(() => {});
   }, []);
 
@@ -342,6 +357,18 @@ export function RenewalPanel({
         return pubs.some((p) => p.toLowerCase().includes(q));
       });
     }
+    // ?needs_review=1 scopes to rows still pending action (no
+    // decision or explicitly "reach_out"). Drops "skip" + "done"
+    // so a CSM clicking the digest / rollup link sees only what's
+    // left to triage. The Review UI on this panel is gone, but
+    // the digest CTA still lands here with the filter applied.
+    if (needsReviewFilter === "1") {
+      list = list.filter((c) =>
+        c.workspace_id
+          ? needsReview(reviewStates[c.workspace_id], "renewals")
+          : true
+      );
+    }
     if (lifecycleFilter) {
       if (lifecycleFilter === "__unset__") {
         list = list.filter((c) => !lifecycleStage(c));
@@ -358,6 +385,8 @@ export function RenewalPanel({
     intervalFilter,
     search,
     ws2pubs,
+    needsReviewFilter,
+    reviewStates,
     lifecycleFilter,
     overrides,
     featureMatcher,
