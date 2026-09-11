@@ -38,6 +38,15 @@ export function dashboardOrigin(): string {
 export function customerDeepLink(c: Customer): string {
   const params = new URLSearchParams({ tab: "renewals" });
   if (c.workspace_id) params.set("workspace_id", c.workspace_id);
+  // Pass the CSM handle so the parent /csm page auto-scopes to that
+  // CSM's book. Without this, a click from someone whose OWN book
+  // doesn't include this customer (a lead, a teammate) lands on an
+  // empty list even though the workspace_id was on the URL. The
+  // renewal panel then filters the CSM's book down to the single
+  // workspace_id so the click surfaces exactly one row.
+  if (c.customer_success_manager) {
+    params.set("csm", c.customer_success_manager);
+  }
   return `${dashboardOrigin()}/csm?${params.toString()}`;
 }
 
