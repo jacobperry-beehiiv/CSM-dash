@@ -174,6 +174,13 @@ export function RenewalPanel({
   const [reviewStates, setReviewStates] = useState<ReviewStatesMap>({});
   const [needsReviewFilter] = useUrlSearch("needs_review");
   const [lifecycleFilter, setLifecycleFilter] = useUrlSearch("lifecycle");
+  // Deep-link to a single account: Slack thread posts use
+  // ?workspace_id=<uuid> so a click lands on exactly that customer.
+  // When present, the panel filters the CSM's book down to just
+  // that workspace_id (auto-expanding it below via the expanded
+  // Set); when the workspace_id isn't in the current viewer's
+  // scope, the empty-state guides them to reset the filter.
+  const [workspaceIdFilter] = useUrlSearch("workspace_id");
   useEffect(() => {
     fetch("/api/customer-overrides")
       .then((r) => (r.ok ? r.json() : null))
@@ -247,6 +254,17 @@ export function RenewalPanel({
     setIntervalFilter("");
     setSearch("");
   }, [customerSignature]);
+
+  // Deep-link auto-expand: rowKey defaults to workspace_id, so a
+  // Slack-thread landing at ?workspace_id=<uuid> can pre-open the
+  // matching detail row without hunting through the buckets. Only
+  // fires while the deep-link param is present; clearing it doesn't
+  // collapse other manually-expanded rows.
+  useEffect(() => {
+    if (workspaceIdFilter) {
+      setExpanded((prev) => new Set(prev).add(workspaceIdFilter));
+    }
+  }, [workspaceIdFilter]);
 
   function rowKey(c: Customer, bucketIdx: number, idx: number): string {
     return c.workspace_id ?? c.stripe_customer_id ?? `${bucketIdx}-${idx}`;
@@ -347,6 +365,15 @@ export function RenewalPanel({
     // active. Uses intervalBucket() so interval_count wins over a
     // misleading raw Stripe interval string.
     let list = customers.filter((c) => intervalBucket(c) !== "monthly");
+    // Deep-link scope: when ?workspace_id=<uuid> is on the URL,
+    // filter down to exactly that account. Runs before every other
+    // filter — a Slack thread click should surface the row even if
+    // an unrelated lifecycle / cadence filter is stuck on from a
+    // prior visit. The other filters are effectively no-ops after
+    // this narrows to at most one row.
+    if (workspaceIdFilter) {
+      list = list.filter((c) => c.workspace_id === workspaceIdFilter);
+    }
     if (intervalFilter) {
       list = list.filter((c) => intervalBucket(c) === intervalFilter);
     }
@@ -403,6 +430,7 @@ export function RenewalPanel({
     lifecycleFilter,
     overrides,
     featureMatcher,
+    workspaceIdFilter,
   ]);
 
   const buckets = useMemo(() => {
@@ -479,6 +507,46 @@ export function RenewalPanel({
   );
 
   if (totalInWindow === 0) {
+    // Deep-link miss: the URL carries a workspace_id but the current
+    // CSM scope doesn't include that account (wrong CSM logged in,
+    // or the ?csm= handle on the URL didn't take). Guide the viewer
+    // to widen the view instead of dropping them on an empty page
+    // that reads like the account has no upcoming renewal.
+    if (workspaceIdFilter) {
+      return (
+        <>
+          {cadencePicker}
+          <div className="bg-amber-50 dark:bg-amber-500/10 border border-amber-300 dark:border-amber-500/30 rounded-lg p-4 text-sm text-amber-900 dark:text-amber-200">
+            <div className="font-medium">
+              This account isn&rsquo;t in your current renewals scope.
+            </div>
+            <p className="mt-1 text-xs">
+              The deep link asked for workspace{" "}
+              <code className="font-mono bg-white/50 dark:bg-white/10 px-1 rounded">
+                {workspaceIdFilter}
+              </code>
+              , but it&rsquo;s not in the currently-selected CSM&rsquo;s
+              book (or it&rsquo;s a monthly account, which the renewals
+              panel excludes by design).
+            </p>
+            <div className="mt-2 flex items-center gap-3 text-xs">
+              <a
+                href="?tab=renewals&csm=all"
+                className="underline text-amber-900 dark:text-amber-200"
+              >
+                Open all CSMs&rsquo; books
+              </a>
+              <a
+                href="?tab=renewals"
+                className="underline text-amber-900 dark:text-amber-200"
+              >
+                Clear the account filter
+              </a>
+            </div>
+          </div>
+        </>
+      );
+    }
     return (
       <>
         {cadencePicker}
