@@ -118,8 +118,19 @@ export function buildRenewalMilestoneReply(args: {
     milestone === 7
       ? `Only *7 days* until renewal on ${formatRenewalDate(renewalIso)}.`
       : `*${milestone} days* until renewal on ${formatRenewalDate(renewalIso)}.`;
+  // 30-day escalation: also @-mention the configured triage user
+  // (Juliet by default) whenever the customer isn't yet Renewal
+  // Confirmed. Blank setting or a non-30d milestone → no extra tag.
+  // "Renewal Confirmed" is the fixed stage name (see
+  // RENEWAL_CONFIRMED_STAGE in /api/customer-overrides/route.ts).
+  const isRenewalConfirmed = (lifecycleStage ?? "").trim() === "Renewal Confirmed";
+  const triageUserId = settings.am?.renewal_30d_triage_user_id?.trim();
+  const escalationMention =
+    milestone === 30 && !isRenewalConfirmed && triageUserId
+      ? ` <@${triageUserId}>`
+      : "";
   return [
-    `:alarm_clock: ${daysLine} ${csmMention(c, settings)}`,
+    `:alarm_clock: ${daysLine} ${csmMention(c, settings)}${escalationMention}`,
     `Current lifecycle stage: *${stageLine}*.`,
     `<${link}|Open in dashboard ↗>`,
   ].join("\n");

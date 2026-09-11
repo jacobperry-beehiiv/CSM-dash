@@ -652,6 +652,16 @@ export default function SlackSettingsPage() {
             },
           }))
         }
+        triageUserId={settings.am?.renewal_30d_triage_user_id ?? ""}
+        onChangeTriage={(next) =>
+          setSettings((prev) => ({
+            ...prev,
+            am: {
+              ...(prev.am ?? {}),
+              renewal_30d_triage_user_id: next,
+            },
+          }))
+        }
       />
 
       <OnboardingDriveTemplateSection
@@ -1262,12 +1272,16 @@ function LifecycleStagesSection({
 function RenewalsChannelSection({
   channelId,
   onChange,
+  triageUserId,
+  onChangeTriage,
 }: {
   channelId: string;
   onChange: (next: string) => void;
+  triageUserId: string;
+  onChangeTriage: (next: string) => void;
 }) {
   return (
-    <section className="bg-surface rounded-xl border border-border shadow-card p-4 space-y-3">
+    <section className="bg-surface rounded-xl border border-border shadow-card p-4 space-y-4">
       <div>
         <h2 className="text-sm font-semibold text-fg">
           Renewals Slack channel
@@ -1292,6 +1306,30 @@ function RenewalsChannelSection({
         placeholder="C0AMK142WUR"
         className="w-full px-3 py-2 text-sm font-mono bg-canvas border border-border rounded-md focus:outline-none focus:ring-2 focus:ring-accent"
       />
+      <div className="pt-3 border-t border-border/60 space-y-2">
+        <label className="block">
+          <div className="text-xs font-medium text-fg">
+            30-day escalation user
+          </div>
+          <p className="text-[11px] text-muted mt-0.5">
+            Slack user ID to @-mention on the 30-day milestone reply when
+            the customer isn&rsquo;t yet at &ldquo;Renewal Confirmed.&rdquo;
+            Set to Juliet&rsquo;s ID today; swap when triage ownership
+            changes. Must be a Slack user id (
+            <code className="font-mono bg-surface-2 px-1 rounded">U…</code>{" "}
+            /{" "}
+            <code className="font-mono bg-surface-2 px-1 rounded">W…</code>),
+            not a handle. Blank disables the extra ping.
+          </p>
+        </label>
+        <input
+          type="text"
+          value={triageUserId}
+          onChange={(e) => onChangeTriage(e.target.value)}
+          placeholder="U01234ABCDE"
+          className="w-full px-3 py-2 text-sm font-mono bg-canvas border border-border rounded-md focus:outline-none focus:ring-2 focus:ring-accent"
+        />
+      </div>
     </section>
   );
 }

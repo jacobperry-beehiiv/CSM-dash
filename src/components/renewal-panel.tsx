@@ -110,6 +110,17 @@ const BUCKETS: Bucket[] = [
     color: "bg-lime-50 dark:bg-lime-500/10 border-lime-200 dark:border-lime-500/30 text-lime-900",
     match: (d) => d != null && d > 90 && d <= 120,
   },
+  {
+    // Full forward pipeline of annual renewals beyond 120 days —
+    // separate from the tightly-scoped 91-120 bucket so the near-
+    // term buckets stay actionable while long-horizon accounts are
+    // still visible for planning.
+    label: "120+ days",
+    detail: "beyond 120 days out",
+    color:
+      "bg-slate-50 dark:bg-slate-500/10 border-slate-200 dark:border-slate-500/40 text-slate-900",
+    match: (d) => d != null && d > 120,
+  },
 ];
 
 export function RenewalPanel({
@@ -472,7 +483,7 @@ export function RenewalPanel({
       <>
         {cadencePicker}
         <div className="bg-green-50 border border-green-200 rounded-lg p-4 text-sm text-green-800">
-          No renewals in the next 120 days
+          No upcoming renewals
           {intervalFilter ? ` for ${bucketLabel(intervalFilter)} customers` : ""}
           {lifecycleFilter
             ? lifecycleFilter === "__unset__"
