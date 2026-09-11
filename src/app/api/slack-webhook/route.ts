@@ -37,6 +37,11 @@ import {
   buildAssignButtonBlocks,
   openAssignModal,
 } from "@/lib/integrations/slack-assign";
+import {
+  RENEWAL_CYCLE_OPEN_BUTTON_ACTION_ID,
+  buildRenewalCycleButtonBlocks,
+  openRenewalCycleModal,
+} from "@/lib/integrations/slack-renewal-cycle";
 import { acquireDedupLock } from "@/lib/integrations/slack-dedup";
 import {
   newTodoId,
@@ -547,6 +552,46 @@ async function handleBlockActions(
         });
       }
       console.warn("[slack-webhook] openAssignModal failed", {
+        error: result.error,
+      });
+    }
+    return NextResponse.json({ ok: true });
+  }
+
+  // Mirrors the assign_open_modal branch above — same trigger_id
+  // lifecycle, same failure surfacing. The renewal-cycle module
+  // owns everything after openRenewalCycleModal returns.
+  if (action.action_id === RENEWAL_CYCLE_OPEN_BUTTON_ACTION_ID) {
+    if (!typed.trigger_id) {
+      console.warn(
+        "[slack-webhook] renewal_cycle_open_modal click missing trigger_id"
+      );
+      return NextResponse.json({ ok: true });
+    }
+    let threadContext = {
+      channel: "",
+      thread_ts: "",
+      requester_user: "",
+    };
+    try {
+      threadContext = JSON.parse(action.value ?? "{}");
+    } catch {
+      console.warn(
+        "[slack-webhook] renewal_cycle_open_modal: couldn't parse button value",
+        { raw: action.value }
+      );
+    }
+    const result = await openRenewalCycleModal({
+      triggerId: typed.trigger_id,
+      threadContext,
+    });
+    if (!result.ok) {
+      if (threadContext.channel && threadContext.thread_ts) {
+        await postThreadReply(threadContext.channel, threadContext.thread_ts, {
+          text: `:warning: Couldn't open the Renewal Cycle form: ${result.error ?? "unknown error"}.`,
+        });
+      }
+      console.warn("[slack-webhook] openRenewalCycleModal failed", {
         error: result.error,
       });
     }
@@ -1367,6 +1412,27 @@ async function handleAppMention(
     await postThreadReply(channel, threadTs, {
       text: "Open the Assign form to onboard a new account.",
       blocks: buildAssignButtonBlocks({
+        channel,
+        thread_ts: threadTs,
+        requester_user: requesterEmail,
+      }),
+    });
+    return;
+  }
+
+  // ── Renewal cycle (SCAFFOLD) ─────────────────────────────────────
+  // `@bot renewal-cycle` posts a button that opens the renewal-cycle
+  // modal. Same trigger_id dance as assign — the button click is
+  // what mints one. Modal contents + submit logic live in
+  // slack-renewal-cycle.ts (scaffold today; wire up as needed).
+  if (parsed.command === "renewal-cycle") {
+    const resolved = await resolveUserKeyForSlackId(event.user);
+    const requesterEmail = resolved.userKey
+      ? userKeyFromEmailToEmail(resolved.userKey)
+      : "";
+    await postThreadReply(channel, threadTs, {
+      text: "Open the Renewal Cycle form.",
+      blocks: buildRenewalCycleButtonBlocks({
         channel,
         thread_ts: threadTs,
         requester_user: requesterEmail,

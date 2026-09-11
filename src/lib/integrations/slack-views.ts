@@ -36,6 +36,10 @@ import {
   ASSIGN_MODAL_CALLBACK_ID,
   assignModalHandler,
 } from "./slack-assign";
+import {
+  RENEWAL_CYCLE_MODAL_CALLBACK_ID,
+  renewalCycleModalHandler,
+} from "./slack-renewal-cycle";
 
 // ─── Generic view-submission contract ─────────────────────────────────
 
@@ -377,6 +381,7 @@ export async function dispatchViewSubmission(
     [HUBSPOT_UPDATE_CSM_CALLBACK_ID]: hubspotUpdateCsmHandler,
     [FIND_CUSTOMER_VIEW_CALLBACK_ID]: findCustomerSubmitHandler,
     [ASSIGN_MODAL_CALLBACK_ID]: assignModalHandler,
+    [RENEWAL_CYCLE_MODAL_CALLBACK_ID]: renewalCycleModalHandler,
   };
   const handler = handlers[payload.view.callback_id];
   if (!handler) {
