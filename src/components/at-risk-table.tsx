@@ -12,6 +12,7 @@ import {
 } from "@/lib/hooks/use-column-visibility";
 import { ColumnPicker } from "./column-picker";
 import { lastContacted, subUtilFraction } from "@/lib/customer-helpers";
+import { buildCsv, csvDateStamp, downloadCsv, type CsvColumn } from "@/lib/csv";
 import { RowActions } from "./row-actions";
 import { BulkEmailLauncher } from "./am/bulk-email-launcher";
 import { RiskLevelChip } from "./risk-level-chip";
@@ -118,6 +119,13 @@ function suggestedTemplate(flags: RiskFlag[]): TemplateScenario {
   if (codes.has("A")) return "dormant-no-send";
   if (codes.has("C")) return "growth-push-under-tier";
   return "general-checkin";
+}
+
+/** Flag codes in the canonical FLAG_META order — same order the row
+ *  chips render in, so the CSV column reads identically to the table. */
+function flagCodesInOrder(flags: RiskFlag[]): RiskFlagCode[] {
+  const present = new Set(flags.map((f) => f.code));
+  return FLAG_META.filter((m) => present.has(m.code)).map((m) => m.code);
 }
 
 function pctVal(c: Customer): number | null {
@@ -460,6 +468,102 @@ export function AtRiskTable({
     }
   }
 
+  /**
+   * Export the accounts currently on screen to a CSV download.
+   *
+   * Mirrors the "All assigned" export (customer-table.tsx) down to the
+   * filename shape and the shared helpers in lib/csv.ts. Exports
+   * `accounts`, NOT `data.accounts`, which is what makes "what you see
+   * is what you get" true across all three filters at once:
+   *   - the CSM scope, applied server-side from `?csm=` before the
+   *     RunResult is ever built;
+   *   - the search box and the flag chips (any/all), applied in the
+   *     `accounts` memo;
+   *   - the Gmail-aware Flag H re-evaluation, so a row whose H was
+   *     stripped client-side exports without an H.
+   *
+   * Dates go out as the raw ISO strings rather than the formatted
+   * "97d ago" the cells render, so the file sorts and joins cleanly.
+   * Last contacted is resolved through the same
+   * lastContacted(c, { gmailDate }) call the column uses — a CSM who
+   * just hit "Refresh from Gmail" gets the refreshed date in the file,
+   * not the staler HubSpot rollup — and the resolved source ships
+   * alongside it so a surprising date can be traced back.
+   */
+  function exportAtRiskCsv() {
+    if (accounts.length === 0) return;
+    const columns: Array<CsvColumn<AtRiskAccount>> = [
+      {
+        header: "Account",
+        pick: (a) => a.customer.company_name ?? a.customer.workspace_name ?? "",
+      },
+      { header: "Workspace", pick: (a) => a.customer.workspace_name ?? "" },
+      // Join keys first-class: workspace_id is the primary key across
+      // every other export + KV blob in this app, stripe_customer_id
+      // is how Finance's exports address the same account.
+      { header: "Workspace ID", pick: (a) => a.customer.workspace_id ?? "" },
+      {
+        header: "Stripe customer ID",
+        pick: (a) => a.customer.stripe_customer_id ?? "",
+      },
+      {
+        header: "CSM",
+        pick: (a) =>
+          a.customer.customer_success_manager?.replace(/_/g, " ") ?? "",
+      },
+      { header: "Risk level", pick: (a) => a.customer.property_risk_level ?? "" },
+      {
+        header: "Risk detail",
+        pick: (a) => a.customer.property_risk_level_detail ?? "",
+      },
+      { header: "ARR", pick: (a) => a.customer.arr ?? 0 },
+      { header: "MRR", pick: (a) => a.customer.mrr ?? 0 },
+      { header: "Last send", pick: (a) => a.customer.last_send ?? "" },
+      { header: "Last login", pick: (a) => a.customer.last_log_in ?? "" },
+      {
+        header: "Last contacted",
+        pick: (a) =>
+          lastContacted(a.customer, { gmailDate: gmailDateFor(a.customer) })
+            .date ?? "",
+      },
+      {
+        header: "Last contacted source",
+        pick: (a) =>
+          lastContacted(a.customer, { gmailDate: gmailDateFor(a.customer) })
+            .source,
+      },
+      // Flags twice: codes for filtering/pivoting in a spreadsheet,
+      // labels so the file is readable without the legend to hand.
+      // Both in FLAG_META order to match the on-screen chip strip.
+      {
+        header: "Flags",
+        pick: (a) => flagCodesInOrder(a.flags).join(" "),
+      },
+      {
+        header: "Flag labels",
+        pick: (a) =>
+          FLAG_META.filter((m) => a.flags.some((f) => f.code === m.code))
+            .map((m) => m.label)
+            .join("; "),
+      },
+      {
+        header: "% of sub cap",
+        pick: (a) => {
+          const pct = pctVal(a.customer);
+          return pct == null ? "" : `${pct.toFixed(1)}%`;
+        },
+      },
+      { header: "Active subs", pick: (a) => a.customer.active_subs ?? "" },
+      { header: "Max subs", pick: (a) => a.customer.max_subscriptions ?? "" },
+      { header: "Renewal date", pick: (a) => a.customer.renewal_date ?? "" },
+      { header: "Recommended action", pick: (a) => a.recommended_action },
+    ];
+    downloadCsv(
+      `at-risk-${csvDateStamp()}.csv`,
+      buildCsv(accounts, columns)
+    );
+  }
+
   async function bulkResolve() {
     // Aggressive console + on-screen tracing because this button has
     // a history of feeling broken to users while silently failing.
@@ -792,6 +896,17 @@ export function AtRiskTable({
             {selected.size === allKeys.length ? "Deselect all" : "Select all"}
           </button>
           <div className="flex-1" />
+          {/* Same placement + styling as the "All assigned" tab's
+           *  export so the two tables feel like one product. Exports
+           *  the filtered view, not the whole book. */}
+          <button
+            onClick={exportAtRiskCsv}
+            disabled={accounts.length === 0}
+            className="px-3 py-1 text-xs border border-border-strong rounded-md bg-surface hover:bg-surface-2 disabled:opacity-50"
+            title="Download the currently-filtered at-risk list as a CSV"
+          >
+            ⬇ Export {accounts.length} to CSV
+          </button>
           {/* Resolve the selected at-risk accounts to Customer[] for
            *  the BulkEmailLauncher. Same Customer object the table
            *  rows already hold — no extra fetch needed. Filter on

@@ -26,6 +26,7 @@ import {
   lastContacted,
 } from "@/lib/customer-helpers";
 import { useGmailLastContact } from "@/lib/hooks/use-gmail-last-contact";
+import { buildCsv, csvDateStamp, downloadCsv, type CsvColumn } from "@/lib/csv";
 import {
   useColumnVisibility,
   type ColumnDef as VisibilityColumnDef,
@@ -632,15 +633,10 @@ export function CustomerTable({
     return "general-checkin";
   }
 
-  function csvEscape(v: unknown): string {
-    if (v == null) return "";
-    return `"${String(v).replace(/"/g, '""')}"`;
-  }
-
   /** Export the currently-filtered list to a CSV download. */
   function exportFilteredCsv() {
     if (filtered.length === 0) return;
-    const columns: Array<{ header: string; pick: (c: CustomerWithMetrics) => unknown }> = [
+    const columns: Array<CsvColumn<CustomerWithMetrics>> = [
       { header: "Company", pick: (c) => c.company_name ?? "" },
       { header: "Workspace", pick: (c) => c.workspace_name ?? "" },
       { header: "Workspace ID", pick: (c) => c.workspace_id ?? "" },
@@ -673,22 +669,7 @@ export function CustomerTable({
       { header: "Prior ESP", pick: (c) => (c.prior_esp ?? []).join("; ") },
       { header: "Tech stack", pick: (c) => (c.tech_stack ?? []).join("; ") },
     ];
-    const header = columns.map((col) => csvEscape(col.header)).join(",");
-    const rows = filtered.map((c) =>
-      columns.map((col) => csvEscape(col.pick(c))).join(",")
-    );
-    const ts = new Date().toISOString().slice(0, 10);
-    const blob = new Blob(["﻿" + [header, ...rows].join("\n")], {
-      type: "text/csv;charset=utf-8",
-    });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `csm-book-${ts}.csv`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    downloadCsv(`csm-book-${csvDateStamp()}.csv`, buildCsv(filtered, columns));
   }
 
   // Cache per-org ad-gap reports across template re-renders so swapping
