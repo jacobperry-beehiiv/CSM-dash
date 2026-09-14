@@ -87,13 +87,21 @@ interface IssuesPageResponse {
 /** The one query the Enterprise Request Loop sync uses. Kept as a
  *  single fetch of one page — the sync engine loops until
  *  `hasNextPage` is false. Only issues WITH at least one customerNeed
- *  come back, so we don't have to filter on the client side. */
+ *  come back, so we don't have to filter on the client side.
+ *
+ *  Filter uses `customerCount: { gt: 0 }` — Linear's IssueFilter
+ *  doesn't expose a `customerNeeds` relation filter (schema returns
+ *  `Field "customerNeeds" is not defined by type "IssueFilter". Did
+ *  you mean "customerCount"?`). `customerCount` is a scalar count
+ *  of attached customer_needs, so `> 0` is the equivalent of "has
+ *  at least one." Confirmed against the Linear GraphQL API on
+ *  2026-09-14. */
 const ISSUES_WITH_NEEDS_QUERY = /* GraphQL */ `
   query IssuesWithNeeds($after: String, $first: Int!) {
     issues(
       first: $first
       after: $after
-      filter: { customerNeeds: { some: { id: { neq: null } } } }
+      filter: { customerCount: { gt: 0 } }
     ) {
       pageInfo {
         hasNextPage
@@ -213,67 +221,73 @@ export async function fetchIssuesWithCustomerNeedsPage(
 }
 
 /** Fetch a single issue by its identifier (e.g. "REQ-2207"). Used by
- *  the Slack-intake sweep to resolve tickets that were posted to
- *  #enterprise-bugs-and-feature-requests but never got a customer_need
- *  attached in Linear — those don't show up in
- *  `fetchAllIssuesWithCustomerNeeds`, so we look them up
- *  individually. Returns null on any 404-shape response (unknown
- *  identifier, or the ticket lives in a team the API key can't
- *  see). Uses the same `issues.filter` shape, keyed on the
- *  `identifier` field. */
+ *  the Slack-intake + Linear-comment scans to resolve tickets that
+ *  are referenced but not yet attached as a customer_need. Uses
+ *  Linear's singular `issue(id:)` root query — accepts either a UUID
+ *  or an identifier like `REQ-2207`, so we skip the fragile
+ *  `IssueFilter` schema shape. Returns null when the identifier is
+ *  unknown or the ticket lives in a team the API key can't see. */
+interface IssueByIdResponse {
+  data?: { issue: LinearIssue | null };
+  errors?: Array<{ message: string }>;
+}
 export async function fetchIssueByIdentifier(
   identifier: string
 ): Promise<LinearIssue | null> {
   const trimmed = identifier.trim();
   if (!trimmed) return null;
   const query = /* GraphQL */ `
-    query IssueByIdentifier($identifier: String!) {
-      issues(first: 1, filter: { identifier: { eq: $identifier } }) {
-        nodes {
+    query IssueById($id: String!) {
+      issue(id: $id) {
+        id
+        identifier
+        title
+        url
+        state {
+          name
+          type
+        }
+        labels {
+          nodes {
+            name
+          }
+        }
+        estimate
+        project {
           id
-          identifier
-          title
-          url
-          state {
-            name
-            type
-          }
-          labels {
-            nodes {
-              name
-            }
-          }
-          estimate
-          project {
+          name
+        }
+        completedAt
+        customerNeeds {
+          nodes {
             id
-            name
-          }
-          completedAt
-          customerNeeds {
-            nodes {
+            body
+            createdAt
+            creator {
+              email
+            }
+            customer {
               id
-              body
-              createdAt
-              creator {
-                email
-              }
-              customer {
-                id
-                name
-                externalIds
-                domains
-                revenue
-              }
+              name
+              externalIds
+              domains
+              revenue
             }
           }
         }
       }
     }
   `;
-  const res = await callLinear<IssuesPageResponse>(query, {
-    identifier: trimmed,
-  });
-  return res.data?.issues?.nodes?.[0] ?? null;
+  try {
+    const res = await callLinear<IssueByIdResponse>(query, { id: trimmed });
+    return res.data?.issue ?? null;
+  } catch (e) {
+    // Linear returns a GraphQL error (not a 404) for unknown
+    // identifiers. Treat any error here as a soft-miss so a single
+    // bad REQ-<KEY> in a Slack post doesn't wedge the whole sweep.
+    console.warn(`[linear] fetchIssueByIdentifier(${trimmed}):`, e);
+    return null;
+  }
 }
 
 /** Walk every page of issues-with-needs and return the concatenated
@@ -302,4 +316,131 @@ export async function fetchAllIssuesWithCustomerNeeds(): Promise<
   // there rather than looping forever.
   console.warn("[linear] fetchAllIssuesWithCustomerNeeds hit 200-page cap");
   return all;
+}
+
+// ─── Comment scan (open issues → comments) ──────────────────────────
+
+/** Comment shape returned by the comment-scan query. `url` is a
+ *  jump-to-Slack-style permalink (`.../issue/<key>#comment-<id>`). */
+export interface LinearComment {
+  id: string;
+  body: string;
+  url: string;
+  createdAt: string;
+  updatedAt: string;
+  user: { email: string | null; name: string | null } | null;
+}
+
+/** Trimmed issue payload for the comment-scan pass. We only pull the
+ *  metadata the engine needs to build a snapshot row + reach each
+ *  comment. `customerCount` is included so the engine can skip
+ *  issues that already have ≥1 customer_need (already covered by
+ *  the main sync). */
+export interface LinearIssueWithComments {
+  id: string;
+  identifier: string;
+  title: string;
+  url: string;
+  state: { name: string; type: string };
+  labels: { nodes: Array<{ name: string }> };
+  estimate: number | null;
+  project: { id: string; name: string } | null;
+  completedAt: string | null;
+  customerCount: number;
+  comments: { nodes: LinearComment[]; pageInfo: { hasNextPage: boolean } };
+}
+
+interface OpenIssuesResponse {
+  data?: {
+    issues: {
+      pageInfo: { hasNextPage: boolean; endCursor: string | null };
+      nodes: LinearIssueWithComments[];
+    };
+  };
+  errors?: Array<{ message: string }>;
+}
+
+/** Pull one page of open issues (statusType NOT completed/canceled)
+ *  with their first 20 comments inlined. Comments beyond the 20th
+ *  are extremely rare on request tickets — if we see hasNextPage in
+ *  the wild, the engine can fall back to a per-issue comment fetch,
+ *  but we don't need that yet. Filter uses `state: { type }` which
+ *  is on IssueFilter (validated in the Linear GraphQL playground). */
+const OPEN_ISSUES_WITH_COMMENTS_QUERY = /* GraphQL */ `
+  query OpenIssuesWithComments($after: String, $first: Int!) {
+    issues(
+      first: $first
+      after: $after
+      filter: {
+        state: {
+          type: { nin: ["completed", "canceled"] }
+        }
+      }
+      orderBy: updatedAt
+    ) {
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
+      nodes {
+        id
+        identifier
+        title
+        url
+        state {
+          name
+          type
+        }
+        labels {
+          nodes {
+            name
+          }
+        }
+        estimate
+        project {
+          id
+          name
+        }
+        completedAt
+        customerCount
+        comments(first: 20) {
+          nodes {
+            id
+            body
+            url
+            createdAt
+            updatedAt
+            user {
+              email
+              name
+            }
+          }
+          pageInfo {
+            hasNextPage
+          }
+        }
+      }
+    }
+  }
+`;
+
+export interface FetchOpenIssuesPage {
+  issues: LinearIssueWithComments[];
+  endCursor: string | null;
+  hasNextPage: boolean;
+}
+
+export async function fetchOpenIssuesWithCommentsPage(
+  after: string | null = null,
+  first: number = 50
+): Promise<FetchOpenIssuesPage> {
+  const res = await callLinear<OpenIssuesResponse>(
+    OPEN_ISSUES_WITH_COMMENTS_QUERY,
+    { after, first }
+  );
+  return {
+    issues: res.data?.issues?.nodes ?? [],
+    endCursor: res.data?.issues?.pageInfo?.endCursor ?? null,
+    hasNextPage: !!res.data?.issues?.pageInfo?.hasNextPage,
+  };
 }

@@ -2,6 +2,7 @@ import { kvGet, kvSet } from "../storage/kv";
 import type {
   DigestSentBlob,
   EnterpriseRequestsBlob,
+  LinearCommentScanCursorBlob,
   ManualMap,
   NotifiedBlob,
   NotifiedEntry,
@@ -232,6 +233,33 @@ export async function saveSlackIntakeCursor(
 ): Promise<void> {
   await kvSet<SlackIntakeCursorBlob>(SLACK_INTAKE_CURSOR_KEY, {
     intake_ts: intakeTs,
+    updated_at: new Date().toISOString(),
+  });
+}
+
+// ─── Linear comment-scan cursor ─────────────────────────────────────
+
+const LINEAR_COMMENT_SCAN_CURSOR_KEY =
+  "csm:enterprise-requests-linear-comment-scan-cursor:v1";
+
+const EMPTY_LINEAR_COMMENT_SCAN_CURSOR: LinearCommentScanCursorBlob = {
+  scan_after: null,
+  updated_at: new Date(0).toISOString(),
+};
+
+export async function loadLinearCommentScanCursor(): Promise<LinearCommentScanCursorBlob> {
+  return (
+    (await kvGet<LinearCommentScanCursorBlob>(
+      LINEAR_COMMENT_SCAN_CURSOR_KEY
+    )) ?? EMPTY_LINEAR_COMMENT_SCAN_CURSOR
+  );
+}
+
+export async function saveLinearCommentScanCursor(
+  scanAfter: string | null
+): Promise<void> {
+  await kvSet<LinearCommentScanCursorBlob>(LINEAR_COMMENT_SCAN_CURSOR_KEY, {
+    scan_after: scanAfter,
     updated_at: new Date().toISOString(),
   });
 }
