@@ -339,9 +339,14 @@ export interface LinearComment {
 
 /** Trimmed issue payload for the comment-scan pass. We only pull the
  *  metadata the engine needs to build a snapshot row + reach each
- *  comment. `customerCount` is included so the engine can skip
- *  issues that already have ≥1 customer_need (already covered by
- *  the main sync). */
+ *  comment. Dedupe against issues already covered by the main sync
+ *  is done via the snapshot's `rows[workspaceId][issue.id]` key, so
+ *  we don't need to know the customer-need count up-front. (An
+ *  earlier draft selected `customerCount` here — it's a filter
+ *  field on IssueFilter, NOT a scalar on Issue. Linear returns
+ *  `Cannot query field "customerCount" on type "Issue". Did you
+ *  mean "customerTicketCount"?` — customerTicketCount is
+ *  Zendesk-attachment-only and unrelated.) */
 export interface LinearIssueWithComments {
   id: string;
   identifier: string;
@@ -352,7 +357,6 @@ export interface LinearIssueWithComments {
   estimate: number | null;
   project: { id: string; name: string } | null;
   completedAt: string | null;
-  customerCount: number;
   comments: { nodes: LinearComment[]; pageInfo: { hasNextPage: boolean } };
 }
 
@@ -408,7 +412,6 @@ const OPEN_ISSUES_WITH_COMMENTS_QUERY = /* GraphQL */ `
           name
         }
         completedAt
-        customerCount
         comments(first: 20) {
           nodes {
             id
