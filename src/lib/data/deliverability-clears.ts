@@ -53,3 +53,31 @@ export async function unclearPost(
   await kvSet(KEY, map);
   return map;
 }
+
+/** Batch-clear many posts in ONE read-modify-write.
+ *
+ *  Firing N single-post `clearPost` calls in parallel is a classic
+ *  KV-race trap (see CLAUDE.md): every call reads the same
+ *  pre-write blob, adds its own entry, and writes back, so only
+ *  the last writer wins and most of the entries silently vanish.
+ *  This helper loads once, adds every id, and writes once, so a
+ *  bulk "Clear all for a workspace" click actually persists all N.
+ */
+export async function clearPostsBatch(
+  postIds: string[],
+  meta: { clearedBy?: string | null; reason?: string | null } = {}
+): Promise<DeliverabilityClearMap> {
+  const uniqueIds = [...new Set(postIds.filter((id) => id && id.trim()))];
+  if (uniqueIds.length === 0) return await loadClearedPosts();
+  const map = { ...(await loadClearedPosts()) };
+  const now = new Date().toISOString();
+  for (const id of uniqueIds) {
+    map[id] = {
+      cleared_at: now,
+      cleared_by: meta.clearedBy ?? null,
+      reason: meta.reason ?? null,
+    };
+  }
+  await kvSet(KEY, map);
+  return map;
+}

@@ -503,42 +503,50 @@ export function DeliverabilityPanel({
       ),
     }));
 
-    // Parallel fire. Track which ids failed so we can roll them back
-    // without disturbing the ones that succeeded.
-    const failed: string[] = [];
-    await Promise.all(
-      targets.map(async (a) => {
-        try {
-          const r = await fetch("/api/deliverability/clear", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              post_id: a.post.post_id,
-              workspace_id: args.workspaceId,
-              subject: a.post.subject ?? null,
-              newsletter: a.post.newsletter ?? null,
-              flag_summary: summarizeFlags(a.flags),
-            }),
-          });
-          if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        } catch {
-          failed.push(a.post.post_id);
-        }
-      })
-    );
-
-    if (failed.length > 0) {
-      const failedSet = new Set(failed);
+    // Single request instead of N parallel POSTs to /clear. The
+    // per-post clearPost() does a read-modify-write on the shared
+    // deliverability-clears KV blob, so N concurrent writes race
+    // and only the last one lands (see CLAUDE.md "KV blobs are
+    // read-modify-write with no locking"). The batch endpoint
+    // does one read + one write for the whole set + one summary
+    // action_log entry.
+    let allFailed = false;
+    try {
+      const r = await fetch("/api/deliverability/clear-batch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          post_ids: targets.map((a) => a.post.post_id),
+          workspace_id: args.workspaceId,
+          workspace_name: args.workspaceName,
+          alerts: targets.map((a) => ({
+            post_id: a.post.post_id,
+            subject: a.post.subject ?? null,
+            newsletter: a.post.newsletter ?? null,
+            flag_summary: summarizeFlags(a.flags),
+          })),
+        }),
+      });
+      if (!r.ok) {
+        const j = (await r.json().catch(() => ({}))) as { error?: string };
+        throw new Error(j.error ?? `HTTP ${r.status}`);
+      }
+    } catch (e) {
+      allFailed = true;
+      // Roll back every optimistic clear since the batch either all
+      // landed or none did — there's no partial state to preserve
+      // like the old N-parallel path had.
       setData((prev) => ({
         ...prev,
         alerts: prev.alerts.map((a) =>
-          failedSet.has(a.post.post_id) ? { ...a, cleared: null } : a
+          targetIds.has(a.post.post_id) ? { ...a, cleared: null } : a
         ),
       }));
       window.alert(
-        `${failed.length} of ${targets.length} clears failed. The failed rows have been restored.`
+        `Clear all failed: ${e instanceof Error ? e.message : "unknown"}. All rows have been restored.`
       );
     }
+    void allFailed;
 
     setBusyPosts((prev) => {
       const next = new Set(prev);
