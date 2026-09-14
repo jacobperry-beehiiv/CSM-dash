@@ -31,6 +31,7 @@ import { getTierLadder } from "@/lib/tiers/client";
 import type {
   AtRiskAccount,
   Customer,
+  HubSpotContactRef,
   RiskFlag,
   RiskFlagCode,
 } from "@/lib/types";
@@ -119,6 +120,27 @@ function suggestedTemplate(flags: RiskFlag[]): TemplateScenario {
   if (codes.has("A")) return "dormant-no-send";
   if (codes.has("C")) return "growth-push-under-tier";
   return "general-checkin";
+}
+
+/** Tri-state boolean → CSV cell. `null`/`undefined` stays empty rather
+ *  than becoming "no", because "we never got this signal" and "this
+ *  signal is off" are different answers for the person reading the
+ *  export. */
+function yesNo(v: boolean | null | undefined): string {
+  if (v == null) return "";
+  return v ? "yes" : "no";
+}
+
+/** One HubSpot contact as a single cell: `Name <email> (title)`, with
+ *  whichever parts HubSpot actually has. Semicolon-joined by the
+ *  caller — commas would survive the CSV quoting fine, but semicolons
+ *  keep the cell readable when a spreadsheet re-splits it by hand. */
+function formatContact(h: HubSpotContactRef): string {
+  const name = h.name ?? h.email ?? h.id;
+  const parts = [name];
+  if (h.email && h.email !== name) parts.push(`<${h.email}>`);
+  if (h.job_title) parts.push(`(${h.job_title})`);
+  return parts.join(" ");
 }
 
 /** Flag codes in the canonical FLAG_META order — same order the row
@@ -472,73 +494,185 @@ export function AtRiskTable({
    * Export the accounts currently on screen to a CSV download.
    *
    * Mirrors the "All assigned" export (customer-table.tsx) down to the
-   * filename shape and the shared helpers in lib/csv.ts. Exports
-   * `accounts`, NOT `data.accounts`, which is what makes "what you see
-   * is what you get" true across all three filters at once:
+   * filename shape and the shared helpers in lib/csv.ts, with one
+   * deliberate difference: where that export is a curated subset, this
+   * one is the **complete record** — every field on the underlying
+   * Customer, every field on the AtRiskAccount wrapper, plus the
+   * handful of values the table computes for display (resolved last
+   * contacted, % of cap, per-flag state). The at-risk CSV is the file
+   * a CSM hands to someone doing account planning in a spreadsheet, so
+   * a missing column costs a round-trip while an extra one costs
+   * nothing but width. When a new field lands on Customer, add it
+   * here.
+   *
+   * Exports `accounts`, NOT `data.accounts`, which is what makes "what
+   * you see is what you get" true across all three filters at once:
    *   - the CSM scope, applied server-side from `?csm=` before the
    *     RunResult is ever built;
    *   - the search box and the flag chips (any/all), applied in the
    *     `accounts` memo;
    *   - the Gmail-aware Flag H re-evaluation, so a row whose H was
-   *     stripped client-side exports without an H.
+   *     stripped client-side exports with "Flag H" = no.
    *
    * Dates go out as the raw ISO strings rather than the formatted
    * "97d ago" the cells render, so the file sorts and joins cleanly.
-   * Last contacted is resolved through the same
-   * lastContacted(c, { gmailDate }) call the column uses — a CSM who
-   * just hit "Refresh from Gmail" gets the refreshed date in the file,
-   * not the staler HubSpot rollup — and the resolved source ships
-   * alongside it so a surprising date can be traced back.
    */
   function exportAtRiskCsv() {
     if (accounts.length === 0) return;
+
+    // Resolve last-contacted once per row rather than per column —
+    // four columns read it and lastContacted() re-derives the max()
+    // across three sources on every call.
+    const resolveContact = (a: AtRiskAccount) =>
+      lastContacted(a.customer, { gmailDate: gmailDateFor(a.customer) });
+
     const columns: Array<CsvColumn<AtRiskAccount>> = [
+      // ─── Identity + join keys ──────────────────────────────────
+      // First so the file is immediately joinable: workspace_id is
+      // the primary key across every other export and KV blob in this
+      // app, stripe_customer_id is how Finance's exports address the
+      // same account, hubspot_company_id how RevOps does.
       {
         header: "Account",
         pick: (a) => a.customer.company_name ?? a.customer.workspace_name ?? "",
       },
-      { header: "Workspace", pick: (a) => a.customer.workspace_name ?? "" },
-      // Join keys first-class: workspace_id is the primary key across
-      // every other export + KV blob in this app, stripe_customer_id
-      // is how Finance's exports address the same account.
-      { header: "Workspace ID", pick: (a) => a.customer.workspace_id ?? "" },
-      {
-        header: "Stripe customer ID",
-        pick: (a) => a.customer.stripe_customer_id ?? "",
-      },
+      { header: "Company name", pick: (a) => a.customer.company_name },
+      { header: "Workspace name", pick: (a) => a.customer.workspace_name },
+      { header: "Workspace ID", pick: (a) => a.customer.workspace_id },
+      { header: "Stripe customer ID", pick: (a) => a.customer.stripe_customer_id },
+      { header: "HubSpot company ID", pick: (a) => a.customer.hubspot_company_id },
+      { header: "HubSpot link source", pick: (a) => a.customer.hubspot_link_source },
+      { header: "HubSpot link warning", pick: (a) => a.customer.hubspot_link_warning },
+
+      // ─── Ownership ─────────────────────────────────────────────
       {
         header: "CSM",
         pick: (a) =>
           a.customer.customer_success_manager?.replace(/_/g, " ") ?? "",
       },
-      { header: "Risk level", pick: (a) => a.customer.property_risk_level ?? "" },
+      { header: "CSM (raw)", pick: (a) => a.customer.customer_success_manager },
+      { header: "CSM email", pick: (a) => a.customer.customer_success_manager_email },
       {
-        header: "Risk detail",
-        pick: (a) => a.customer.property_risk_level_detail ?? "",
+        header: "CSM owner change date",
+        pick: (a) => a.customer.property_csm_owner_change_date,
       },
-      { header: "ARR", pick: (a) => a.customer.arr ?? 0 },
+      { header: "Owner email", pick: (a) => a.customer.owner_email },
+      { header: "Main contact", pick: (a) => a.customer.property_main_contact },
+      { header: "Agency / talent", pick: (a) => a.customer.property_agency_talent },
+      { header: "Timezone", pick: (a) => a.customer.property_timezone },
+      { header: "Customer folder", pick: (a) => a.customer.property_customer_folder },
+
+      // ─── Risk, goals, status ───────────────────────────────────
+      { header: "Risk level", pick: (a) => a.customer.property_risk_level },
+      { header: "Risk detail", pick: (a) => a.customer.property_risk_level_detail },
+      { header: "Customer goals", pick: (a) => a.customer.property_customer_goals },
+      {
+        header: "Customer goals detail",
+        pick: (a) => a.customer.property_customer_goals_detail,
+      },
+      { header: "Company status", pick: (a) => a.customer.property_company_status },
+      { header: "Engagement", pick: (a) => a.customer.company_engagement },
+      { header: "Priority score", pick: (a) => a.priority_score },
+      { header: "Recommended action", pick: (a) => a.recommended_action },
+      { header: "Draft outreach", pick: (a) => a.draft_outreach },
+
+      // ─── Commercials ───────────────────────────────────────────
+      { header: "Plan", pick: (a) => a.customer.stripe_plan },
+      { header: "Billing interval", pick: (a) => a.customer.interval },
+      { header: "Billing interval count (months)", pick: (a) => a.customer.interval_count },
       { header: "MRR", pick: (a) => a.customer.mrr ?? 0 },
-      { header: "Last send", pick: (a) => a.customer.last_send ?? "" },
-      { header: "Last login", pick: (a) => a.customer.last_log_in ?? "" },
+      { header: "ARR", pick: (a) => a.customer.arr ?? 0 },
+      { header: "Renewal date", pick: (a) => a.customer.renewal_date },
+      { header: "Contract renewal", pick: (a) => a.customer.contract_renewal },
+      { header: "Next invoice", pick: (a) => a.customer.next_invoice },
+      { header: "Months since first Enterprise", pick: (a) => a.customer.mon_since_1st_ent },
+
+      // ─── Subscribers / tier utilization ────────────────────────
+      // Two percentages on purpose: "% of sub cap" is what the table
+      // renders (subUtilFraction, which handles over-cap rows), while
+      // percent_of_max_subs is the raw snapshot column. They usually
+      // agree; when they don't, the raw one is the one to debug with.
+      { header: "Active subs", pick: (a) => a.customer.active_subs },
+      { header: "Max subscriptions", pick: (a) => a.customer.max_subscriptions },
+      {
+        header: "% of sub cap",
+        pick: (a) => {
+          const pct = pctVal(a.customer);
+          return pct == null ? "" : `${pct.toFixed(1)}%`;
+        },
+      },
+      { header: "% of max subs (raw)", pick: (a) => a.customer.percent_of_max_subs },
+
+      // ─── Activity ──────────────────────────────────────────────
+      { header: "Last send", pick: (a) => a.customer.last_send },
+      { header: "Last send (days ago)", pick: (a) => daysAgo(a.customer.last_send) },
+      { header: "Last login", pick: (a) => a.customer.last_log_in },
+      { header: "Last login (days ago)", pick: (a) => daysAgo(a.customer.last_log_in) },
+      // Last contacted is the Gmail-merged value the column renders —
+      // a CSM who just hit "Refresh from Gmail" exports the refreshed
+      // date, not the staler HubSpot rollup. The three raw inputs ship
+      // alongside it so a surprising value can be traced to its source
+      // without opening the app.
       {
         header: "Last contacted",
-        pick: (a) =>
-          lastContacted(a.customer, { gmailDate: gmailDateFor(a.customer) })
-            .date ?? "",
+        pick: (a) => resolveContact(a).date ?? "",
       },
       {
-        header: "Last contacted source",
-        pick: (a) =>
-          lastContacted(a.customer, { gmailDate: gmailDateFor(a.customer) })
-            .source,
+        header: "Last contacted (days ago)",
+        pick: (a) => daysAgo(resolveContact(a).date),
       },
-      // Flags twice: codes for filtering/pivoting in a spreadsheet,
-      // labels so the file is readable without the legend to hand.
-      // Both in FLAG_META order to match the on-screen chip strip.
+      { header: "Last contacted source", pick: (a) => resolveContact(a).source },
       {
-        header: "Flags",
-        pick: (a) => flagCodesInOrder(a.flags).join(" "),
+        header: "Last contacted (Gmail)",
+        pick: (a) => gmailDateFor(a.customer) ?? "",
       },
+      {
+        header: "Gmail message subject",
+        pick: (a) =>
+          a.customer.owner_email
+            ? gmail.matchMap[a.customer.owner_email.trim().toLowerCase()]
+                ?.subject ?? ""
+            : "",
+      },
+      {
+        header: "Gmail message from",
+        pick: (a) =>
+          a.customer.owner_email
+            ? gmail.matchMap[a.customer.owner_email.trim().toLowerCase()]?.from ??
+              ""
+            : "",
+      },
+      { header: "HubSpot last activity", pick: (a) => a.customer.last_activity_at },
+      {
+        header: "HubSpot last activity source",
+        pick: (a) => a.customer.last_activity_source,
+      },
+      {
+        header: "HubSpot notes last contacted",
+        pick: (a) => a.customer.property_notes_last_contacted,
+      },
+
+      // ─── Send cadence (drives Flag A's threshold) ──────────────
+      { header: "Inferred cadence (days)", pick: (a) => a.customer.inferred_cadence_days },
+      {
+        header: "Inferred cadence sample size",
+        pick: (a) => a.customer.inferred_cadence_sample_size,
+      },
+      {
+        header: "Inferred cadence updated",
+        pick: (a) => a.customer.inferred_cadence_updated_at,
+      },
+      {
+        header: "Expected cadence override (days)",
+        pick: (a) => a.customer.expected_send_cadence_days,
+      },
+
+      // ─── Flags ─────────────────────────────────────────────────
+      // Summary columns first, then one yes/no column per code so the
+      // file pivots in a spreadsheet without anyone parsing a
+      // space-joined string.
+      { header: "Flag count", pick: (a) => a.flags.length },
+      { header: "Flags", pick: (a) => flagCodesInOrder(a.flags).join(" ") },
       {
         header: "Flag labels",
         pick: (a) =>
@@ -547,21 +681,72 @@ export function AtRiskTable({
             .join("; "),
       },
       {
-        header: "% of sub cap",
+        header: "Flag details",
+        pick: (a) =>
+          FLAG_META.filter((m) => a.flags.some((f) => f.code === m.code))
+            .map((m) => {
+              const f = a.flags.find((x) => x.code === m.code);
+              return f ? `${f.code}: ${f.detail}` : "";
+            })
+            .join(" | "),
+      },
+      ...FLAG_META.map(
+        (m): CsvColumn<AtRiskAccount> => ({
+          header: `Flag ${m.code} — ${m.label}`,
+          pick: (a) => (a.flags.some((f) => f.code === m.code) ? "yes" : "no"),
+        })
+      ),
+
+      // ─── Monetization + product signals ────────────────────────
+      {
+        header: "Direct sponsorships enabled",
+        pick: (a) => yesNo(a.customer.direct_sponsorships_enabled),
+      },
+      { header: "Ad placement", pick: (a) => yesNo(a.customer.ad_placement) },
+      { header: "Grew via Boost", pick: (a) => yesNo(a.customer.grew_via_boost) },
+      {
+        header: "Monetization via Boost",
+        pick: (a) => yesNo(a.customer.monetization_via_boost),
+      },
+      {
+        header: "Started T4 recommendations",
+        pick: (a) => yesNo(a.customer.have_started_t4_recommendations),
+      },
+      {
+        header: "Completed T4 recommendations",
+        pick: (a) => yesNo(a.customer.completed_t4_recommendations),
+      },
+
+      // ─── CSM-set profile fields (override-only) ────────────────
+      { header: "Prior ESP", pick: (a) => (a.customer.prior_esp ?? []).join("; ") },
+      { header: "Tech stack", pick: (a) => (a.customer.tech_stack ?? []).join("; ") },
+      { header: "Tech stack notes", pick: (a) => a.customer.tech_stack_notes },
+
+      // ─── HubSpot contacts ──────────────────────────────────────
+      // Flattened rather than dropped: one row per account is the
+      // contract here, so the contact list collapses to a count, the
+      // pinned primary, and a semicolon-joined roster.
+      {
+        header: "HubSpot contact count",
+        pick: (a) => (a.customer.hubspot_contacts ?? []).length,
+      },
+      {
+        header: "HubSpot primary contact",
         pick: (a) => {
-          const pct = pctVal(a.customer);
-          return pct == null ? "" : `${pct.toFixed(1)}%`;
+          const primary = (a.customer.hubspot_contacts ?? []).find(
+            (h) => h.is_primary
+          );
+          return primary ? formatContact(primary) : "";
         },
       },
-      { header: "Active subs", pick: (a) => a.customer.active_subs ?? "" },
-      { header: "Max subs", pick: (a) => a.customer.max_subscriptions ?? "" },
-      { header: "Renewal date", pick: (a) => a.customer.renewal_date ?? "" },
-      { header: "Recommended action", pick: (a) => a.recommended_action },
+      {
+        header: "HubSpot contacts",
+        pick: (a) =>
+          (a.customer.hubspot_contacts ?? []).map(formatContact).join("; "),
+      },
     ];
-    downloadCsv(
-      `at-risk-${csvDateStamp()}.csv`,
-      buildCsv(accounts, columns)
-    );
+
+    downloadCsv(`at-risk-${csvDateStamp()}.csv`, buildCsv(accounts, columns));
   }
 
   async function bulkResolve() {
