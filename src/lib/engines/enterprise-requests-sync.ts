@@ -219,7 +219,7 @@ export async function runEnterpriseRequestsSync(): Promise<SyncResult> {
   let matched = 0;
 
   for (const issue of issues) {
-    for (const need of issue.customerNeeds?.nodes ?? []) {
+    for (const need of issue.needs?.nodes ?? []) {
       const linearCustomer = need.customer;
       if (!linearCustomer) continue;
       const decision = matchLinearCustomer(linearCustomer, index, manualMap);

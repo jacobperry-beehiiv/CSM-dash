@@ -220,7 +220,7 @@ function buildRowFromLinear(
   // fall back to the intake meta's posted_at date as the submitted_at
   // stamp. The sync will overwrite this with the canonical
   // customer_need createdAt on the next run once a need is attached.
-  const need = issue.customerNeeds?.nodes?.[0];
+  const need = issue.needs?.nodes?.[0];
   return {
     linear_issue_id: issue.id,
     linear_identifier: issue.identifier,

@@ -71,7 +71,13 @@ export interface LinearIssue {
   estimate: number | null;
   project: { id: string; name: string } | null;
   completedAt: string | null;
-  customerNeeds: { nodes: LinearCustomerNeed[] };
+  /** Renamed by Linear: the field on Issue is `needs` (typed as
+   *  `CustomerNeedConnection`). We keep the local TS field name in
+   *  sync with the GraphQL wire shape so `issue.needs.nodes` walks
+   *  the connection directly. Linear's error message for the old
+   *  name (`customerNeeds`) even suggests `formerNeeds` — that's
+   *  a different, archived relation and NOT what we want. */
+  needs: { nodes: LinearCustomerNeed[] };
 }
 
 interface IssuesPageResponse {
@@ -127,7 +133,7 @@ const ISSUES_WITH_NEEDS_QUERY = /* GraphQL */ `
           name
         }
         completedAt
-        customerNeeds {
+        needs {
           nodes {
             id
             body
@@ -258,7 +264,7 @@ export async function fetchIssueByIdentifier(
           name
         }
         completedAt
-        customerNeeds {
+        needs {
           nodes {
             id
             body
