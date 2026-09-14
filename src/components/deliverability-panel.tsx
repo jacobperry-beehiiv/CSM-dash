@@ -7,6 +7,7 @@ import { masqueradeUrl, metabasePubUrl } from "@/lib/links";
 import { FilterBar, SearchInput } from "./filters";
 import { CsmSelector } from "./csm-selector";
 import { BulkEmailLauncher } from "./am/bulk-email-launcher";
+import { CompanyNotes } from "./am/company-notes";
 import { OutreachModal } from "./outreach-modal";
 import { useUrlSearch } from "@/lib/hooks/use-url-search";
 import type { TemplateScenario } from "@/lib/templates/templates";
@@ -1130,6 +1131,18 @@ export function DeliverabilityPanel({
                     {isWorkspaceOpen ? (
                       <tr className="border-b border-border bg-canvas/30">
                         <td colSpan={13} className="px-3 py-2 pl-16 pr-4">
+                          {/* Notes/Automated-activity block at the top
+                              of the workspace expand — same component
+                              the CSM detail panel uses so a note or
+                              action_log entry written here shows up
+                              on the account profile too (single KV
+                              behind /api/customer-signals). Sits
+                              ABOVE the Publications table so CSMs can
+                              read + write context without scrolling
+                              past the per-publication grid. */}
+                          <div className="ml-4 mb-2">
+                            <CompanyNotes workspaceId={group.workspaceId} />
+                          </div>
                           <div className="ml-4 rounded-lg border border-border bg-surface shadow-sm overflow-hidden">
                             <div className="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted bg-canvas/60 border-b border-border/60">
                               Publications ({group.alerts.length})

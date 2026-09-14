@@ -17,11 +17,18 @@ import { CollapsibleSection } from "../collapsible-section";
  *     Visually distinct (muted, 🤖 prefix) and read-only — no Edit /
  *     Delete / Post-to-HubSpot affordances.
  *
- * Both render in a single chronological feed so the CSM sees actions
- * interleaved with their own commentary. The count chip in the
- * section header is intentionally CSM-notes-only — auto-events would
- * otherwise inflate it and break its "has the CSM written anything?"
- * signal.
+ * The two kinds render in SEPARATE blocks (as of 2026-09):
+ *   • Manual notes stay in the primary list — they're what the CSM
+ *     writes and needs to see immediately.
+ *   • Action-log entries drop into a nested "Automated activity"
+ *     collapsible sub-section that starts closed, so past-due
+ *     emails / Slack pings / lifecycle transitions don't drown the
+ *     hand-written commentary.
+ *
+ * The count chip on the outer section header is CSM-notes-only —
+ * auto-events would otherwise inflate it and break its "has the
+ * CSM written anything?" signal (they get their own count chip on
+ * the inner collapsible).
  *
  * Wire-up:
  *   • GET  /api/customer-signals?workspace_id=…  → list, filter to
@@ -192,91 +199,124 @@ export function CompanyNotes({ workspaceId }: Props) {
       <div className="space-y-3">
         {notes === null ? (
           <p className="text-xs text-muted">Loading…</p>
-        ) : notes.length === 0 ? (
-          <p className="text-xs text-muted italic">
-            No notes yet. Add the first one below.
-          </p>
         ) : (
-          <ul className="space-y-2">
-            {notes.map((n) => {
-              const isAuto = n.kind === "action_log";
-              if (isAuto) {
-                return (
-                  <li
-                    key={n.id}
-                    className="rounded-md border border-border/60 bg-canvas/20 px-3 py-2 text-xs"
-                  >
-                    <div className="flex items-baseline gap-2 text-muted">
-                      <span aria-hidden>🤖</span>
-                      <span className="text-fg/80 italic break-words">
-                        {n.text}
-                      </span>
-                    </div>
-                    <p className="mt-0.5 text-[11px] text-subtle pl-5">
-                      {n.created_by ?? "—"} · {fmtWhen(n.event_at ?? n.created_at)}
-                    </p>
-                  </li>
-                );
-              }
-              const posted = Boolean(
-                (n.metadata as Record<string, unknown> | undefined)
-                  ?.hubspot_note_id
-              );
-              const busy = Boolean(hubspotBusy[n.id]);
-              const hsErr = hubspotError[n.id];
-              return (
-                <li
-                  key={n.id}
-                  className="rounded-md border border-border bg-canvas/40 p-3 text-sm"
-                >
-                  <div className="flex items-baseline justify-between gap-3">
-                    <p className="text-xs text-muted">
-                      <span className="font-medium text-fg">
-                        {n.created_by ?? "—"}
-                      </span>{" "}
-                      · {fmtWhen(n.event_at ?? n.created_at)}
-                    </p>
-                    <button
-                      type="button"
-                      onClick={() => void deleteNote(n.id)}
-                      className="text-[11px] text-muted hover:text-red-600 hover:underline"
-                      title="Delete this note"
-                    >
-                      Delete
-                    </button>
-                  </div>
-                  <p className="mt-1 text-fg whitespace-pre-wrap break-words">
-                    {n.text}
+          (() => {
+            // Split the feed into two lists so they can render in
+            // separate blocks: manual notes stay expanded (primary
+            // content), automated action_log entries go into a
+            // collapsed sub-section further down. Preserves the
+            // newest-first order set upstream in reload().
+            const manualNotes = notes.filter((n) => n.kind === "note");
+            const autoNotes = notes.filter((n) => n.kind === "action_log");
+            return (
+              <>
+                {manualNotes.length === 0 ? (
+                  <p className="text-xs text-muted italic">
+                    No notes yet. Add the first one below.
                   </p>
-                  <div className="mt-2 flex items-center justify-end gap-2">
-                    {posted ? (
-                      <span
-                        className="text-[11px] text-emerald-700 dark:text-emerald-300"
-                        title="This note has been mirrored to the HubSpot company timeline."
-                      >
-                        ✓ Posted to HubSpot
+                ) : (
+                  <ul className="space-y-2">
+                    {manualNotes.map((n) => {
+                      const posted = Boolean(
+                        (n.metadata as Record<string, unknown> | undefined)
+                          ?.hubspot_note_id
+                      );
+                      const busy = Boolean(hubspotBusy[n.id]);
+                      const hsErr = hubspotError[n.id];
+                      return (
+                        <li
+                          key={n.id}
+                          className="rounded-md border border-border bg-canvas/40 p-3 text-sm"
+                        >
+                          <div className="flex items-baseline justify-between gap-3">
+                            <p className="text-xs text-muted">
+                              <span className="font-medium text-fg">
+                                {n.created_by ?? "—"}
+                              </span>{" "}
+                              · {fmtWhen(n.event_at ?? n.created_at)}
+                            </p>
+                            <button
+                              type="button"
+                              onClick={() => void deleteNote(n.id)}
+                              className="text-[11px] text-muted hover:text-red-600 hover:underline"
+                              title="Delete this note"
+                            >
+                              Delete
+                            </button>
+                          </div>
+                          <p className="mt-1 text-fg whitespace-pre-wrap break-words">
+                            {n.text}
+                          </p>
+                          <div className="mt-2 flex items-center justify-end gap-2">
+                            {posted ? (
+                              <span
+                                className="text-[11px] text-emerald-700 dark:text-emerald-300"
+                                title="This note has been mirrored to the HubSpot company timeline."
+                              >
+                                ✓ Posted to HubSpot
+                              </span>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => void postToHubspot(n.id)}
+                                disabled={busy}
+                                className="text-[11px] px-2 py-1 border border-border-strong rounded-md hover:bg-canvas disabled:opacity-50"
+                                title="Create this note on the HubSpot company's timeline so it's visible alongside other CRM activity."
+                              >
+                                {busy ? "Posting…" : "📥 Post to HubSpot"}
+                              </button>
+                            )}
+                          </div>
+                          {hsErr ? (
+                            <p className="mt-1 text-[11px] text-red-700 dark:text-red-300">
+                              {hsErr}
+                            </p>
+                          ) : null}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
+                {/* Automated action-log entries — collapsed by default
+                    so the CSM's own notes are the primary content on
+                    the surface, and the auto-noise (past-due emails,
+                    Slack pings, ProactiveOutreach status flips, …) is
+                    one click away when needed for audit. Count chip in
+                    the header shows how many are hidden. */}
+                {autoNotes.length > 0 ? (
+                  <CollapsibleSection
+                    title="Automated activity"
+                    defaultOpen={false}
+                    trailing={
+                      <span className="text-xs text-muted font-normal normal-case">
+                        {autoNotes.length}
                       </span>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={() => void postToHubspot(n.id)}
-                        disabled={busy}
-                        className="text-[11px] px-2 py-1 border border-border-strong rounded-md hover:bg-canvas disabled:opacity-50"
-                        title="Create this note on the HubSpot company's timeline so it's visible alongside other CRM activity."
-                      >
-                        {busy ? "Posting…" : "📥 Post to HubSpot"}
-                      </button>
-                    )}
-                  </div>
-                  {hsErr ? (
-                    <p className="mt-1 text-[11px] text-red-700 dark:text-red-300">
-                      {hsErr}
-                    </p>
-                  ) : null}
-                </li>
-              );
-            })}
-          </ul>
+                    }
+                  >
+                    <ul className="space-y-2">
+                      {autoNotes.map((n) => (
+                        <li
+                          key={n.id}
+                          className="rounded-md border border-border/60 bg-canvas/20 px-3 py-2 text-xs"
+                        >
+                          <div className="flex items-baseline gap-2 text-muted">
+                            <span aria-hidden>🤖</span>
+                            <span className="text-fg/80 italic break-words">
+                              {n.text}
+                            </span>
+                          </div>
+                          <p className="mt-0.5 text-[11px] text-subtle pl-5">
+                            {n.created_by ?? "—"} ·{" "}
+                            {fmtWhen(n.event_at ?? n.created_at)}
+                          </p>
+                        </li>
+                      ))}
+                    </ul>
+                  </CollapsibleSection>
+                ) : null}
+              </>
+            );
+          })()
         )}
 
         <div className="space-y-2">
