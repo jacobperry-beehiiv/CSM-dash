@@ -450,6 +450,102 @@ export function DeliverabilityPanel({
     }
   }
 
+  /**
+   * "Clear all" for a whole company — walks every uncleared alert in
+   * the workspace group and POSTs to /api/deliverability/clear in
+   * parallel. Optimistic UI applies immediately; individual failures
+   * roll back their own row (so a partial success leaves the
+   * successful clears in place and only the failed rows reappear).
+   *
+   * Confirms before firing since it's a bulk destructive-ish action
+   * — the individual "Clear" per-row is one click, but a company
+   * with 8 uncleared publications shouldn't disappear from an
+   * accidental click.
+   */
+  async function clearWorkspaceAlerts(args: {
+    workspaceId: string;
+    workspaceName: string | null;
+    alerts: RunResult["alerts"];
+  }) {
+    const targets = args.alerts.filter((a) => !a.cleared);
+    if (targets.length === 0) return;
+    const label = args.workspaceName ?? args.workspaceId;
+    const ok = window.confirm(
+      `Clear ${targets.length} alert${targets.length === 1 ? "" : "s"} for ${label}?\n\nEvery send below (across every publication in this workspace) will drop off the panel. You can un-clear individual sends afterward if needed.`
+    );
+    if (!ok) return;
+
+    const stamp = new Date().toISOString();
+    const targetIds = new Set(targets.map((a) => a.post.post_id));
+
+    // Optimistic: mark every target cleared at once so the row
+    // collapses to the "Cleared" pill immediately. `busyPosts`
+    // gates each row's individual button state.
+    setBusyPosts((prev) => {
+      const next = new Set(prev);
+      for (const id of targetIds) next.add(id);
+      return next;
+    });
+    setData((prev) => ({
+      ...prev,
+      alerts: prev.alerts.map((a) =>
+        targetIds.has(a.post.post_id)
+          ? {
+              ...a,
+              cleared: {
+                cleared_at: stamp,
+                cleared_by: null,
+                reason: "Cleared (whole workspace)",
+              },
+            }
+          : a
+      ),
+    }));
+
+    // Parallel fire. Track which ids failed so we can roll them back
+    // without disturbing the ones that succeeded.
+    const failed: string[] = [];
+    await Promise.all(
+      targets.map(async (a) => {
+        try {
+          const r = await fetch("/api/deliverability/clear", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              post_id: a.post.post_id,
+              workspace_id: args.workspaceId,
+              subject: a.post.subject ?? null,
+              newsletter: a.post.newsletter ?? null,
+              flag_summary: summarizeFlags(a.flags),
+            }),
+          });
+          if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        } catch {
+          failed.push(a.post.post_id);
+        }
+      })
+    );
+
+    if (failed.length > 0) {
+      const failedSet = new Set(failed);
+      setData((prev) => ({
+        ...prev,
+        alerts: prev.alerts.map((a) =>
+          failedSet.has(a.post.post_id) ? { ...a, cleared: null } : a
+        ),
+      }));
+      window.alert(
+        `${failed.length} of ${targets.length} clears failed. The failed rows have been restored.`
+      );
+    }
+
+    setBusyPosts((prev) => {
+      const next = new Set(prev);
+      for (const id of targetIds) next.delete(id);
+      return next;
+    });
+  }
+
   function toggleWorkspace(key: string) {
     setExpandedWorkspaces((prev) => {
       const next = new Set(prev);
@@ -1000,6 +1096,32 @@ export function DeliverabilityPanel({
                               className="px-2 py-1 text-xs border border-border-strong rounded-md hover:bg-canvas"
                             >
                               Draft
+                            </button>
+                          ) : null}
+                          {/* Whole-company clear: drops every uncleared
+                              alert in the group at once, so a workspace
+                              whose sends all resolved to the same root
+                              cause (e.g. one campaign) can be zeroed
+                              out in one click instead of expanding +
+                              clearing per publication. Hidden when the
+                              group is already fully cleared. */}
+                          {group.alerts.some((a) => !a.cleared) ? (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                void clearWorkspaceAlerts({
+                                  workspaceId: group.workspaceId,
+                                  workspaceName: group.workspaceName ?? null,
+                                  alerts: group.alerts,
+                                })
+                              }
+                              disabled={group.alerts.some(
+                                (a) => !a.cleared && busyPosts.has(a.post.post_id)
+                              )}
+                              title="Clear every uncleared send in this workspace"
+                              className="px-2 py-1 text-xs border border-border-strong rounded-md hover:bg-canvas disabled:opacity-50"
+                            >
+                              Clear all
                             </button>
                           ) : null}
                         </div>
