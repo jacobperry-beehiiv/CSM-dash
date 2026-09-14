@@ -37,6 +37,8 @@ type Endpoint =
   | "shipped-sweep"
   | "slack-intake-sweep"
   | "slack-intake-sweep-backfill"
+  | "linear-comment-scan"
+  | "linear-comment-scan-backfill"
   | "digest"
   | "digest-dry-run";
 
@@ -60,6 +62,16 @@ const ENDPOINTS: Record<Endpoint, { path: string; label: string; help: string }>
     path: "/api/enterprise-requests/slack-intake-sweep?backfill=1",
     label: "3b. Backfill entire channel history",
     help: "Same as #3 but ignores the cursor and walks the ENTIRE visible channel history (up to ~5000 messages). Use after a parser fix so historic skill posts get re-processed. Idempotent — re-processing an already-seen row is a no-op.",
+  },
+  "linear-comment-scan": {
+    path: "/api/enterprise-requests/linear-comment-scan",
+    label: "4. Scan Linear-issue comments for customer references",
+    help: "For every open Linear issue, walks the first 20 comments and looks for the same structured customer signals (Publication ID / User Email) the Slack sweep uses. Injects rows for open tickets where a comment named a customer but a customer_need was never attached. Uses the stored cursor — only re-walks issues updated since the last run.",
+  },
+  "linear-comment-scan-backfill": {
+    path: "/api/enterprise-requests/linear-comment-scan?backfill=1",
+    label: "4b. Backfill every open Linear issue",
+    help: "Same as #4 but ignores the cursor and walks every open (non-completed/canceled) Linear issue across every team (~1500–2500 tickets). ~15–30 min at Linear's 1500 req/hr rate limit. Run once after enabling the connection; incremental #4 runs cheaply thereafter.",
   },
   "digest-dry-run": {
     path: "/api/enterprise-requests/digest?dryRun=1",
@@ -154,7 +166,9 @@ export function ResyncControls() {
       if (!okSync) return;
       const okShipped = await run("shipped-sweep");
       if (!okShipped) return;
-      await run("slack-intake-sweep");
+      const okSlack = await run("slack-intake-sweep");
+      if (!okSlack) return;
+      await run("linear-comment-scan");
     } finally {
       setChainRunning(false);
     }
@@ -185,39 +199,46 @@ export function ResyncControls() {
           "shipped-sweep",
           "slack-intake-sweep",
           "slack-intake-sweep-backfill",
+          "linear-comment-scan",
+          "linear-comment-scan-backfill",
         ] as const
-      ).map((k) => (
-        <div
-          key={k}
-          className={`rounded-xl border shadow-card p-4 space-y-2 ${
-            k === "slack-intake-sweep-backfill"
-              ? "border-amber-400 dark:border-amber-500/60 bg-amber-50/40 dark:bg-amber-500/5"
-              : "border-border bg-surface"
-          }`}
-        >
-          <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0 flex-1">
-              <h3 className="text-sm font-semibold text-fg">
-                {ENDPOINTS[k].label}
-              </h3>
-              <p className="text-xs text-muted">{ENDPOINTS[k].help}</p>
+      ).map((k) => {
+        const isBackfill =
+          k === "slack-intake-sweep-backfill" ||
+          k === "linear-comment-scan-backfill";
+        return (
+          <div
+            key={k}
+            className={`rounded-xl border shadow-card p-4 space-y-2 ${
+              isBackfill
+                ? "border-amber-400 dark:border-amber-500/60 bg-amber-50/40 dark:bg-amber-500/5"
+                : "border-border bg-surface"
+            }`}
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0 flex-1">
+                <h3 className="text-sm font-semibold text-fg">
+                  {ENDPOINTS[k].label}
+                </h3>
+                <p className="text-xs text-muted">{ENDPOINTS[k].help}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => void run(k)}
+                disabled={states[k].running || chainRunning}
+                className="shrink-0 px-3 py-1.5 text-xs rounded border border-border-strong hover:bg-canvas disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {states[k].running
+                  ? "Running…"
+                  : isBackfill
+                    ? "Run backfill"
+                    : "Run now"}
+              </button>
             </div>
-            <button
-              type="button"
-              onClick={() => void run(k)}
-              disabled={states[k].running || chainRunning}
-              className="shrink-0 px-3 py-1.5 text-xs rounded border border-border-strong hover:bg-canvas disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {states[k].running
-                ? "Running…"
-                : k === "slack-intake-sweep-backfill"
-                  ? "Run backfill"
-                  : "Run now"}
-            </button>
+            <StatusCard state={states[k]} />
           </div>
-          <StatusCard state={states[k]} />
-        </div>
-      ))}
+        );
+      })}
 
       <div className="rounded-xl border border-border bg-surface shadow-card p-4 space-y-3">
         <div>

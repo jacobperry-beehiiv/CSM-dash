@@ -308,6 +308,32 @@ export function CustomerRequestsSection({
                                 Slack-only
                               </span>
                             ) : null}
+                            {row.linear_comment?.permalink ? (
+                              <>
+                                {" · "}
+                                <a
+                                  href={row.linear_comment.permalink}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="text-blue-600 dark:text-blue-400 hover:underline"
+                                  title={
+                                    row.linear_comment.body_preview
+                                      ? `Discussed in Linear comment${row.linear_comment.author_name ? ` by ${row.linear_comment.author_name}` : ""}: ${row.linear_comment.body_preview}`
+                                      : "Referenced in a Linear comment"
+                                  }
+                                >
+                                  💭 Linear comment
+                                </a>
+                              </>
+                            ) : null}
+                            {row.intake_source === "linear_comment" ? (
+                              <span
+                                className="ml-1.5 rounded border border-border-strong px-1 py-0.5 text-[9px] uppercase tracking-wide text-subtle"
+                                title="Picked up from a Linear-issue comment — a customer_need hasn't been formally attached to the ticket yet."
+                              >
+                                Comment-only
+                              </span>
+                            ) : null}
                           </div>
                         </div>
                         <span

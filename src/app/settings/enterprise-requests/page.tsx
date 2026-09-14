@@ -4,6 +4,7 @@ import { auth } from "@/auth";
 import { isFeatureEnabledFor } from "@/lib/auth/feature-flags";
 import {
   loadEnterpriseRequestsSnapshot,
+  loadLinearCommentScanCursor,
   loadOrphans,
   loadShippedCursor,
   loadSlackIntakeCursor,
@@ -29,19 +30,26 @@ export default async function EnterpriseRequestsSettingsPage() {
     notFound();
   }
 
-  const [snapshot, shippedCursor, slackIntakeCursor, orphansBlob] =
-    await Promise.all([
-      loadEnterpriseRequestsSnapshot(),
-      loadShippedCursor(),
-      loadSlackIntakeCursor(),
-      loadOrphans(),
-    ]);
+  const [
+    snapshot,
+    shippedCursor,
+    slackIntakeCursor,
+    linearCommentCursor,
+    orphansBlob,
+  ] = await Promise.all([
+    loadEnterpriseRequestsSnapshot(),
+    loadShippedCursor(),
+    loadSlackIntakeCursor(),
+    loadLinearCommentScanCursor(),
+    loadOrphans(),
+  ]);
 
   // Rough row-count summary so an admin can eyeball snapshot health
   // without opening the KV browser.
   let totalRows = 0;
   let liveRows = 0;
   let slackIntakeRows = 0;
+  let linearCommentRows = 0;
   for (const bucket of Object.values(snapshot.rows)) {
     for (const row of Object.values(bucket)) {
       totalRows += 1;
@@ -52,6 +60,7 @@ export default async function EnterpriseRequestsSettingsPage() {
         liveRows += 1;
       }
       if (row.intake_source === "slack_intake") slackIntakeRows += 1;
+      if (row.intake_source === "linear_comment") linearCommentRows += 1;
     }
   }
   const pendingOrphans = Object.values(orphansBlob.orphans).filter(
@@ -76,7 +85,7 @@ export default async function EnterpriseRequestsSettingsPage() {
 
       <section className="mb-8 rounded-xl border border-border bg-canvas p-4">
         <h2 className="text-sm font-semibold text-fg mb-2">Snapshot status</h2>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-3 text-xs">
           <Stat
             label="Rows in snapshot"
             value={totalRows.toString()}
@@ -97,12 +106,17 @@ export default async function EnterpriseRequestsSettingsPage() {
             hint="Rows discovered via #enterprise-bugs-and-fr with no Linear customer_need yet."
           />
           <Stat
+            label="Comment-only"
+            value={linearCommentRows.toString()}
+            hint="Rows discovered from a Linear-issue comment where no customer_need was attached."
+          />
+          <Stat
             label="Orphaned shipments"
             value={pendingOrphans.toString()}
             hint="Shipped-channel hits pending admin review (>14d old)."
           />
         </div>
-        <div className="mt-3 grid grid-cols-1 md:grid-cols-3 gap-3 text-[11px] text-muted">
+        <div className="mt-3 grid grid-cols-1 md:grid-cols-4 gap-3 text-[11px] text-muted">
           <div>
             Linear sync ran: <strong>{fmtDate(snapshot.fetched_at)}</strong>
           </div>
@@ -113,6 +127,10 @@ export default async function EnterpriseRequestsSettingsPage() {
           <div>
             Slack-intake cursor:{" "}
             <strong>{fmtDate(slackIntakeCursor.updated_at)}</strong>
+          </div>
+          <div>
+            Linear-comment cursor:{" "}
+            <strong>{fmtDate(linearCommentCursor.updated_at)}</strong>
           </div>
         </div>
       </section>

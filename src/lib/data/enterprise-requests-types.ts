@@ -57,7 +57,18 @@ export type PromotionSource =
  *  customer-needs metadata (keeping the slack_intake block intact
  *  as extra context — see runEnterpriseRequestsSync's prior-row
  *  merge). */
-export type IntakeSource = "customer_needs" | "slack_intake";
+export type IntakeSource =
+  | "customer_needs"
+  | "slack_intake"
+  /** Rows discovered by the Linear-comment-scan sweep: an open
+   *  Linear issue carried a comment (typically written by Juliet's
+   *  feature-request-creator skill) that named a customer via
+   *  Publication ID / User Email but never got a formal
+   *  customer_need attach. Reconciled the same way as slack_intake:
+   *  when a customer_need shows up on the same issue, the Linear
+   *  sync overwrites the row with the canonical customer_needs
+   *  metadata but preserves the linear_comment block for context. */
+  | "linear_comment";
 
 /** Slack-post metadata for a row that either originated from or is
  *  additionally referenced in #enterprise-bugs-and-feature-requests.
@@ -140,6 +151,31 @@ export interface EnterpriseRequestRow {
    *  never cleared by the Linear sync (the sync merges this block
    *  forward from the prior snapshot). */
   slack_intake?: SlackIntakeMeta | null;
+  /** Optional link back to the Linear comment that mentioned this
+   *  customer. Populated by the linear-comment-scan sweep. Same
+   *  merge posture as slack_intake — customer_needs sync preserves
+   *  the block across runs. */
+  linear_comment?: LinearCommentMeta | null;
+}
+
+/** Linear-comment metadata for a row discovered via
+ *  `enterprise-requests-linear-comment-scan`. Stored on the row so
+ *  the profile UI can deep-link back to the exact comment that
+ *  triggered the association. */
+export interface LinearCommentMeta {
+  issue_id: string;
+  issue_identifier: string;
+  comment_id: string;
+  /** Direct URL to the comment (issue URL + `#comment-<id>` fragment).
+   *  Linear renders this as a scroll-to-anchor. */
+  permalink: string;
+  /** Comment author email (available on the Linear comment.user
+   *  relation). Kept for the profile display + admin audit. */
+  author_email: string | null;
+  author_name: string | null;
+  posted_at: string;
+  body_preview: string;
+  matched_via: "publication_id" | "owner_email" | "domain";
 }
 
 /** A Linear customer that couldn't be resolved to a dash workspace.
@@ -217,6 +253,15 @@ export interface ShippedCursorBlob {
  *  so the cursor is a soft floor not a hard barrier). */
 export interface SlackIntakeCursorBlob {
   intake_ts: string | null;
+  updated_at: string;
+}
+
+/** Cursor blob for the Linear-comment-scan sweep. Stores an ISO
+ *  timestamp — the sweep filters open issues by `updatedAt >
+ *  scan_after` on incremental runs. `backfill: true` on the engine
+ *  ignores the cursor and re-walks every open issue. */
+export interface LinearCommentScanCursorBlob {
+  scan_after: string | null;
   updated_at: string;
 }
 
