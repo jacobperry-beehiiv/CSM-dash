@@ -125,6 +125,13 @@ export function EnterpriseOnlyPanel({ rows, csms }: Props) {
   // is the actionable bucket; "has outreach" surfaces who's already
   // been pitched.
   const [outreachFilter, setOutreachFilter] = useUrlSearch("outreach");
+  // Utilization floor. The Slack proactive-outreach rollup deep-links
+  // in with ?util_min=90 so the click lands pre-filtered to "≥90%";
+  // manual users pick a threshold from the dropdown too. Values are
+  // strings ("75" | "80" | "85" | "90" | "95" | "100"); empty = no
+  // floor (defaults to the 75% cohort the panel already scopes to
+  // via the parent /am page).
+  const [utilMinFilter, setUtilMinFilter] = useUrlSearch("util_min");
   const [needsReviewFilter, setNeedsReviewFilter] = useUrlSearch(
     "needs_review"
   );
@@ -290,9 +297,17 @@ export function EnterpriseOnlyPanel({ rows, csms }: Props) {
         ? needsReview(reviewStates[c.workspace_id], "proactive")
         : true;
     });
+    // Utilization floor — deep-linked from the Slack proactive-outreach
+    // rollup with ?util_min=90 (or user-selected in the toolbar).
+    // Parsed as an integer; invalid values disable the floor rather
+    // than silently hiding everything.
+    const utilFloor = utilMinFilter ? parseInt(utilMinFilter, 10) : NaN;
+    const filteredByUtil = Number.isFinite(utilFloor)
+      ? filteredByReview.filter((c) => pct(c) >= utilFloor)
+      : filteredByReview;
     return BUCKETS.map((b) => ({
       bucket: b,
-      list: filteredByReview
+      list: filteredByUtil
         .filter((c) => b.test(pct(c)))
         .sort((a, b) => pct(b) - pct(a)),
     })).filter((g) => g.list.length > 0);
@@ -304,6 +319,7 @@ export function EnterpriseOnlyPanel({ rows, csms }: Props) {
     reviewFilter,
     reviewStates,
     featureMatcher,
+    utilMinFilter,
   ]);
 
   const visibleRows = useMemo(
@@ -394,6 +410,19 @@ export function EnterpriseOnlyPanel({ rows, csms }: Props) {
           options={[
             { value: "none", label: "No outreach yet" },
             { value: "has", label: "Has outreach" },
+          ]}
+        />
+        <SelectFilter
+          label="Utilization"
+          value={utilMinFilter}
+          onChange={setUtilMinFilter}
+          emptyLabel="≥75% (all)"
+          options={[
+            { value: "80", label: "≥80%" },
+            { value: "85", label: "≥85%" },
+            { value: "90", label: "≥90%" },
+            { value: "95", label: "≥95%" },
+            { value: "100", label: "≥100% (over cap)" },
           ]}
         />
         <SelectFilter

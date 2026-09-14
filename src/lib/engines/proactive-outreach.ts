@@ -220,7 +220,11 @@ export async function runProactiveOutreachSweep(
   const dashboardOrigin = (
     process.env.NEXT_PUBLIC_DASHBOARD_URL ?? "https://csm-dash.vercel.app"
   ).replace(/\/+$/, "");
-  const proactiveDeepLink = `${dashboardOrigin}/am?tab=proactive`;
+  // `util_min=90` lands the CSM on the 90%+ slice the rollup call to
+  // action is about — the ≥75% cohort is a lot of rows once the
+  // month rolls forward, and the top-priority accounts are the 90%+
+  // ones. The panel's Utilization dropdown reads the same param.
+  const proactiveDeepLink = `${dashboardOrigin}/am?tab=proactive&util_min=90`;
 
   // Eligible cohort: Enterprise, ≥75% of cap, with a workspace_id to
   // key dedupe state on. Falls into the same definition the panel uses.
