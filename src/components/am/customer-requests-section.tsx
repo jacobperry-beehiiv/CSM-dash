@@ -260,6 +260,42 @@ export function CustomerRequestsSection({
                                 Resurfaced
                               </span>
                             ) : null}
+                            {row.project_name ? (
+                              row.project_url ? (
+                                <a
+                                  href={row.project_url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="px-1 py-0.5 rounded border border-border-strong text-blue-700 dark:text-blue-300 hover:underline"
+                                  title={
+                                    row.project_status_type
+                                      ? `Project status: ${row.project_status_type}`
+                                      : "Linear project"
+                                  }
+                                >
+                                  📁 {row.project_name}
+                                </a>
+                              ) : (
+                                <span
+                                  className="px-1 py-0.5 rounded border border-border-strong"
+                                  title={
+                                    row.project_status_type
+                                      ? `Project status: ${row.project_status_type}`
+                                      : "Linear project"
+                                  }
+                                >
+                                  📁 {row.project_name}
+                                </span>
+                              )
+                            ) : null}
+                            {row.pending_ship ? (
+                              <span
+                                className="px-1 py-0.5 rounded border border-amber-400 bg-amber-50 dark:bg-amber-500/10 text-amber-800 dark:text-amber-200"
+                                title={`Ticket shipped ${row.pending_ship.ship_date ? "on " + fmtDate(row.pending_ship.ship_date) + " " : ""}but the parent project (${row.pending_ship.project_name ?? "unknown"}) is still ${row.pending_ship.project_status_type ?? "in progress"}. The row will flip to ${row.pending_ship.target_state} on the next sync after the project is marked completed.`}
+                              >
+                                ⏳ Shipped · project pending
+                              </span>
+                            ) : null}
                           </div>
                           <div className="mt-0.5 text-[10px] text-muted">
                             Submitted {fmtDate(row.submitted_at)}

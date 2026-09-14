@@ -127,6 +127,17 @@ export interface EnterpriseRequestRow {
    *  isn't populated. */
   estimate: number | null;
   project_name: string | null;
+  /** Direct link to the Linear project page. Populated when the
+   *  ticket has a project; used by the profile UI for the project
+   *  chip. Null on tickets not under a project. */
+  project_url?: string | null;
+  /** Linear ProjectStatusType — one of `backlog` / `planned` /
+   *  `started` / `paused` / `completed` / `canceled`. The
+   *  shipped-sweep gates "Live" promotion on this being `completed`:
+   *  a ticket shipping while its wider project is still in progress
+   *  produces a `pending_ship` block instead. Null for tickets not
+   *  attached to any project. */
+  project_status_type?: string | null;
   linear_completed_at: string | null;
   /** When the customer_need was created (i.e. when this CSM logged
    *  the request against this customer). */
@@ -156,6 +167,37 @@ export interface EnterpriseRequestRow {
    *  merge posture as slack_intake — customer_needs sync preserves
    *  the block across runs. */
   linear_comment?: LinearCommentMeta | null;
+  /** Set when the shipped-sweep saw a Slack ship hit for this row
+   *  but the parent project's status.type is still not `completed`.
+   *  We capture the intended promotion in this block instead of
+   *  updating `derived_state` so the CSM isn't told the customer
+   *  received the feature before the project is actually released.
+   *
+   *  Cleared by the sync's post-processing pass when the project's
+   *  status.type flips to `completed` — at that point the deferred
+   *  promotion is applied and the row jumps to Live (or
+   *  Live-possibly-in-beta if that's what the shipped-sweep would
+   *  have picked). See applyPendingShipPromotions in
+   *  enterprise-requests-sync.ts. */
+  pending_ship?: PendingShip | null;
+}
+
+/** Deferred-promotion payload: what the shipped-sweep WOULD have
+ *  promoted the row to if the parent project were already
+ *  `completed`. Captured 1:1 with the shipped-sweep's decision so
+ *  the deferred pass can apply it verbatim without re-computing
+ *  from Slack. */
+export interface PendingShip {
+  target_state: EnterpriseRequestDerivedState;
+  source: PromotionSource;
+  ship_url: string | null;
+  ship_date: string | null;
+  detected_at: string;
+  /** Snapshot of the project state at detection time — surfaced in
+   *  the UI badge so a CSM can see "shipped, waiting on project X"
+   *  without a second Linear round-trip. */
+  project_name: string | null;
+  project_status_type: string | null;
 }
 
 /** Linear-comment metadata for a row discovered via

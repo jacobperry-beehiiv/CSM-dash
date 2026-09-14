@@ -202,6 +202,8 @@ function buildRowFromIssueAndComment(
     resurfaced: labels.resurfaced,
     estimate: issue.estimate ?? null,
     project_name: issue.project?.name ?? null,
+    project_url: issue.project?.url ?? null,
+    project_status_type: issue.project?.status?.type ?? null,
     linear_completed_at: issue.completedAt ?? null,
     submitted_at: meta.posted_at,
     submitting_csm_email: meta.author_email,
