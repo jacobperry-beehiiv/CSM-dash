@@ -1,6 +1,7 @@
 import { loadAdminFlags } from "../data/admin-flags";
 import {
   applyGate,
+  DEFAULT_FLAGS,
   type FeatureId,
 } from "../data/admin-flags-types";
 
@@ -46,4 +47,29 @@ export async function isFeatureEnabledFor(
  *  so a save propagates without waiting out the 60s TTL. */
 export function invalidateFeatureFlagsCache() {
   cache = null;
+}
+
+/** True when the flag's admin gate has `restricted: false` — i.e.
+ *  the feature has been opened up to everyone who passes its own
+ *  eligibility check. Used by the settings layout to promote
+ *  formerly-gated features out of the "Feature settings" hub and
+ *  into the primary sidebar list once they graduate to general
+ *  availability.
+ *
+ *  Falls through to DEFAULT_FLAGS when the KV row is absent so a
+ *  fresh install has the same promotion behavior a saved-and-
+ *  cleared row does. Soft-fails to `false` on KV errors — same
+ *  posture as `isFeatureEnabledFor`: under-promote before over-
+ *  promote. */
+export async function isFeatureUnrestricted(
+  featureId: FeatureId
+): Promise<boolean> {
+  try {
+    const flags = await loadCachedFlags();
+    const gate =
+      flags.features?.[featureId] ?? DEFAULT_FLAGS.features[featureId];
+    return !gate?.restricted;
+  } catch {
+    return false;
+  }
 }

@@ -1,23 +1,29 @@
 import Link from "next/link";
 import { auth } from "@/auth";
-import { isFeatureEnabledFor } from "@/lib/auth/feature-flags";
+import {
+  isFeatureEnabledFor,
+  isFeatureUnrestricted,
+} from "@/lib/auth/feature-flags";
 import { isAdmin, isProfileOptionsAdmin } from "@/lib/auth/admin";
+import {
+  FEATURE_SETTINGS_LINKS,
+  type FeatureId,
+} from "@/lib/data/admin-flags-types";
 
 export const dynamic = "force-dynamic";
 
 /**
- * /settings/features — consolidated hub for every settings surface
- * that lives behind a feature flag. Previously each flag-gated area
- * (gmail labels, customer folders, wins, upgrade analysis, todo
- * automation, profile field options, …) was its own sidebar entry
- * managed via the layout's `extras` array. The sidebar grew long
- * and made the dashboard's "settings" section feel bloated for
- * everyone even when most of the entries were dark for the viewer.
+ * /settings/features — dark-launch hub for the settings surfaces
+ * behind still-restricted feature flags. When a flag graduates to
+ * unrestricted (via /admin/flags), the settings layout promotes its
+ * entry into the primary sidebar and this hub drops the card. The
+ * hub always retains admin-only entries (profile-fields option
+ * lists, todo-automation) that aren't governed by a feature flag.
  *
- * This page renders one card per feature the current viewer is
- * eligible for, linking through to the specific page that already
- * exists. Non-eligible features aren't shown — same visibility
- * envelope as before, just one sidebar entry.
+ * Card labels + descriptions come from the shared
+ * FEATURE_SETTINGS_LINKS registry so a promoted entry shows up in
+ * the sidebar with the exact same copy it had in the hub — no
+ * per-surface drift.
  */
 
 interface FeatureCard {
@@ -26,58 +32,43 @@ interface FeatureCard {
   description: string;
 }
 
+/** Feature IDs the hub renders when the flag is still restricted.
+ *  Ordering here is the card render order. */
+const HUB_FEATURE_IDS: FeatureId[] = [
+  "gmail-draft-labels",
+  "customer-folders-sweep",
+  "wins-opportunities",
+  "upgrade-analysis",
+  "sybill-ingest",
+  "enterprise-requests",
+];
+
 export default async function FeaturesSettingsPage() {
   const session = await auth();
   const email = session?.user?.email ?? null;
 
   const cards: FeatureCard[] = [];
-  if (await isFeatureEnabledFor("gmail-draft-labels", email)) {
+  for (const id of HUB_FEATURE_IDS) {
+    const hasAccess = await isFeatureEnabledFor(id, email);
+    if (!hasAccess) continue;
+    // Flag has graduated → the sidebar owns the entry, hub skips it.
+    if (await isFeatureUnrestricted(id)) continue;
+    const link = FEATURE_SETTINGS_LINKS[id];
+    if (!link) continue;
     cards.push({
-      href: "/settings/gmail-labels",
-      title: "Gmail customer labels",
-      description:
-        "Map each customer in your book to the Gmail label you already use, so dashboard drafts auto-tag in your inbox.",
+      href: link.href,
+      title: link.label,
+      description: link.description,
     });
   }
-  if (await isFeatureEnabledFor("customer-folders-sweep", email)) {
-    cards.push({
-      href: "/settings/customer-folders",
-      title: "Customer folders sweep",
-      description:
-        "Scan the shared Drive parent, match folders to customers, and backfill HubSpot's customer_folder property.",
-    });
-  }
-  if (await isFeatureEnabledFor("wins-opportunities", email)) {
-    cards.push({
-      href: "/settings/wins",
-      title: "Wins detection thresholds",
-      description:
-        "Tune the per-rule thresholds the daily wins-detection engine scores against.",
-    });
-  }
-  if (await isFeatureEnabledFor("upgrade-analysis", email)) {
-    cards.push({
-      href: "/settings/upgrade-analysis",
-      title: "D&C Upgrade Analysis thresholds",
-      description:
-        "Tune the D&C Upgrade Analysis scorecard bands — complaint rates, deferral bands, engagement floors, escalation rules.",
-    });
-  }
-  if (await isFeatureEnabledFor("sybill-ingest", email)) {
-    cards.push({
-      href: "/settings/sybill",
-      title: "Sybill action-item ingest",
-      description:
-        "Manual sync button that pulls call-recap action items from Sybill emails in your Gmail into your personal to-do list.",
-    });
-  }
-  if (await isFeatureEnabledFor("enterprise-requests", email)) {
-    cards.push({
-      href: "/settings/enterprise-requests",
-      title: "Enterprise Request Loop — resync + status",
-      description:
-        "Trigger the Linear sync, #devs-shipped/changelog sweep, and #enterprise-bugs-and-fr intake sweep on demand. Preview or send the weekly per-CSM digest. Shows last-run timestamps + snapshot health.",
-    });
+  // Enterprise Request Loop has two admin queues under it. These
+  // are dedicated deep-links to sub-pages, so they live only in the
+  // hub — the sidebar-promoted top-level entry gets the reader to
+  // the same queues via its own admin-queues section.
+  if (
+    (await isFeatureEnabledFor("enterprise-requests", email)) &&
+    !(await isFeatureUnrestricted("enterprise-requests"))
+  ) {
     cards.push({
       href: "/settings/enterprise-requests/unmatched",
       title: "Enterprise Request Loop — unmatched customers",
@@ -114,14 +105,17 @@ export default async function FeaturesSettingsPage() {
         Feature settings
       </h1>
       <p className="text-sm text-muted mb-6 max-w-prose">
-        Settings for gated features — only the ones enabled for your
-        account appear below. Each card links through to that
-        feature&rsquo;s own page.
+        Settings for dark-launched features — only the ones enabled
+        for your account appear below. Features that have graduated
+        to general availability move out of this hub and into the
+        primary sidebar; look for them there.
       </p>
 
       {cards.length === 0 ? (
         <div className="text-sm text-muted italic">
-          You don&rsquo;t currently have any gated features enabled.
+          You don&rsquo;t currently have any dark-launched features
+          enabled. Anything you had here that&rsquo;s now open to the
+          full team lives in the main settings sidebar.
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">

@@ -40,7 +40,26 @@ export default async function CustomerFoldersSettingsPage() {
         typeof c.property_customer_folder === "string" &&
           c.property_customer_folder.trim().length > 0
       ),
+      /** CSM handle from the customer book, in the underscore form
+       *  q10600 exposes it ("Jacob_Perry"). Threaded into the review
+       *  component so it can filter the queue to only rows whose
+       *  candidate matches sit in the viewer's book by default. */
+      customer_success_manager: c.customer_success_manager ?? null,
     }));
+
+  // Viewer's CSM handle — resolved from the customer book by matching
+  // the signed-in email against `customer_success_manager_email`.
+  // When the viewer is an admin who isn't a CSM (e.g. Jacob viewing
+  // for others), this is null and the scope toggle defaults to "show
+  // all" since there's no book to scope to.
+  const viewerCsm =
+    (email
+      ? customers.find(
+          (c) =>
+            (c.customer_success_manager_email ?? "").toLowerCase() ===
+            email.toLowerCase()
+        )?.customer_success_manager ?? null
+      : null);
 
   return (
     <div>
@@ -55,7 +74,7 @@ export default async function CustomerFoldersSettingsPage() {
         property. Existing values are always preserved &mdash; the sweep only
         backfills BLANK fields.
       </p>
-      <CustomerFoldersReview workspaces={workspaceIndex} />
+      <CustomerFoldersReview workspaces={workspaceIndex} viewerCsm={viewerCsm} />
     </div>
   );
 }

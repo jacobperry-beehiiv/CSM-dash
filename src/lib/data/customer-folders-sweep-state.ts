@@ -55,6 +55,10 @@ export interface CustomerFoldersSweepState {
     folders_no_candidate: number;
     folders_skipped_already_set: number;
     truncated: boolean;
+    /** Email of the CSM who fired the scan. Surfaced in the
+     *  settings page header so a viewer opening the page later
+     *  can see whose scan populated the shared queue. */
+    ran_by?: string | null;
   };
   fetched_at: string;
 }

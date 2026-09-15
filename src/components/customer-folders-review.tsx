@@ -22,6 +22,10 @@ interface WorkspaceIndexRow {
   workspace_name: string | null;
   company_name: string | null;
   has_folder: boolean;
+  /** CSM handle in the underscore form q10600 exposes it
+   *  ("Jacob_Perry"). Used to scope the review queue to the
+   *  viewer's own book by default. */
+  customer_success_manager: string | null;
 }
 
 interface Candidate {
@@ -56,6 +60,10 @@ interface ScanSummary {
   folders_no_candidate: number;
   folders_skipped_already_set: number;
   truncated: boolean;
+  /** Email of the CSM who fired the scan. Persisted so a viewer
+   *  who opens the page later sees who last populated the queue —
+   *  the queue itself lives in KV and is shared team-wide. */
+  ran_by?: string | null;
 }
 
 interface GetResponse {
@@ -100,8 +108,15 @@ const CONFIDENCE_COLOR: Record<Candidate["confidence"], string> = {
 
 export function CustomerFoldersReview({
   workspaces,
+  viewerCsm,
 }: {
   workspaces: WorkspaceIndexRow[];
+  /** Viewer's CSM handle from the customer book. When set, the
+   *  review defaults to scoping the queue to rows whose candidates
+   *  land on a workspace in the viewer's book. Null when the viewer
+   *  is an admin without an assigned book — the scope toggle then
+   *  defaults to "show all". */
+  viewerCsm: string | null;
 }) {
   const [state, setState] = useState<GetResponse | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -111,10 +126,28 @@ export function CustomerFoldersReview({
   // Local per-folder selection edits, keyed by folder_id. Flushed on
   // Apply; a fresh scan wipes them (the incoming queue is canonical).
   const [edits, setEdits] = useState<Record<string, LocalSelection>>({});
+  // Scope toggle — default to viewer's book when they have one, else
+  // show everyone. The queue itself is team-wide; this only narrows
+  // what's rendered.
+  const [scopeToViewer, setScopeToViewer] = useState<boolean>(
+    Boolean(viewerCsm)
+  );
 
   const workspaceLookup = useMemo(() => {
     return new Map(workspaces.map((w) => [w.workspace_id, w]));
   }, [workspaces]);
+
+  // Set of workspace_ids the viewer owns. When empty (admin viewer
+  // with no book) the scope toggle is disabled so the "my book"
+  // choice can't accidentally hide the entire queue.
+  const viewerWorkspaceIds = useMemo(() => {
+    if (!viewerCsm) return new Set<string>();
+    return new Set(
+      workspaces
+        .filter((w) => w.customer_success_manager === viewerCsm)
+        .map((w) => w.workspace_id)
+    );
+  }, [workspaces, viewerCsm]);
 
   const refresh = useCallback(async () => {
     try {
@@ -220,8 +253,20 @@ export function CustomerFoldersReview({
     }
   }
 
-  const queue = state?.queue ?? [];
+  const fullQueue = state?.queue ?? [];
   const summary = state?.last_scan_summary ?? null;
+  // Apply the scope toggle: a row belongs to the viewer's book if
+  // ANY of its candidates is one of the viewer's workspaces. Rows
+  // with zero candidates (truly ambiguous folders) are treated as
+  // "not scoped to any book" and only appear when the toggle is off.
+  const scopeActive = scopeToViewer && viewerWorkspaceIds.size > 0;
+  const queue = useMemo(() => {
+    if (!scopeActive) return fullQueue;
+    return fullQueue.filter((r) =>
+      r.candidates.some((c) => viewerWorkspaceIds.has(c.workspace_id))
+    );
+  }, [fullQueue, scopeActive, viewerWorkspaceIds]);
+  const hiddenByScope = fullQueue.length - queue.length;
   const pendingCount = queue.filter(
     (r) => !r.applied_at && effectiveSelection(r, edits).kind === "pending"
   ).length;
@@ -260,15 +305,37 @@ export function CustomerFoldersReview({
           </button>
           <span className="text-xs text-muted">
             Last scan: <strong>{fmtRelative(state?.last_scan_at ?? null)}</strong>
+            {summary?.ran_by ? (
+              <> by <strong>{summary.ran_by}</strong></>
+            ) : null}
             {summary ? (
               <>
                 {" · "}
                 {summary.folders_scanned} folder{summary.folders_scanned === 1 ? "" : "s"} ·{" "}
                 {pendingCount} needs review ·{" "}
                 {approvedUnappliedCount} approved
+                {scopeActive && hiddenByScope > 0 ? (
+                  <>
+                    {" · "}
+                    <span className="italic">
+                      {hiddenByScope} hidden (not in your book)
+                    </span>
+                  </>
+                ) : null}
               </>
             ) : null}
           </span>
+          {viewerWorkspaceIds.size > 0 ? (
+            <label className="inline-flex items-center gap-1.5 text-xs text-fg cursor-pointer select-none ml-auto">
+              <input
+                type="checkbox"
+                checked={scopeToViewer}
+                onChange={(e) => setScopeToViewer(e.currentTarget.checked)}
+                className="h-3.5 w-3.5 rounded border-border-strong cursor-pointer"
+              />
+              Only show folders matching my book
+            </label>
+          ) : null}
         </div>
         {message ? (
           <div className="text-xs text-muted bg-canvas/40 border border-border rounded-md px-3 py-2">
@@ -284,7 +351,19 @@ export function CustomerFoldersReview({
 
       {queue.length === 0 ? (
         <p className="text-sm text-muted">
-          No folders in the queue yet. Click <strong>Scan Drive</strong> to populate it.
+          {fullQueue.length === 0 ? (
+            <>
+              No folders in the queue yet. Click <strong>Scan Drive</strong> to
+              populate it — the queue is shared, so anyone with access can
+              see whatever was last scanned.
+            </>
+          ) : (
+            <>
+              No folders in the queue match customers in your book. Uncheck{" "}
+              <strong>Only show folders matching my book</strong> above to see
+              the full {fullQueue.length}-folder queue.
+            </>
+          )}
         </p>
       ) : (
         <div className="bg-surface rounded-xl border border-border shadow-card overflow-x-auto">
