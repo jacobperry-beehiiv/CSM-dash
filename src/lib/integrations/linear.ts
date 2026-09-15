@@ -69,7 +69,19 @@ export interface LinearIssue {
   state: { name: string; type: string };
   labels: { nodes: Array<{ name: string }> };
   estimate: number | null;
-  project: { id: string; name: string } | null;
+  /** Linear project the issue is under. Includes the status so the
+   *  ER Loop shipped-sweep can gate "Live" promotion on the project
+   *  being `completed` — a single ticket shipping doesn't mean the
+   *  wider project is customer-facing yet (typical case: BEE-24713
+   *  under the "Workspace Library" project). `status.type` is one
+   *  of `backlog` / `planned` / `started` / `paused` / `completed`
+   *  / `canceled`; only `completed` unblocks promotion. */
+  project: {
+    id: string;
+    name: string;
+    url: string;
+    status: { name: string; type: string } | null;
+  } | null;
   completedAt: string | null;
   /** Renamed by Linear: the field on Issue is `needs` (typed as
    *  `CustomerNeedConnection`). We keep the local TS field name in
@@ -131,6 +143,11 @@ const ISSUES_WITH_NEEDS_QUERY = /* GraphQL */ `
         project {
           id
           name
+          url
+          status {
+            name
+            type
+          }
         }
         completedAt
         needs {
@@ -262,6 +279,11 @@ export async function fetchIssueByIdentifier(
         project {
           id
           name
+          url
+          status {
+            name
+            type
+          }
         }
         completedAt
         needs {
@@ -339,9 +361,14 @@ export interface LinearComment {
 
 /** Trimmed issue payload for the comment-scan pass. We only pull the
  *  metadata the engine needs to build a snapshot row + reach each
- *  comment. `customerCount` is included so the engine can skip
- *  issues that already have ≥1 customer_need (already covered by
- *  the main sync). */
+ *  comment. Dedupe against issues already covered by the main sync
+ *  is done via the snapshot's `rows[workspaceId][issue.id]` key, so
+ *  we don't need to know the customer-need count up-front. (An
+ *  earlier draft selected `customerCount` here — it's a filter
+ *  field on IssueFilter, NOT a scalar on Issue. Linear returns
+ *  `Cannot query field "customerCount" on type "Issue". Did you
+ *  mean "customerTicketCount"?` — customerTicketCount is
+ *  Zendesk-attachment-only and unrelated.) */
 export interface LinearIssueWithComments {
   id: string;
   identifier: string;
@@ -350,9 +377,20 @@ export interface LinearIssueWithComments {
   state: { name: string; type: string };
   labels: { nodes: Array<{ name: string }> };
   estimate: number | null;
-  project: { id: string; name: string } | null;
+  /** Linear project the issue is under. Includes the status so the
+   *  ER Loop shipped-sweep can gate "Live" promotion on the project
+   *  being `completed` — a single ticket shipping doesn't mean the
+   *  wider project is customer-facing yet (typical case: BEE-24713
+   *  under the "Workspace Library" project). `status.type` is one
+   *  of `backlog` / `planned` / `started` / `paused` / `completed`
+   *  / `canceled`; only `completed` unblocks promotion. */
+  project: {
+    id: string;
+    name: string;
+    url: string;
+    status: { name: string; type: string } | null;
+  } | null;
   completedAt: string | null;
-  customerCount: number;
   comments: { nodes: LinearComment[]; pageInfo: { hasNextPage: boolean } };
 }
 
@@ -406,9 +444,13 @@ const OPEN_ISSUES_WITH_COMMENTS_QUERY = /* GraphQL */ `
         project {
           id
           name
+          url
+          status {
+            name
+            type
+          }
         }
         completedAt
-        customerCount
         comments(first: 20) {
           nodes {
             id

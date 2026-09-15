@@ -315,7 +315,38 @@ export async function runEnterpriseRequestsShippedSweep(): Promise<ShippedSweepR
       if (devsHit) matchedLinearKeys.add(devsHit.linear_key);
       if (changelogExact?.linear_key) matchedLinearKeys.add(changelogExact.linear_key);
       if (!decision) continue;
+      // Project-state gate: if the ticket is under a Linear project
+      // whose status.type isn't `completed`, defer the promotion.
+      // Rationale: shipping a single ticket doesn't mean the wider
+      // project is customer-facing yet (e.g. BEE-24713 under the
+      // still-in-progress "Workspace Library" project — telling a
+      // CSM their customer's request is Live before the surrounding
+      // feature is released would be misleading). We capture the
+      // decision in `pending_ship` and the sync's deferred-promotion
+      // pass applies it once the project flips to `completed`.
+      //
+      // Tickets with no project (null) fall through the gate — no
+      // project means no "wider release" to wait for.
       const nextBucket = { ...(nextRows[workspaceId] ?? {}) };
+      const projectBlocks =
+        row.project_status_type &&
+        row.project_status_type !== "completed";
+      if (projectBlocks) {
+        nextBucket[issueId] = {
+          ...row,
+          pending_ship: {
+            target_state: decision.target_state,
+            source: decision.source,
+            ship_url: decision.ship_url,
+            ship_date: decision.ship_date,
+            detected_at: now,
+            project_name: row.project_name,
+            project_status_type: row.project_status_type ?? null,
+          },
+        };
+        nextRows[workspaceId] = nextBucket;
+        continue;
+      }
       nextBucket[issueId] = {
         ...row,
         derived_state: decision.target_state,
@@ -333,6 +364,7 @@ export async function runEnterpriseRequestsShippedSweep(): Promise<ShippedSweepR
             permalink: decision.ship_url,
           },
         ],
+        pending_ship: null,
       };
       nextRows[workspaceId] = nextBucket;
       promoted.push({ workspaceId, issueId });

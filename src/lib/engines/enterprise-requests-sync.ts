@@ -183,6 +183,8 @@ function buildRow(
     resurfaced: labels.resurfaced,
     estimate: issue.estimate ?? null,
     project_name: issue.project?.name ?? null,
+    project_url: issue.project?.url ?? null,
+    project_status_type: issue.project?.status?.type ?? null,
     linear_completed_at: issue.completedAt ?? null,
     submitted_at: need.createdAt,
     submitting_csm_email: need.creator?.email ?? null,
@@ -264,6 +266,7 @@ export async function runEnterpriseRequestsSync(): Promise<SyncResult> {
         // blocks for the profile UI.
         row.slack_intake = priorRow.slack_intake ?? null;
         row.linear_comment = priorRow.linear_comment ?? null;
+        row.pending_ship = priorRow.pending_ship ?? null;
         // If the shipped sweep had already promoted this row past
         // the Linear-native derived state, keep it. A Linear state
         // change (e.g. reopened for a follow-up) shouldn't demote
@@ -283,6 +286,61 @@ export async function runEnterpriseRequestsSync(): Promise<SyncResult> {
       bucket[issue.id] = row;
       rows[workspaceId] = bucket;
     }
+  }
+
+  // ─── Deferred-promotion pass ────────────────────────────────────
+  // The shipped-sweep captures a `pending_ship` block whenever a
+  // Slack ship hit lands on a ticket whose parent project isn't
+  // `completed` yet (e.g. BEE-24713 shipping under the still-in-
+  // progress "Workspace Library" project). Now that we've refreshed
+  // every row's `project_status_type` from Linear, walk every
+  // pending row: if the project just crossed into `completed`,
+  // apply the deferred promotion. This is the only path outside
+  // the shipped-sweep that mutates `derived_state`.
+  let deferred_applied = 0;
+  for (const [workspaceId, bucket] of Object.entries(rows)) {
+    for (const [issueId, row] of Object.entries(bucket)) {
+      const pending = row.pending_ship;
+      if (!pending) continue;
+      if (row.project_status_type !== "completed") continue;
+      // Never demote: if this row has already been promoted past
+      // pending's target state, don't step backwards.
+      if (
+        (pending.target_state === "Live, possibly in beta" &&
+          row.derived_state === "Live") ||
+        row.derived_state === pending.target_state
+      ) {
+        bucket[issueId] = { ...row, pending_ship: null };
+        continue;
+      }
+      const now = new Date().toISOString();
+      bucket[issueId] = {
+        ...row,
+        derived_state: pending.target_state,
+        promotion_source: pending.source,
+        promoted_at: now,
+        ship_url: pending.ship_url ?? row.ship_url,
+        ship_date: pending.ship_date ?? row.ship_date,
+        promotion_history: [
+          ...(row.promotion_history ?? []),
+          {
+            from_state: row.derived_state,
+            to_state: pending.target_state,
+            source: pending.source,
+            at: now,
+            permalink: pending.ship_url,
+          },
+        ],
+        pending_ship: null,
+      };
+      deferred_applied += 1;
+    }
+    rows[workspaceId] = bucket;
+  }
+  if (deferred_applied > 0) {
+    console.log(
+      `[enterprise-requests-sync] applied ${deferred_applied} deferred-project promotions`
+    );
   }
 
   const fetched_at = new Date().toISOString();

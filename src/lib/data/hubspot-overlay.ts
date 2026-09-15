@@ -22,12 +22,14 @@ import type { Customer, HubSpotContactRef } from "../types";
  * Customer fields we override, the serialized JSON stays small
  * enough (< 200 KB) that we don't need per-workspace splitting.
  *
- * Overlay is intentionally narrow — only the fields the HubSpot
- * resync path can refresh end-to-end. Metabase-sourced fields
- * (ARR, MRR, subs, last_send) stay from the snapshot. Risk and
- * status (HubSpot properties that come through Metabase) ARE
- * editable in HubSpot but require a Metabase sync to refresh,
- * so they're NOT in the overlay.
+ * Overlay covers the fields the HubSpot batch API can serve
+ * directly — no Metabase round-trip needed. Metabase-sourced
+ * fields (ARR, MRR, subs, last_send) stay from the snapshot.
+ * Company-level HubSpot properties that CSMs edit mid-day
+ * (touch level, risk level, customer-folder URL, last-activity
+ * rollup) all pull straight from HubSpot on demand so the resync
+ * button reflects the change without waiting for the twice-daily
+ * Metabase snapshot rebuild.
  */
 
 const KEY = "csm:hubspot-overlay:v1";
@@ -37,6 +39,14 @@ export interface HubSpotOverlayRow {
   last_activity_at: string | null;
   last_activity_source: string | null;
   property_customer_folder: string | null;
+  /** Touch level — HubSpot's `company_engagement` enum (No / Low /
+   *  Medium / High / Very High Touch, plus Downgrade + Churned).
+   *  Populated by the resync route; null means "resync hasn't run
+   *  yet for this workspace" (fall back to snapshot value). */
+  company_engagement: string | null;
+  /** Risk level — HubSpot's `risk_level__csm_` enum (Green / Light
+   *  Green / Yellow / Red). Same posture as company_engagement. */
+  property_risk_level: string | null;
   fetched_at: string;
 }
 
@@ -96,6 +106,9 @@ export function mergeOverlayInto(
         row.last_activity_source ?? c.last_activity_source,
       property_customer_folder:
         row.property_customer_folder ?? c.property_customer_folder,
+      company_engagement: row.company_engagement ?? c.company_engagement,
+      property_risk_level:
+        row.property_risk_level ?? c.property_risk_level,
     };
   });
 }
