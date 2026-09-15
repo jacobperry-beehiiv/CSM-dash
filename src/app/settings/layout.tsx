@@ -1,8 +1,15 @@
 import { Suspense } from "react";
 import { auth } from "@/auth";
 import { SettingsSidebar } from "@/components/settings-sidebar";
-import { isFeatureEnabledFor } from "@/lib/auth/feature-flags";
+import {
+  isFeatureEnabledFor,
+  isFeatureUnrestricted,
+} from "@/lib/auth/feature-flags";
 import { isAdmin, isProfileOptionsAdmin } from "@/lib/auth/admin";
+import {
+  FEATURE_SETTINGS_LINKS,
+  type FeatureId,
+} from "@/lib/data/admin-flags-types";
 
 export default async function SettingsLayout({
   children,
@@ -11,25 +18,53 @@ export default async function SettingsLayout({
 }) {
   const session = await auth();
   const email = session?.user?.email ?? null;
-  // Every flag-gated sub-page lives under one consolidated "Features"
-  // sidebar entry so the sidebar doesn't grow one line per feature.
-  // The Features hub page renders per-feature cards conditionally on
-  // the viewer's eligibility (same visibility envelope as before).
+  // Two-tier feature-settings surfacing:
+  //   • Restricted (dark-launched to an allowlist) → the Features
+  //     hub, one line for every gated card the viewer has access to.
+  //   • Unrestricted (graduated to general availability) → promoted
+  //     into the primary sidebar as its own top-level entry. Being
+  //     in the sidebar is the visible signal that the feature has
+  //     shipped for everyone.
+  //
+  // Layout does this promotion by checking each FeatureId's gate
+  // state, and only pushes a features-hub entry when the viewer
+  // still has at least one RESTRICTED gated feature to see.
   const extras: Array<{ href: string; label: string; description: string }> = [];
-  const hasAnyFeatureAccess =
-    (await isFeatureEnabledFor("gmail-draft-labels", email)) ||
-    (await isFeatureEnabledFor("customer-folders-sweep", email)) ||
-    (await isFeatureEnabledFor("wins-opportunities", email)) ||
-    (await isFeatureEnabledFor("upgrade-analysis", email)) ||
-    (await isFeatureEnabledFor("sybill-ingest", email)) ||
-    isProfileOptionsAdmin(email) ||
-    isAdmin(email);
-  if (hasAnyFeatureAccess) {
+
+  const FLAG_IDS_WITH_SETTINGS: FeatureId[] = [
+    "gmail-draft-labels",
+    "customer-folders-sweep",
+    "wins-opportunities",
+    "upgrade-analysis",
+    "sybill-ingest",
+    "enterprise-requests",
+  ];
+  let hasRestrictedAccess = false;
+  for (const id of FLAG_IDS_WITH_SETTINGS) {
+    const hasAccess = await isFeatureEnabledFor(id, email);
+    if (!hasAccess) continue;
+    const unrestricted = await isFeatureUnrestricted(id);
+    const link = FEATURE_SETTINGS_LINKS[id];
+    if (unrestricted && link) {
+      // Graduated feature — promote to sidebar.
+      extras.push(link);
+    } else if (!unrestricted) {
+      // Still gated — the Features hub carries it.
+      hasRestrictedAccess = true;
+    }
+  }
+  // Additional non-flag-driven accesses to the hub (profile-fields
+  // options list + todo-automation for admins) — surface the hub
+  // link when the viewer holds any of them even if no flag-gated
+  // features are still restricted for them.
+  const showFeaturesHub =
+    hasRestrictedAccess || isProfileOptionsAdmin(email) || isAdmin(email);
+  if (showFeaturesHub) {
     extras.push({
       href: "/settings/features",
       label: "Feature settings",
       description:
-        "Hub for gated feature settings — Gmail labels, wins thresholds, D&C Upgrade Analysis, and more (only the ones enabled for you appear).",
+        "Hub for dark-launched features — Gmail labels, wins thresholds, D&C Upgrade Analysis, and more (only the ones enabled for you appear).",
     });
   }
   // Admin-only "Access allowlist" entry — promotes non-CSM emails to

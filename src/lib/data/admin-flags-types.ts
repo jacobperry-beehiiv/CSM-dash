@@ -50,6 +50,77 @@ export interface FeatureMetadata {
   eligibility_note?: string;
 }
 
+/** Per-feature settings-page link, if any. When a feature has a
+ *  dedicated settings surface, this maps the FeatureId to the
+ *  navigation entry that surfaces it.
+ *
+ *  Consumed in two places with different posture:
+ *
+ *    • `/settings/features` — the gated-features hub — renders a
+ *      card for each feature the viewer has access to whose flag
+ *      is STILL RESTRICTED (i.e. dark-launch / allowlist).
+ *
+ *    • The primary settings sidebar promotes a feature's entry
+ *      into its top-level nav once the flag has been marked
+ *      unrestricted from /admin/flags — the visible signal that
+ *      the feature has graduated to general availability.
+ *
+ *  Both surfaces share this registry so an admin never has to
+ *  update two places when adding a new gated feature.
+ *
+ *  Not every FeatureId has a settings surface — `personalization`
+ *  and `news-feed`, for example, expose settings through their own
+ *  routes that are already discoverable. Absent entries just don't
+ *  get promoted or hub-carded. */
+export interface FeatureSettingsLink {
+  href: string;
+  label: string;
+  /** Description shown in the primary sidebar and the hub card.
+   *  Kept short — one sentence. */
+  description: string;
+}
+
+export const FEATURE_SETTINGS_LINKS: Partial<
+  Record<FeatureId, FeatureSettingsLink>
+> = {
+  "gmail-draft-labels": {
+    href: "/settings/gmail-labels",
+    label: "Gmail customer labels",
+    description:
+      "Map each customer in your book to a Gmail label so dashboard drafts auto-tag in your inbox.",
+  },
+  "customer-folders-sweep": {
+    href: "/settings/customer-folders",
+    label: "Customer folders sweep",
+    description:
+      "Scan the shared Drive parent, match folders to customers, and backfill HubSpot's customer_folder property.",
+  },
+  "wins-opportunities": {
+    href: "/settings/wins",
+    label: "Wins detection thresholds",
+    description:
+      "Tune the per-rule thresholds the daily wins-detection engine scores against.",
+  },
+  "upgrade-analysis": {
+    href: "/settings/upgrade-analysis",
+    label: "D&C Upgrade Analysis thresholds",
+    description:
+      "Tune the D&C Upgrade Analysis scorecard bands (complaint rates, deferral bands, engagement floors, escalation rules).",
+  },
+  "sybill-ingest": {
+    href: "/settings/sybill",
+    label: "Sybill action-item ingest",
+    description:
+      "Manual sync button that pulls call-recap action items from Sybill emails into your personal to-do list.",
+  },
+  "enterprise-requests": {
+    href: "/settings/enterprise-requests",
+    label: "Enterprise Request Loop",
+    description:
+      "Trigger the Linear sync, shipped-sweep, and #enterprise-bugs-and-fr intake on demand. Preview or send the weekly per-CSM digest.",
+  },
+};
+
 export const FEATURE_METADATA: ReadonlyArray<FeatureMetadata> = [
   {
     id: "personalization",

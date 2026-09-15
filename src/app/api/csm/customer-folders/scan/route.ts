@@ -182,6 +182,12 @@ export async function POST() {
     folders_no_candidate,
     folders_skipped_already_set,
     truncated,
+    // Attribution — surfaced in the settings header so a viewer
+    // who opens the page later sees whose scan populated the queue.
+    // The queue itself is KV-backed and visible to everyone with
+    // the flag on; recording the actor makes the persistence
+    // obvious in the UI.
+    ran_by: viewerEmail ?? null,
   };
   await saveSweepState(state);
 
