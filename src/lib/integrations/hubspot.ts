@@ -413,6 +413,40 @@ export interface HubspotOverlayActivity extends CompanyActivity {
   /** HubSpot company-level `customer_folder` property (Drive folder
    *  URL). Null when unset on the company. */
   customer_folder: string | null;
+  /** HubSpot `company_engagement` — the touch level (No / Low /
+   *  Medium / High / Very High Touch, plus the Downgrade + Churned
+   *  states). Editable in HubSpot; CSMs bump it mid-day when an
+   *  account's engagement level changes and expect the resync to
+   *  pick it up. Null when unset. */
+  company_engagement: string | null;
+  /** HubSpot `risk_level__csm_` — the customer-health flag
+   *  (Green / Light Green / Yellow / Red). Same posture as
+   *  company_engagement; CSMs edit it in HubSpot and want the
+   *  resync to reflect the change without waiting for the daily
+   *  Metabase snapshot rebuild. Null when unset. */
+  property_risk_level: string | null;
+}
+
+/** Company-level properties we pull on the overlay batch. Each name
+ *  is the RAW HubSpot property identifier (not the dashboard's
+ *  `property_`-prefixed alias). Kept in one place so the batch
+ *  request, response parser, and downstream types stay in sync. */
+const OVERLAY_COMPANY_PROPERTIES = [
+  "customer_folder",
+  // Touch level — CSMs bump it mid-day and expect the resync to
+  // pick it up. Previously omitted, which meant the button did
+  // nothing for this field until the twice-daily Metabase sync ran.
+  "company_engagement",
+  // Risk level — same class of bug. HubSpot's internal property
+  // is `risk_level__csm_` (two underscores between "level" and
+  // "csm"); verified against src/lib/integrations/slack-assign.ts.
+  "risk_level__csm_",
+] as const;
+
+interface OverlayCompanyProperties {
+  customer_folder: string | null;
+  company_engagement: string | null;
+  property_risk_level: string | null;
 }
 
 export async function fetchHubspotOverlayBatch(
@@ -420,7 +454,7 @@ export async function fetchHubspotOverlayBatch(
 ): Promise<Map<string, HubspotOverlayActivity>> {
   const activity = await fetchLastActivity(companyIds);
   const token = await getAccessToken();
-  const customerFolders = new Map<string, string | null>();
+  const companyProps = new Map<string, OverlayCompanyProperties>();
 
   const unique = [...new Set(companyIds.filter(Boolean))];
   for (let i = 0; i < unique.length; i += BATCH_SIZE) {
@@ -435,13 +469,13 @@ export async function fetchHubspotOverlayBatch(
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          properties: ["customer_folder"],
+          properties: [...OVERLAY_COMPANY_PROPERTIES],
           inputs: slice.map((id) => ({ id })),
         }),
       });
     } catch (e) {
       console.error(
-        `[hubspot] customer_folder batch ${i / BATCH_SIZE} network error:`,
+        `[hubspot] overlay props batch ${i / BATCH_SIZE} network error:`,
         e instanceof Error ? e.message : e
       );
       continue;
@@ -449,7 +483,7 @@ export async function fetchHubspotOverlayBatch(
     if (!res.ok) {
       const body = await res.text().catch(() => "");
       console.error(
-        `[hubspot] customer_folder batch ${i / BATCH_SIZE} HTTP ${res.status}: ${body.slice(0, 200)}`
+        `[hubspot] overlay props batch ${i / BATCH_SIZE} HTTP ${res.status}: ${body.slice(0, 200)}`
       );
       continue;
     }
@@ -460,23 +494,35 @@ export async function fetchHubspotOverlayBatch(
       }>;
     };
     for (const c of json.results ?? []) {
-      const val = c.properties?.customer_folder;
-      customerFolders.set(c.id, typeof val === "string" && val.length > 0 ? val : null);
+      const raw = c.properties ?? {};
+      const strOrNull = (v: unknown): string | null =>
+        typeof v === "string" && v.length > 0 ? v : null;
+      companyProps.set(c.id, {
+        customer_folder: strOrNull(raw.customer_folder),
+        company_engagement: strOrNull(raw.company_engagement),
+        // Map HubSpot's raw `risk_level__csm_` back to the
+        // dashboard's `property_risk_level` shape so downstream
+        // code stays uniform with the Customer type.
+        property_risk_level: strOrNull(raw.risk_level__csm_),
+      });
     }
   }
 
   const merged = new Map<string, HubspotOverlayActivity>();
   const allIds = new Set<string>([
     ...activity.keys(),
-    ...customerFolders.keys(),
+    ...companyProps.keys(),
   ]);
   for (const id of allIds) {
     const a = activity.get(id);
+    const props = companyProps.get(id);
     merged.set(id, {
       last_activity_at: a?.last_activity_at ?? null,
       source: a?.source ?? null,
       contacts: a?.contacts ?? [],
-      customer_folder: customerFolders.get(id) ?? null,
+      customer_folder: props?.customer_folder ?? null,
+      company_engagement: props?.company_engagement ?? null,
+      property_risk_level: props?.property_risk_level ?? null,
     });
   }
   return merged;

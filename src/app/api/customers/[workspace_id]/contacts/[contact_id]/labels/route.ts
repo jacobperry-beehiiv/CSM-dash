@@ -170,6 +170,8 @@ export async function PUT(
         last_activity_at: row.last_activity_at ?? null,
         last_activity_source: row.source ?? null,
         property_customer_folder: row.customer_folder ?? null,
+        company_engagement: row.company_engagement ?? null,
+        property_risk_level: row.property_risk_level ?? null,
         fetched_at: new Date().toISOString(),
       };
       overlay.rows[workspaceId] = overlayRow;
