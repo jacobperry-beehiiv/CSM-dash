@@ -60,9 +60,20 @@ export async function POST(req: Request) {
   const csmParam = (url.searchParams.get("csm") ?? "").trim();
   const csmScope =
     csmParam && csmParam.toLowerCase() !== "all" ? csmParam : null;
+  // Single-workspace diagnostic mode: `?workspace_id=<uuid>&debug=1`
+  // scopes the resync to one customer and returns the raw HubSpot
+  // batch response + the overlay row that got written. Cuts through
+  // "did HubSpot return it?" vs "did the overlay land?" vs "did the
+  // merge pick it up?" when a Drive folder set in HubSpot isn't
+  // showing on the profile after clicking the header Resync.
+  const workspaceIdParam = (url.searchParams.get("workspace_id") ?? "").trim();
+  const debug = url.searchParams.get("debug") === "1";
 
   const all = await loadCustomers();
-  const scoped = filterCustomers(all, { csm: csmScope });
+  const scopedByCsm = filterCustomers(all, { csm: csmScope });
+  const scoped = workspaceIdParam
+    ? scopedByCsm.filter((c) => c.workspace_id === workspaceIdParam)
+    : scopedByCsm;
 
   const customersWithHubspot = scoped.filter(
     (c): c is typeof c & { workspace_id: string; hubspot_company_id: string } =>
@@ -78,7 +89,17 @@ export async function POST(req: Request) {
       no_hubspot_company_id: noHubspot,
       errors: [],
       generated_at: new Date().toISOString(),
-      message: "No customers in scope with a HubSpot company link.",
+      message: workspaceIdParam
+        ? `Workspace ${workspaceIdParam} isn't in the current scope, or has no hubspot_company_id set on the snapshot.`
+        : "No customers in scope with a HubSpot company link.",
+      debug: debug
+        ? {
+            workspace_id: workspaceIdParam || null,
+            csm_scope: csmScope,
+            scope_size: scoped.length,
+            snapshot_hubspot_company_id: scoped[0]?.hubspot_company_id ?? null,
+          }
+        : undefined,
     });
   }
 
@@ -162,5 +183,47 @@ export async function POST(req: Request) {
     errors,
     truncated: truncated.length < customersWithHubspot.length,
     generated_at: new Date().toISOString(),
+    // Diagnostic block — populated only when the caller passes
+    // `?workspace_id=<uuid>&debug=1`. Shows the raw HubSpot batch
+    // response for the requested customer alongside the overlay row
+    // that got written so a mismatch between "field is live in
+    // HubSpot" and "field doesn't render on the profile" can be
+    // pinned to the exact hop.
+    debug:
+      debug && workspaceIdParam
+        ? (() => {
+            const targetCustomer = truncated.find(
+              (c) => c.workspace_id === workspaceIdParam
+            );
+            const hubspotRow = targetCustomer
+              ? hubspotResult.get(targetCustomer.hubspot_company_id)
+              : null;
+            const overlayRow = overlay.rows[workspaceIdParam] ?? null;
+            return {
+              workspace_id: workspaceIdParam,
+              hubspot_company_id:
+                targetCustomer?.hubspot_company_id ?? null,
+              hubspot_batch_returned: hubspotRow
+                ? {
+                    customer_folder: hubspotRow.customer_folder,
+                    company_engagement: hubspotRow.company_engagement,
+                    property_risk_level: hubspotRow.property_risk_level,
+                    last_activity_at: hubspotRow.last_activity_at,
+                    last_activity_source: hubspotRow.source,
+                    contacts_count: hubspotRow.contacts?.length ?? 0,
+                  }
+                : null,
+              overlay_row_written: overlayRow,
+              snapshot_values: {
+                property_customer_folder:
+                  targetCustomer?.property_customer_folder ?? null,
+                company_engagement:
+                  targetCustomer?.company_engagement ?? null,
+                property_risk_level:
+                  targetCustomer?.property_risk_level ?? null,
+              },
+            };
+          })()
+        : undefined,
   });
 }
