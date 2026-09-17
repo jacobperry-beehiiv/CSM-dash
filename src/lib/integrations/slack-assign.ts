@@ -1043,13 +1043,22 @@ export const assignModalHandler: ViewSubmitHandler = async ({ payload }) => {
 // can read the exact same step_key/title list without pulling this
 // file's Slack/Drive imports into a client bundle.
 
-/** Compose the to-do sequence for a given assignment. */
-function buildAssignTodoSequence(args: {
+/** Compose the to-do sequence for a given assignment. Exported so the
+ *  Lifecycle board's onboarding-backfill route (see
+ *  /api/lifecycle/backfill-onboarding) can build the exact same
+ *  sequence for a customer @bot assign was never run for, instead of
+ *  maintaining a second copy of this construction logic. */
+export function buildAssignTodoSequence(args: {
   companyName: string;
   hubspotCompanyId: string;
   requesterEmail: string;
   flow: AccountStatus;
   slackUserId: string;
+  /** Provenance phrasing baked into each todo's `details`. Defaults
+   *  to the Slack flow's own wording — the backfill route overrides
+   *  this so the audit trail doesn't claim @bot assign ran when it
+   *  didn't. */
+  via?: string;
 }): PersonalTodo[] {
   const playbook =
     args.flow === "Onboarding" ? ONBOARDING_PLAYBOOK : LIVE_PLAYBOOK;
@@ -1058,7 +1067,7 @@ function buildAssignTodoSequence(args: {
   const hubspotUrl =
     hubspotCompanyUrl(args.hubspotCompanyId) ?? args.hubspotCompanyId;
   const provenance =
-    `Auto-scheduled via @bot assign by ${args.requesterEmail} for ${args.companyName}.\n` +
+    `Auto-scheduled via ${args.via ?? "@bot assign"} by ${args.requesterEmail} for ${args.companyName}.\n` +
     `HubSpot: ${hubspotUrl}`;
 
   return playbook.map((tpl) => {
