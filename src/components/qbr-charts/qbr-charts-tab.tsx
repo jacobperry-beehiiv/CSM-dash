@@ -628,10 +628,26 @@ export function QbrChartsTab({
       {/* Offscreen capture — active only while handleExportPngs is
        *  cycling through tiles. Portalled to <body> so it lives
        *  outside every layout container and Recharts sees a
-       *  proper 960px parent width. */}
+       *  proper 960px parent width.
+       *
+       *  `key={exporting.questionId}` forces a full unmount/mount
+       *  between tiles so Recharts starts from a clean slate on each
+       *  spec — otherwise React reuses the ChartCard instance and
+       *  Recharts animates from the prior tile's shape into the new
+       *  one, giving html-to-image a mid-animation frame to snapshot
+       *  (which is what truncated the exported line chart).
+       *
+       *  `disableAnimation` finishes the deterministic-capture story
+       *  by turning off the mount-time grow-in animation entirely
+       *  in the export path only. */}
       {exporting && captureHostRef.current
         ? createPortal(
-            <ChartCard ref={capturedCardRef} spec={exporting.spec} />,
+            <ChartCard
+              key={exporting.questionId}
+              ref={capturedCardRef}
+              spec={exporting.spec}
+              disableAnimation
+            />,
             captureHostRef.current
           )
         : null}

@@ -27,8 +27,18 @@ import type { ChartSpec } from "@/lib/qbr-charts/types";
  */
 export const ChartCard = forwardRef<
   HTMLDivElement,
-  { spec: ChartSpec; headerActions?: ReactNode }
->(function ChartCard({ spec, headerActions }, ref) {
+  {
+    spec: ChartSpec;
+    headerActions?: ReactNode;
+    /** Set true in the PNG-export flow so Recharts renders
+     *  statically — a snapshot taken while the mount-time
+     *  grow-in animation is running truncates the visible
+     *  geometry (line only drawn through the animated-so-far
+     *  X-domain, bars still climbing). Off by default so the
+     *  live UI keeps its animation. */
+    disableAnimation?: boolean;
+  }
+>(function ChartCard({ spec, headerActions, disableAnimation = false }, ref) {
   return (
     <div
       ref={ref}
@@ -60,7 +70,7 @@ export const ChartCard = forwardRef<
         </div>
       </header>
 
-      <ChartCanvas spec={spec} />
+      <ChartCanvas spec={spec} disableAnimation={disableAnimation} />
 
       {spec.takeaway ? (
         <p className="mt-4 text-sm text-fg italic">{spec.takeaway}</p>
