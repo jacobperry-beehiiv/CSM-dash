@@ -23,8 +23,16 @@ import type { BeehiivUsageReport } from "@/lib/qbr-charts/beehiiv-usage";
  */
 export const BeehiivUsageCard = forwardRef<
   HTMLDivElement,
-  { workspaceId: string | null }
->(function BeehiivUsageCard({ workspaceId }, ref) {
+  {
+    workspaceId: string | null;
+    /** Optional — when set, the engine returns this publication's
+     *  logo + name; otherwise it falls back to the workspace's
+     *  earliest-created publication with a logo. Threaded from
+     *  the QBR tab's PublicationPicker so the header reflects the
+     *  same selection the charts scope to. */
+    publicationId?: string | null;
+  }
+>(function BeehiivUsageCard({ workspaceId, publicationId = null }, ref) {
   const [report, setReport] = useState<BeehiivUsageReport | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -37,10 +45,11 @@ export const BeehiivUsageCard = forwardRef<
     let cancelled = false;
     setReport(null);
     setError(null);
-    fetch(
-      `/api/qbr-charts/beehiiv-usage?workspace_id=${encodeURIComponent(workspaceId)}`,
-      { cache: "no-store" }
-    )
+    const params = new URLSearchParams({ workspace_id: workspaceId });
+    if (publicationId) params.set("publication_id", publicationId);
+    fetch(`/api/qbr-charts/beehiiv-usage?${params.toString()}`, {
+      cache: "no-store",
+    })
       .then(async (r) => {
         if (!r.ok) {
           const body = (await r.json().catch(() => ({}))) as { error?: string };
@@ -59,7 +68,7 @@ export const BeehiivUsageCard = forwardRef<
     return () => {
       cancelled = true;
     };
-  }, [workspaceId]);
+  }, [workspaceId, publicationId]);
 
   return (
     <div
@@ -68,13 +77,40 @@ export const BeehiivUsageCard = forwardRef<
       style={{ maxWidth: 960 }}
     >
       <header className="flex items-start justify-between gap-4 mb-4">
-        <div className="min-w-0">
-          <h2 className="text-xl font-semibold text-fg tracking-tight">
-            beehiiv Usage
-          </h2>
-          <p className="text-sm text-muted mt-1">
-            Feature-adoption checklist for this workspace.
-          </p>
+        <div className="flex items-start gap-3 min-w-0">
+          {report?.publication ? (
+            /* Publication logo — proxied through /api/qbr-charts/logo
+             * so html-to-image can inline it in the exported PNG
+             * (beehiiv's media CDN doesn't set CORS headers).
+             * crossOrigin="anonymous" pairs with our same-origin
+             * response so the browser doesn't taint the canvas.
+             * eslint-disable-next-line @next/next/no-img-element —
+             * next/image would need a remote pattern whitelist for
+             * every possible publication host; a plain <img> works. */
+            /* eslint-disable-next-line @next/next/no-img-element */
+            <img
+              src={`/api/qbr-charts/logo/${report.publication.publication_id}`}
+              alt={
+                report.publication.publication_name
+                  ? `${report.publication.publication_name} logo`
+                  : "Publication logo"
+              }
+              width={48}
+              height={48}
+              crossOrigin="anonymous"
+              className="h-12 w-12 rounded-md object-contain bg-canvas/60 border border-border shrink-0"
+            />
+          ) : null}
+          <div className="min-w-0">
+            <h2 className="text-xl font-semibold text-fg tracking-tight">
+              beehiiv Usage
+            </h2>
+            <p className="text-sm text-muted mt-1">
+              {report?.publication?.publication_name
+                ? report.publication.publication_name
+                : "Feature-adoption checklist for this workspace."}
+            </p>
+          </div>
         </div>
         <div
           className="flex items-center gap-2 text-[11px] text-muted shrink-0"
