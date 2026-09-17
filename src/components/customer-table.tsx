@@ -39,6 +39,7 @@ import type { AdGapReport } from "@/lib/types";
 import { getTierLadder } from "@/lib/tiers/client";
 import { buildBulkDrafts } from "@/lib/templates/bulk-drafts";
 import { useCustomMergeTags } from "@/lib/data/use-custom-merge-tags";
+import { useZendeskOverlay } from "@/lib/data/use-zendesk-overlay";
 import { BulkDraftsModal, type BulkDraft } from "./bulk-drafts-modal";
 import { MappedFieldEditor } from "./mapped-field-editor";
 import { MAPPABLE_DASHBOARD_FIELDS } from "@/lib/data/field-mappings-types";
@@ -324,6 +325,23 @@ export function CustomerTable({
   );
   const [openRequestsChipOn, setOpenRequestsChipOn] = useState(false);
   const [openRequestsLoading, setOpenRequestsLoading] = useState(false);
+  // "Has Zendesk tickets" chip — narrows the book to workspaces
+  // that have ≥1 ticket in the current 30-day overlay window.
+  // Overlay is fetched by useZendeskOverlay (module-cached across
+  // the tab), so toggling the chip doesn't cost a fresh round-trip.
+  // Overlay is null while loading — the chip renders a spinner in
+  // that state to make "waiting on data" distinguishable from
+  // "no tickets in book."
+  const [zendeskChipOn, setZendeskChipOn] = useState(false);
+  const zendeskOverlay = useZendeskOverlay();
+  const zendeskWorkspaceIds = useMemo(() => {
+    if (!zendeskOverlay) return null;
+    const set = new Set<string>();
+    for (const [wsId, row] of Object.entries(zendeskOverlay.rows)) {
+      if (row.total_30d > 0) set.add(wsId);
+    }
+    return set;
+  }, [zendeskOverlay]);
   const [outreachFor, setOutreachFor] = useState<Customer | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   // Deep-link support: /csm?workspace_id=X pre-expands that row and
@@ -458,6 +476,11 @@ export function CustomerTable({
         c.workspace_id ? openRequestIds.has(c.workspace_id) : false
       );
     }
+    if (zendeskChipOn && zendeskWorkspaceIds) {
+      list = list.filter((c) =>
+        c.workspace_id ? zendeskWorkspaceIds.has(c.workspace_id) : false
+      );
+    }
     if (statusFilter) {
       const target = statusFilter.toLowerCase();
       list = list.filter(
@@ -515,6 +538,8 @@ export function CustomerTable({
     featureMatcher,
     openRequestsChipOn,
     openRequestIds,
+    zendeskChipOn,
+    zendeskWorkspaceIds,
     statusFilter,
     priorEspSelected,
     techSelected,
@@ -1090,8 +1115,33 @@ export function CustomerTable({
           workspaceIds={featureWorkspaceIds}
           onFilterChange={onFeatureFilterChange}
         />
-        {requestsEnabled ? (
-          <div className="flex flex-wrap items-center gap-2 rounded-xl border border-border bg-surface shadow-card px-4 py-3">
+        {/* Signal chips — narrow the book by outstanding-support or
+         *  outstanding-request state. Zendesk chip renders for
+         *  everyone; the Linear FR chip only surfaces for viewers
+         *  who have the Enterprise Request Loop flag on. */}
+        <div className="flex flex-wrap items-center gap-2 rounded-xl border border-border bg-surface shadow-card px-4 py-3">
+          <button
+            type="button"
+            onClick={() => setZendeskChipOn((v) => !v)}
+            className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md border transition-colors ${
+              zendeskChipOn
+                ? "bg-accent text-accent-fg border-accent font-medium"
+                : "bg-surface text-fg border-border-strong hover:bg-canvas"
+            }`}
+            title="Show only customers with at least one Zendesk ticket logged in the last 30 days."
+          >
+            <span>🎫 Has Zendesk tickets (30d)</span>
+            {zendeskChipOn ? (
+              zendeskWorkspaceIds ? (
+                <span className="tabular-nums">
+                  ({zendeskWorkspaceIds.size})
+                </span>
+              ) : (
+                <span className="inline-block w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin" />
+              )
+            ) : null}
+          </button>
+          {requestsEnabled ? (
             <button
               type="button"
               onClick={() => {
@@ -1115,12 +1165,14 @@ export function CustomerTable({
                 ) : null
               ) : null}
             </button>
-            <span className="text-[11px] text-muted">
-              Feature-request tracker — nightly sync from Linear via the
-              Enterprise Request Loop.
-            </span>
-          </div>
-        ) : null}
+          ) : null}
+          <span className="text-[11px] text-muted">
+            Ticket counts from the shared Zendesk overlay
+            {requestsEnabled
+              ? "; Linear requests from the Enterprise Request Loop nightly sync."
+              : "."}
+          </span>
+        </div>
       </div>
 
       <div className="flex flex-wrap items-center gap-2 px-3 py-2 mb-3 bg-canvas border border-border rounded-md">
