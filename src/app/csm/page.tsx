@@ -338,6 +338,7 @@ export default async function CsmPage({
             ]}
             defaultTab="live"
             param="sub"
+            centered
           />
           {boardBody}
         </>

@@ -14,9 +14,18 @@ interface Props {
   tabs: Tab[];
   defaultTab?: string;
   param?: string;
+  /** Centers the tab strip instead of the default left alignment.
+   *  Opt-in per instance — e.g. Lifecycle's nested Onboarding/Live
+   *  sub-tab bar uses this; the primary tab bar never sets it. */
+  centered?: boolean;
 }
 
-export function TabBar({ tabs, defaultTab, param = "tab" }: Props) {
+export function TabBar({
+  tabs,
+  defaultTab,
+  param = "tab",
+  centered = false,
+}: Props) {
   const params = useSearchParams();
   const current = params.get(param) ?? defaultTab ?? tabs[0]?.id;
 
@@ -35,7 +44,11 @@ export function TabBar({ tabs, defaultTab, param = "tab" }: Props) {
     // slot anyway, which made the tab strip look like it was wrapped
     // in an iframe. Wrap instead if a future page adds enough tabs to
     // overflow the viewport.
-    <div className="border-b border-border mb-6 flex flex-wrap gap-1">
+    <div
+      className={`border-b border-border mb-6 flex flex-wrap gap-1 ${
+        centered ? "justify-center" : ""
+      }`}
+    >
       {tabs.map((t) => {
         const active = current === t.id;
         return (
