@@ -10,6 +10,7 @@ import {
   type SlackChannel,
   type SlackSettings,
 } from "./settings-types";
+import { resolveLifecycleStepStages } from "../lifecycle/step-stage-config";
 
 export type { FlagPeriod, SettingsShape } from "./settings-types";
 export { DEFAULTS } from "./settings-types";
@@ -127,6 +128,13 @@ function merge(partial: Partial<SettingsShape>): SettingsShape {
         )
       ).sort(),
     },
+    // Lifecycle step->stage map — same "must be wired into merge() or
+    // it's dropped" gotcha as personal_todos/access above. Store the
+    // fully-resolved map (defaults + overrides) so a stale default
+    // never lingers if DEFAULT_LIFECYCLE_STEP_STAGES changes later.
+    lifecycle_step_stages: resolveLifecycleStepStages(
+      partial.lifecycle_step_stages
+    ),
   };
 }
 

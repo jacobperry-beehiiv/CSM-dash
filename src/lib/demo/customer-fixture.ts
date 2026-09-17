@@ -39,6 +39,15 @@ export function monthsFromNow(months: number, today: Date): string {
   return d.toISOString().slice(0, 10);
 }
 
+/** Day-precision offset, for seeding `contract_renewal` values that
+ *  need to land inside a specific renewal-milestone window (7/30/60/
+ *  90 days) — `monthsFromNow` isn't precise enough for that. */
+export function daysFromNow(days: number, today: Date): string {
+  const d = new Date(today);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
 export interface FixtureSeed {
   workspace_id: string;
   workspace_name: string;
@@ -54,6 +63,17 @@ export interface FixtureSeed {
   last_log_in_days_ago: number;
   last_activity_days_ago: number;
   renewal_in_months: number;
+  /** HubSpot company id — bridges to a PersonalTodo's
+   *  source_meta.hubspot_company_id for the Lifecycle Kanban's
+   *  onboarding-playbook matching. Left unset (null) on most seeds,
+   *  same as the real book of business before @bot assign has run. */
+  hubspot_company_id?: string;
+  /** Day-precision renewal override for seeds that need to land
+   *  inside a specific renewal-milestone window (7/30/60/90 days) —
+   *  `renewal_in_months` isn't precise enough for that. Feeds
+   *  `contract_renewal`, which the Lifecycle board and the renewal-
+   *  milestones engine key off (not `renewal_date`). */
+  contract_renewal_in_days?: number;
   property_risk_level?: string;
   /** Free-text note for the detail panel. */
   property_risk_level_detail?: string;
@@ -84,6 +104,7 @@ const SEEDS: FixtureSeed[] = [
     last_log_in_days_ago: 0,
     last_activity_days_ago: 3,
     renewal_in_months: 8,
+    hubspot_company_id: "hs-demo-001",
     property_risk_level: "Light Green",
     features: {
       direct_sponsorships: true,
@@ -107,6 +128,8 @@ const SEEDS: FixtureSeed[] = [
     last_log_in_days_ago: 1,
     last_activity_days_ago: 5,
     renewal_in_months: 4,
+    hubspot_company_id: "hs-demo-002",
+    contract_renewal_in_days: 25,
     property_risk_level: "Light Green",
     features: {
       ad_placement: true,
@@ -128,6 +151,7 @@ const SEEDS: FixtureSeed[] = [
     last_log_in_days_ago: 0,
     last_activity_days_ago: 2,
     renewal_in_months: 6,
+    hubspot_company_id: "hs-demo-003",
     property_risk_level: "Light Green",
     features: {
       direct_sponsorships: true,
@@ -151,6 +175,7 @@ const SEEDS: FixtureSeed[] = [
     last_log_in_days_ago: 54,
     last_activity_days_ago: 41,
     renewal_in_months: 2,
+    hubspot_company_id: "hs-demo-004",
     property_risk_level: "Yellow",
     property_risk_level_detail:
       "No send in 60+ days; renewal coming up. Schedule check-in.",
@@ -170,6 +195,7 @@ const SEEDS: FixtureSeed[] = [
     last_log_in_days_ago: 102,
     last_activity_days_ago: 70,
     renewal_in_months: 1,
+    hubspot_company_id: "hs-demo-005",
     property_risk_level: "Red",
     property_risk_level_detail:
       "Renewal in 30 days. No sends since Q1, no logins in 3+ months.",
@@ -189,6 +215,8 @@ const SEEDS: FixtureSeed[] = [
     last_log_in_days_ago: 32,
     last_activity_days_ago: 24,
     renewal_in_months: 3,
+    hubspot_company_id: "hs-demo-006",
+    contract_renewal_in_days: 5,
     property_risk_level: "Yellow",
     property_risk_level_detail:
       "Engagement dipping — last login 30+ days ago. Renewal in Q1.",
@@ -213,6 +241,7 @@ const SEEDS: FixtureSeed[] = [
     last_log_in_days_ago: 2,
     last_activity_days_ago: 9,
     renewal_in_months: 5,
+    hubspot_company_id: "hs-demo-007",
     features: {
       grew_via_boost: true,
     },
@@ -232,6 +261,7 @@ const SEEDS: FixtureSeed[] = [
     last_log_in_days_ago: 3,
     last_activity_days_ago: 12,
     renewal_in_months: 9,
+    hubspot_company_id: "hs-demo-008",
     features: {
       ad_placement: true,
       grew_via_boost: true,
@@ -252,6 +282,7 @@ const SEEDS: FixtureSeed[] = [
     last_log_in_days_ago: 6,
     last_activity_days_ago: 14,
     renewal_in_months: 11,
+    hubspot_company_id: "hs-demo-009",
   },
 
   // ── Growth opportunity (low utilization) ───────────────────────
@@ -270,6 +301,7 @@ const SEEDS: FixtureSeed[] = [
     last_log_in_days_ago: 1,
     last_activity_days_ago: 4,
     renewal_in_months: 7,
+    hubspot_company_id: "hs-demo-010",
     property_risk_level: "Yellow",
     property_risk_level_detail:
       "Plan headroom underutilized — explore growth campaigns.",
@@ -282,13 +314,17 @@ const SEEDS: FixtureSeed[] = [
     max_subscriptions: 50_000,
     stripe_plan: "Enterprise",
     interval: "year",
-    property_company_status: "Live",
+    // Deliberately the fixture's one Churned example, for Lifecycle
+    // Kanban column coverage — see docs on the Churned column in
+    // src/lib/lifecycle/stage.ts.
+    property_company_status: "Churned",
     property_main_contact: "Casey Bloom",
     owner_email: "casey@harborherald.example.com",
     last_send_days_ago: 2,
     last_log_in_days_ago: 0,
     last_activity_days_ago: 6,
     renewal_in_months: 10,
+    hubspot_company_id: "hs-demo-011",
   },
 
   // ── Onboarding (just live, low engagement still ramping) ───────
@@ -303,6 +339,7 @@ const SEEDS: FixtureSeed[] = [
     property_company_status: "Onboarding",
     property_main_contact: "Avery Lindon",
     owner_email: "avery@skylinesundays.example.com",
+    hubspot_company_id: "hs-demo-012",
     last_send_days_ago: 12,
     last_log_in_days_ago: 5,
     last_activity_days_ago: 7,
@@ -325,6 +362,7 @@ const SEEDS: FixtureSeed[] = [
     last_log_in_days_ago: 2,
     last_activity_days_ago: 11,
     renewal_in_months: 0,
+    hubspot_company_id: "hs-demo-013",
   },
   {
     workspace_id: "ws-demo-014-foundry-field-notes",
@@ -341,6 +379,7 @@ const SEEDS: FixtureSeed[] = [
     last_log_in_days_ago: 3,
     last_activity_days_ago: 14,
     renewal_in_months: 0,
+    hubspot_company_id: "hs-demo-014",
   },
 
   // ── Past-due reference (also seeds the AM Past Due tab) ─────────
@@ -359,6 +398,7 @@ const SEEDS: FixtureSeed[] = [
     last_log_in_days_ago: 4,
     last_activity_days_ago: 8,
     renewal_in_months: -1,
+    hubspot_company_id: "hs-demo-015",
     property_risk_level: "Red",
     property_risk_level_detail:
       "Invoice failed for the past 2 months. Stripe outreach in progress.",
@@ -379,6 +419,10 @@ export function buildDemoCustomers(today: Date = new Date()): Customer[] {
       active_subs: seed.active_subs,
       max_subscriptions: seed.max_subscriptions,
       renewal_date: monthsFromNow(seed.renewal_in_months, today),
+      contract_renewal:
+        seed.contract_renewal_in_days != null
+          ? daysFromNow(seed.contract_renewal_in_days, today)
+          : null,
       company_engagement: null,
       customer_success_manager: VIEWER_CSM_HANDLE,
       customer_success_manager_email: VIEWER_EMAIL,
@@ -401,7 +445,7 @@ export function buildDemoCustomers(today: Date = new Date()): Customer[] {
       property_risk_level_detail: seed.property_risk_level_detail ?? null,
       last_activity_at: daysAgo(seed.last_activity_days_ago, today),
       last_activity_source: "demo",
-      hubspot_company_id: null,
+      hubspot_company_id: seed.hubspot_company_id ?? null,
       hubspot_contacts: null,
       hubspot_link_source: "none",
     };

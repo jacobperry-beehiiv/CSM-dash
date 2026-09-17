@@ -1,0 +1,129 @@
+import type { AtRiskAccount, Customer } from "@/lib/types";
+import type { PersonalTodo } from "@/lib/personal-todos/types";
+import { daysUntilRenewal } from "@/lib/renewals/date";
+import { matchPlaybookTodos } from "./todos";
+import { buildRenewalChecklist } from "./renewal-checklist";
+import { atRiskSummary, isEditableBy, type LifecycleCard } from "./card";
+
+/**
+ * Lifecycle tab — Live board. Fully computed, not draggable, no
+ * stored field — which column a card is in is purely "how many days
+ * until this contract renews," bucketed into quarters. The "Renewal"
+ * column deliberately lines up with the existing 90-day
+ * renewal-milestone trigger (src/lib/engines/renewal-milestones.ts)
+ * so this board's last column means the same thing that engine
+ * already means by "renewal window."
+ *
+ * There is no separate Renewal board anymore — a card that renews
+ * (its `contract_renewal` rolls forward once the deal is actually
+ * renewed in HubSpot) automatically computes back to Q1 on the next
+ * page load. Nothing here resets it manually; it's the same date math
+ * that placed it in "Renewal" in the first place, just re-run against
+ * a now-later date.
+ *
+ * Each column shows the checklist that's actually relevant to it:
+ * Q1/Q2/Q3 show whichever matched playbook steps are CONFIGURED (at
+ * /settings/lifecycle-steps) to one of LIVE_ASSIGNABLE_STAGES below —
+ * this is stage-based, not step_key-prefix-based, so a step Normbot
+ * originally handed out via the onboarding flow shows up here too if
+ * an admin reassigns it. "Renewal" never shows playbook steps at all;
+ * it always shows the fixed 5-item renewal-stage checklist instead
+ * (renewal-checklist.ts), a different VIEW of the same
+ * `lifecycle_stage` field the AM Renewals tab's dropdown already
+ * edits, not a new field.
+ */
+
+const RENEWAL_WINDOW_DAYS = 90;
+const Q3_WINDOW_DAYS = 180;
+const Q2_WINDOW_DAYS = 270;
+
+/** Columns a "live:" playbook step can be assigned to at
+ *  /settings/lifecycle-steps. Excludes "Renewal" — that column never
+ *  shows playbook steps, only the renewal-stage checklist. */
+export const LIVE_ASSIGNABLE_STAGES = ["Q1", "Q2", "Q3"];
+
+/**
+ * Buckets a customer into one of 4 columns by days-until-renewal.
+ * Customers with no `contract_renewal` (monthly cadence, or contract
+ * date never populated) don't have a real renewal date to count down
+ * from — by product decision they still cycle through the same 4
+ * columns rather than being excluded, using `mon_since_1st_ent`
+ * (tenure in months) as an approximation: NOT a real renewal signal,
+ * only ever used for placement on this one board.
+ */
+export function computeLiveQuarter(
+  customer: Customer,
+  now: Date = new Date()
+): string {
+  const days = daysUntilRenewal(customer.contract_renewal ?? null, now);
+  if (days != null) {
+    if (days <= RENEWAL_WINDOW_DAYS) return "Renewal";
+    if (days <= Q3_WINDOW_DAYS) return "Q3";
+    if (days <= Q2_WINDOW_DAYS) return "Q2";
+    return "Q1";
+  }
+  const tenureMonths = customer.mon_since_1st_ent;
+  if (typeof tenureMonths === "number" && tenureMonths >= 0) {
+    const monthsIntoCycle = tenureMonths % 12;
+    if (monthsIntoCycle < 3) return "Q1";
+    if (monthsIntoCycle < 6) return "Q2";
+    if (monthsIntoCycle < 9) return "Q3";
+    return "Renewal";
+  }
+  return "Q1";
+}
+
+export function buildLiveCard(
+  customer: Customer & { workspace_id: string },
+  csmTodos: PersonalTodo[],
+  lifecycleStageOverride: string | null | undefined,
+  stepStages: Record<string, string | null>,
+  atRiskAccount: AtRiskAccount | undefined,
+  viewerEmail: string | null | undefined,
+  now: Date = new Date()
+): LifecycleCard {
+  const stage = computeLiveQuarter(customer, now);
+
+  if (stage === "Renewal") {
+    const items = buildRenewalChecklist(lifecycleStageOverride);
+    return {
+      customer,
+      stage,
+      completedCount: items.filter((s) => s.completed).length,
+      totalCount: items.length,
+      // Always editable — this writes lifecycle_stage via
+      // /api/customer-overrides, which has no per-CSM ownership
+      // check, matching the AM Renewals tab's own dropdown today.
+      editable: true,
+      checklist_kind: "renewal_stage",
+      atRisk: atRiskSummary(atRiskAccount),
+      steps: items,
+    };
+  }
+
+  const liveTodos = matchPlaybookTodos(customer, csmTodos).filter((t) => {
+    const s = stepStages[t.source_meta?.playbook_step ?? ""];
+    return s != null && LIVE_ASSIGNABLE_STAGES.includes(s);
+  });
+  const matched = [...liveTodos].sort((a, b) => {
+    if (!a.due_date) return 1;
+    if (!b.due_date) return -1;
+    return a.due_date.localeCompare(b.due_date);
+  });
+  return {
+    customer,
+    stage,
+    completedCount: matched.filter((t) => t.completed_at).length,
+    totalCount: matched.length,
+    editable: isEditableBy(customer, viewerEmail),
+    checklist_kind: "playbook",
+    atRisk: atRiskSummary(atRiskAccount),
+    steps: matched.map((t) => ({
+      id: t.id,
+      title: t.title,
+      completed: Boolean(t.completed_at),
+      due_date: t.due_date,
+      stage: stepStages[t.source_meta?.playbook_step ?? ""] ?? null,
+    })),
+  };
+}

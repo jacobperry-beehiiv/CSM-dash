@@ -30,6 +30,7 @@ interface FeatureCard {
   href: string;
   title: string;
   description: string;
+  badge?: string;
 }
 
 /** Feature IDs the hub renders when the flag is still restricted.
@@ -41,6 +42,7 @@ const HUB_FEATURE_IDS: FeatureId[] = [
   "upgrade-analysis",
   "sybill-ingest",
   "enterprise-requests",
+  "lifecycle-board",
 ];
 
 export default async function FeaturesSettingsPage() {
@@ -59,6 +61,7 @@ export default async function FeaturesSettingsPage() {
       href: link.href,
       title: link.label,
       description: link.description,
+      badge: link.badge,
     });
   }
   // Enterprise Request Loop has two admin queues under it. These
@@ -125,7 +128,14 @@ export default async function FeaturesSettingsPage() {
               href={c.href}
               className="block rounded-lg border border-border bg-surface p-4 hover:border-border-strong hover:bg-canvas/50"
             >
-              <h2 className="font-semibold text-fg">{c.title}</h2>
+              <h2 className="font-semibold text-fg flex items-center gap-1.5">
+                {c.title}
+                {c.badge ? (
+                  <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wide bg-accent/15 text-accent">
+                    {c.badge}
+                  </span>
+                ) : null}
+              </h2>
               <p className="text-xs text-muted mt-1">{c.description}</p>
             </Link>
           ))}

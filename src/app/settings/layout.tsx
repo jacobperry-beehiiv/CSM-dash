@@ -29,7 +29,12 @@ export default async function SettingsLayout({
   // Layout does this promotion by checking each FeatureId's gate
   // state, and only pushes a features-hub entry when the viewer
   // still has at least one RESTRICTED gated feature to see.
-  const extras: Array<{ href: string; label: string; description: string }> = [];
+  const extras: Array<{
+    href: string;
+    label: string;
+    description: string;
+    badge?: string;
+  }> = [];
 
   const FLAG_IDS_WITH_SETTINGS: FeatureId[] = [
     "gmail-draft-labels",
@@ -38,6 +43,7 @@ export default async function SettingsLayout({
     "upgrade-analysis",
     "sybill-ingest",
     "enterprise-requests",
+    "lifecycle-board",
   ];
   let hasRestrictedAccess = false;
   for (const id of FLAG_IDS_WITH_SETTINGS) {

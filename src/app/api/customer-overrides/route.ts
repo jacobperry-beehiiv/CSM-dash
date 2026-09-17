@@ -56,6 +56,12 @@ interface PostBody {
    *  null or empty string to clear. Audit fields are stamped from the
    *  session viewer's email. */
   lifecycle_stage?: string | null;
+  /** Update the customer's column on the Lifecycle tab's Onboarding
+   *  board. Pass null or empty string to clear (renders in the
+   *  board's "Unsorted" column). Independent of lifecycle_stage above
+   *  — no transition side-effects fire off this field. Audit fields
+   *  are stamped from the session viewer's email. */
+  onboarding_lifecycle_stage?: string | null;
   /** Manual expected send cadence in days. Feeds Flag A's threshold in
    *  place of the ClickHouse-inferred cadence. Pass null / 0 / empty
    *  to clear the override and fall back to inferred. Audit fields
@@ -113,6 +119,16 @@ export async function POST(req: Request) {
         ? new Date().toISOString()
         : undefined;
       patch.lifecycle_stage_updated_by = trimmed
+        ? session?.user?.email?.toLowerCase() ?? undefined
+        : undefined;
+    }
+    if ("onboarding_lifecycle_stage" in body) {
+      const trimmed = body.onboarding_lifecycle_stage?.trim() || "";
+      patch.onboarding_lifecycle_stage = trimmed || undefined;
+      patch.onboarding_lifecycle_stage_updated_at = trimmed
+        ? new Date().toISOString()
+        : undefined;
+      patch.onboarding_lifecycle_stage_updated_by = trimmed
         ? session?.user?.email?.toLowerCase() ?? undefined
         : undefined;
     }

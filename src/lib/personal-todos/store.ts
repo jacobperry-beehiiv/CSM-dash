@@ -1,4 +1,6 @@
 import { kvGet, kvSet } from "../storage/kv";
+import { isDemoMode } from "../demo/mode";
+import { buildDemoPersonalTodos } from "../demo/personal-todos-fixture";
 import {
   EMPTY_STATE,
   type PersonalTodo,
@@ -22,6 +24,12 @@ import {
 const KEY = "csm:personal-todos:v1";
 
 export async function loadAll(): Promise<PersonalTodosState> {
+  // Same swap-the-whole-loader shape as loadCustomers() in demo mode —
+  // the Lifecycle tab's Onboarding/Live boards need real-looking
+  // to-do data to have anything to show, and kvSet() no-ops writes
+  // here anyway (src/lib/storage/kv.ts), so there's never real KV
+  // state to merge with in demo mode.
+  if (isDemoMode()) return buildDemoPersonalTodos(new Date());
   const stored = await kvGet<Partial<PersonalTodosState>>(KEY);
   return { by_user: stored?.by_user ?? {} };
 }
