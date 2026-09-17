@@ -133,11 +133,14 @@ export function QbrChartsTab({
   }, [organizationId, publicationId, startMonth, endMonth, chartType]);
 
   // Auto-fill start/end from the selected workspace's contract
-  // renewal date. Window is [renewal - 12mo, renewal] when the
-  // renewal is in the past (retrospective QBR); when it's upcoming
-  // (or missing), end defaults to today and start to 12 months
-  // ago so a CSM prepping the QBR early doesn't get a future-
-  // dated end.
+  // renewal date. `start` is ALWAYS anchored on the renewal —
+  // `renewal - 12mo` — so the window represents "the year leading
+  // up to this renewal" regardless of when the CSM opens the QBR.
+  // `end` = renewal if the renewal has passed (retrospective QBR),
+  // otherwise `today` so an upcoming renewal doesn't surface a
+  // future end date the CSM would have to correct. Missing
+  // renewal → both dates fall back to a plain trailing-12mo window
+  // anchored on today.
   useEffect(() => {
     if (!organizationId) return;
     const ws = workspaces.find((w) => w.workspace_id === organizationId);
@@ -641,27 +644,33 @@ export function QbrChartsTab({
  *  <input type="date"> writes back into the DateField.
  *
  *  Rules (per product ask):
- *    • contract_renewal set AND in the past / today
- *        → end = renewal, start = renewal - 12 months  (retrospective QBR)
- *    • contract_renewal upcoming OR missing
- *        → end = today,   start = today   - 12 months  (early-prep QBR;
- *          never surface a future end date the CSM would have to fix)
+ *    • contract_renewal set
+ *        → start = renewal - 12 months (always anchored on renewal —
+ *          the window is "the year that leads up to this renewal")
+ *        → end   = renewal if the renewal is today / in the past
+ *                  today   if the renewal is upcoming (never surface
+ *                  a future end date the CSM would have to fix)
+ *    • contract_renewal missing
+ *        → start = today - 12 months, end = today
  */
 function defaultQbrWindow(renewalIso: string | null): {
   start: string;
   end: string;
 } {
   const today = startOfLocalDay(new Date());
-  let end = today;
   if (renewalIso) {
     const renewal = startOfLocalDay(new Date(renewalIso));
-    if (!Number.isNaN(renewal.getTime()) && renewal.getTime() <= today.getTime()) {
-      end = renewal;
+    if (!Number.isNaN(renewal.getTime())) {
+      const start = new Date(renewal);
+      start.setMonth(start.getMonth() - 12);
+      const end =
+        renewal.getTime() <= today.getTime() ? renewal : today;
+      return { start: toIsoDate(start), end: toIsoDate(end) };
     }
   }
-  const start = new Date(end);
+  const start = new Date(today);
   start.setMonth(start.getMonth() - 12);
-  return { start: toIsoDate(start), end: toIsoDate(end) };
+  return { start: toIsoDate(start), end: toIsoDate(today) };
 }
 
 function startOfLocalDay(d: Date): Date {
