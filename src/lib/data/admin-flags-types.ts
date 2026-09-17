@@ -19,7 +19,8 @@ export type FeatureId =
   | "wins-opportunities"
   | "upgrade-analysis"
   | "news-feed"
-  | "enterprise-requests";
+  | "enterprise-requests"
+  | "lifecycle-board";
 
 /** Per-feature gate state. Defaults to "unrestricted" — everyone who
  *  passes the feature's own eligibility check (e.g. CSM with Gmail
@@ -78,6 +79,10 @@ export interface FeatureSettingsLink {
   /** Description shown in the primary sidebar and the hub card.
    *  Kept short — one sentence. */
   description: string;
+  /** Short pill text (e.g. "beta") rendered next to the label in the
+   *  sidebar/hub. Omit for features that have already graduated past
+   *  needing the callout. */
+  badge?: string;
 }
 
 export const FEATURE_SETTINGS_LINKS: Partial<
@@ -118,6 +123,13 @@ export const FEATURE_SETTINGS_LINKS: Partial<
     label: "Enterprise Request Loop",
     description:
       "Trigger the Linear sync, shipped-sweep, and #enterprise-bugs-and-fr intake on demand. Preview or send the weekly per-CSM digest.",
+  },
+  "lifecycle-board": {
+    href: "/settings/lifecycle-steps",
+    label: "Lifecycle board steps",
+    description:
+      "Which column each onboarding/live playbook step's checklist item shows under.",
+    badge: "beta",
   },
 };
 
@@ -186,6 +198,14 @@ export const FEATURE_METADATA: ReadonlyArray<FeatureMetadata> = [
     eligibility_note:
       "Requires LINEAR_API_KEY in the deployment env. The nightly sync + shipped sweep run regardless of who has the flag; this flag only controls surface visibility (Requests section, /csm tab, chip, admin pages).",
   },
+  {
+    id: "lifecycle-board",
+    label: "Lifecycle board (beta)",
+    description:
+      "Kanban view of a CSM's book across Onboarding (drag-and-drop) and Live (computed by days-to-renewal) sub-tabs at /csm?tab=lifecycle, with on-card playbook checklists. Column assignment is configurable at /settings/lifecycle-steps.",
+    eligibility_note:
+      "Actively iterating — Chris is opting individual CSMs in via the allowlist below for feedback before this graduates to unrestricted.",
+  },
 ];
 
 /** Safe defaults — every feature ships unrestricted. New flags
@@ -242,6 +262,13 @@ export const DEFAULT_FLAGS: AdminFlags = {
     "enterprise-requests": {
       restricted: true,
       allowed_emails: ["jacob.perry@beehiiv.com"],
+    },
+    // Ships dark — Chris's in-progress Lifecycle board. Widen the
+    // allowlist via /admin/flags to bring individual CSMs in for
+    // feedback as it stabilizes.
+    "lifecycle-board": {
+      restricted: true,
+      allowed_emails: ["chris.claiborne@beehiiv.com", "jacob.perry@beehiiv.com"],
     },
   },
 };

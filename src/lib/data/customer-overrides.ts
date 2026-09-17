@@ -33,6 +33,23 @@ export interface CustomerOverride {
   lifecycle_stage?: string;
   lifecycle_stage_updated_at?: string;
   lifecycle_stage_updated_by?: string;
+  /** CSM-set column on the Lifecycle tab's Onboarding board
+   *  (src/components/lifecycle/onboarding-board.tsx). Deliberately a
+   *  separate field from lifecycle_stage above — that one drives the
+   *  Renewals tab's stage dropdown (AM/renewal-specific) and the Live
+   *  board's "Renewal" column checklist (which reuses it verbatim);
+   *  this one is Onboarding-only. Column list is the fixed
+   *  ONBOARDING_STAGES constant in src/lib/lifecycle/onboarding.ts
+   *  (not settings-configurable). Empty / undefined = not yet placed
+   *  (renders in the board's "Unsorted" column) OR the customer has
+   *  already graduated onboarding by other signals (see
+   *  src/lib/lifecycle/onboarding.ts's hasGraduatedOnboarding) — either
+   *  way nothing here is auto-updated after a CSM has explicitly set
+   *  it once; "Launch" is the terminal value that hands the customer
+   *  off to the Live board. */
+  onboarding_lifecycle_stage?: string;
+  onboarding_lifecycle_stage_updated_at?: string;
+  onboarding_lifecycle_stage_updated_by?: string;
   /** Generic per-mapped-field overrides — keyed by the dashboard
    *  field id from MAPPABLE_DASHBOARD_FIELDS (e.g.,
    *  "property_risk_level"). Written by the "Edit" affordances on
@@ -146,6 +163,9 @@ export async function setOverride(
   applyField("lifecycle_stage");
   applyField("lifecycle_stage_updated_at");
   applyField("lifecycle_stage_updated_by");
+  applyField("onboarding_lifecycle_stage");
+  applyField("onboarding_lifecycle_stage_updated_at");
+  applyField("onboarding_lifecycle_stage_updated_by");
   applyField("hubspot_company_id");
   applyField("hubspot_link_source");
   applyField("hubspot_link_refreshed_at");

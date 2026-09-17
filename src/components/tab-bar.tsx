@@ -6,6 +6,8 @@ import { useSearchParams } from "next/navigation";
 interface Tab {
   id: string;
   label: string;
+  /** Short pill text (e.g. "beta") rendered next to the label. */
+  badge?: string;
 }
 
 interface Props {
@@ -47,7 +49,14 @@ export function TabBar({ tabs, defaultTab, param = "tab" }: Props) {
                 : "border-transparent text-muted hover:text-fg"
             }`}
           >
-            {t.label}
+            <span className="inline-flex items-center gap-1.5">
+              {t.label}
+              {t.badge ? (
+                <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wide bg-accent/15 text-accent">
+                  {t.badge}
+                </span>
+              ) : null}
+            </span>
           </Link>
         );
       })}

@@ -9,9 +9,23 @@ import {
 import { auth } from "@/auth";
 import { runAtRiskCheck } from "@/lib/engines/at-risk";
 import { runDeliverabilityCheck } from "@/lib/engines/deliverability";
-import type { CustomerWithMetrics, Segment } from "@/lib/types";
+import type { Customer, CustomerWithMetrics, Segment } from "@/lib/types";
+import { loadAll } from "@/lib/personal-todos/store";
+import { userKeyFromEmail } from "@/lib/personal-todos/identity";
+import { loadOverrides } from "@/lib/data/customer-overrides";
+import { matchPlaybookTodos } from "@/lib/lifecycle/todos";
+import {
+  buildOnboardingCard,
+  hasGraduatedOnboarding,
+  ONBOARDING_STAGES,
+} from "@/lib/lifecycle/onboarding";
+import { buildLiveCard } from "@/lib/lifecycle/live-quarter";
+import { resolveLifecycleStepStages } from "@/lib/lifecycle/step-stage-config";
+import { loadSettings } from "@/lib/data/settings";
 
 import { TabBar } from "@/components/tab-bar";
+import { OnboardingBoard } from "@/components/lifecycle/onboarding-board";
+import { LiveBoard } from "@/components/lifecycle/live-board";
 import { CustomerTable } from "@/components/customer-table";
 import { AtRiskTable } from "@/components/at-risk-table";
 import { DeliverabilityPanel } from "@/components/deliverability-panel";
@@ -43,6 +57,11 @@ const BASE_TABS = [
 
 interface SP {
   tab?: string;
+  /** Sub-tab within the Lifecycle tab — "onboarding" | "live" |
+   *  "renewal". Its own param (mirrors how `tab` itself works) so it
+   *  survives independently of the top-level tab; defaults to "live"
+   *  per product decision (land there, not on Onboarding). */
+  sub?: string;
   csm?: string;
   segment?: Segment;
 }
@@ -115,6 +134,15 @@ export default async function CsmPage({
     "enterprise-requests",
     viewerEmail
   );
+  // Lifecycle board flag — Chris is actively iterating on this one, so
+  // it ships dark to an allowlist (see admin-flags-types.ts) rather
+  // than to every CSM. Resolved up-front, same shape as the other
+  // gated tabs, so the tab strip and the tab body branch off the same
+  // value and a direct ?tab=lifecycle link can't bypass the gate.
+  const lifecycleEnabled = await isFeatureEnabledFor(
+    "lifecycle-board",
+    viewerEmail
+  );
   const TABS = [
     ...BASE_TABS,
     ...(winsEnabled
@@ -122,6 +150,9 @@ export default async function CsmPage({
       : []),
     ...(requestsEnabled
       ? [{ id: "live-this-week" as const, label: "Live This Week" }]
+      : []),
+    ...(lifecycleEnabled
+      ? [{ id: "lifecycle" as const, label: "Lifecycle", badge: "beta" }]
       : []),
   ];
 
@@ -190,6 +221,120 @@ export default async function CsmPage({
           showTeamRollup={sp.csm === "all"}
           initialView={tab === "renewal-calendar" ? "calendar" : "list"}
         />
+      );
+    } else if (tab === "lifecycle" && !lifecycleEnabled) {
+      // Flag-gated (see lifecycleEnabled above) — a direct ?tab=lifecycle
+      // link can't bypass the allowlist, same posture as wins/live-this-week.
+      body = (
+        <div className="text-sm text-muted italic">
+          Lifecycle board isn&apos;t enabled for this account yet.
+        </div>
+      );
+    } else if (tab === "lifecycle") {
+      // Same CSM scope as every other tab (?csm= / "All CSMs"), but
+      // todos are keyed by the owning CSM, not the viewer — so we
+      // pull every CSM's todo slice once and look each customer's up
+      // by its own assigned CSM. That's what makes viewing another
+      // CSM's (or the whole team's) board work without a second data
+      // path; the to-do checklist still only ever writes to the
+      // viewer's own slice via /api/personal-todos. Dragging a card
+      // on the Onboarding board, or checking off a Renewal-column
+      // card's stage checklist, has no such restriction — see
+      // /api/customer-overrides, same permission model lifecycle_stage
+      // already has on the Renewals tab.
+      const sub = sp.sub === "onboarding" ? sp.sub : "live";
+      const lifecycleBook = filterCustomers(all, { csm }).filter(
+        (c): c is Customer & { workspace_id: string } => Boolean(c.workspace_id)
+      );
+      const [atRisk, todosState, overrides, lifecycleSettings] = await Promise.all([
+        runAtRiskCheck({ customers: lifecycleBook, csmName: null }),
+        loadAll(),
+        loadOverrides(),
+        loadSettings(),
+      ]);
+      const stepStages = resolveLifecycleStepStages(
+        lifecycleSettings.lifecycle_step_stages
+      );
+      const atRiskByWorkspace = new Map(
+        atRisk.accounts
+          .filter((a) => a.customer.workspace_id)
+          .map((a) => [a.customer.workspace_id as string, a])
+      );
+      const todosFor = (c: Customer) =>
+        todosState.by_user[
+          userKeyFromEmail(c.customer_success_manager_email ?? "")
+        ]?.todos ?? [];
+
+      let boardBody;
+      if (sub === "onboarding") {
+        const onboardingStages = ONBOARDING_STAGES;
+        // Explicit override always wins over the computed "has this
+        // account graduated?" signal — a CSM who's manually placed a
+        // card keeps it visible here even if other signals would
+        // otherwise say "skip to Live." Reaching the configured
+        // terminal stage (default "Launch") is what hands the
+        // customer to the Live board — no separate field write, just
+        // absence from this list.
+        const onboardingCustomers = lifecycleBook.filter((c) => {
+          const explicit = overrides[c.workspace_id]?.onboarding_lifecycle_stage
+            ?.trim();
+          if (explicit) return explicit !== "Launch";
+          const matched = matchPlaybookTodos(c, todosFor(c));
+          return !hasGraduatedOnboarding(
+            c,
+            matched,
+            overrides[c.workspace_id]?.lifecycle_stage
+          );
+        });
+        const cards = onboardingCustomers.map((c) =>
+          buildOnboardingCard(
+            c,
+            todosFor(c),
+            overrides[c.workspace_id]?.onboarding_lifecycle_stage,
+            onboardingStages,
+            stepStages,
+            atRiskByWorkspace.get(c.workspace_id),
+            viewerEmail
+          )
+        );
+        boardBody = <OnboardingBoard cards={cards} stages={onboardingStages} />;
+      } else {
+        const liveCustomers = lifecycleBook.filter((c) => {
+          const explicit = overrides[c.workspace_id]?.onboarding_lifecycle_stage
+            ?.trim();
+          if (explicit) return explicit === "Launch";
+          const matched = matchPlaybookTodos(c, todosFor(c));
+          return hasGraduatedOnboarding(
+            c,
+            matched,
+            overrides[c.workspace_id]?.lifecycle_stage
+          );
+        });
+        const cards = liveCustomers.map((c) =>
+          buildLiveCard(
+            c,
+            todosFor(c),
+            overrides[c.workspace_id]?.lifecycle_stage,
+            stepStages,
+            atRiskByWorkspace.get(c.workspace_id),
+            viewerEmail
+          )
+        );
+        boardBody = <LiveBoard cards={cards} />;
+      }
+
+      body = (
+        <>
+          <TabBar
+            tabs={[
+              { id: "onboarding", label: "Onboarding" },
+              { id: "live", label: "Live" },
+            ]}
+            defaultTab="live"
+            param="sub"
+          />
+          {boardBody}
+        </>
       );
     } else if (tab === "juliet") {
       // Team-wide queue — always show every flagged workspace,

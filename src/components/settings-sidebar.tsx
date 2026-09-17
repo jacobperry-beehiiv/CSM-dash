@@ -3,7 +3,12 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
-const SECTIONS: Array<{ href: string; label: string; description: string }> = [
+const SECTIONS: Array<{
+  href: string;
+  label: string;
+  description: string;
+  badge?: string;
+}> = [
   {
     href: "/settings/general",
     label: "Flags & thresholds",
@@ -73,7 +78,12 @@ export function SettingsSidebar({
   /** Additional sections to surface beneath the static SECTIONS list.
    *  Computed server-side (e.g. by the layout reading a feature flag)
    *  so flag-gated nav entries don't leak to non-allowlist users. */
-  extras?: Array<{ href: string; label: string; description: string }>;
+  extras?: Array<{
+    href: string;
+    label: string;
+    description: string;
+    badge?: string;
+  }>;
 } = {}) {
   const pathname = usePathname();
   const allSections = [...SECTIONS, ...extras];
@@ -92,7 +102,14 @@ export function SettingsSidebar({
                   : "text-muted hover:bg-surface-2"
               }`}
             >
-              <div className="font-medium">{s.label}</div>
+              <div className="font-medium flex items-center gap-1.5">
+                {s.label}
+                {s.badge ? (
+                  <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wide bg-accent/15 text-accent">
+                    {s.badge}
+                  </span>
+                ) : null}
+              </div>
               <div
                 className={`text-xs mt-0.5 hidden md:block ${
                   active ? "text-subtle" : "text-muted"
