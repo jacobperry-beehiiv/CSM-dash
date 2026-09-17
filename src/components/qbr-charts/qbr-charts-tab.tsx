@@ -15,6 +15,7 @@ import {
 } from "./workspace-picker";
 import { PublicationPicker } from "./publication-picker";
 import { AxisEditor } from "./axis-editor";
+import { BeehiivUsageCard } from "./beehiiv-usage-card";
 import { useWorkspacePublications } from "@/lib/hooks/customer-publications-cache";
 import { QBR_PRESETS } from "@/lib/qbr-charts/qbr-presets";
 import { specHasData } from "@/lib/qbr-charts/has-data";
@@ -110,6 +111,11 @@ export function QbrChartsTab({
   const [exportMessage, setExportMessage] = useState<string | null>(null);
   const captureHostRef = useRef<HTMLDivElement | null>(null);
   const capturedCardRef = useRef<HTMLDivElement | null>(null);
+  // Live beehiiv Usage card. The export flow snapshots this ref
+  // directly rather than re-rendering the card offscreen — the
+  // card's already mounted at 960px on the tab, so duplicating it
+  // would just double the fetch + wait without any layout benefit.
+  const usageCardRef = useRef<HTMLDivElement | null>(null);
 
   const abortRef = useRef<AbortController | null>(null);
 
@@ -367,9 +373,25 @@ export function QbrChartsTab({
   const handleExportPngs = useCallback(async () => {
     if (exporting !== null || exportableSpecs.length === 0) return;
     setExportMessage(null);
-    setExportProgress({ done: 0, total: exportableSpecs.length });
+    // Total = chart tiles + 1 for the beehiiv Usage card (captured
+    // first so it's the natural cover-slide-follower in the .zip).
+    const includeUsage = usageCardRef.current !== null;
+    const total = exportableSpecs.length + (includeUsage ? 1 : 0);
+    setExportProgress({ done: 0, total });
     const captures: Array<{ filename: string; bytes: Uint8Array }> = [];
     try {
+      // Snapshot the beehiiv Usage card as capture #1 from its live
+      // mount — no offscreen re-render needed because the card's
+      // already at 960px on the tab, and it's a static table so no
+      // animation to freeze.
+      if (includeUsage && usageCardRef.current) {
+        const dataUrl = await snapshotElement(usageCardRef.current);
+        captures.push({
+          filename: "000-beehiiv-usage",
+          bytes: dataUrlToBytes(dataUrl),
+        });
+        setExportProgress({ done: 1, total });
+      }
       for (let i = 0; i < exportableSpecs.length; i++) {
         const { questionId, spec } = exportableSpecs[i];
         // Mount the card in the offscreen host, wait for Recharts to
@@ -387,7 +409,10 @@ export function QbrChartsTab({
           filename: slugForFilename(spec.title, questionId),
           bytes: dataUrlToBytes(dataUrl),
         });
-        setExportProgress({ done: i + 1, total: exportableSpecs.length });
+        setExportProgress({
+          done: captures.length,
+          total,
+        });
       }
       setExporting(null);
       const blob = await zipPngs(captures);
@@ -397,7 +422,7 @@ export function QbrChartsTab({
         .replace(/^-+|-+$/g, "");
       downloadBlob(blob, zipFilename(`qbr-${workspaceSlug || "charts"}`));
       setExportMessage(
-        `Downloaded ${captures.length} chart${
+        `Downloaded ${captures.length} file${
           captures.length === 1 ? "" : "s"
         } as .zip.`
       );
@@ -570,6 +595,14 @@ export function QbrChartsTab({
         <div className="bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/30 rounded-md px-4 py-3 text-sm text-red-700 dark:text-red-300">
           {globalError}
         </div>
+      ) : null}
+
+      {/* beehiiv Usage checklist — renders whenever a workspace is
+       *  picked, above the chart grid so it's the first thing the
+       *  CSM sees on the QBR tab. Exported as the leading tile in
+       *  the .zip. */}
+      {organizationId ? (
+        <BeehiivUsageCard ref={usageCardRef} workspaceId={organizationId} />
       ) : null}
 
       {selectedSpec ? (
