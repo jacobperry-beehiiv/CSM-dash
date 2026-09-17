@@ -50,7 +50,23 @@ import { ChartTooltip } from "./chart-tooltip";
  * Falls back to "line" for unknown chart types to keep the surface
  * resilient when Claude (PR B) suggests something we don't render.
  */
-export function ChartCanvas({ spec }: { spec: ChartSpec }) {
+/**
+ * `disableAnimation` — set true in the PNG export flow so the
+ * html-to-image snapshot captures a completed, deterministic chart
+ * instead of one mid-animation. Recharts' default line/bar/area/pie
+ * "grow-in" animation runs ~1s from mount; a snapshot that fires
+ * before it finishes truncates the visible geometry (line drawn
+ * only through the animated-so-far X-domain, bars still growing
+ * up from zero, etc.). Live UI keeps animation on — it's just the
+ * offscreen capture path that goes static.
+ */
+export function ChartCanvas({
+  spec,
+  disableAnimation = false,
+}: {
+  spec: ChartSpec;
+  disableAnimation?: boolean;
+}) {
   if (spec.data.length === 0) {
     return (
       <div className="h-[460px] flex items-center justify-center text-sm text-muted">
@@ -62,11 +78,13 @@ export function ChartCanvas({ spec }: { spec: ChartSpec }) {
   if (spec.chartType === "scalar") return <ScalarCard spec={spec} />;
   if (spec.chartType === "table") return <TableCard spec={spec} />;
   if (spec.chartType === "pie" || spec.chartType === "donut") {
-    return <PieCard spec={spec} />;
+    return <PieCard spec={spec} disableAnimation={disableAnimation} />;
   }
-  if (spec.chartType === "scatter") return <ScatterCard spec={spec} />;
+  if (spec.chartType === "scatter") {
+    return <ScatterCard spec={spec} disableAnimation={disableAnimation} />;
+  }
 
-  return <CartesianCard spec={spec} />;
+  return <CartesianCard spec={spec} disableAnimation={disableAnimation} />;
 }
 
 // ─── Axis + grid theme ────────────────────────────────────────────────
@@ -86,7 +104,13 @@ const gridProps = {
 
 // ─── Cartesian (line / bar / area / combo / stacked) ──────────────────
 
-function CartesianCard({ spec }: { spec: ChartSpec }) {
+function CartesianCard({
+  spec,
+  disableAnimation,
+}: {
+  spec: ChartSpec;
+  disableAnimation: boolean;
+}) {
   const { chartType, xKey, series, data } = spec;
   if (!xKey || series.length === 0) {
     return (
@@ -98,6 +122,7 @@ function CartesianCard({ spec }: { spec: ChartSpec }) {
 
   const stacked = chartType === "stacked-bar" || chartType === "stacked-area";
   const yFormat = pickPredominantYFormat(series);
+  const animProps = disableAnimation ? { isAnimationActive: false } : {};
 
   // Combo is its own component; the others share LineChart/BarChart/
   // AreaChart. Compose via ComposedChart for combo so a single chart
@@ -124,6 +149,7 @@ function CartesianCard({ spec }: { spec: ChartSpec }) {
                   name={s.label}
                   fill={color}
                   radius={[2, 2, 0, 0]}
+                  {...animProps}
                 />
               );
             }
@@ -137,6 +163,7 @@ function CartesianCard({ spec }: { spec: ChartSpec }) {
                   fillOpacity={0.2}
                   stroke={color}
                   strokeWidth={2}
+                  {...animProps}
                 />
               );
             }
@@ -148,6 +175,7 @@ function CartesianCard({ spec }: { spec: ChartSpec }) {
                 stroke={color}
                 strokeWidth={2}
                 dot={false}
+                {...animProps}
               />
             );
           })}
@@ -178,6 +206,7 @@ function CartesianCard({ spec }: { spec: ChartSpec }) {
               fill={pickColor(i)}
               stackId={stacked ? "x" : undefined}
               radius={[2, 2, 0, 0]}
+              {...animProps}
             />
           ))}
         </BarChart>
@@ -211,6 +240,7 @@ function CartesianCard({ spec }: { spec: ChartSpec }) {
                 fillOpacity={0.2}
                 strokeWidth={2}
                 stackId={stacked ? "x" : undefined}
+                {...animProps}
               />
             );
           })}
@@ -246,6 +276,7 @@ function CartesianCard({ spec }: { spec: ChartSpec }) {
             stroke={pickColor(i)}
             strokeWidth={2}
             dot={false}
+            {...animProps}
           />
         ))}
       </LineChart>
@@ -276,7 +307,13 @@ function ScalarCard({ spec }: { spec: ChartSpec }) {
 
 // ─── Pie / donut ──────────────────────────────────────────────────────
 
-function PieCard({ spec }: { spec: ChartSpec }) {
+function PieCard({
+  spec,
+  disableAnimation,
+}: {
+  spec: ChartSpec;
+  disableAnimation: boolean;
+}) {
   // For pie: x-key = slice label, first numeric series = slice
   // value. Heuristic spec passes the rows verbatim.
   const labelKey = spec.xKey;
@@ -296,6 +333,7 @@ function PieCard({ spec }: { spec: ChartSpec }) {
           outerRadius={150}
           innerRadius={spec.chartType === "donut" ? 80 : 0}
           paddingAngle={2}
+          isAnimationActive={!disableAnimation}
           label={(entry: unknown) => {
             const e = (entry ?? {}) as Record<string, unknown>;
             return formatValue(e[valueSeries.key], valueSeries.format);
@@ -312,7 +350,13 @@ function PieCard({ spec }: { spec: ChartSpec }) {
 
 // ─── Scatter ──────────────────────────────────────────────────────────
 
-function ScatterCard({ spec }: { spec: ChartSpec }) {
+function ScatterCard({
+  spec,
+  disableAnimation,
+}: {
+  spec: ChartSpec;
+  disableAnimation: boolean;
+}) {
   const xKey = spec.xKey;
   const yKey = spec.series[0]?.key;
   if (!xKey || !yKey) return null;
@@ -323,7 +367,11 @@ function ScatterCard({ spec }: { spec: ChartSpec }) {
         <XAxis dataKey={xKey} {...axisProps} />
         <YAxis dataKey={yKey} {...axisProps} />
         <Tooltip content={<ChartTooltip series={spec.series} />} />
-        <Scatter data={spec.data} fill={beehiiv.purple} />
+        <Scatter
+          data={spec.data}
+          fill={beehiiv.purple}
+          isAnimationActive={!disableAnimation}
+        />
       </ScatterChart>
     </ResponsiveContainer>
   );
