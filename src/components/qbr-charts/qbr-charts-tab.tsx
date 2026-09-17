@@ -132,6 +132,20 @@ export function QbrChartsTab({
     setAxisOverrides({});
   }, [organizationId, publicationId, startMonth, endMonth, chartType]);
 
+  // Auto-fill start/end from the selected workspace's contract
+  // renewal date. Window is [renewal - 12mo, renewal] when the
+  // renewal is in the past (retrospective QBR); when it's upcoming
+  // (or missing), end defaults to today and start to 12 months
+  // ago so a CSM prepping the QBR early doesn't get a future-
+  // dated end.
+  useEffect(() => {
+    if (!organizationId) return;
+    const ws = workspaces.find((w) => w.workspace_id === organizationId);
+    const window = defaultQbrWindow(ws?.contract_renewal ?? null);
+    setStartMonth(window.start);
+    setEndMonth(window.end);
+  }, [organizationId, workspaces]);
+
   const fetchOne = useCallback(
     async (
       preset: QbrPreset,
@@ -620,6 +634,47 @@ export function QbrChartsTab({
         : null}
     </div>
   );
+}
+
+/** Default 12-month QBR window from an optional contract renewal
+ *  date. Returns ISO yyyy-mm-dd strings matching the format
+ *  <input type="date"> writes back into the DateField.
+ *
+ *  Rules (per product ask):
+ *    • contract_renewal set AND in the past / today
+ *        → end = renewal, start = renewal - 12 months  (retrospective QBR)
+ *    • contract_renewal upcoming OR missing
+ *        → end = today,   start = today   - 12 months  (early-prep QBR;
+ *          never surface a future end date the CSM would have to fix)
+ */
+function defaultQbrWindow(renewalIso: string | null): {
+  start: string;
+  end: string;
+} {
+  const today = startOfLocalDay(new Date());
+  let end = today;
+  if (renewalIso) {
+    const renewal = startOfLocalDay(new Date(renewalIso));
+    if (!Number.isNaN(renewal.getTime()) && renewal.getTime() <= today.getTime()) {
+      end = renewal;
+    }
+  }
+  const start = new Date(end);
+  start.setMonth(start.getMonth() - 12);
+  return { start: toIsoDate(start), end: toIsoDate(end) };
+}
+
+function startOfLocalDay(d: Date): Date {
+  const out = new Date(d);
+  out.setHours(0, 0, 0, 0);
+  return out;
+}
+
+function toIsoDate(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
 }
 
 function DateField({
