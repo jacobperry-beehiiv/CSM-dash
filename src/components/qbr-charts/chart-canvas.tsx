@@ -228,7 +228,12 @@ function CartesianCard({ spec }: { spec: ChartSpec }) {
         <YAxis
           {...axisProps}
           tickFormatter={(v) =>
-            yFormat === "percent" ? `${Number(v).toFixed(0)}%` : compactNumber(v)
+            // Delegate to formatValue so 0-1 ratios (Metabase's
+            // default for open/CTR/spam questions) render as
+            // 35% / 3.2% instead of 0% for the whole axis. Match
+            // the bar / area branches which already went through
+            // formatValue for the same reason.
+            yFormat === "percent" ? formatValue(v, "percent") : compactNumber(v)
           }
         />
         <Tooltip content={<ChartTooltip series={series} />} />
