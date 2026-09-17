@@ -1,5 +1,6 @@
 "use client";
 
+import { forwardRef, type ReactNode } from "react";
 import { ChartCanvas } from "./chart-canvas";
 import { BeehiivLogo } from "@/components/beehiiv-logo";
 import { beehiiv } from "@/lib/qbr-charts/colors";
@@ -13,10 +14,24 @@ import type { ChartSpec } from "@/lib/qbr-charts/types";
  *
  * Fixed width on desktop (~960px) so slide-pasted charts have
  * consistent dimensions regardless of who screenshots them.
+ *
+ * `headerActions` slot lets a parent inject controls into the top-
+ * right of the card (e.g. the axis editor pencil) without the card
+ * having to know about them. Slotted controls sit next to the
+ * beehiiv badge and are hidden by the PNG-export walker via the
+ * `data-qbr-hide-in-export` attribute so the exported image stays
+ * clean.
+ *
+ * `ref` forwards the outer card element so the export flow can
+ * snapshot the exact rendered chrome + chart at its 960px width.
  */
-export function ChartCard({ spec }: { spec: ChartSpec }) {
+export const ChartCard = forwardRef<
+  HTMLDivElement,
+  { spec: ChartSpec; headerActions?: ReactNode }
+>(function ChartCard({ spec, headerActions }, ref) {
   return (
     <div
+      ref={ref}
       className="bg-surface border border-border rounded-xl shadow-card p-6 mx-auto"
       style={{ maxWidth: 960 }}
     >
@@ -33,6 +48,11 @@ export function ChartCard({ spec }: { spec: ChartSpec }) {
           className="flex items-center gap-2 text-[11px] text-muted shrink-0"
           aria-label="beehiiv badge"
         >
+          {headerActions ? (
+            <div data-qbr-hide-in-export className="flex items-center">
+              {headerActions}
+            </div>
+          ) : null}
           <BeehiivLogo className="h-4 w-4" />
           <span style={{ color: beehiiv.purple, fontWeight: 600 }}>
             beehiiv
@@ -50,4 +70,4 @@ export function ChartCard({ spec }: { spec: ChartSpec }) {
       ) : null}
     </div>
   );
-}
+});
