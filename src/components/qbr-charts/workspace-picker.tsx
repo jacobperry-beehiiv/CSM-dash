@@ -19,6 +19,18 @@ import { useMemo, useState } from "react";
 export interface WorkspaceOption {
   workspace_id: string;
   workspace_name: string | null;
+  /** HubSpot company name — the primary identifier the customer
+   *  table + deliverability tab surface. Preferred over
+   *  workspace_name for the dropdown label so accounts read the
+   *  same across every tab. Falls back to workspace_name / id. */
+  company_name: string | null;
+  /** Owner email, threaded through so downstream consumers (e.g.
+   *  the QBR date-window auto-fill) can look up the same customer
+   *  without a second lookup against the book. */
+  owner_email: string | null;
+  /** Upcoming HubSpot contract-renewal date (ISO), when set.
+   *  Powers the QBR tab's auto-fill of the start/end window. */
+  contract_renewal: string | null;
   customer_success_manager: string | null;
 }
 
@@ -44,9 +56,11 @@ export function WorkspacePicker({
       showAll || !csm
         ? workspaces
         : workspaces.filter((w) => w.customer_success_manager === csm);
+    // Sort by the same primary label the option renders — the CSM
+    // reads "Company · Workspace" and expects alphabetical to match.
     return [...filtered].sort((a, b) => {
-      const an = a.workspace_name?.toLowerCase() ?? "";
-      const bn = b.workspace_name?.toLowerCase() ?? "";
+      const an = (a.company_name ?? a.workspace_name ?? "").toLowerCase();
+      const bn = (b.company_name ?? b.workspace_name ?? "").toLowerCase();
       return an.localeCompare(bn);
     });
   }, [workspaces, csm, showAll]);
@@ -81,14 +95,28 @@ export function WorkspacePicker({
             ? "No workspaces in scope"
             : `Select a workspace (${visible.length})`}
         </option>
-        {visible.map((w) => (
-          <option key={w.workspace_id} value={w.workspace_id}>
-            {w.workspace_name ?? w.workspace_id}
-            {showAll && w.customer_success_manager
+        {visible.map((w) => {
+          // Match the /csm All-assigned + deliverability formatting:
+          // company_name is primary, workspace_name is a muted
+          // suffix only when it differs. Falls back to
+          // workspace_name / id when company_name is missing.
+          const primary = w.company_name ?? w.workspace_name ?? w.workspace_id;
+          const secondary =
+            w.workspace_name && w.workspace_name !== w.company_name
+              ? w.workspace_name
+              : null;
+          const csmSuffix =
+            showAll && w.customer_success_manager
               ? ` — ${w.customer_success_manager.replace(/_/g, " ")}`
-              : ""}
-          </option>
-        ))}
+              : "";
+          return (
+            <option key={w.workspace_id} value={w.workspace_id}>
+              {primary}
+              {secondary ? ` · ${secondary}` : ""}
+              {csmSuffix}
+            </option>
+          );
+        })}
       </select>
     </div>
   );
