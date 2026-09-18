@@ -1,7 +1,8 @@
 "use client";
 
-import { FilterBar, SearchInput } from "../filters";
+import { SearchInput } from "../filters";
 import { CsmSelector } from "../csm-selector";
+import { TabBar } from "../tab-bar";
 import { useZendeskOverlay } from "@/lib/data/use-zendesk-overlay";
 
 interface Props {
@@ -13,13 +14,19 @@ interface Props {
 }
 
 /**
- * Filter row shared by both Lifecycle sub-boards (Onboarding, Live) —
- * search + CSM switcher + "Has Zendesk tickets" chip, same visual
- * pieces the book view (customer-table.tsx) already uses, deliberately
- * without the Status / Prior ESP / Tech stack / Feature usage filters
- * that make sense for a full customer list but not a small Kanban
- * board (per product decision — a card's board/column already carries
- * most of that signal here).
+ * Filter row shared by both Lifecycle sub-boards (Onboarding, Live).
+ * Reads almost like a sentence: [Onboarding|Live] for [CSM] and
+ * [Zendesk chip] — the Onboarding/Live sub-tabs live here (each board
+ * renders its own copy, same duplication CsmSelector/the Zendesk chip
+ * already had) so the "which board am I on" control sits right next
+ * to "which CSM's book" and "narrowed to which customers", instead of
+ * owning a separate row above. Search gets its own row below, since
+ * it's a different kind of control (free text, not a toggle/switch).
+ *
+ * Deliberately without the Status / Prior ESP / Tech stack / Feature
+ * usage filters the book view (customer-table.tsx) has — those make
+ * sense for a full customer list, not a small Kanban board (a card's
+ * own column already carries most of that signal here).
  *
  * Purely presentational — each board owns its own `search` state and
  * derives its own Zendesk-workspace-id set (via the same
@@ -40,32 +47,46 @@ export function LifecycleFilterBar({
     : null;
 
   return (
-    <FilterBar>
+    <div className="space-y-3 mb-4">
+      <div className="flex flex-wrap items-center gap-2">
+        <TabBar
+          bare
+          tabs={[
+            { id: "onboarding", label: "Onboarding" },
+            { id: "live", label: "Live" },
+          ]}
+          defaultTab="live"
+          param="sub"
+        />
+        <span className="text-sm text-muted">for</span>
+        <CsmSelector csms={csms} />
+        <span className="text-sm text-muted">and</span>
+        <button
+          type="button"
+          onClick={onToggleZendesk}
+          className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md border transition-colors ${
+            zendeskOn
+              ? "bg-accent text-accent-fg border-accent font-medium"
+              : "bg-surface text-fg border-border-strong hover:bg-canvas"
+          }`}
+          title="Show only customers with at least one Zendesk ticket logged in the last 30 days."
+        >
+          <span>🎫 Has Zendesk tickets (30d)</span>
+          {zendeskOn ? (
+            zendeskCount != null ? (
+              <span className="tabular-nums">({zendeskCount})</span>
+            ) : (
+              <span className="inline-block w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin" />
+            )
+          ) : null}
+        </button>
+      </div>
       <SearchInput
         value={search}
         onChange={onSearchChange}
         placeholder="Search company or workspace…"
+        className="w-full"
       />
-      <CsmSelector csms={csms} />
-      <button
-        type="button"
-        onClick={onToggleZendesk}
-        className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md border transition-colors ${
-          zendeskOn
-            ? "bg-accent text-accent-fg border-accent font-medium"
-            : "bg-surface text-fg border-border-strong hover:bg-canvas"
-        }`}
-        title="Show only customers with at least one Zendesk ticket logged in the last 30 days."
-      >
-        <span>🎫 Has Zendesk tickets (30d)</span>
-        {zendeskOn ? (
-          zendeskCount != null ? (
-            <span className="tabular-nums">({zendeskCount})</span>
-          ) : (
-            <span className="inline-block w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin" />
-          )
-        ) : null}
-      </button>
-    </FilterBar>
+    </div>
   );
 }

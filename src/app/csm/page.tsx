@@ -334,20 +334,7 @@ export default async function CsmPage({
         boardBody = <LiveBoard cards={cards} csms={csms} />;
       }
 
-      body = (
-        <>
-          <TabBar
-            tabs={[
-              { id: "onboarding", label: "Onboarding" },
-              { id: "live", label: "Live" },
-            ]}
-            defaultTab="live"
-            param="sub"
-            centered
-          />
-          {boardBody}
-        </>
-      );
+      body = boardBody;
     } else if (tab === "juliet") {
       // Team-wide queue — always show every flagged workspace,
       // regardless of the ?csm filter, so Juliet (or anyone triaging)
