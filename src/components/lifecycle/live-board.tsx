@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { compareByRenewalDate, type LifecycleCard } from "@/lib/lifecycle/card";
-import { toggleLifecycleStep } from "@/lib/lifecycle/toggle-step";
+import { toggleLifecycleStep, patchLifecycleStepDueDate } from "@/lib/lifecycle/toggle-step";
 import { buildRenewalChecklist, setLifecycleStage } from "@/lib/lifecycle/renewal-checklist";
 import { LIVE_ASSIGNABLE_STAGES } from "@/lib/lifecycle/live-quarter";
 import { useZendeskOverlay } from "@/lib/data/use-zendesk-overlay";
@@ -103,6 +103,34 @@ export function LiveBoard({ cards: initialCards, csms }: Props) {
     }
   }
 
+  // Only ever invoked for "playbook"-kind steps — kanban-columns.tsx
+  // never wires onEditDueDate for a Renewal-stage card, so there's no
+  // checklist_kind branch needed here (unlike handleToggleStep).
+  async function handleEditDueDate(
+    workspaceId: string,
+    stepId: string,
+    dueDate: string | null
+  ) {
+    const prevCards = cards;
+    setCards((prev) =>
+      prev.map((c) =>
+        c.customer.workspace_id === workspaceId
+          ? {
+              ...c,
+              steps: c.steps.map((s) =>
+                s.id === stepId ? { ...s, due_date: dueDate } : s
+              ),
+            }
+          : c
+      )
+    );
+    try {
+      await patchLifecycleStepDueDate(stepId, dueDate);
+    } catch {
+      setCards(prevCards);
+    }
+  }
+
   async function handleSetRenewalStage(workspaceId: string, stageLabel: string) {
     const prevCards = cards;
     const nextSteps = buildRenewalChecklist(stageLabel);
@@ -152,6 +180,9 @@ export function LiveBoard({ cards: initialCards, csms }: Props) {
         draggable={false}
         onCardClick={setOpenWorkspaceId}
         onToggleStep={handleToggleStep}
+        onEditDueDate={(workspaceId, stepId, dueDate) =>
+          void handleEditDueDate(workspaceId, stepId, dueDate)
+        }
         renderCardMeta={(c) => (
           <span className="text-xs text-subtle">
             Renews {fmtDate(c.customer.contract_renewal)}

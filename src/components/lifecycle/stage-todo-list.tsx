@@ -18,6 +18,11 @@ interface Props {
   currentStage: string | null;
   editable: boolean;
   onToggle: (stepId: string) => void;
+  /** Present only for "playbook"-kind checklists (Onboarding, Live's
+   *  Q1/Q2/Q3) — renders the due date as an editable date input
+   *  instead of plain text. Omitted for the Renewal-stage checklist,
+   *  whose items have no independent due date at all. */
+  onEditDueDate?: (stepId: string, dueDate: string | null) => void;
   /** Title for the single flat group when steps carry no per-step
    *  `stage` label (e.g. "Renewal stage" vs the generic "To-dos"
    *  fallback). Ignored when steps do carry stage labels — those
@@ -45,6 +50,7 @@ export function StageTodoList({
   currentStage,
   editable,
   onToggle,
+  onEditDueDate,
   flatGroupTitle,
 }: Props) {
   if (steps.length === 0) return null;
@@ -77,6 +83,13 @@ export function StageTodoList({
     <div
       className="mt-2 space-y-1.5"
       onClick={(e) => e.stopPropagation()}
+      // The native drag gesture is detected from mousedown, not click —
+      // stopping only onClick (below) doesn't stop the card's own
+      // draggable div from picking up a mousedown+move that starts on a
+      // plain, non-interactive element in here (e.g. the "due" label
+      // next to the date input). A <button> like DoneCheckbox is
+      // exempt from this natively; a <span> or <input> isn't.
+      onMouseDown={(e) => e.stopPropagation()}
       draggable={false}
       onDragStart={(e) => e.preventDefault()}
     >
@@ -118,7 +131,22 @@ export function StageTodoList({
                       {s.title}
                     </span>
                   </div>
-                  {s.due_date ? (
+                  {onEditDueDate ? (
+                    <div className="pl-[26px] flex items-center gap-1">
+                      <span className="text-[10px] text-subtle">due</span>
+                      <input
+                        type="date"
+                        value={s.due_date ?? ""}
+                        onChange={(e) =>
+                          editable &&
+                          onEditDueDate(s.id, e.target.value || null)
+                        }
+                        disabled={!editable}
+                        draggable={false}
+                        className="text-[10px] text-subtle bg-transparent border-none p-0 leading-none disabled:opacity-60"
+                      />
+                    </div>
+                  ) : s.due_date ? (
                     <span className="text-[10px] text-subtle pl-[26px]">
                       due {fmtDate(s.due_date)}
                     </span>

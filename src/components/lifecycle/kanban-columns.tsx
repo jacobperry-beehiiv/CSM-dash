@@ -30,6 +30,15 @@ interface Props {
    *  (Onboarding, Live). Renewal cards never have steps, so this is
    *  never called there. */
   onToggleStep?: (workspaceId: string, stepId: string) => void;
+  /** Present only on boards whose checklist steps have a real,
+   *  editable due date (playbook-kind — Onboarding, Live's Q1/Q2/Q3).
+   *  Never called for a Renewal-stage card — see the per-card gate
+   *  in this component's own render. */
+  onEditDueDate?: (
+    workspaceId: string,
+    stepId: string,
+    dueDate: string | null
+  ) => void;
   /** Replaces the default status-badge row on each card when
    *  provided (e.g. Live board swaps it for the renewal date, since
    *  "Live"/"Onboarding" is redundant with which board you're already
@@ -67,6 +76,7 @@ export function KanbanColumns({
   onDrop,
   onCardClick,
   onToggleStep,
+  onEditDueDate,
   renderCardMeta,
   renderEmptyChecklist,
 }: Props) {
@@ -203,6 +213,16 @@ export function KanbanColumns({
                           editable={c.editable}
                           onToggle={(stepId) =>
                             onToggleStep(c.customer.workspace_id, stepId)
+                          }
+                          onEditDueDate={
+                            c.checklist_kind === "renewal_stage" || !onEditDueDate
+                              ? undefined
+                              : (stepId, dueDate) =>
+                                  onEditDueDate(
+                                    c.customer.workspace_id,
+                                    stepId,
+                                    dueDate
+                                  )
                           }
                           flatGroupTitle={
                             c.checklist_kind === "renewal_stage"
