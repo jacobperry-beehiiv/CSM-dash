@@ -4,6 +4,7 @@ import { useState } from "react";
 import type { LifecycleStep } from "@/lib/lifecycle/card";
 import { CollapsibleSection } from "../collapsible-section";
 import { DoneCheckbox } from "../done-checkbox";
+import { NoteEditorModal } from "./note-editor-modal";
 import { fmtDate } from "../format";
 
 interface Props {
@@ -25,9 +26,10 @@ interface Props {
    *  whose items have no independent due date at all. */
   onEditDueDate?: (stepId: string, dueDate: string | null) => void;
   /** Present only for "playbook"-kind checklists — same scope as
-   *  onEditDueDate. Clicking a step's title opens an inline textarea
-   *  for free-text notes (PersonalTodo.details); a small icon marks
-   *  a step that already has one. Omitted for the Renewal-stage
+   *  onEditDueDate. Clicking a step's title opens a full-size modal
+   *  editor for free-text notes (PersonalTodo.details) — the on-card
+   *  space is too tight for anything past a one-liner. A small icon
+   *  marks a step that already has one. Omitted for the Renewal-stage
    *  checklist, whose items have no independent notes field. */
   onEditDetails?: (stepId: string, details: string | null) => void;
   /** Title for the single flat group when steps carry no per-step
@@ -66,6 +68,8 @@ export function StageTodoList({
   );
 
   if (steps.length === 0) return null;
+
+  const editingStep = steps.find((s) => s.id === editingDetailsId) ?? null;
 
   const byStage = new Map<string, LifecycleStep[]>();
   const seenOrder: string[] = [];
@@ -135,51 +139,25 @@ export function StageTodoList({
                       />
                     </div>
                     {onEditDetails && editable ? (
-                      editingDetailsId === s.id ? (
-                        <textarea
-                          autoFocus
-                          rows={2}
-                          defaultValue={s.details ?? ""}
-                          placeholder="Add a note…"
-                          onMouseDown={(e) => e.stopPropagation()}
-                          onKeyDown={(e) => {
-                            if (e.key === "Escape") {
-                              e.currentTarget.value = s.details ?? "";
-                              e.currentTarget.blur();
-                            }
-                          }}
-                          onBlur={(e) => {
-                            setEditingDetailsId(null);
-                            const next = e.target.value.trim();
-                            if (next !== (s.details ?? "").trim()) {
-                              onEditDetails(s.id, next || null);
-                            }
-                          }}
-                          className="min-w-0 flex-1 text-xs px-1.5 py-1 border border-accent rounded resize-y bg-surface text-fg focus:outline-none"
-                        />
-                      ) : (
-                        <button
-                          type="button"
-                          title={
-                            s.details
-                              ? `${s.title}\n\n${s.details}`
-                              : `${s.title} — click to add a note`
-                          }
-                          onClick={() => setEditingDetailsId(s.id)}
-                          className={`text-xs min-w-0 break-words text-left hover:underline ${
-                            s.completed
-                              ? "text-subtle line-through"
-                              : "text-fg"
-                          }`}
-                        >
-                          {s.title}
-                          {s.details ? (
-                            <span className="ml-1" aria-label="Has a note">
-                              📝
-                            </span>
-                          ) : null}
-                        </button>
-                      )
+                      <button
+                        type="button"
+                        title={
+                          s.details
+                            ? `${s.title}\n\n${s.details}`
+                            : `${s.title} — click to add a note`
+                        }
+                        onClick={() => setEditingDetailsId(s.id)}
+                        className={`text-xs min-w-0 break-words text-left hover:underline ${
+                          s.completed ? "text-subtle line-through" : "text-fg"
+                        }`}
+                      >
+                        {s.title}
+                        {s.details ? (
+                          <span className="ml-1" aria-label="Has a note">
+                            📝
+                          </span>
+                        ) : null}
+                      </button>
                     ) : (
                       <span
                         title={s.details ? `${s.title}\n\n${s.details}` : s.title}
@@ -222,6 +200,14 @@ export function StageTodoList({
           </CollapsibleSection>
         );
       })}
+      {editingStep && onEditDetails ? (
+        <NoteEditorModal
+          stepTitle={editingStep.title}
+          initialValue={editingStep.details ?? ""}
+          onSave={(details) => onEditDetails(editingStep.id, details)}
+          onClose={() => setEditingDetailsId(null)}
+        />
+      ) : null}
     </div>
   );
 }
