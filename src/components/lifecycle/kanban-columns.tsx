@@ -35,6 +35,13 @@ interface Props {
    *  "Live"/"Onboarding" is redundant with which board you're already
    *  looking at). Falls back to the plain status badge when omitted. */
   renderCardMeta?: (card: LifecycleCard) => React.ReactNode;
+  /** Renders in place of the checklist for a card with zero matched
+   *  steps (StageTodoList itself renders nothing in that case). Only
+   *  the Onboarding board supplies this today — see
+   *  backfill-onboarding-button.tsx — since an empty Live-board
+   *  checklist doesn't have an equivalent recovery action. Omitted
+   *  entirely on boards where an empty checklist is unremarkable. */
+  renderEmptyChecklist?: (card: LifecycleCard) => React.ReactNode;
 }
 
 /**
@@ -61,6 +68,7 @@ export function KanbanColumns({
   onCardClick,
   onToggleStep,
   renderCardMeta,
+  renderEmptyChecklist,
 }: Props) {
   const [dragOverColumn, setDragOverColumn] = useState<string | null>(null);
 
@@ -185,20 +193,24 @@ export function KanbanColumns({
                       )}
                     </div>
                     {onToggleStep ? (
-                      <StageTodoList
-                        steps={c.steps}
-                        stageOrder={stageOrder ?? []}
-                        currentStage={c.stage ?? c.suggested_stage ?? null}
-                        editable={c.editable}
-                        onToggle={(stepId) =>
-                          onToggleStep(c.customer.workspace_id, stepId)
-                        }
-                        flatGroupTitle={
-                          c.checklist_kind === "renewal_stage"
-                            ? "Renewal stage"
-                            : undefined
-                        }
-                      />
+                      c.steps.length === 0 && renderEmptyChecklist ? (
+                        renderEmptyChecklist(c)
+                      ) : (
+                        <StageTodoList
+                          steps={c.steps}
+                          stageOrder={stageOrder ?? []}
+                          currentStage={c.stage ?? c.suggested_stage ?? null}
+                          editable={c.editable}
+                          onToggle={(stepId) =>
+                            onToggleStep(c.customer.workspace_id, stepId)
+                          }
+                          flatGroupTitle={
+                            c.checklist_kind === "renewal_stage"
+                              ? "Renewal stage"
+                              : undefined
+                          }
+                        />
+                      )
                     ) : null}
                   </div>
                 ))

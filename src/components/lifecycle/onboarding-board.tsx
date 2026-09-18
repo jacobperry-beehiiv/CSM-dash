@@ -1,10 +1,11 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { compareByRenewalDate, type LifecycleCard } from "@/lib/lifecycle/card";
+import { compareByRenewalDate, type LifecycleCard, type LifecycleStep } from "@/lib/lifecycle/card";
 import { toggleLifecycleStep } from "@/lib/lifecycle/toggle-step";
 import { KanbanColumns, UNSORTED } from "./kanban-columns";
 import { LifecycleCardModal } from "./lifecycle-card-modal";
+import { BackfillOnboardingButton } from "./backfill-onboarding-button";
 import { fmtDate } from "../format";
 
 interface Props {
@@ -107,6 +108,21 @@ export function OnboardingBoard({ cards: initialCards, stages }: Props) {
     }
   }
 
+  function handleBackfilled(workspaceId: string, steps: LifecycleStep[]) {
+    setCards((prev) =>
+      prev.map((c) =>
+        c.customer.workspace_id === workspaceId
+          ? {
+              ...c,
+              steps,
+              totalCount: steps.length,
+              completedCount: steps.filter((s) => s.completed).length,
+            }
+          : c
+      )
+    );
+  }
+
   async function handleToggleStep(workspaceId: string, stepId: string) {
     const prevCards = cards;
     setCards((prev) =>
@@ -139,6 +155,16 @@ export function OnboardingBoard({ cards: initialCards, stages }: Props) {
         onCardClick={setOpenWorkspaceId}
         onToggleStep={(workspaceId, stepId) =>
           void handleToggleStep(workspaceId, stepId)
+        }
+        renderEmptyChecklist={(c) =>
+          c.editable ? (
+            <BackfillOnboardingButton
+              workspaceId={c.customer.workspace_id}
+              onBackfilled={(steps) =>
+                handleBackfilled(c.customer.workspace_id, steps)
+              }
+            />
+          ) : null
         }
         renderCardMeta={(c) => {
           const isPastDue =

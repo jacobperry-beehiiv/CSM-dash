@@ -46,11 +46,16 @@ import { loadProfileFieldOptions } from "@/lib/data/profile-field-options";
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
-const BASE_TABS = [
+// Split around the Lifecycle tab's insertion point (right after
+// Renewals) so the flag-gated tab can be spliced back into its
+// original position instead of tacked onto the end of the strip.
+const TABS_BEFORE_LIFECYCLE = [
   { id: "book", label: "All assigned" },
   { id: "deliverability", label: "Deliverability" },
   { id: "at-risk", label: "At-risk" },
   { id: "renewals", label: "Renewals" },
+];
+const TABS_AFTER_LIFECYCLE = [
   { id: "juliet", label: "Flagged for Juliet" },
   { id: "qbr-charts", label: "QBR Charts" },
 ];
@@ -144,7 +149,11 @@ export default async function CsmPage({
     viewerEmail
   );
   const TABS = [
-    ...BASE_TABS,
+    ...TABS_BEFORE_LIFECYCLE,
+    ...(lifecycleEnabled
+      ? [{ id: "lifecycle" as const, label: "Lifecycle", badge: "beta" }]
+      : []),
+    ...TABS_AFTER_LIFECYCLE,
     ...(winsEnabled
       ? [{ id: "wins" as const, label: "Wins & Opportunities" }]
       : []),
@@ -335,6 +344,7 @@ export default async function CsmPage({
             ]}
             defaultTab="live"
             param="sub"
+            centered
           />
           {boardBody}
         </>
