@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import type { LifecycleStep } from "@/lib/lifecycle/card";
 import { CollapsibleSection } from "../collapsible-section";
 import { DoneCheckbox } from "../done-checkbox";
@@ -23,6 +24,12 @@ interface Props {
    *  instead of plain text. Omitted for the Renewal-stage checklist,
    *  whose items have no independent due date at all. */
   onEditDueDate?: (stepId: string, dueDate: string | null) => void;
+  /** Present only for "playbook"-kind checklists — same scope as
+   *  onEditDueDate. Clicking a step's title opens an inline textarea
+   *  for free-text notes (PersonalTodo.details); a small icon marks
+   *  a step that already has one. Omitted for the Renewal-stage
+   *  checklist, whose items have no independent notes field. */
+  onEditDetails?: (stepId: string, details: string | null) => void;
   /** Title for the single flat group when steps carry no per-step
    *  `stage` label (e.g. "Renewal stage" vs the generic "To-dos"
    *  fallback). Ignored when steps do carry stage labels — those
@@ -51,8 +58,13 @@ export function StageTodoList({
   editable,
   onToggle,
   onEditDueDate,
+  onEditDetails,
   flatGroupTitle,
 }: Props) {
+  const [editingDetailsId, setEditingDetailsId] = useState<string | null>(
+    null
+  );
+
   if (steps.length === 0) return null;
 
   const byStage = new Map<string, LifecycleStep[]>();
@@ -122,14 +134,67 @@ export function StageTodoList({
                         ariaLabel={`Mark "${s.title}" complete`}
                       />
                     </div>
-                    <span
-                      title={s.title}
-                      className={`text-xs min-w-0 break-words ${
-                        s.completed ? "text-subtle line-through" : "text-fg"
-                      }`}
-                    >
-                      {s.title}
-                    </span>
+                    {onEditDetails && editable ? (
+                      editingDetailsId === s.id ? (
+                        <textarea
+                          autoFocus
+                          rows={2}
+                          defaultValue={s.details ?? ""}
+                          placeholder="Add a note…"
+                          onMouseDown={(e) => e.stopPropagation()}
+                          onKeyDown={(e) => {
+                            if (e.key === "Escape") {
+                              e.currentTarget.value = s.details ?? "";
+                              e.currentTarget.blur();
+                            }
+                          }}
+                          onBlur={(e) => {
+                            setEditingDetailsId(null);
+                            const next = e.target.value.trim();
+                            if (next !== (s.details ?? "").trim()) {
+                              onEditDetails(s.id, next || null);
+                            }
+                          }}
+                          className="min-w-0 flex-1 text-xs px-1.5 py-1 border border-accent rounded resize-y bg-surface text-fg focus:outline-none"
+                        />
+                      ) : (
+                        <button
+                          type="button"
+                          title={
+                            s.details
+                              ? `${s.title}\n\n${s.details}`
+                              : `${s.title} — click to add a note`
+                          }
+                          onClick={() => setEditingDetailsId(s.id)}
+                          className={`text-xs min-w-0 break-words text-left hover:underline ${
+                            s.completed
+                              ? "text-subtle line-through"
+                              : "text-fg"
+                          }`}
+                        >
+                          {s.title}
+                          {s.details ? (
+                            <span className="ml-1" aria-label="Has a note">
+                              📝
+                            </span>
+                          ) : null}
+                        </button>
+                      )
+                    ) : (
+                      <span
+                        title={s.details ? `${s.title}\n\n${s.details}` : s.title}
+                        className={`text-xs min-w-0 break-words ${
+                          s.completed ? "text-subtle line-through" : "text-fg"
+                        }`}
+                      >
+                        {s.title}
+                        {onEditDetails && s.details ? (
+                          <span className="ml-1" aria-label="Has a note">
+                            📝
+                          </span>
+                        ) : null}
+                      </span>
+                    )}
                   </div>
                   {onEditDueDate ? (
                     <div className="pl-[26px] flex items-center gap-1">

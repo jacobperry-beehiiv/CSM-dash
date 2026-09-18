@@ -39,6 +39,14 @@ interface Props {
     stepId: string,
     dueDate: string | null
   ) => void;
+  /** Present only on boards whose checklist steps carry editable
+   *  free-text notes (playbook-kind — same scope as onEditDueDate).
+   *  Never called for a Renewal-stage card. */
+  onEditDetails?: (
+    workspaceId: string,
+    stepId: string,
+    details: string | null
+  ) => void;
   /** Replaces the default status-badge row on each card when
    *  provided (e.g. Live board swaps it for the renewal date, since
    *  "Live"/"Onboarding" is redundant with which board you're already
@@ -77,6 +85,7 @@ export function KanbanColumns({
   onCardClick,
   onToggleStep,
   onEditDueDate,
+  onEditDetails,
   renderCardMeta,
   renderEmptyChecklist,
 }: Props) {
@@ -222,6 +231,16 @@ export function KanbanColumns({
                                     c.customer.workspace_id,
                                     stepId,
                                     dueDate
+                                  )
+                          }
+                          onEditDetails={
+                            c.checklist_kind === "renewal_stage" || !onEditDetails
+                              ? undefined
+                              : (stepId, details) =>
+                                  onEditDetails(
+                                    c.customer.workspace_id,
+                                    stepId,
+                                    details
                                   )
                           }
                           flatGroupTitle={
