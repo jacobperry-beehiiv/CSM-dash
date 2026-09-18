@@ -160,9 +160,6 @@ export default async function CsmPage({
     ...(requestsEnabled
       ? [{ id: "live-this-week" as const, label: "Live This Week" }]
       : []),
-    ...(lifecycleEnabled
-      ? [{ id: "lifecycle" as const, label: "Lifecycle", badge: "beta" }]
-      : []),
   ];
 
   try {
