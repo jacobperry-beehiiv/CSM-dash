@@ -3,8 +3,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { compareByRenewalDate, type LifecycleCard, type LifecycleStep } from "@/lib/lifecycle/card";
 import { toggleLifecycleStep } from "@/lib/lifecycle/toggle-step";
+import { useZendeskOverlay } from "@/lib/data/use-zendesk-overlay";
 import { KanbanColumns, UNSORTED } from "./kanban-columns";
 import { LifecycleCardModal } from "./lifecycle-card-modal";
+import { LifecycleFilterBar } from "./lifecycle-filter-bar";
 import { BackfillOnboardingButton } from "./backfill-onboarding-button";
 import { fmtDate } from "../format";
 
@@ -17,6 +19,10 @@ interface Props {
    *  — leftmost, per product decision, unlike the old Renewal board's
    *  trailing one. */
   stages: string[];
+  /** Every CSM handle in the current book — feeds the filter row's
+   *  CsmSelector, same list the book/at-risk/renewals tabs already
+   *  pass to theirs. */
+  csms: string[];
 }
 
 async function patchOnboardingStage(workspaceId: string, stage: string | null) {
@@ -45,10 +51,13 @@ async function patchOnboardingStage(workspaceId: string, stage: string | null) {
  * decision (src/app/csm/page.tsx re-fetches on next load), not
  * something this component does itself.
  */
-export function OnboardingBoard({ cards: initialCards, stages }: Props) {
+export function OnboardingBoard({ cards: initialCards, stages, csms }: Props) {
   const [cards, setCards] = useState(initialCards);
   const [openWorkspaceId, setOpenWorkspaceId] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
+  const [zendeskOn, setZendeskOn] = useState(false);
   const seeded = useRef(new Set<string>());
+  const zendeskOverlay = useZendeskOverlay();
 
   useEffect(() => {
     for (const c of cards) {
@@ -76,17 +85,35 @@ export function OnboardingBoard({ cards: initialCards, stages }: Props) {
 
   const columns = useMemo(() => [UNSORTED, ...stages], [stages]);
 
+  const visibleCards = useMemo(() => {
+    let out = cards;
+    const q = search.trim().toLowerCase();
+    if (q) {
+      out = out.filter((c) => {
+        const name = c.customer.company_name ?? c.customer.workspace_name ?? "";
+        return name.toLowerCase().includes(q);
+      });
+    }
+    if (zendeskOn && zendeskOverlay) {
+      out = out.filter((c) => {
+        const wsId = c.customer.workspace_id;
+        return wsId ? (zendeskOverlay.rows[wsId]?.total_30d ?? 0) > 0 : false;
+      });
+    }
+    return out;
+  }, [cards, search, zendeskOn, zendeskOverlay]);
+
   const cardsByColumn = useMemo(() => {
     const m = new Map<string, LifecycleCard[]>();
     for (const col of columns) m.set(col, []);
-    for (const c of cards) {
+    for (const c of visibleCards) {
       const col = c.stage ?? c.suggested_stage ?? UNSORTED;
       const list = m.get(col) ?? m.get(UNSORTED)!;
       list.push(c);
     }
     for (const list of m.values()) list.sort(compareByRenewalDate);
     return m;
-  }, [cards, columns]);
+  }, [visibleCards, columns]);
 
   const openCard =
     cards.find((c) => c.customer.workspace_id === openWorkspaceId) ?? null;
@@ -146,6 +173,13 @@ export function OnboardingBoard({ cards: initialCards, stages }: Props) {
 
   return (
     <>
+      <LifecycleFilterBar
+        search={search}
+        onSearchChange={setSearch}
+        csms={csms}
+        zendeskOn={zendeskOn}
+        onToggleZendesk={() => setZendeskOn((v) => !v)}
+      />
       <KanbanColumns
         columns={columns}
         cardsByColumn={cardsByColumn}
