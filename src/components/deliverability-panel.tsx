@@ -992,11 +992,39 @@ export function DeliverabilityPanel({
                           ) : null}
                         </div>
                       </td>
-                      <td className="px-3 py-3 break-words">
-                        <div className="font-semibold text-fg">
-                          {group.workspaceName}
+                      {/* Company cell — mirrors the "All assigned"
+                       *  customer-table shape: HubSpot company name
+                       *  first, workspace name as a muted second line
+                       *  only when it differs, owner email as a
+                       *  mailto below. Falls back to group.workspaceName
+                       *  when the workspace isn't in the customer
+                       *  book (masquerade + drafts already gracefully
+                       *  handle that case a few columns over). */}
+                      <td className="px-3 py-3 break-words min-w-0">
+                        <div className="font-medium text-fg break-words">
+                          {customer?.company_name ||
+                            customer?.workspace_name ||
+                            group.workspaceName ||
+                            "-"}
                         </div>
-                        <div className="text-xs text-muted">
+                        {customer?.workspace_name &&
+                        customer.workspace_name !==
+                          (customer.company_name ?? customer.workspace_name) ? (
+                          <div className="text-xs text-muted break-words">
+                            {customer.workspace_name}
+                          </div>
+                        ) : null}
+                        {customer?.owner_email ? (
+                          <a
+                            href={`mailto:${customer.owner_email}`}
+                            onClick={(e) => e.stopPropagation()}
+                            className="text-xs text-subtle hover:text-accent break-words block"
+                            title={customer.owner_email}
+                          >
+                            {customer.owner_email}
+                          </a>
+                        ) : null}
+                        <div className="text-[11px] text-muted mt-0.5">
                           {group.alerts.length} publication
                           {group.alerts.length === 1 ? "" : "s"}
                         </div>

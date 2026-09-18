@@ -160,6 +160,9 @@ export default async function CsmPage({
     ...(requestsEnabled
       ? [{ id: "live-this-week" as const, label: "Live This Week" }]
       : []),
+    ...(lifecycleEnabled
+      ? [{ id: "lifecycle" as const, label: "Lifecycle", badge: "beta" }]
+      : []),
   ];
 
   try {
@@ -205,6 +208,9 @@ export default async function CsmPage({
         wsOptions.push({
           workspace_id: c.workspace_id,
           workspace_name: c.workspace_name,
+          company_name: c.company_name ?? null,
+          owner_email: c.owner_email ?? null,
+          contract_renewal: c.contract_renewal ?? null,
           customer_success_manager: c.customer_success_manager,
         });
       }

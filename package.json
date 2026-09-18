@@ -15,7 +15,9 @@
   "dependencies": {
     "@vercel/blob": "^2.4.1",
     "fast-xml-parser": "^5.9.3",
+    "html-to-image": "^1.11.13",
     "jsonwebtoken": "^9.0.3",
+    "jszip": "^3.10.2",
     "next": "16.2.2",
     "next-auth": "^5.0.0-beta.31",
     "postgres": "^3.4.9",

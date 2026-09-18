@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { ChartCard } from "./chart-card";
 import {
   DeckPreview,
@@ -13,9 +14,24 @@ import {
   type WorkspaceOption,
 } from "./workspace-picker";
 import { PublicationPicker } from "./publication-picker";
+import { AxisEditor } from "./axis-editor";
+import { BeehiivUsageCard } from "./beehiiv-usage-card";
 import { useWorkspacePublications } from "@/lib/hooks/customer-publications-cache";
 import { QBR_PRESETS } from "@/lib/qbr-charts/qbr-presets";
 import { specHasData } from "@/lib/qbr-charts/has-data";
+import {
+  applyAxisOverride,
+  type AxisOverride,
+} from "@/lib/qbr-charts/axis-override";
+import {
+  dataUrlToBytes,
+  downloadBlob,
+  slugForFilename,
+  snapshotElement,
+  waitForCardReady,
+  zipFilename,
+  zipPngs,
+} from "@/lib/qbr-charts/png-export";
 import type {
   ChartSpec,
   ChartType,
@@ -73,6 +89,33 @@ export function QbrChartsTab({
   const [isRunning, setIsRunning] = useState(false);
   const [globalError, setGlobalError] = useState<string | null>(null);
   const [deckOpen, setDeckOpen] = useState(false);
+  // Per-tile axis overrides. Keyed by questionId. Cleared on any
+  // input change (same reset semantics as `specs`) — a different
+  // workspace's data may not have the same columns, so a stale
+  // xKey / ySeriesKey selection would render an empty chart.
+  const [axisOverrides, setAxisOverrides] = useState<
+    Record<number, AxisOverride>
+  >({});
+  // PNG-export state. `exporting.spec` is the tile currently being
+  // captured — rendered into a hidden portal so ResponsiveContainer
+  // can size + paint before html-to-image snapshots it. `progress`
+  // drives the button label so the CSM sees "3/17…" during a run.
+  const [exporting, setExporting] = useState<{
+    spec: ChartSpec;
+    questionId: number;
+  } | null>(null);
+  const [exportProgress, setExportProgress] = useState<{
+    done: number;
+    total: number;
+  } | null>(null);
+  const [exportMessage, setExportMessage] = useState<string | null>(null);
+  const captureHostRef = useRef<HTMLDivElement | null>(null);
+  const capturedCardRef = useRef<HTMLDivElement | null>(null);
+  // Live beehiiv Usage card. The export flow snapshots this ref
+  // directly rather than re-rendering the card offscreen — the
+  // card's already mounted at 960px on the tab, so duplicating it
+  // would just double the fetch + wait without any layout benefit.
+  const usageCardRef = useRef<HTMLDivElement | null>(null);
 
   const abortRef = useRef<AbortController | null>(null);
 
@@ -92,7 +135,25 @@ export function QbrChartsTab({
     setIsRunning(false);
     setGlobalError(null);
     setDeckOpen(false);
+    setAxisOverrides({});
   }, [organizationId, publicationId, startMonth, endMonth, chartType]);
+
+  // Auto-fill start/end from the selected workspace's contract
+  // renewal date. `start` is ALWAYS anchored on the renewal —
+  // `renewal - 12mo` — so the window represents "the year leading
+  // up to this renewal" regardless of when the CSM opens the QBR.
+  // `end` = renewal if the renewal has passed (retrospective QBR),
+  // otherwise `today` so an upcoming renewal doesn't surface a
+  // future end date the CSM would have to correct. Missing
+  // renewal → both dates fall back to a plain trailing-12mo window
+  // anchored on today.
+  useEffect(() => {
+    if (!organizationId) return;
+    const ws = workspaces.find((w) => w.workspace_id === organizationId);
+    const window = defaultQbrWindow(ws?.contract_renewal ?? null);
+    setStartMonth(window.start);
+    setEndMonth(window.end);
+  }, [organizationId, workspaces]);
 
   const fetchOne = useCallback(
     async (
@@ -287,6 +348,128 @@ export function QbrChartsTab({
     endMonth: endMonth || null,
   };
 
+  // Exportable set — every hasData tile, in preset order (matches the
+  // deck ordering). Independent of the "inDeck" toggle since a CSM
+  // may want the raw PNGs for charts they've excluded from a formal
+  // deck. Each entry carries the axis-override-applied spec so the
+  // exported PNG reflects the CSM's edits.
+  const exportableSpecs = useMemo<
+    Array<{ questionId: number; spec: ChartSpec }>
+  >(() => {
+    const out: Array<{ questionId: number; spec: ChartSpec }> = [];
+    for (const p of QBR_PRESETS) {
+      const state = tileStates[p.questionId];
+      const spec = specs[p.questionId];
+      if (state?.status === "ready" && state.hasData === true && spec) {
+        out.push({
+          questionId: p.questionId,
+          spec: applyAxisOverride(spec, axisOverrides[p.questionId]),
+        });
+      }
+    }
+    return out;
+  }, [tileStates, specs, axisOverrides]);
+
+  const handleExportPngs = useCallback(async () => {
+    if (exporting !== null || exportableSpecs.length === 0) return;
+    setExportMessage(null);
+    // Total = chart tiles + 1 for the beehiiv Usage card (captured
+    // first so it's the natural cover-slide-follower in the .zip).
+    const includeUsage = usageCardRef.current !== null;
+    const total = exportableSpecs.length + (includeUsage ? 1 : 0);
+    setExportProgress({ done: 0, total });
+    const captures: Array<{ filename: string; bytes: Uint8Array }> = [];
+    try {
+      // Snapshot the beehiiv Usage card as capture #1 from its live
+      // mount — no offscreen re-render needed because the card's
+      // already at 960px on the tab, and it's a static table so no
+      // animation to freeze.
+      if (includeUsage && usageCardRef.current) {
+        const dataUrl = await snapshotElement(usageCardRef.current);
+        captures.push({
+          filename: "000-beehiiv-usage",
+          bytes: dataUrlToBytes(dataUrl),
+        });
+        setExportProgress({ done: 1, total });
+      }
+      for (let i = 0; i < exportableSpecs.length; i++) {
+        const { questionId, spec } = exportableSpecs[i];
+        // Mount the card in the offscreen host, wait for Recharts to
+        // paint at 960px, snapshot, then unmount before the next
+        // tile. One-at-a-time keeps memory bounded and lets Recharts
+        // reuse its sizing infrastructure without cross-tile
+        // interference.
+        setExporting({ questionId, spec });
+        await waitForCardReady();
+        if (!capturedCardRef.current) {
+          throw new Error("Offscreen chart card failed to mount");
+        }
+        const dataUrl = await snapshotElement(capturedCardRef.current);
+        captures.push({
+          filename: slugForFilename(spec.title, questionId),
+          bytes: dataUrlToBytes(dataUrl),
+        });
+        setExportProgress({
+          done: captures.length,
+          total,
+        });
+      }
+      setExporting(null);
+      const blob = await zipPngs(captures);
+      const workspaceSlug = (workspaceName ?? "qbr")
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "");
+      downloadBlob(blob, zipFilename(`qbr-${workspaceSlug || "charts"}`));
+      setExportMessage(
+        `Downloaded ${captures.length} file${
+          captures.length === 1 ? "" : "s"
+        } as .zip.`
+      );
+    } catch (e) {
+      setExporting(null);
+      setExportMessage(
+        `Export failed: ${e instanceof Error ? e.message : "unknown"}`
+      );
+    } finally {
+      setExportProgress(null);
+      window.setTimeout(() => setExportMessage(null), 8000);
+    }
+  }, [exportableSpecs, exporting, workspaceName]);
+
+  // Offscreen host for the export flow. Lives outside every layout
+  // container (fixed, off-viewport, z:-1) so Recharts sees a proper
+  // 960px width and html-to-image can capture a clean chrome-free
+  // snapshot without any of the surrounding app UI bleeding in.
+  useEffect(() => {
+    const host = document.createElement("div");
+    host.setAttribute("data-qbr-export-host", "");
+    host.style.position = "fixed";
+    host.style.left = "-99999px";
+    host.style.top = "0";
+    host.style.width = "1000px";
+    host.style.pointerEvents = "none";
+    host.style.zIndex = "-1";
+    document.body.appendChild(host);
+    captureHostRef.current = host;
+    return () => {
+      host.remove();
+      captureHostRef.current = null;
+    };
+  }, []);
+
+  const setAxisOverrideForQuestion = useCallback(
+    (questionId: number, next: AxisOverride | undefined) => {
+      setAxisOverrides((prev) => {
+        const copy = { ...prev };
+        if (next) copy[questionId] = next;
+        else delete copy[questionId];
+        return copy;
+      });
+    },
+    []
+  );
+
   return (
     <div className="space-y-4">
       <div className="bg-surface border border-border rounded-xl shadow-card p-4">
@@ -375,6 +558,22 @@ export function QbrChartsTab({
               Generate deck ({deckSlides.length})
             </button>
           ) : null}
+          {exportableSpecs.length > 0 ? (
+            <button
+              type="button"
+              onClick={handleExportPngs}
+              disabled={exporting !== null}
+              title="Snapshot every ready tile at 960px and download as a .zip of PNGs. Uses whatever axis edits you've made per tile."
+              className="px-3 py-1.5 text-xs font-medium rounded-md border border-border-strong text-fg bg-surface hover:bg-canvas/40 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {exportProgress
+                ? `Capturing ${exportProgress.done}/${exportProgress.total}…`
+                : `Download all as PNGs (${exportableSpecs.length})`}
+            </button>
+          ) : null}
+          {exportMessage ? (
+            <span className="text-[11px] text-muted">{exportMessage}</span>
+          ) : null}
           {selectedSpec ? (
             <button
               type="button"
@@ -398,6 +597,14 @@ export function QbrChartsTab({
         </div>
       ) : null}
 
+      {/* beehiiv Usage checklist — renders whenever a workspace is
+       *  picked, above the chart grid so it's the first thing the
+       *  CSM sees on the QBR tab. Exported as the leading tile in
+       *  the .zip. */}
+      {organizationId ? (
+        <BeehiivUsageCard ref={usageCardRef} workspaceId={organizationId} />
+      ) : null}
+
       {selectedSpec ? (
         <div className="space-y-2">
           <div className="flex items-center gap-2 text-xs">
@@ -416,7 +623,23 @@ export function QbrChartsTab({
               </button>
             ) : null}
           </div>
-          <ChartCard spec={selectedSpec} />
+          {selectedQuestionId != null ? (
+            <ChartCard
+              spec={applyAxisOverride(
+                selectedSpec,
+                axisOverrides[selectedQuestionId]
+              )}
+              headerActions={
+                <AxisEditor
+                  spec={selectedSpec}
+                  override={axisOverrides[selectedQuestionId]}
+                  onChange={(next) =>
+                    setAxisOverrideForQuestion(selectedQuestionId, next)
+                  }
+                />
+              }
+            />
+          ) : null}
         </div>
       ) : (
         <PresetGrid
@@ -434,8 +657,82 @@ export function QbrChartsTab({
           onRemoveSlide={removeFromDeck}
         />
       ) : null}
+
+      {/* Offscreen capture — active only while handleExportPngs is
+       *  cycling through tiles. Portalled to <body> so it lives
+       *  outside every layout container and Recharts sees a
+       *  proper 960px parent width.
+       *
+       *  `key={exporting.questionId}` forces a full unmount/mount
+       *  between tiles so Recharts starts from a clean slate on each
+       *  spec — otherwise React reuses the ChartCard instance and
+       *  Recharts animates from the prior tile's shape into the new
+       *  one, giving html-to-image a mid-animation frame to snapshot
+       *  (which is what truncated the exported line chart).
+       *
+       *  `disableAnimation` finishes the deterministic-capture story
+       *  by turning off the mount-time grow-in animation entirely
+       *  in the export path only. */}
+      {exporting && captureHostRef.current
+        ? createPortal(
+            <ChartCard
+              key={exporting.questionId}
+              ref={capturedCardRef}
+              spec={exporting.spec}
+              disableAnimation
+            />,
+            captureHostRef.current
+          )
+        : null}
     </div>
   );
+}
+
+/** Default 12-month QBR window from an optional contract renewal
+ *  date. Returns ISO yyyy-mm-dd strings matching the format
+ *  <input type="date"> writes back into the DateField.
+ *
+ *  Rules (per product ask):
+ *    • contract_renewal set
+ *        → start = renewal - 12 months (always anchored on renewal —
+ *          the window is "the year that leads up to this renewal")
+ *        → end   = renewal if the renewal is today / in the past
+ *                  today   if the renewal is upcoming (never surface
+ *                  a future end date the CSM would have to fix)
+ *    • contract_renewal missing
+ *        → start = today - 12 months, end = today
+ */
+function defaultQbrWindow(renewalIso: string | null): {
+  start: string;
+  end: string;
+} {
+  const today = startOfLocalDay(new Date());
+  if (renewalIso) {
+    const renewal = startOfLocalDay(new Date(renewalIso));
+    if (!Number.isNaN(renewal.getTime())) {
+      const start = new Date(renewal);
+      start.setMonth(start.getMonth() - 12);
+      const end =
+        renewal.getTime() <= today.getTime() ? renewal : today;
+      return { start: toIsoDate(start), end: toIsoDate(end) };
+    }
+  }
+  const start = new Date(today);
+  start.setMonth(start.getMonth() - 12);
+  return { start: toIsoDate(start), end: toIsoDate(today) };
+}
+
+function startOfLocalDay(d: Date): Date {
+  const out = new Date(d);
+  out.setHours(0, 0, 0, 0);
+  return out;
+}
+
+function toIsoDate(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
 }
 
 function DateField({
