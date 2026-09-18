@@ -83,6 +83,13 @@ export function StageTodoList({
     <div
       className="mt-2 space-y-1.5"
       onClick={(e) => e.stopPropagation()}
+      // The native drag gesture is detected from mousedown, not click —
+      // stopping only onClick (below) doesn't stop the card's own
+      // draggable div from picking up a mousedown+move that starts on a
+      // plain, non-interactive element in here (e.g. the "due" label
+      // next to the date input). A <button> like DoneCheckbox is
+      // exempt from this natively; a <span> or <input> isn't.
+      onMouseDown={(e) => e.stopPropagation()}
       draggable={false}
       onDragStart={(e) => e.preventDefault()}
     >
@@ -135,6 +142,7 @@ export function StageTodoList({
                           onEditDueDate(s.id, e.target.value || null)
                         }
                         disabled={!editable}
+                        draggable={false}
                         className="text-[10px] text-subtle bg-transparent border-none p-0 leading-none disabled:opacity-60"
                       />
                     </div>
