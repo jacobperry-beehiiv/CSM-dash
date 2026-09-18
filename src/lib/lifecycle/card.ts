@@ -22,6 +22,14 @@ export interface LifecycleStep {
    *  expanded when its stage matches the card's current stage,
    *  collapsed otherwise. */
   stage?: string | null;
+  /** Free-text CSM notes — the same PersonalTodo.details field the
+   *  Slack-generated playbook steps already carry (context, blockers,
+   *  outreach links). Undefined/null renders no note; present, it
+   *  drives the "has a note" icon and the click-to-edit textarea in
+   *  stage-todo-list.tsx. Only ever populated for "playbook"-kind
+   *  steps — the Renewal-stage checklist has no independent details
+   *  to carry. */
+  details?: string | null;
 }
 
 export interface LifecycleCard {

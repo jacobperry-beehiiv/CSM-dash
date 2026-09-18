@@ -2,7 +2,11 @@
 
 import { useMemo, useState } from "react";
 import { compareByRenewalDate, type LifecycleCard } from "@/lib/lifecycle/card";
-import { toggleLifecycleStep, patchLifecycleStepDueDate } from "@/lib/lifecycle/toggle-step";
+import {
+  toggleLifecycleStep,
+  patchLifecycleStepDueDate,
+  patchLifecycleStepDetails,
+} from "@/lib/lifecycle/toggle-step";
 import { buildRenewalChecklist, setLifecycleStage } from "@/lib/lifecycle/renewal-checklist";
 import { LIVE_ASSIGNABLE_STAGES } from "@/lib/lifecycle/live-quarter";
 import { useZendeskOverlay } from "@/lib/data/use-zendesk-overlay";
@@ -131,6 +135,33 @@ export function LiveBoard({ cards: initialCards, csms }: Props) {
     }
   }
 
+  // Same reasoning as handleEditDueDate above — never invoked for a
+  // Renewal-stage card, so no checklist_kind branch needed.
+  async function handleEditDetails(
+    workspaceId: string,
+    stepId: string,
+    details: string | null
+  ) {
+    const prevCards = cards;
+    setCards((prev) =>
+      prev.map((c) =>
+        c.customer.workspace_id === workspaceId
+          ? {
+              ...c,
+              steps: c.steps.map((s) =>
+                s.id === stepId ? { ...s, details } : s
+              ),
+            }
+          : c
+      )
+    );
+    try {
+      await patchLifecycleStepDetails(stepId, details);
+    } catch {
+      setCards(prevCards);
+    }
+  }
+
   async function handleSetRenewalStage(workspaceId: string, stageLabel: string) {
     const prevCards = cards;
     const nextSteps = buildRenewalChecklist(stageLabel);
@@ -182,6 +213,9 @@ export function LiveBoard({ cards: initialCards, csms }: Props) {
         onToggleStep={handleToggleStep}
         onEditDueDate={(workspaceId, stepId, dueDate) =>
           void handleEditDueDate(workspaceId, stepId, dueDate)
+        }
+        onEditDetails={(workspaceId, stepId, details) =>
+          void handleEditDetails(workspaceId, stepId, details)
         }
         renderCardMeta={(c) => (
           <span className="text-xs text-subtle">

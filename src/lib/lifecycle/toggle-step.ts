@@ -37,3 +37,23 @@ export async function patchLifecycleStepDueDate(
     throw new Error(j.error ?? `HTTP ${r.status}`);
   }
 }
+
+/** Same shape again, patching `details` — the free-text notes field.
+ *  Only ever called for "playbook"-kind steps, same reasoning as
+ *  patchLifecycleStepDueDate above. */
+export async function patchLifecycleStepDetails(
+  stepId: string,
+  details: string | null
+): Promise<void> {
+  const r = await fetch("/api/personal-todos", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      ops: [{ type: "patch", todoId: stepId, patch: { details } }],
+    }),
+  });
+  if (!r.ok) {
+    const j = (await r.json().catch(() => ({}))) as { error?: string };
+    throw new Error(j.error ?? `HTTP ${r.status}`);
+  }
+}

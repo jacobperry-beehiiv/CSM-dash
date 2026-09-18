@@ -185,6 +185,7 @@ export function buildOnboardingCard(
       completed: Boolean(t.completed_at),
       due_date: t.due_date,
       stage: stepStages[t.source_meta?.playbook_step ?? ""] ?? null,
+      details: t.details,
     })),
   };
 }
