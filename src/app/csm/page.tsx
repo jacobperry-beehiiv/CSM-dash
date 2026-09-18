@@ -160,9 +160,6 @@ export default async function CsmPage({
     ...(requestsEnabled
       ? [{ id: "live-this-week" as const, label: "Live This Week" }]
       : []),
-    ...(lifecycleEnabled
-      ? [{ id: "lifecycle" as const, label: "Lifecycle", badge: "beta" }]
-      : []),
   ];
 
   try {
@@ -309,7 +306,9 @@ export default async function CsmPage({
             viewerEmail
           )
         );
-        boardBody = <OnboardingBoard cards={cards} stages={onboardingStages} />;
+        boardBody = (
+          <OnboardingBoard cards={cards} stages={onboardingStages} csms={csms} />
+        );
       } else {
         const liveCustomers = lifecycleBook.filter((c) => {
           const explicit = overrides[c.workspace_id]?.onboarding_lifecycle_stage
@@ -332,7 +331,7 @@ export default async function CsmPage({
             viewerEmail
           )
         );
-        boardBody = <LiveBoard cards={cards} />;
+        boardBody = <LiveBoard cards={cards} csms={csms} />;
       }
 
       body = (
