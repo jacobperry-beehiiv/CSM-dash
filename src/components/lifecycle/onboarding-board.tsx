@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { compareByRenewalDate, type LifecycleCard, type LifecycleStep } from "@/lib/lifecycle/card";
-import { toggleLifecycleStep } from "@/lib/lifecycle/toggle-step";
+import { toggleLifecycleStep, patchLifecycleStepDueDate } from "@/lib/lifecycle/toggle-step";
 import { useZendeskOverlay } from "@/lib/data/use-zendesk-overlay";
 import { KanbanColumns, UNSORTED } from "./kanban-columns";
 import { LifecycleCardModal } from "./lifecycle-card-modal";
@@ -171,6 +171,31 @@ export function OnboardingBoard({ cards: initialCards, stages, csms }: Props) {
     }
   }
 
+  async function handleEditDueDate(
+    workspaceId: string,
+    stepId: string,
+    dueDate: string | null
+  ) {
+    const prevCards = cards;
+    setCards((prev) =>
+      prev.map((c) =>
+        c.customer.workspace_id === workspaceId
+          ? {
+              ...c,
+              steps: c.steps.map((s) =>
+                s.id === stepId ? { ...s, due_date: dueDate } : s
+              ),
+            }
+          : c
+      )
+    );
+    try {
+      await patchLifecycleStepDueDate(stepId, dueDate);
+    } catch {
+      setCards(prevCards);
+    }
+  }
+
   return (
     <>
       <LifecycleFilterBar
@@ -189,6 +214,9 @@ export function OnboardingBoard({ cards: initialCards, stages, csms }: Props) {
         onCardClick={setOpenWorkspaceId}
         onToggleStep={(workspaceId, stepId) =>
           void handleToggleStep(workspaceId, stepId)
+        }
+        onEditDueDate={(workspaceId, stepId, dueDate) =>
+          void handleEditDueDate(workspaceId, stepId, dueDate)
         }
         renderEmptyChecklist={(c) =>
           c.editable ? (
