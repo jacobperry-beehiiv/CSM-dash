@@ -30,6 +30,12 @@ import {
 export interface PlaybookStepInfo {
   step_key: string;
   title: string;
+  /** The template's own body text — same field @bot assign copies
+   *  verbatim into a real todo's `details`. Carried here so a
+   *  manually-created one-off todo (see personal-todos-panel.tsx's
+   *  playbook-step picker) can pre-fill the same context text instead
+   *  of shipping with nothing. */
+  details: string;
   /** Which Normbot flow this step came from — default grouping only,
    *  not a constraint (see module doc comment). */
   playbook: "onboarding" | "live";
@@ -74,12 +80,14 @@ export const PLAYBOOK_STEPS: PlaybookStepInfo[] = [
   ...ONBOARDING_PLAYBOOK.map((t) => ({
     step_key: t.step_key,
     title: t.title,
+    details: t.details,
     playbook: "onboarding" as const,
     default_stage: KNOWN_DEFAULT_STAGES[t.step_key] ?? null,
   })),
   ...LIVE_PLAYBOOK.map((t) => ({
     step_key: t.step_key,
     title: t.title,
+    details: t.details,
     playbook: "live" as const,
     default_stage: KNOWN_DEFAULT_STAGES[t.step_key] ?? null,
   })),
