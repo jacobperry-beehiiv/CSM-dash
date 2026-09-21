@@ -230,19 +230,24 @@ export function CustomerTable({
   // else is toggleable via the "Columns ▾" dropdown above the table.
   const columns = useColumnVisibility("customer-book", VISIBILITY_COLUMNS);
 
-  // Gmail-direct "Last contacted" overlay. Batches one POST per page
-  // load using the active CSM's Gmail token. Results merge into
-  // lastContacted() per row via the new gmailDate option. Failure
-  // modes (no active Gmail, missing scope, network blip) are
-  // non-fatal — the column falls back to HubSpot values.
-  const ownerEmailList = useMemo(
+  // Gmail-direct "Last contacted" overlay. Each row routes through
+  // THAT row's assigned CSM's Gmail token — the viewer sees the
+  // owner-CSM's inbox activity, not their own. Rows without an
+  // assigned CSM email fall back to the viewer's active Gmail
+  // cookie via the endpoint's default. Failure modes (no active
+  // Gmail, missing scope, network blip) are non-fatal — the column
+  // falls back to HubSpot values.
+  const gmailTargets = useMemo(
     () =>
       initialCustomers
-        .map((c) => c.owner_email ?? "")
-        .filter((e): e is string => Boolean(e)),
+        .filter((c) => Boolean(c.owner_email))
+        .map((c) => ({
+          email: c.owner_email as string,
+          csmEmail: c.customer_success_manager_email ?? null,
+        })),
     [initialCustomers]
   );
-  const gmail = useGmailLastContact(ownerEmailList);
+  const gmail = useGmailLastContact(gmailTargets);
   const gmailDateFor = useCallback(
     (c: Customer): string | undefined => {
       const email = (c.owner_email ?? "").trim().toLowerCase();

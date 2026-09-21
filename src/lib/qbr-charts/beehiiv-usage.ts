@@ -32,6 +32,20 @@ export interface BeehiivUsageReport {
   /** Whole percent (rounded), 0-100. Derived so the client doesn't
    *  have to keep the formula in sync. */
   score: number;
+  /** Primary publication for header rendering. When the caller
+   *  passes a `publication_id`, that publication wins; otherwise
+   *  we pick the workspace's earliest-created publication with a
+   *  non-null logo (typically the flagship). Null when no
+   *  publication in the workspace has a logo set. */
+  publication: {
+    publication_id: string;
+    publication_name: string | null;
+    /** Bare filename as stored on `publications.logo`. Full URL
+     *  is constructed client-side via /api/qbr-charts/logo — we
+     *  proxy to sidestep the beehiiv CDN's missing CORS headers
+     *  so html-to-image can inline the image in exported PNGs. */
+    logo_filename: string;
+  } | null;
   fetched_at: string;
 }
 
@@ -69,11 +83,14 @@ type UsageRow = {
 };
 
 export async function computeBeehiivUsage(
-  workspaceId: string
+  workspaceId: string,
+  publicationId?: string | null
 ): Promise<BeehiivUsageReport> {
   if (!UUID_RE.test(workspaceId)) {
     throw new Error("workspace_id must be a UUID");
   }
+  const pubIdFilter =
+    publicationId && UUID_RE.test(publicationId) ? publicationId : null;
   const sql = `
     WITH pubs AS (
       SELECT id FROM publications WHERE organization_id = '${workspaceId}'::uuid
@@ -137,7 +154,34 @@ export async function computeBeehiivUsage(
         WHERE publication_id IN (SELECT id FROM pubs)
       ) AS slack_community
   `;
-  const rows = (await runNativeQuery(DB.POSTGRES, sql)) as UsageRow[];
+  // Primary publication pick — either the caller's explicit
+  // publication_id (from the QBR tab's PublicationPicker) or the
+  // workspace's earliest-created publication with a non-null logo.
+  // Runs in parallel with the usage EXISTS query so the round-trip
+  // count stays at 2 regardless of scoping.
+  const pubSql = pubIdFilter
+    ? `SELECT id::text AS publication_id, name AS publication_name, logo AS logo_filename
+         FROM publications
+        WHERE id = '${pubIdFilter}'::uuid
+          AND organization_id = '${workspaceId}'::uuid
+        LIMIT 1`
+    : `SELECT id::text AS publication_id, name AS publication_name, logo AS logo_filename
+         FROM publications
+        WHERE organization_id = '${workspaceId}'::uuid
+          AND logo IS NOT NULL
+          AND logo <> ''
+        ORDER BY created_at ASC
+        LIMIT 1`;
+  const [rows, pubRows] = await Promise.all([
+    runNativeQuery(DB.POSTGRES, sql) as Promise<UsageRow[]>,
+    runNativeQuery(DB.POSTGRES, pubSql) as Promise<
+      Array<{
+        publication_id: string;
+        publication_name: string | null;
+        logo_filename: string | null;
+      }>
+    >,
+  ]);
   const row = rows[0] ?? {
     settings_complete: false,
     welcome_email: false,
@@ -160,12 +204,22 @@ export async function computeBeehiivUsage(
   const active = features.filter((f) => f.active).length;
   const total = features.length;
   const score = total === 0 ? 0 : Math.round((active / total) * 100);
+  const pubRow = pubRows[0];
+  const publication =
+    pubRow && pubRow.logo_filename
+      ? {
+          publication_id: pubRow.publication_id,
+          publication_name: pubRow.publication_name,
+          logo_filename: pubRow.logo_filename,
+        }
+      : null;
   return {
     workspace_id: workspaceId,
     features,
     active,
     total,
     score,
+    publication,
     fetched_at: new Date().toISOString(),
   };
 }
