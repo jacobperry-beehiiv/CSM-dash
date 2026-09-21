@@ -6,6 +6,7 @@ import {
   toggleLifecycleStep,
   patchLifecycleStepDueDate,
   patchLifecycleStepDetails,
+  patchLifecycleStepTitle,
   addLifecycleStep,
 } from "@/lib/lifecycle/toggle-step";
 import { useZendeskOverlay } from "@/lib/data/use-zendesk-overlay";
@@ -238,6 +239,25 @@ export function OnboardingBoard({ cards: initialCards, stages, csms }: Props) {
     }
   }
 
+  async function handleEditTitle(workspaceId: string, stepId: string, title: string) {
+    const prevCards = cards;
+    setCards((prev) =>
+      prev.map((c) =>
+        c.customer.workspace_id === workspaceId
+          ? {
+              ...c,
+              steps: c.steps.map((s) => (s.id === stepId ? { ...s, title } : s)),
+            }
+          : c
+      )
+    );
+    try {
+      await patchLifecycleStepTitle(stepId, title);
+    } catch {
+      setCards(prevCards);
+    }
+  }
+
   /** On-card "+" (AddTodoModal, via StageTodoList) — same PersonalTodo
    *  shape personal-todos-panel.tsx's composer builds for a
    *  company+group pair, just sourced from the card's own customer
@@ -324,6 +344,9 @@ export function OnboardingBoard({ cards: initialCards, stages, csms }: Props) {
         }
         onEditDetails={(workspaceId, stepId, details) =>
           void handleEditDetails(workspaceId, stepId, details)
+        }
+        onEditTitle={(workspaceId, stepId, title) =>
+          void handleEditTitle(workspaceId, stepId, title)
         }
         onAddTodo={(workspaceId, group, fields) =>
           void handleAddTodo(workspaceId, group, fields)

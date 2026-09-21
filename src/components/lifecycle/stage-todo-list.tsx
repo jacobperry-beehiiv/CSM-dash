@@ -34,6 +34,13 @@ interface Props {
    *  marks a step that already has one. Omitted for the Renewal-stage
    *  checklist, whose items have no independent notes field. */
   onEditDetails?: (stepId: string, details: string | null) => void;
+  /** Present only for "playbook"-kind checklists — same scope as
+   *  onEditDueDate/onEditDetails. Lets NoteEditorModal's header become
+   *  an editable rename field instead of a static title — the on-card
+   *  checklist has no other way to rename a step. Omitted for the
+   *  Renewal-stage checklist, whose step ids are stage labels rather
+   *  than real todos. */
+  onEditTitle?: (stepId: string, title: string) => void;
   /** Title for the single flat group when steps carry no per-step
    *  `stage` label (e.g. "Renewal stage" vs the generic "To-dos"
    *  fallback). Ignored when steps do carry stage labels — those
@@ -80,6 +87,7 @@ export function StageTodoList({
   onToggle,
   onEditDueDate,
   onEditDetails,
+  onEditTitle,
   flatGroupTitle,
   onAddStep,
   companyName,
@@ -296,6 +304,9 @@ export function StageTodoList({
           initialValue={editingStep.details ?? ""}
           onSave={(details) => onEditDetails(editingStep.id, details)}
           onClose={() => setEditingDetailsId(null)}
+          onSaveTitle={
+            onEditTitle ? (title) => onEditTitle(editingStep.id, title) : undefined
+          }
         />
       ) : null}
       {addingToGroup && onAddStep ? (

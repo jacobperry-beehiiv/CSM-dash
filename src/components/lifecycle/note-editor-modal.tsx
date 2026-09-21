@@ -7,6 +7,15 @@ interface Props {
   initialValue: string;
   onSave: (details: string | null) => void;
   onClose: () => void;
+  /** When provided, the header becomes an editable text input instead
+   *  of a static heading, and Save also commits a changed title
+   *  through this callback (skipped if the title wasn't actually
+   *  changed, or was cleared to blank). Only wired up from the
+   *  Lifecycle board's checklist (stage-todo-list.tsx) — the main
+   *  "Your to-dos" panel already edits title inline in its own row,
+   *  so it leaves this unset and keeps the modal's header read-only
+   *  rather than offering a second, redundant way to rename a row. */
+  onSaveTitle?: (title: string) => void;
 }
 
 /**
@@ -26,12 +35,18 @@ export function NoteEditorModal({
   initialValue,
   onSave,
   onClose,
+  onSaveTitle,
 }: Props) {
   const [draft, setDraft] = useState(initialValue);
+  const [titleDraft, setTitleDraft] = useState(stepTitle);
 
   function handleSave() {
     const next = draft.trim();
     onSave(next || null);
+    if (onSaveTitle) {
+      const trimmedTitle = titleDraft.trim();
+      if (trimmedTitle && trimmedTitle !== stepTitle) onSaveTitle(trimmedTitle);
+    }
     onClose();
   }
 
@@ -45,9 +60,21 @@ export function NoteEditorModal({
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-start justify-between p-4 border-b border-border">
-          <h3 className="font-semibold text-fg text-sm min-w-0 break-words pr-2">
-            {stepTitle}
-          </h3>
+          {onSaveTitle ? (
+            <input
+              type="text"
+              value={titleDraft}
+              onChange={(e) => setTitleDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") onClose();
+              }}
+              className="font-semibold text-fg text-sm min-w-0 flex-1 bg-transparent outline-none focus:ring-2 focus:ring-accent rounded px-1 -mx-1 mr-2"
+            />
+          ) : (
+            <h3 className="font-semibold text-fg text-sm min-w-0 break-words pr-2">
+              {stepTitle}
+            </h3>
+          )}
           <button
             onClick={onClose}
             className="text-subtle hover:text-muted text-xl leading-none flex-shrink-0"

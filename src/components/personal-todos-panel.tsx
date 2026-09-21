@@ -152,6 +152,7 @@ export function PersonalTodosPanel({
 
   // Composer state
   const [draftTitle, setDraftTitle] = useState("");
+  const [draftDetails, setDraftDetails] = useState("");
   const [draftDueDate, setDraftDueDate] = useState("");
   const [draftSurfaceAt, setDraftSurfaceAt] = useState("");
   const [draftPriority, setDraftPriority] = useState<TodoPriority | "">("");
@@ -397,10 +398,12 @@ export function PersonalTodosPanel({
     const todo: PersonalTodo = {
       id: newTodoId(),
       title,
-      // No auto-generated text here — the title itself already
-      // carries the "{company} — " prefix (see maybeAutofillTitle),
-      // so there's nothing left for details to restate.
-      details: null,
+      // Whatever the CSM typed into the composer's own notes box, if
+      // anything — no auto-generated text here, since the title
+      // already carries the "{company} — " prefix (see
+      // maybeAutofillTitle) and has nothing left for details to
+      // restate.
+      details: draftDetails.trim() || null,
       due_date: draftDueDate || null,
       surface_at: draftSurfaceAt || null,
       priority: draftPriority || null,
@@ -419,6 +422,7 @@ export function PersonalTodosPanel({
     void sendOps([{ type: "add", todo }]);
     // Reset composer
     setDraftTitle("");
+    setDraftDetails("");
     setDraftDueDate("");
     setDraftSurfaceAt("");
     setDraftPriority("");
@@ -502,21 +506,28 @@ export function PersonalTodosPanel({
       ) : null}
 
       {/* Composer */}
-      <div className="px-5 py-3 bg-canvas/30 border-b border-border">
+      <div className="px-5 py-3 bg-canvas/30 border-b border-border space-y-2">
+        <input
+          type="text"
+          value={draftTitle}
+          onChange={(e) => setDraftTitle(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              addFromComposer();
+            }
+          }}
+          placeholder="What needs doing?"
+          className="w-full px-3 py-1.5 text-sm border border-border-strong rounded-md bg-surface text-fg"
+        />
+        <textarea
+          rows={2}
+          value={draftDetails}
+          onChange={(e) => setDraftDetails(e.target.value)}
+          placeholder="Add a note — blockers, context, links… (optional)"
+          className="w-full text-sm px-3 py-2 border border-border-strong rounded-md resize-y bg-surface text-fg focus:outline-none focus:ring-2 focus:ring-accent"
+        />
         <div className="flex flex-wrap items-center gap-2">
-          <input
-            type="text"
-            value={draftTitle}
-            onChange={(e) => setDraftTitle(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                e.preventDefault();
-                addFromComposer();
-              }
-            }}
-            placeholder="What needs doing?"
-            className="flex-1 min-w-[200px] px-3 py-1.5 text-sm border border-border-strong rounded-md bg-surface text-fg"
-          />
           <label className="text-xs text-muted flex items-center gap-1">
             Due
             <input
