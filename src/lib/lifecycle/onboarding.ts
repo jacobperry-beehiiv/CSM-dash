@@ -185,6 +185,7 @@ export function buildOnboardingCard(
       stage: resolveTodoStage(t, stepStages),
       details: t.details,
       completed_at: t.completed_at,
+      surface_at: t.surface_at,
     })),
   };
 }

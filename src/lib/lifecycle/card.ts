@@ -39,6 +39,15 @@ export interface LifecycleStep {
    *  steps — the Renewal-stage checklist has no independent details
    *  to carry. */
   details?: string | null;
+  /** ISO YYYY-MM-DD, mirroring PersonalTodo.surface_at — when set to a
+   *  future date, the step is "scheduled": stage-todo-list.tsx hides
+   *  it behind a per-group "Scheduled (N)" toggle instead of showing
+   *  it inline, same dormant-until-its-date treatment the main
+   *  "Your to-dos" panel already gives these (see isScheduledFor in
+   *  personal-todos/types.ts, reused directly by stage-todo-list.tsx
+   *  rather than re-implemented). Undefined for a "renewal_stage"
+   *  checklist — same scope as completed_at/details. */
+  surface_at?: string | null;
 }
 
 export interface LifecycleCard {

@@ -7,6 +7,7 @@ import { DoneCheckbox } from "../done-checkbox";
 import { NoteEditorModal } from "./note-editor-modal";
 import { AddTodoModal, type AddTodoFields } from "./add-todo-modal";
 import { CHECKLIST_GROUP_OPTIONS } from "@/lib/lifecycle/checklist-groups";
+import { isScheduledFor, todayYmdUtc } from "@/lib/personal-todos/types";
 import { fmtDate } from "../format";
 
 interface Props {
@@ -104,8 +105,17 @@ export function StageTodoList({
   const [expandedCompletedGroups, setExpandedCompletedGroups] = useState<
     Set<string>
   >(new Set());
+  // Same idea, for "Scheduled (N)" — a pending step whose surface_at
+  // is still in the future stays hidden per group until its date
+  // arrives or a CSM expands it here, mirroring the main "Your to-dos"
+  // panel's dormant-until-surfaced treatment (isScheduledFor).
+  const [expandedScheduledGroups, setExpandedScheduledGroups] = useState<
+    Set<string>
+  >(new Set());
 
   if (steps.length === 0) return null;
+
+  const today = todayYmdUtc();
 
   const editingStep = steps.find((s) => s.id === editingDetailsId) ?? null;
 
@@ -205,6 +215,18 @@ export function StageTodoList({
     });
   }
 
+  function toggleScheduledGroup(key: string) {
+    setExpandedScheduledGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.add(key);
+      }
+      return next;
+    });
+  }
+
   // Every stage with at least one matched to-do, in board order —
   // not just current-and-earlier. Falls back to array order for any
   // stage label that isn't in the board's configured list for some
@@ -237,12 +259,15 @@ export function StageTodoList({
         const doneCount = groupSteps.filter((s) => s.completed).length;
 
         const pending = groupSteps.filter((s) => !s.completed);
+        const scheduledPending = pending.filter((s) => isScheduledFor(s, today));
+        const visiblePending = pending.filter((s) => !isScheduledFor(s, today));
         const completedSorted = groupSteps
           .filter((s) => s.completed)
           .sort((a, b) => (b.completed_at ?? "").localeCompare(a.completed_at ?? ""));
         const recentCompleted = completedSorted.slice(0, RECENT_COMPLETED_LIMIT);
         const olderCompleted = completedSorted.slice(RECENT_COMPLETED_LIMIT);
         const groupExpanded = expandedCompletedGroups.has(key);
+        const scheduledExpanded = expandedScheduledGroups.has(key);
         // Only the 4 real checklist groups (Pre-kickoff/Post-kickoff/
         // Migration & warm-up/Live) are valid source_meta.checklist_group
         // values — Q1/Q2/Q3 are computed renewal-quarter buckets a real
@@ -279,9 +304,22 @@ export function StageTodoList({
             bodyClassName="p-2"
           >
             <ul className="space-y-2">
-              {pending.map(renderStep)}
+              {visiblePending.map(renderStep)}
               {recentCompleted.map(renderStep)}
             </ul>
+            {scheduledPending.length > 0 ? (
+              <button
+                type="button"
+                onClick={() => toggleScheduledGroup(key)}
+                className="mt-1.5 text-[10px] text-subtle hover:text-fg"
+              >
+                {scheduledExpanded ? "▾" : "▸"} Scheduled ({scheduledPending.length}) —
+                hidden until their date
+              </button>
+            ) : null}
+            {scheduledExpanded ? (
+              <ul className="space-y-2 mt-2">{scheduledPending.map(renderStep)}</ul>
+            ) : null}
             {olderCompleted.length > 0 ? (
               <button
                 type="button"

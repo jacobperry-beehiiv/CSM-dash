@@ -284,6 +284,7 @@ export function OnboardingBoard({ cards: initialCards, stages, csms }: Props) {
       stage: group,
       details: fields.details,
       completed_at: null,
+      surface_at: fields.surface_at,
     };
 
     const prevCards = cards;
