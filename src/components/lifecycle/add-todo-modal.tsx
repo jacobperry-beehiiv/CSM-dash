@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { createPortal } from "react-dom";
 import type { TodoPriority } from "@/lib/personal-todos/types";
 import { CHECKLIST_GROUP_OPTIONS } from "@/lib/lifecycle/checklist-groups";
 
@@ -61,7 +62,15 @@ export function AddTodoModal({ companyName, initialGroup, onAdd, onClose }: Prop
     onClose();
   }
 
-  return (
+  // Portal to document.body — same reasoning as note-editor-modal.tsx.
+  // This modal opens from inside StageTodoList, a descendant of the
+  // Onboarding board's own draggable card; a plain nested <div>
+  // doesn't escape the browser's native dragstart resolution walking
+  // up to that card as the drag source, and draggable={false} on the
+  // modal itself doesn't block that walk either (confirmed by
+  // testing). Rendering as a sibling of the card in the real DOM
+  // sidesteps the whole problem.
+  return createPortal(
     <div
       className="fixed inset-0 bg-black/40 z-30 flex items-center justify-center p-4"
       onClick={onClose}
@@ -192,6 +201,7 @@ export function AddTodoModal({ companyName, initialGroup, onAdd, onClose }: Prop
           </div>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
