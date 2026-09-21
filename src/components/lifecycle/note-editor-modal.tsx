@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { createPortal } from "react-dom";
 
 interface Props {
   stepTitle: string;
@@ -50,7 +51,21 @@ export function NoteEditorModal({
     onClose();
   }
 
-  return (
+  // Portal to document.body rather than rendering inline: this modal
+  // opens from inside StageTodoList, which lives inside the
+  // Onboarding board's own draggable card element. A plain nested
+  // <div> — even with draggable={false} set directly on it — doesn't
+  // escape that: confirmed by testing that the browser's native
+  // dragstart still resolves to the CARD as the drag source for a
+  // click-drag starting anywhere in the modal that isn't a <button>.
+  // draggable={false} only stops a walk THROUGH that element for an
+  // "auto" descendant with no explicit value of its own — it doesn't
+  // stop the browser continuing past an explicit false to find a
+  // draggable={true} ancestor further up. A portal sidesteps the
+  // whole problem: it's a sibling of the card in the real DOM, not a
+  // descendant, so there's no draggable ancestor to find in the first
+  // place.
+  return createPortal(
     <div
       className="fixed inset-0 bg-black/40 z-30 flex items-center justify-center p-4"
       onClick={onClose}
@@ -114,6 +129,7 @@ export function NoteEditorModal({
           </div>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
