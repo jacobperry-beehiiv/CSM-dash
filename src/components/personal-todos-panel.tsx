@@ -11,6 +11,7 @@ import {
 } from "@/lib/personal-todos/types";
 import { normalizeSlackText } from "@/lib/personal-todos/normalize-text";
 import { CHECKLIST_GROUP_OPTIONS } from "@/lib/lifecycle/checklist-groups";
+import { stageDisplayLabel } from "@/lib/lifecycle/stage-labels";
 import { DoneCheckbox } from "./done-checkbox";
 import { SybillSyncControl } from "./sybill-sync-control";
 import { TodoCelebration } from "./todo-celebration";
@@ -591,7 +592,7 @@ export function PersonalTodosPanel({
                   {CHECKLIST_GROUP_OPTIONS.filter((g) => g.section === "Onboarding").map(
                     (g) => (
                       <option key={g.value} value={g.value}>
-                        {g.value}
+                        {stageDisplayLabel(g.value)}
                       </option>
                     )
                   )}
@@ -599,7 +600,7 @@ export function PersonalTodosPanel({
                 <optgroup label="Live">
                   {CHECKLIST_GROUP_OPTIONS.filter((g) => g.section === "Live").map((g) => (
                     <option key={g.value} value={g.value}>
-                      {g.value}
+                      {stageDisplayLabel(g.value)}
                     </option>
                   ))}
                 </optgroup>

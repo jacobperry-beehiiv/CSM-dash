@@ -6,6 +6,7 @@ import { fmtCurrency } from "../format";
 import { StatusBadge } from "../status-badge";
 import { StageTodoList } from "./stage-todo-list";
 import type { AddTodoFields } from "./add-todo-modal";
+import { stageDisplayLabel } from "@/lib/lifecycle/stage-labels";
 
 /** Fixed catch-all column — never part of a board's configurable
  *  column list. Callers decide where it sits in `columns` (leftmost
@@ -167,7 +168,9 @@ export function KanbanColumns({
             } ${col === UNSORTED ? "border-dashed" : ""}`}
           >
             <div className="px-3 py-2 border-b border-border">
-              <div className="text-sm font-semibold text-fg">{col}</div>
+              <div className="text-sm font-semibold text-fg">
+                {stageDisplayLabel(col)}
+              </div>
               <div className="text-xs text-muted mt-0.5">
                 {isRenewalStageColumn ? (
                   <>

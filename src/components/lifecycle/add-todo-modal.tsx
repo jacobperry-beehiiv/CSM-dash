@@ -4,6 +4,7 @@ import { useState } from "react";
 import { createPortal } from "react-dom";
 import type { TodoPriority } from "@/lib/personal-todos/types";
 import { CHECKLIST_GROUP_OPTIONS } from "@/lib/lifecycle/checklist-groups";
+import { stageDisplayLabel } from "@/lib/lifecycle/stage-labels";
 
 export interface AddTodoFields {
   title: string;
@@ -157,7 +158,7 @@ export function AddTodoModal({ companyName, initialGroup, onAdd, onClose }: Prop
                   {CHECKLIST_GROUP_OPTIONS.filter((g) => g.section === "Onboarding").map(
                     (g) => (
                       <option key={g.value} value={g.value}>
-                        {g.value}
+                        {stageDisplayLabel(g.value)}
                       </option>
                     )
                   )}
@@ -165,7 +166,7 @@ export function AddTodoModal({ companyName, initialGroup, onAdd, onClose }: Prop
                 <optgroup label="Live">
                   {CHECKLIST_GROUP_OPTIONS.filter((g) => g.section === "Live").map((g) => (
                     <option key={g.value} value={g.value}>
-                      {g.value}
+                      {stageDisplayLabel(g.value)}
                     </option>
                   ))}
                 </optgroup>
