@@ -11,6 +11,7 @@
 const ADMIN_EMAILS: ReadonlySet<string> = new Set([
   "jacob.perry@beehiiv.com",
   "richard@beehiiv.com",
+  "chris.claiborne@beehiiv.com",
 ]);
 
 export function isAdmin(email: string | null | undefined): boolean {
