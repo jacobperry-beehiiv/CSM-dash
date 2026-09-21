@@ -6,8 +6,14 @@ import {
   toggleLifecycleStep,
   patchLifecycleStepDueDate,
   patchLifecycleStepDetails,
+  addLifecycleStep,
 } from "@/lib/lifecycle/toggle-step";
 import { useZendeskOverlay } from "@/lib/data/use-zendesk-overlay";
+import { useViewerEmail } from "@/lib/auth-client";
+import { hubspotCompanyUrl } from "@/lib/links";
+import { newTodoId } from "@/lib/personal-todos/types";
+import { normalizeSlackText } from "@/lib/personal-todos/normalize-text";
+import type { AddTodoFields } from "./add-todo-modal";
 import { KanbanColumns, UNSORTED } from "./kanban-columns";
 import { LifecycleCardModal } from "./lifecycle-card-modal";
 import { LifecycleFilterBar } from "./lifecycle-filter-bar";
@@ -62,6 +68,7 @@ export function OnboardingBoard({ cards: initialCards, stages, csms }: Props) {
   const [zendeskOn, setZendeskOn] = useState(false);
   const seeded = useRef(new Set<string>());
   const zendeskOverlay = useZendeskOverlay();
+  const viewerEmail = useViewerEmail();
 
   // useState(initialCards) only seeds state on first mount — switching
   // the CsmSelector calls router.refresh(), which re-runs the server
@@ -234,6 +241,69 @@ export function OnboardingBoard({ cards: initialCards, stages, csms }: Props) {
     }
   }
 
+  /** On-card "+" (AddTodoModal, via StageTodoList) — same PersonalTodo
+   *  shape personal-todos-panel.tsx's composer builds for a
+   *  company+group pair, just sourced from the card's own customer
+   *  instead of a picked-from-a-dropdown one. */
+  async function handleAddTodo(
+    workspaceId: string,
+    group: string,
+    fields: AddTodoFields
+  ) {
+    const card = cards.find((c) => c.customer.workspace_id === workspaceId);
+    if (!card?.customer.hubspot_company_id) return;
+    const title = normalizeSlackText(fields.title).trim();
+    if (!title) return;
+    const now = new Date().toISOString();
+    const companyName =
+      card.customer.company_name ?? card.customer.workspace_name ?? workspaceId;
+    const hubspotUrl = hubspotCompanyUrl(card.customer.hubspot_company_id);
+    const newStep: LifecycleStep = {
+      id: newTodoId(),
+      title,
+      completed: false,
+      due_date: fields.due_date,
+      stage: group,
+      details: `Manually added via the dashboard by ${
+        viewerEmail ?? "a teammate"
+      } for ${companyName}.${hubspotUrl ? `\nHubSpot: ${hubspotUrl}` : ""}`,
+      completed_at: null,
+    };
+
+    const prevCards = cards;
+    setCards((prev) =>
+      prev.map((c) =>
+        c.customer.workspace_id === workspaceId
+          ? {
+              ...c,
+              steps: [...c.steps, newStep],
+              totalCount: c.totalCount + 1,
+            }
+          : c
+      )
+    );
+    try {
+      await addLifecycleStep({
+        id: newStep.id,
+        title,
+        details: newStep.details ?? null,
+        due_date: fields.due_date,
+        surface_at: fields.surface_at,
+        priority: fields.priority,
+        source: "slack_assign",
+        source_meta: {
+          hubspot_company_id: card.customer.hubspot_company_id,
+          checklist_group: group,
+        },
+        completed_at: null,
+        created_at: now,
+        updated_at: now,
+      });
+    } catch {
+      setCards(prevCards);
+    }
+  }
+
   return (
     <>
       <LifecycleFilterBar
@@ -258,6 +328,9 @@ export function OnboardingBoard({ cards: initialCards, stages, csms }: Props) {
         }
         onEditDetails={(workspaceId, stepId, details) =>
           void handleEditDetails(workspaceId, stepId, details)
+        }
+        onAddTodo={(workspaceId, group, fields) =>
+          void handleAddTodo(workspaceId, group, fields)
         }
         renderEmptyChecklist={(c) =>
           c.editable ? (

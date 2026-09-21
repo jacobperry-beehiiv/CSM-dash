@@ -1,3 +1,5 @@
+import type { PersonalTodo } from "@/lib/personal-todos/types";
+
 /**
  * Shared write path for the on-card checklist (Onboarding + Live
  * boards) — the exact same call personal-todos-panel.tsx's sendOps
@@ -51,6 +53,24 @@ export async function patchLifecycleStepDetails(
     body: JSON.stringify({
       ops: [{ type: "patch", todoId: stepId, patch: { details } }],
     }),
+  });
+  if (!r.ok) {
+    const j = (await r.json().catch(() => ({}))) as { error?: string };
+    throw new Error(j.error ?? `HTTP ${r.status}`);
+  }
+}
+
+/** Adds a brand-new step via the on-card "+" (add-todo-modal.tsx) —
+ *  the same `add` op personal-todos-panel.tsx's composer already
+ *  sends, so a todo created from either place is the exact same
+ *  PersonalTodo shape. The caller builds the full object (id,
+ *  source_meta.checklist_group, etc.) since this module doesn't know
+ *  which customer/group it belongs to. */
+export async function addLifecycleStep(todo: PersonalTodo): Promise<void> {
+  const r = await fetch("/api/personal-todos", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ops: [{ type: "add", todo }] }),
   });
   if (!r.ok) {
     const j = (await r.json().catch(() => ({}))) as { error?: string };

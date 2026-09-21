@@ -5,6 +5,8 @@ import type { LifecycleStep } from "@/lib/lifecycle/card";
 import { CollapsibleSection } from "../collapsible-section";
 import { DoneCheckbox } from "../done-checkbox";
 import { NoteEditorModal } from "./note-editor-modal";
+import { AddTodoModal, type AddTodoFields } from "./add-todo-modal";
+import { CHECKLIST_GROUP_OPTIONS } from "@/lib/lifecycle/checklist-groups";
 import { fmtDate } from "../format";
 
 interface Props {
@@ -37,6 +39,16 @@ interface Props {
    *  fallback). Ignored when steps do carry stage labels — those
    *  always use the stage name itself as each group's title. */
   flatGroupTitle?: string;
+  /** Present only for "playbook"-kind checklists — same scope as
+   *  onEditDueDate/onEditDetails. Renders a small "+" in each stage
+   *  group's header that opens AddTodoModal, pre-selecting that
+   *  group. Omitted for the Renewal-stage checklist (no real
+   *  checklist_group to attach a new item to) and for a card with no
+   *  known HubSpot company id (nothing for a new todo to match on). */
+  onAddStep?: (group: string, fields: AddTodoFields) => void;
+  /** Customer name shown in AddTodoModal's header ("New to-do for
+   *  {companyName}"). Required whenever onAddStep is provided. */
+  companyName?: string;
 }
 
 /** Above-the-fold cap on completed items per stage group — a
@@ -69,10 +81,13 @@ export function StageTodoList({
   onEditDueDate,
   onEditDetails,
   flatGroupTitle,
+  onAddStep,
+  companyName,
 }: Props) {
   const [editingDetailsId, setEditingDetailsId] = useState<string | null>(
     null
   );
+  const [addingToGroup, setAddingToGroup] = useState<string | null>(null);
   // Which stage groups have "Show N more completed" expanded — keyed
   // by stage name (stable across a currentStage change, unlike
   // CollapsibleSection's own remount-on-stage-change key below), so
@@ -220,14 +235,36 @@ export function StageTodoList({
         const recentCompleted = completedSorted.slice(0, RECENT_COMPLETED_LIMIT);
         const olderCompleted = completedSorted.slice(RECENT_COMPLETED_LIMIT);
         const groupExpanded = expandedCompletedGroups.has(key);
+        // Only the 4 real checklist groups (Pre-kickoff/Post-kickoff/
+        // Migration & warm-up/Live) are valid source_meta.checklist_group
+        // values — Q1/Q2/Q3 are computed renewal-quarter buckets a real
+        // playbook step's due date lands in, not something a one-off
+        // manual todo can be tagged with (see live-quarter.ts's own
+        // comment on LIVE_ONGOING_GROUP). Showing "+" there would let a
+        // CSM "add" a todo to a group AddTodoModal's picker doesn't
+        // even offer.
+        const isAssignableGroup = CHECKLIST_GROUP_OPTIONS.some((g) => g.value === key);
 
         return (
           <CollapsibleSection
             key={`${key}::${currentStage}`}
             title={key || flatGroupTitle || "To-dos"}
             trailing={
-              <span className="text-[10px] text-subtle whitespace-nowrap">
-                {doneCount}/{groupSteps.length}
+              <span className="flex items-center gap-1.5">
+                {onAddStep && editable && isAssignableGroup ? (
+                  <button
+                    type="button"
+                    onClick={() => setAddingToGroup(key)}
+                    title={`Add a to-do to ${key}`}
+                    aria-label={`Add a to-do to ${key}`}
+                    className="text-subtle hover:text-fg leading-none w-4 h-4 flex items-center justify-center rounded hover:bg-canvas text-sm"
+                  >
+                    +
+                  </button>
+                ) : null}
+                <span className="text-[10px] text-subtle whitespace-nowrap">
+                  {doneCount}/{groupSteps.length}
+                </span>
               </span>
             }
             defaultOpen={isCurrent}
@@ -259,6 +296,14 @@ export function StageTodoList({
           initialValue={editingStep.details ?? ""}
           onSave={(details) => onEditDetails(editingStep.id, details)}
           onClose={() => setEditingDetailsId(null)}
+        />
+      ) : null}
+      {addingToGroup && onAddStep ? (
+        <AddTodoModal
+          companyName={companyName ?? "this customer"}
+          initialGroup={addingToGroup}
+          onAdd={(fields) => onAddStep(addingToGroup, fields)}
+          onClose={() => setAddingToGroup(null)}
         />
       ) : null}
     </div>

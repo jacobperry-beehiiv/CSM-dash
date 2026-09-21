@@ -5,6 +5,7 @@ import type { LifecycleCard } from "@/lib/lifecycle/card";
 import { fmtCurrency } from "../format";
 import { StatusBadge } from "../status-badge";
 import { StageTodoList } from "./stage-todo-list";
+import type { AddTodoFields } from "./add-todo-modal";
 
 /** Fixed catch-all column — never part of a board's configurable
  *  column list. Callers decide where it sits in `columns` (leftmost
@@ -47,6 +48,13 @@ interface Props {
     stepId: string,
     details: string | null
   ) => void;
+  /** Present only on boards whose cards carry a checklist a CSM can
+   *  add one-off items to (Onboarding, Live) — same scope as
+   *  onEditDueDate/onEditDetails. Never called for a Renewal-stage
+   *  card (gated per-card below, alongside those two) or a card with
+   *  no known HubSpot company id (nothing for a new todo to match
+   *  on). */
+  onAddTodo?: (workspaceId: string, group: string, fields: AddTodoFields) => void;
   /** Replaces the default status-badge row on each card when
    *  provided (e.g. Live board swaps it for the renewal date, since
    *  "Live"/"Onboarding" is redundant with which board you're already
@@ -86,6 +94,7 @@ export function KanbanColumns({
   onToggleStep,
   onEditDueDate,
   onEditDetails,
+  onAddTodo,
   renderCardMeta,
   renderEmptyChecklist,
 }: Props) {
@@ -247,6 +256,17 @@ export function KanbanColumns({
                             c.checklist_kind === "renewal_stage"
                               ? "Renewal stage"
                               : undefined
+                          }
+                          companyName={
+                            c.customer.company_name ?? c.customer.workspace_name ?? undefined
+                          }
+                          onAddStep={
+                            c.checklist_kind === "renewal_stage" ||
+                            !onAddTodo ||
+                            !c.customer.hubspot_company_id
+                              ? undefined
+                              : (group, fields) =>
+                                  onAddTodo(c.customer.workspace_id, group, fields)
                           }
                         />
                       )
