@@ -5,6 +5,8 @@ import type { LifecycleCard } from "@/lib/lifecycle/card";
 import { fmtCurrency } from "../format";
 import { StatusBadge } from "../status-badge";
 import { StageTodoList } from "./stage-todo-list";
+import type { AddTodoFields } from "./add-todo-modal";
+import { stageDisplayLabel } from "@/lib/lifecycle/stage-labels";
 
 /** Fixed catch-all column — never part of a board's configurable
  *  column list. Callers decide where it sits in `columns` (leftmost
@@ -30,11 +32,54 @@ interface Props {
    *  (Onboarding, Live). Renewal cards never have steps, so this is
    *  never called there. */
   onToggleStep?: (workspaceId: string, stepId: string) => void;
+  /** Present only on boards whose checklist steps have a real,
+   *  editable due date (playbook-kind — Onboarding, Live's Q1/Q2/Q3).
+   *  Never called for a Renewal-stage card — see the per-card gate
+   *  in this component's own render. */
+  onEditDueDate?: (
+    workspaceId: string,
+    stepId: string,
+    dueDate: string | null
+  ) => void;
+  /** Present only on boards whose checklist steps carry editable
+   *  free-text notes (playbook-kind — same scope as onEditDueDate).
+   *  Never called for a Renewal-stage card. */
+  onEditDetails?: (
+    workspaceId: string,
+    stepId: string,
+    details: string | null
+  ) => void;
+  /** Present only on boards whose checklist steps can be renamed from
+   *  NoteEditorModal's own editable header — same scope as
+   *  onEditDueDate/onEditDetails. Never called for a Renewal-stage
+   *  card, whose step ids are stage labels rather than real todos. */
+  onEditTitle?: (workspaceId: string, stepId: string, title: string) => void;
+  /** Present only on boards whose cards carry a checklist a CSM can
+   *  add one-off items to (Onboarding, Live) — same scope as
+   *  onEditDueDate/onEditDetails. Never called for a Renewal-stage
+   *  card (gated per-card below, alongside those two) or a card with
+   *  no known HubSpot company id (nothing for a new todo to match
+   *  on). */
+  onAddTodo?: (workspaceId: string, group: string, fields: AddTodoFields) => void;
+  /** Stage keys that should always render their own checklist group,
+   *  even with zero matched steps — see StageTodoList's own doc
+   *  comment. Board-wide (like stageOrder), but gated off per-card
+   *  for a Renewal-stage card below, same as onAddTodo. Only the Live
+   *  board passes this (LIVE_ONGOING_GROUP) — Onboarding's groups
+   *  always have real playbook steps already. */
+  alwaysShowGroups?: string[];
   /** Replaces the default status-badge row on each card when
    *  provided (e.g. Live board swaps it for the renewal date, since
    *  "Live"/"Onboarding" is redundant with which board you're already
    *  looking at). Falls back to the plain status badge when omitted. */
   renderCardMeta?: (card: LifecycleCard) => React.ReactNode;
+  /** Renders in place of the checklist for a card with zero matched
+   *  steps (StageTodoList itself renders nothing in that case). Only
+   *  the Onboarding board supplies this today — see
+   *  backfill-onboarding-button.tsx — since an empty Live-board
+   *  checklist doesn't have an equivalent recovery action. Omitted
+   *  entirely on boards where an empty checklist is unremarkable. */
+  renderEmptyChecklist?: (card: LifecycleCard) => React.ReactNode;
 }
 
 /**
@@ -60,7 +105,13 @@ export function KanbanColumns({
   onDrop,
   onCardClick,
   onToggleStep,
+  onEditDueDate,
+  onEditDetails,
+  onEditTitle,
+  onAddTodo,
+  alwaysShowGroups,
   renderCardMeta,
+  renderEmptyChecklist,
 }: Props) {
   const [dragOverColumn, setDragOverColumn] = useState<string | null>(null);
 
@@ -117,7 +168,9 @@ export function KanbanColumns({
             } ${col === UNSORTED ? "border-dashed" : ""}`}
           >
             <div className="px-3 py-2 border-b border-border">
-              <div className="text-sm font-semibold text-fg">{col}</div>
+              <div className="text-sm font-semibold text-fg">
+                {stageDisplayLabel(col)}
+              </div>
               <div className="text-xs text-muted mt-0.5">
                 {isRenewalStageColumn ? (
                   <>
@@ -185,19 +238,112 @@ export function KanbanColumns({
                       )}
                     </div>
                     {onToggleStep ? (
+                      c.steps.length === 0 && renderEmptyChecklist ? (
+                        renderEmptyChecklist(c)
+                      ) : (
+                        <StageTodoList
+                          steps={c.steps}
+                          stageOrder={stageOrder ?? []}
+                          currentStage={c.stage ?? c.suggested_stage ?? null}
+                          editable={c.editable}
+                          onToggle={(stepId) =>
+                            onToggleStep(c.customer.workspace_id, stepId)
+                          }
+                          onEditDueDate={
+                            c.checklist_kind === "renewal_stage" || !onEditDueDate
+                              ? undefined
+                              : (stepId, dueDate) =>
+                                  onEditDueDate(
+                                    c.customer.workspace_id,
+                                    stepId,
+                                    dueDate
+                                  )
+                          }
+                          onEditDetails={
+                            c.checklist_kind === "renewal_stage" || !onEditDetails
+                              ? undefined
+                              : (stepId, details) =>
+                                  onEditDetails(
+                                    c.customer.workspace_id,
+                                    stepId,
+                                    details
+                                  )
+                          }
+                          onEditTitle={
+                            c.checklist_kind === "renewal_stage" || !onEditTitle
+                              ? undefined
+                              : (stepId, title) =>
+                                  onEditTitle(c.customer.workspace_id, stepId, title)
+                          }
+                          flatGroupTitle={
+                            c.checklist_kind === "renewal_stage"
+                              ? "Renewal stage"
+                              : undefined
+                          }
+                          companyName={
+                            c.customer.company_name ?? c.customer.workspace_name ?? undefined
+                          }
+                          onAddStep={
+                            c.checklist_kind === "renewal_stage" ||
+                            !onAddTodo ||
+                            !c.customer.hubspot_company_id
+                              ? undefined
+                              : (group, fields) =>
+                                  onAddTodo(c.customer.workspace_id, group, fields)
+                          }
+                          alwaysShowGroups={
+                            c.checklist_kind === "renewal_stage"
+                              ? undefined
+                              : alwaysShowGroups
+                          }
+                        />
+                      )
+                    ) : null}
+                    {/* Renewal-stage cards get a second, independent
+                        checklist beneath the fixed 5-item one — the
+                        same "Live" ongoing group a Q1/Q2/Q3/Q4 card
+                        shows, reusing alwaysShowGroups (already board-
+                        scoped to just that group) so it still renders
+                        at 0/0 with a "+" to create the first one. */}
+                    {onToggleStep &&
+                    c.checklist_kind === "renewal_stage" &&
+                    alwaysShowGroups?.length ? (
                       <StageTodoList
-                        steps={c.steps}
-                        stageOrder={stageOrder ?? []}
-                        currentStage={c.stage ?? c.suggested_stage ?? null}
+                        steps={c.liveOngoingSteps ?? []}
+                        stageOrder={alwaysShowGroups}
+                        currentStage={alwaysShowGroups[0]}
                         editable={c.editable}
                         onToggle={(stepId) =>
                           onToggleStep(c.customer.workspace_id, stepId)
                         }
-                        flatGroupTitle={
-                          c.checklist_kind === "renewal_stage"
-                            ? "Renewal stage"
-                            : undefined
+                        onEditDueDate={
+                          !onEditDueDate
+                            ? undefined
+                            : (stepId, dueDate) =>
+                                onEditDueDate(c.customer.workspace_id, stepId, dueDate)
                         }
+                        onEditDetails={
+                          !onEditDetails
+                            ? undefined
+                            : (stepId, details) =>
+                                onEditDetails(c.customer.workspace_id, stepId, details)
+                        }
+                        onEditTitle={
+                          !onEditTitle
+                            ? undefined
+                            : (stepId, title) =>
+                                onEditTitle(c.customer.workspace_id, stepId, title)
+                        }
+                        companyName={
+                          c.customer.company_name ?? c.customer.workspace_name ?? undefined
+                        }
+                        onAddStep={
+                          !onAddTodo || !c.customer.hubspot_company_id
+                            ? undefined
+                            : (group, fields) =>
+                                onAddTodo(c.customer.workspace_id, group, fields)
+                        }
+                        alwaysShowGroups={alwaysShowGroups}
                       />
                     ) : null}
                   </div>

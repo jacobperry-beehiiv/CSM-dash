@@ -10,10 +10,13 @@ import {
   type TodoSource,
 } from "@/lib/personal-todos/types";
 import { normalizeSlackText } from "@/lib/personal-todos/normalize-text";
+import { CHECKLIST_GROUP_OPTIONS } from "@/lib/lifecycle/checklist-groups";
+import { stageDisplayLabel } from "@/lib/lifecycle/stage-labels";
 import { DoneCheckbox } from "./done-checkbox";
 import { SybillSyncControl } from "./sybill-sync-control";
 import { TodoCelebration } from "./todo-celebration";
 import { TodoActionButton } from "./todo-action-button";
+import { NoteEditorModal } from "./lifecycle/note-editor-modal";
 import type {
   AutomatedSource,
   TodoSourceConfig,
@@ -71,6 +74,7 @@ const SOURCE_LABEL: Record<TodoSource, { icon: string; label: string }> = {
   sybill_callrecap: { icon: "📞", label: "Sybill" },
   renewal_milestone: { icon: "🔁", label: "Renewal milestone" },
   renewal_confirmed: { icon: "✅", label: "Renewal confirmed" },
+  live_quarter_checkin: { icon: "📅", label: "90-day check-in" },
 };
 
 /** Replace bare URLs with anchors so links pasted into details are
@@ -100,16 +104,33 @@ function renderDetails(value: string | null): React.ReactNode {
  *  as the CSM's personal list. New feature-flag-gated slots (like
  *  the Sybill sync affordance) are opt-in, computed server-side in
  *  page.tsx and passed down as booleans. */
+/** One entry per customer in the viewer's book that has a HubSpot
+ *  company id — the join key the Lifecycle board's checklist matching
+ *  requires (matchPlaybookTodos), so anything without one couldn't
+ *  ever show up there and isn't worth offering in the picker. */
+export interface PlaybookCompanyOption {
+  workspace_id: string;
+  hubspot_company_id: string;
+  name: string;
+}
+
 interface PersonalTodosPanelProps {
   /** True when the viewer has the `sybill-ingest` feature flag on —
    *  renders the SybillSyncControl inline above the composer so
    *  syncing recap action items lives with the todos it creates,
    *  not in a separate settings page. */
   sybillIngestEnabled?: boolean;
+  /** Feeds the composer's "Company" + "Playbook step" pickers — see
+   *  addFromComposer for what selecting both actually does. Computed
+   *  server-side in page.tsx from the viewer's own book, same as
+   *  sybillIngestEnabled. Empty array (not undefined) when the viewer
+   *  has no book — the pickers just render with nothing to choose. */
+  playbookCompanies?: PlaybookCompanyOption[];
 }
 
 export function PersonalTodosPanel({
   sybillIngestEnabled = false,
+  playbookCompanies = [],
 }: PersonalTodosPanelProps = {}) {
   const [todos, setTodos] = useState<PersonalTodo[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -117,6 +138,13 @@ export function PersonalTodosPanel({
   const [saving, setSaving] = useState(false);
   const [showCompleted, setShowCompleted] = useState(false);
   const [showScheduled, setShowScheduled] = useState(false);
+  // Which row's note editor is open — a single modal at the panel
+  // level (not one per row), same shell as the Lifecycle board's
+  // NoteEditorModal, so notes work identically in both places. Stores
+  // just the id, not the todo itself, so the modal always shows the
+  // latest local state even if a background poll refreshes `todos`
+  // while it's open.
+  const [editingNotesId, setEditingNotesId] = useState<string | null>(null);
   // Automated-todo action registry — loaded once on mount. Sparse map
   // (only sources with a customized entry appear); TodoActionButton
   // reads out per-todo whether an outreach template is bound.
@@ -126,9 +154,18 @@ export function PersonalTodosPanel({
 
   // Composer state
   const [draftTitle, setDraftTitle] = useState("");
+  const [draftDetails, setDraftDetails] = useState("");
   const [draftDueDate, setDraftDueDate] = useState("");
   const [draftSurfaceAt, setDraftSurfaceAt] = useState("");
   const [draftPriority, setDraftPriority] = useState<TodoPriority | "">("");
+  // Optional — only when BOTH are picked does the new todo get tagged
+  // (source: "slack_assign" + source_meta.checklist_group), so it
+  // shows up directly under that grouping on the customer's Lifecycle
+  // board card. Either alone is silently ignored — a checklist group
+  // with no company (or vice versa) has nothing to attach to. See
+  // addFromComposer.
+  const [draftWorkspaceId, setDraftWorkspaceId] = useState("");
+  const [draftChecklistGroup, setDraftChecklistGroup] = useState("");
 
   // Pending text patches (same coalescer as team-tasks)
   const pendingPatchesRef = useRef<Map<string, Partial<PersonalTodo>>>(
@@ -312,6 +349,34 @@ export function PersonalTodosPanel({
     void sendOps([{ type: "delete", todoId }]);
   }
 
+  /** Sent immediately via sendOps rather than the debounced patchTodo
+   *  coalescer — the note editor has an explicit Save button (not
+   *  save-on-blur), so there's no rapid-keystroke stream to batch. */
+  function saveDetails(todoId: string, details: string | null) {
+    if (!todos) return;
+    setTodos(
+      todos.map((t) =>
+        t.id === todoId
+          ? { ...t, details, updated_at: new Date().toISOString() }
+          : t
+      )
+    );
+    void sendOps([{ type: "patch", todoId, patch: { details } }]);
+  }
+
+  /** Auto-fills the title with a "{company} — " prefix as soon as a
+   *  company is picked, so the CSM just has to fill in what comes
+   *  after — but only while the title is still blank, so it never
+   *  clobbers something already typed. Doesn't wait on the checklist
+   *  group too — unlike a playbook step, a group has no title text of
+   *  its own to append. */
+  function maybeAutofillTitle(workspaceId: string) {
+    if (draftTitle.trim()) return;
+    if (!workspaceId) return;
+    const company = playbookCompanies.find((c) => c.workspace_id === workspaceId);
+    if (company) setDraftTitle(`${company.name} — `);
+  }
+
   function addFromComposer() {
     // Normalize Slack-pasted text on submit so a copy/pasted message
     // body lands as readable plain text. "<@U123> ping <https://x|here>"
@@ -320,15 +385,37 @@ export function PersonalTodosPanel({
     const title = normalizeSlackText(draftTitle).trim();
     if (!title) return;
     const now = new Date().toISOString();
+
+    const selectedCompany = draftWorkspaceId
+      ? playbookCompanies.find((c) => c.workspace_id === draftWorkspaceId)
+      : undefined;
+    // Only tag it when BOTH are picked — a checklist group with no
+    // company (or vice versa) has nothing to attach to, so it falls
+    // through to today's plain manual/scheduled todo.
+    const playbook =
+      selectedCompany && draftChecklistGroup
+        ? { company: selectedCompany, group: draftChecklistGroup }
+        : null;
+
     const todo: PersonalTodo = {
       id: newTodoId(),
       title,
-      details: null,
+      // Whatever the CSM typed into the composer's own notes box, if
+      // anything — no auto-generated text here, since the title
+      // already carries the "{company} — " prefix (see
+      // maybeAutofillTitle) and has nothing left for details to
+      // restate.
+      details: draftDetails.trim() || null,
       due_date: draftDueDate || null,
       surface_at: draftSurfaceAt || null,
       priority: draftPriority || null,
-      source: draftSurfaceAt ? "scheduled" : "manual",
-      source_meta: null,
+      source: playbook ? "slack_assign" : draftSurfaceAt ? "scheduled" : "manual",
+      source_meta: playbook
+        ? {
+            hubspot_company_id: playbook.company.hubspot_company_id,
+            checklist_group: playbook.group,
+          }
+        : null,
       completed_at: null,
       created_at: now,
       updated_at: now,
@@ -337,9 +424,12 @@ export function PersonalTodosPanel({
     void sendOps([{ type: "add", todo }]);
     // Reset composer
     setDraftTitle("");
+    setDraftDetails("");
     setDraftDueDate("");
     setDraftSurfaceAt("");
     setDraftPriority("");
+    setDraftWorkspaceId("");
+    setDraftChecklistGroup("");
   }
 
   const today = todayYmdUtc();
@@ -418,21 +508,28 @@ export function PersonalTodosPanel({
       ) : null}
 
       {/* Composer */}
-      <div className="px-5 py-3 bg-canvas/30 border-b border-border">
+      <div className="px-5 py-3 bg-canvas/30 border-b border-border space-y-2">
+        <input
+          type="text"
+          value={draftTitle}
+          onChange={(e) => setDraftTitle(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              addFromComposer();
+            }
+          }}
+          placeholder="What needs doing?"
+          className="w-full px-3 py-1.5 text-sm border border-border-strong rounded-md bg-surface text-fg"
+        />
+        <textarea
+          rows={2}
+          value={draftDetails}
+          onChange={(e) => setDraftDetails(e.target.value)}
+          placeholder="Add a note — blockers, context, links… (optional)"
+          className="w-full text-sm px-3 py-2 border border-border-strong rounded-md resize-y bg-surface text-fg focus:outline-none focus:ring-2 focus:ring-accent"
+        />
         <div className="flex flex-wrap items-center gap-2">
-          <input
-            type="text"
-            value={draftTitle}
-            onChange={(e) => setDraftTitle(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                e.preventDefault();
-                addFromComposer();
-              }
-            }}
-            placeholder="What needs doing?"
-            className="flex-1 min-w-[200px] px-3 py-1.5 text-sm border border-border-strong rounded-md bg-surface text-fg"
-          />
           <label className="text-xs text-muted flex items-center gap-1">
             Due
             <input
@@ -466,6 +563,50 @@ export function PersonalTodosPanel({
             <option value="medium">Medium</option>
             <option value="low">Low</option>
           </select>
+          {playbookCompanies.length > 0 ? (
+            <>
+              <select
+                value={draftWorkspaceId}
+                onChange={(e) => {
+                  setDraftWorkspaceId(e.target.value);
+                  maybeAutofillTitle(e.target.value);
+                }}
+                title="Pick a company + checklist group together to attach this to that customer's Lifecycle board card."
+                className="px-2 py-1 text-xs border border-border-strong rounded-md bg-surface text-fg max-w-[160px]"
+              >
+                <option value="">No company</option>
+                {playbookCompanies.map((c) => (
+                  <option key={c.workspace_id} value={c.workspace_id}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
+              <select
+                value={draftChecklistGroup}
+                onChange={(e) => setDraftChecklistGroup(e.target.value)}
+                title="Pick a company + checklist group together to attach this to that customer's Lifecycle board card."
+                className="px-2 py-1 text-xs border border-border-strong rounded-md bg-surface text-fg max-w-[160px]"
+              >
+                <option value="">No checklist group</option>
+                <optgroup label="Onboarding">
+                  {CHECKLIST_GROUP_OPTIONS.filter((g) => g.section === "Onboarding").map(
+                    (g) => (
+                      <option key={g.value} value={g.value}>
+                        {stageDisplayLabel(g.value)}
+                      </option>
+                    )
+                  )}
+                </optgroup>
+                <optgroup label="Live">
+                  {CHECKLIST_GROUP_OPTIONS.filter((g) => g.section === "Live").map((g) => (
+                    <option key={g.value} value={g.value}>
+                      {stageDisplayLabel(g.value)}
+                    </option>
+                  ))}
+                </optgroup>
+              </select>
+            </>
+          ) : null}
           <button
             type="button"
             onClick={addFromComposer}
@@ -493,6 +634,7 @@ export function PersonalTodosPanel({
               onToggle={() => toggleComplete(t.id)}
               onPatch={(patch) => patchTodo(t.id, patch)}
               onDelete={() => deleteTodo(t.id)}
+              onOpenNotes={() => setEditingNotesId(t.id)}
               sourceConfigs={sourceConfigs}
             />
           ))
@@ -518,6 +660,7 @@ export function PersonalTodosPanel({
                   onToggle={() => toggleComplete(t.id)}
                   onPatch={(patch) => patchTodo(t.id, patch)}
                   onDelete={() => deleteTodo(t.id)}
+                  onOpenNotes={() => setEditingNotesId(t.id)}
                   sourceConfigs={sourceConfigs}
                   dim
                 />
@@ -544,12 +687,28 @@ export function PersonalTodosPanel({
                   onToggle={() => toggleComplete(t.id)}
                   onPatch={(patch) => patchTodo(t.id, patch)}
                   onDelete={() => deleteTodo(t.id)}
+                  onOpenNotes={() => setEditingNotesId(t.id)}
                   sourceConfigs={sourceConfigs}
                   dim
                 />
               ))
             : null}
         </div>
+      ) : null}
+
+      {editingNotesId ? (
+        (() => {
+          const editing = todos?.find((t) => t.id === editingNotesId);
+          if (!editing) return null;
+          return (
+            <NoteEditorModal
+              stepTitle={editing.title}
+              initialValue={editing.details ?? ""}
+              onSave={(details) => saveDetails(editing.id, details)}
+              onClose={() => setEditingNotesId(null)}
+            />
+          );
+        })()
       ) : null}
     </section>
   );
@@ -560,6 +719,11 @@ interface RowProps {
   onToggle: () => void;
   onPatch: (patch: Partial<PersonalTodo>) => void;
   onDelete: () => void;
+  /** Opens the shared NoteEditorModal (rendered once at the panel
+   *  level) for this row — same modal + Save/Cancel workflow the
+   *  Lifecycle board's checklist items already use, so notes work
+   *  identically in both places. */
+  onOpenNotes: () => void;
   /** Automated-todo action registry loaded by the parent. Passed to
    *  TodoActionButton to decide whether a "Draft outreach" button
    *  renders for this todo. */
@@ -574,6 +738,7 @@ function TodoRow({
   onToggle,
   onPatch,
   onDelete,
+  onOpenNotes,
   sourceConfigs,
   dim,
 }: RowProps) {
@@ -711,9 +876,22 @@ function TodoRow({
             <span>Slack reminders</span>
           </label>
         </div>
-        {todo.details ? (
-          <div className="mt-1 text-xs text-muted">{renderDetails(todo.details)}</div>
-        ) : null}
+        <div className="mt-1 flex items-start gap-1.5">
+          <button
+            type="button"
+            onClick={onOpenNotes}
+            title={todo.details ? `Note: ${todo.details}` : "Add a note"}
+            aria-label={todo.details ? "Edit note" : "Add a note"}
+            className={`text-[13px] leading-none flex-shrink-0 ${
+              todo.details ? "" : "opacity-30 hover:opacity-70"
+            }`}
+          >
+            📝
+          </button>
+          {todo.details ? (
+            <div className="text-xs text-muted min-w-0">{renderDetails(todo.details)}</div>
+          ) : null}
+        </div>
       </div>
       <button
         type="button"
