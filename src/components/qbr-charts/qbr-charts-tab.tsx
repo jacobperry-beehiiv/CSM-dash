@@ -383,8 +383,11 @@ export function QbrChartsTab({
       // Snapshot the beehiiv Usage card as capture #1 from its live
       // mount — no offscreen re-render needed because the card's
       // already at 960px on the tab, and it's a static table so no
-      // animation to freeze.
+      // animation to freeze. Wait one settle tick first so the
+      // proxied publication logo has time to finish decoding into
+      // the DOM before html-to-image walks it.
       if (includeUsage && usageCardRef.current) {
+        await waitForCardReady();
         const dataUrl = await snapshotElement(usageCardRef.current);
         captures.push({
           filename: "000-beehiiv-usage",
@@ -602,7 +605,11 @@ export function QbrChartsTab({
        *  CSM sees on the QBR tab. Exported as the leading tile in
        *  the .zip. */}
       {organizationId ? (
-        <BeehiivUsageCard ref={usageCardRef} workspaceId={organizationId} />
+        <BeehiivUsageCard
+          ref={usageCardRef}
+          workspaceId={organizationId}
+          publicationId={publicationId || null}
+        />
       ) : null}
 
       {selectedSpec ? (
