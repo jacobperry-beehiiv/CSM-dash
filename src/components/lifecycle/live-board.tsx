@@ -335,15 +335,11 @@ export function LiveBoard({ cards: initialCards, csms }: Props) {
         onAddTodo={(workspaceId, group, fields) =>
           void handleAddTodo(workspaceId, group, fields)
         }
-        renderCardMeta={(c) =>
-          c.stage === MONTHLY_COLUMN ? (
-            <span className="text-xs text-subtle">Monthly billing</span>
-          ) : (
-            <span className="text-xs text-subtle">
-              Renews {fmtDate(c.customer.contract_renewal)}
-            </span>
-          )
-        }
+        renderCardMeta={(c) => (
+          <span className="text-xs text-subtle">
+            Renews {fmtDate(c.customer.contract_renewal)}
+          </span>
+        )}
       />
       {openCard ? (
         <LifecycleCardModal card={openCard} onClose={() => setOpenWorkspaceId(null)} />
