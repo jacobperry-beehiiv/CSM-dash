@@ -30,7 +30,7 @@ import { fmtDate } from "../format";
 // "Q4" is the monthly-billed bucket — see live-quarter.ts's module
 // doc comment for why it's kept separate from the Q1→Renewal annual
 // countdown instead of folded in.
-const LIVE_QUARTER_COLUMNS = ["Q1", "Q2", "Q3", "Renewal", MONTHLY_COLUMN];
+const LIVE_QUARTER_COLUMNS = ["Q1", "Q2", "Q3", MONTHLY_COLUMN, "Renewal"];
 
 interface Props {
   cards: LifecycleCard[];
