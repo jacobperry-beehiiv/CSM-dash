@@ -10,6 +10,9 @@ import {
   type TodoSource,
 } from "@/lib/personal-todos/types";
 import { normalizeSlackText } from "@/lib/personal-todos/normalize-text";
+import { PLAYBOOK_STEPS } from "@/lib/lifecycle/step-stage-config";
+import { hubspotCompanyUrl } from "@/lib/links";
+import { useViewerEmail } from "@/lib/auth-client";
 import { DoneCheckbox } from "./done-checkbox";
 import { SybillSyncControl } from "./sybill-sync-control";
 import { TodoCelebration } from "./todo-celebration";
@@ -100,17 +103,35 @@ function renderDetails(value: string | null): React.ReactNode {
  *  as the CSM's personal list. New feature-flag-gated slots (like
  *  the Sybill sync affordance) are opt-in, computed server-side in
  *  page.tsx and passed down as booleans. */
+/** One entry per customer in the viewer's book that has a HubSpot
+ *  company id — the join key the Lifecycle board's checklist matching
+ *  requires (matchPlaybookTodos), so anything without one couldn't
+ *  ever show up there and isn't worth offering in the picker. */
+export interface PlaybookCompanyOption {
+  workspace_id: string;
+  hubspot_company_id: string;
+  name: string;
+}
+
 interface PersonalTodosPanelProps {
   /** True when the viewer has the `sybill-ingest` feature flag on —
    *  renders the SybillSyncControl inline above the composer so
    *  syncing recap action items lives with the todos it creates,
    *  not in a separate settings page. */
   sybillIngestEnabled?: boolean;
+  /** Feeds the composer's "Company" + "Playbook step" pickers — see
+   *  addFromComposer for what selecting both actually does. Computed
+   *  server-side in page.tsx from the viewer's own book, same as
+   *  sybillIngestEnabled. Empty array (not undefined) when the viewer
+   *  has no book — the pickers just render with nothing to choose. */
+  playbookCompanies?: PlaybookCompanyOption[];
 }
 
 export function PersonalTodosPanel({
   sybillIngestEnabled = false,
+  playbookCompanies = [],
 }: PersonalTodosPanelProps = {}) {
+  const viewerEmail = useViewerEmail();
   const [todos, setTodos] = useState<PersonalTodo[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [savedAt, setSavedAt] = useState<string | null>(null);
@@ -129,6 +150,14 @@ export function PersonalTodosPanel({
   const [draftDueDate, setDraftDueDate] = useState("");
   const [draftSurfaceAt, setDraftSurfaceAt] = useState("");
   const [draftPriority, setDraftPriority] = useState<TodoPriority | "">("");
+  // Optional — only when BOTH are picked does the new todo get tagged
+  // as a real playbook step (source: "slack_assign" + the matching
+  // source_meta), so it shows up on that customer's Lifecycle board
+  // card exactly like an @bot-assign step would. Either alone is
+  // silently ignored — a step with no company (or vice versa) has
+  // nothing to attach to. See addFromComposer.
+  const [draftWorkspaceId, setDraftWorkspaceId] = useState("");
+  const [draftPlaybookStep, setDraftPlaybookStep] = useState("");
 
   // Pending text patches (same coalescer as team-tasks)
   const pendingPatchesRef = useRef<Map<string, Partial<PersonalTodo>>>(
@@ -312,6 +341,19 @@ export function PersonalTodosPanel({
     void sendOps([{ type: "delete", todoId }]);
   }
 
+  /** Auto-fills the title from the selected company + step, same
+   *  "{company} — {step title}" shape @bot assign itself produces —
+   *  but only while the title is still blank, so it never clobbers
+   *  something the CSM already typed. Called from both pickers'
+   *  onChange, since either one completing the pair should trigger it. */
+  function maybeAutofillTitle(workspaceId: string, stepKey: string) {
+    if (draftTitle.trim()) return;
+    if (!workspaceId || !stepKey) return;
+    const company = playbookCompanies.find((c) => c.workspace_id === workspaceId);
+    const step = PLAYBOOK_STEPS.find((s) => s.step_key === stepKey);
+    if (company && step) setDraftTitle(`${company.name} — ${step.title}`);
+  }
+
   function addFromComposer() {
     // Normalize Slack-pasted text on submit so a copy/pasted message
     // body lands as readable plain text. "<@U123> ping <https://x|here>"
@@ -320,15 +362,42 @@ export function PersonalTodosPanel({
     const title = normalizeSlackText(draftTitle).trim();
     if (!title) return;
     const now = new Date().toISOString();
+
+    const selectedCompany = draftWorkspaceId
+      ? playbookCompanies.find((c) => c.workspace_id === draftWorkspaceId)
+      : undefined;
+    const selectedStep = draftPlaybookStep
+      ? PLAYBOOK_STEPS.find((s) => s.step_key === draftPlaybookStep)
+      : undefined;
+    // Only tag it as a real playbook step when BOTH are picked — a
+    // step with no company (or vice versa) has nothing to attach to,
+    // so it falls through to today's plain manual/scheduled todo.
+    const playbook =
+      selectedCompany && selectedStep
+        ? { company: selectedCompany, step: selectedStep }
+        : null;
+    const hubspotUrl = playbook
+      ? hubspotCompanyUrl(playbook.company.hubspot_company_id)
+      : null;
+
     const todo: PersonalTodo = {
       id: newTodoId(),
       title,
-      details: null,
+      details: playbook
+        ? `${playbook.step.details}\n\nManually added via the dashboard by ${
+            viewerEmail ?? "a teammate"
+          } for ${playbook.company.name}.${hubspotUrl ? `\nHubSpot: ${hubspotUrl}` : ""}`
+        : null,
       due_date: draftDueDate || null,
       surface_at: draftSurfaceAt || null,
       priority: draftPriority || null,
-      source: draftSurfaceAt ? "scheduled" : "manual",
-      source_meta: null,
+      source: playbook ? "slack_assign" : draftSurfaceAt ? "scheduled" : "manual",
+      source_meta: playbook
+        ? {
+            hubspot_company_id: playbook.company.hubspot_company_id,
+            playbook_step: playbook.step.step_key,
+          }
+        : null,
       completed_at: null,
       created_at: now,
       updated_at: now,
@@ -340,6 +409,8 @@ export function PersonalTodosPanel({
     setDraftDueDate("");
     setDraftSurfaceAt("");
     setDraftPriority("");
+    setDraftWorkspaceId("");
+    setDraftPlaybookStep("");
   }
 
   const today = todayYmdUtc();
@@ -466,6 +537,53 @@ export function PersonalTodosPanel({
             <option value="medium">Medium</option>
             <option value="low">Low</option>
           </select>
+          {playbookCompanies.length > 0 ? (
+            <>
+              <select
+                value={draftWorkspaceId}
+                onChange={(e) => {
+                  setDraftWorkspaceId(e.target.value);
+                  maybeAutofillTitle(e.target.value, draftPlaybookStep);
+                }}
+                title="Pick a company + playbook step together to attach this to that customer's Lifecycle board checklist."
+                className="px-2 py-1 text-xs border border-border-strong rounded-md bg-surface text-fg max-w-[160px]"
+              >
+                <option value="">No company</option>
+                {playbookCompanies.map((c) => (
+                  <option key={c.workspace_id} value={c.workspace_id}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
+              <select
+                value={draftPlaybookStep}
+                onChange={(e) => {
+                  setDraftPlaybookStep(e.target.value);
+                  maybeAutofillTitle(draftWorkspaceId, e.target.value);
+                }}
+                title="Pick a company + playbook step together to attach this to that customer's Lifecycle board checklist."
+                className="px-2 py-1 text-xs border border-border-strong rounded-md bg-surface text-fg max-w-[160px]"
+              >
+                <option value="">No playbook step</option>
+                <optgroup label="Onboarding">
+                  {PLAYBOOK_STEPS.filter((s) => s.playbook === "onboarding").map(
+                    (s) => (
+                      <option key={s.step_key} value={s.step_key}>
+                        {s.title}
+                      </option>
+                    )
+                  )}
+                </optgroup>
+                <optgroup label="Live">
+                  {PLAYBOOK_STEPS.filter((s) => s.playbook === "live").map((s) => (
+                    <option key={s.step_key} value={s.step_key}>
+                      {s.title}
+                    </option>
+                  ))}
+                </optgroup>
+              </select>
+            </>
+          ) : null}
           <button
             type="button"
             onClick={addFromComposer}

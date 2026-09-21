@@ -56,6 +56,22 @@ export default async function MissionControl({
     error = e instanceof Error ? e.message : "Unknown error";
   }
 
+  // Feeds the "Your to-dos" composer's company picker — only entries
+  // with a HubSpot company id are offered, since that's the join key
+  // the Lifecycle board's checklist matching requires (see
+  // matchPlaybookTodos); anything else could never show up there.
+  const playbookCompanies = book
+    .filter(
+      (c): c is Customer & { workspace_id: string; hubspot_company_id: string } =>
+        Boolean(c.workspace_id) && Boolean(c.hubspot_company_id)
+    )
+    .map((c) => ({
+      workspace_id: c.workspace_id,
+      hubspot_company_id: c.hubspot_company_id,
+      name: c.company_name ?? c.workspace_name ?? c.workspace_id,
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+
   const totalArr = book.reduce((s, c) => s + c.arr, 0);
   // CSM team members get a mascot-themed heading where the random
   // team pet image visually replaces "Port" in "Portfolio". Non-CSM
@@ -108,7 +124,10 @@ export default async function MissionControl({
       </div>
 
       <TeamTasksPanel />
-      <PersonalTodosPanel sybillIngestEnabled={sybillIngestEnabled} />
+      <PersonalTodosPanel
+        sybillIngestEnabled={sybillIngestEnabled}
+        playbookCompanies={playbookCompanies}
+      />
       {newsFeedEnabled ? <BookNewsPanel viewerCsmHandle={csm} /> : null}
       <FeatureUpdatesPanel />
     </>
