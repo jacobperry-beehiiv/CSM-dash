@@ -99,3 +99,46 @@ export function resolveLifecycleStepStages(
 ): Record<string, string | null> {
   return { ...DEFAULT_LIFECYCLE_STEP_STAGES, ...(stored ?? {}) };
 }
+
+/** step title -> step_key, for recovering a step_key from a todo that
+ *  has no `source_meta.playbook_step` at all — see
+ *  resolvePlaybookStepKey below. */
+const TITLE_TO_STEP_KEY: Record<string, string> = Object.fromEntries(
+  PLAYBOOK_STEPS.map((s) => [s.title, s.step_key])
+);
+
+/**
+ * Recovers a playbook todo's step_key when `source_meta.playbook_step`
+ * is missing entirely — true for any @bot-assign batch created before
+ * that field was added to slack-assign.ts's buildAssignTodoSequence;
+ * there was no backfill migration for pre-existing data, so those
+ * todos match fine by hubspot_company_id but silently vanish from the
+ * board once the stage lookup can't resolve a key for them (found via
+ * a real customer's fully-missing checklist — see the git history for
+ * this function).
+ *
+ * Falls back to matching the todo's title against the known playbook
+ * step titles, stripping the "{company} — " prefix
+ * buildAssignTodoSequence always adds (titles are stable identifiers
+ * even when step_key metadata is missing; company names aren't, so we
+ * match on the suffix after the FIRST " — ", not a prefix match
+ * against the customer's current name). Deliberately the first
+ * occurrence, not the last — a couple of real step titles (e.g.
+ * "(With-package) Internal sync — AE + Solutions Engineer + Ashley")
+ * contain their own " — ", and the company-name prefix is always
+ * exactly one, prepended once at the very start. Returns null when
+ * neither the stored key nor a title match resolves — e.g. the CSM
+ * has since renamed the todo, or it was never a playbook step to
+ * begin with.
+ */
+export function resolvePlaybookStepKey(todo: {
+  title: string;
+  source_meta?: { playbook_step?: string | null } | null;
+}): string | null {
+  const stored = todo.source_meta?.playbook_step;
+  if (stored) return stored;
+  if (TITLE_TO_STEP_KEY[todo.title]) return TITLE_TO_STEP_KEY[todo.title];
+  const sepIndex = todo.title.indexOf(" — ");
+  const stepTitle = sepIndex >= 0 ? todo.title.slice(sepIndex + 3) : todo.title;
+  return TITLE_TO_STEP_KEY[stepTitle] ?? null;
+}
