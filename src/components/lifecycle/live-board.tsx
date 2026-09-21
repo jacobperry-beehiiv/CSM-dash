@@ -10,7 +10,7 @@ import {
   addLifecycleStep,
 } from "@/lib/lifecycle/toggle-step";
 import { buildRenewalChecklist, setLifecycleStage } from "@/lib/lifecycle/renewal-checklist";
-import { LIVE_ASSIGNABLE_STAGES } from "@/lib/lifecycle/live-quarter";
+import { LIVE_ASSIGNABLE_STAGES, LIVE_ONGOING_GROUP } from "@/lib/lifecycle/live-quarter";
 import { useZendeskOverlay } from "@/lib/data/use-zendesk-overlay";
 import { newTodoId } from "@/lib/personal-todos/types";
 import { normalizeSlackText } from "@/lib/personal-todos/normalize-text";
@@ -308,6 +308,7 @@ export function LiveBoard({ cards: initialCards, csms }: Props) {
         columns={columns}
         cardsByColumn={cardsByColumn}
         stageOrder={LIVE_ASSIGNABLE_STAGES}
+        alwaysShowGroups={[LIVE_ONGOING_GROUP]}
         draggable={false}
         onCardClick={setOpenWorkspaceId}
         onToggleStep={handleToggleStep}

@@ -6,16 +6,20 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
 /**
- * GET /api/qbr-charts/beehiiv-usage?workspace_id=<uuid>
+ * GET /api/qbr-charts/beehiiv-usage?workspace_id=<uuid>&publication_id=<uuid>
  *
  * Returns the beehiiv Usage Y/N feature-adoption report for one
- * workspace. Feeds the "beehiiv Usage" table on the QBR tab
- * (top-right block in the customer-deck screenshot). Signed-in
- * users only; no admin gate — every CSM can read their own book's
- * usage picture.
+ * workspace, plus the primary-publication metadata (id, name, logo
+ * filename) used to render the header logo.
  *
- * Single Postgres round-trip against beehiiv's public schema,
- * scored 0-100 by (# active features / # total).
+ * `publication_id` is optional — when set, that publication wins
+ * (matches whatever the QBR tab's PublicationPicker resolved to);
+ * otherwise the engine picks the earliest-created publication in
+ * the workspace with a non-null logo.
+ *
+ * Signed-in users only; no admin gate — every CSM reads their own
+ * book's usage picture. Two Postgres round-trips (usage EXISTS
+ * batch + publication pick, in parallel).
  */
 export async function GET(req: Request) {
   const session = await auth();
@@ -24,6 +28,8 @@ export async function GET(req: Request) {
   }
   const url = new URL(req.url);
   const workspaceId = (url.searchParams.get("workspace_id") ?? "").trim();
+  const publicationId =
+    (url.searchParams.get("publication_id") ?? "").trim() || null;
   if (!workspaceId) {
     return NextResponse.json(
       { error: "Missing workspace_id" },
@@ -31,7 +37,7 @@ export async function GET(req: Request) {
     );
   }
   try {
-    const report = await computeBeehiivUsage(workspaceId);
+    const report = await computeBeehiivUsage(workspaceId, publicationId);
     return NextResponse.json(report);
   } catch (e) {
     return NextResponse.json(
