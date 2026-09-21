@@ -42,7 +42,17 @@ export type TodoSource =
    *  lifecycle stage — a verification todo dated to the renewal
    *  date so the CSM confirms the invoice actually went through.
    *  Idempotent: only fires on the transition INTO the stage. */
-  | "renewal_confirmed";
+  | "renewal_confirmed"
+  /** Created by the Live-board quarter check-in sweep on the exact
+   *  day a customer's card crosses into Q1, Q2, or Q3 (computed
+   *  backward from their annual contract_renewal date) — a baseline
+   *  "touch every 90 days" reminder for accounts that don't already
+   *  have a higher-touch cadence. Tagged with
+   *  source_meta.checklist_group = "Live" so it lands in the same
+   *  on-card grouping a CSM would use to add one manually.
+   *  source_meta.live_quarter + workspace_id form the dedupe key so
+   *  a daily re-run doesn't double-fire within the same cycle. */
+  | "live_quarter_checkin";
 
 /** Slack-side provenance carried on rows created from Slack. Filled in
  *  by the inbound webhook so the UI can render a "↗ View in Slack"
@@ -98,15 +108,22 @@ export interface SlackSourceMeta {
    *  source-configs registry — same shape as renewal_milestone's
    *  per-stage bindings, keyed by this string instead of days. */
   playbook_step?: string;
-  /** For source === "slack_assign": direct Lifecycle-board checklist
-   *  grouping for a manually-created one-off todo (see
-   *  personal-todos-panel.tsx's checklist-group picker) — one of
-   *  ONBOARDING_ASSIGNABLE_STAGES or LIVE_ONGOING_GROUP. Unlike
+  /** For source === "slack_assign" or "live_quarter_checkin": direct
+   *  Lifecycle-board checklist grouping for a todo that isn't tied to
+   *  a real playbook template (see personal-todos-panel.tsx's
+   *  checklist-group picker, and the live-quarter-checkins engine) —
+   *  one of ONBOARDING_ASSIGNABLE_STAGES or LIVE_ONGOING_GROUP. Unlike
    *  `playbook_step`, this isn't a reference to one of the 21 known
-   *  playbook templates; it's set directly by the CSM at creation
-   *  time and read first, before any playbook_step lookup — see
-   *  resolveTodoStage in step-stage-config.ts. */
+   *  playbook templates; it's set directly at creation time and read
+   *  first, before any playbook_step lookup — see resolveTodoStage in
+   *  step-stage-config.ts. */
   checklist_group?: string;
+  /** For source === "live_quarter_checkin": which quarter (Q1/Q2/Q3)
+   *  this 90-day check-in fired for — purely diagnostic/audit
+   *  context, not read by any resolver. The real dedupe key is
+   *  (workspace_id, live_quarter, renewal_iso) in the engine's own KV
+   *  store (live-quarter-checkins-fired.ts), not this field. */
+  live_quarter?: "Q1" | "Q2" | "Q3";
 }
 
 export interface PersonalTodo {

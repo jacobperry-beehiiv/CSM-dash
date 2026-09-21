@@ -73,6 +73,7 @@ const SOURCE_LABEL: Record<TodoSource, { icon: string; label: string }> = {
   sybill_callrecap: { icon: "📞", label: "Sybill" },
   renewal_milestone: { icon: "🔁", label: "Renewal milestone" },
   renewal_confirmed: { icon: "✅", label: "Renewal confirmed" },
+  live_quarter_checkin: { icon: "📅", label: "90-day check-in" },
 };
 
 /** Replace bare URLs with anchors so links pasted into details are
