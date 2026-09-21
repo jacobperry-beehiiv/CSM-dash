@@ -63,6 +63,15 @@ export function OnboardingBoard({ cards: initialCards, stages, csms }: Props) {
   const seeded = useRef(new Set<string>());
   const zendeskOverlay = useZendeskOverlay();
 
+  // useState(initialCards) only seeds state on first mount — switching
+  // the CsmSelector calls router.refresh(), which re-runs the server
+  // component and hands this component a genuinely new `cards` prop,
+  // but without this, the already-mounted board would keep showing
+  // the previous CSM's stale local state instead of picking it up.
+  useEffect(() => {
+    setCards(initialCards);
+  }, [initialCards]);
+
   useEffect(() => {
     for (const c of cards) {
       const id = c.customer.workspace_id;
