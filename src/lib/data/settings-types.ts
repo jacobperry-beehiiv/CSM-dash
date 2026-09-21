@@ -232,6 +232,16 @@ export interface SettingsShape {
   am?: AmSettings;
   personal_todos?: PersonalTodosSettings;
   access?: AccessSettings;
+  /** Admin-edited step_key -> Lifecycle board column map — see
+   *  src/lib/lifecycle/step-stage-config.ts (canonical step list +
+   *  defaults) and /settings/lifecycle-steps (the editor).
+   *  resolveLifecycleStepStages() merges this on top of
+   *  DEFAULT_LIFECYCLE_STEP_STAGES; merge() below stores the full
+   *  resolved snapshot (not just the reassigned steps) so a stale
+   *  default never lingers if the defaults change later. `null` means
+   *  a step with no known default AND no override yet — "Unassigned"
+   *  at /settings/lifecycle-steps until someone picks a column. */
+  lifecycle_step_stages?: Record<string, string | null>;
 }
 
 /** Access-control settings. Currently just an allowlist of emails
@@ -502,6 +512,11 @@ export const DEFAULTS: SettingsShape = {
     // Empty by default — admins add via /settings/access.
     extra_csm_emails: [],
   },
+  // Empty by default — resolveLifecycleStepStages() (in
+  // src/lib/lifecycle/step-stage-config.ts) fills in every step's
+  // DEFAULT_LIFECYCLE_STEP_STAGES value on top of whatever's here, so
+  // this only ever needs to carry admin-reassigned steps.
+  lifecycle_step_stages: {},
 };
 
 /**
