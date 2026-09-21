@@ -296,6 +296,53 @@ export function KanbanColumns({
                         />
                       )
                     ) : null}
+                    {/* Renewal-stage cards get a second, independent
+                        checklist beneath the fixed 5-item one — the
+                        same "Live" ongoing group a Q1/Q2/Q3/Q4 card
+                        shows, reusing alwaysShowGroups (already board-
+                        scoped to just that group) so it still renders
+                        at 0/0 with a "+" to create the first one. */}
+                    {onToggleStep &&
+                    c.checklist_kind === "renewal_stage" &&
+                    alwaysShowGroups?.length ? (
+                      <StageTodoList
+                        steps={c.liveOngoingSteps ?? []}
+                        stageOrder={alwaysShowGroups}
+                        currentStage={alwaysShowGroups[0]}
+                        editable={c.editable}
+                        onToggle={(stepId) =>
+                          onToggleStep(c.customer.workspace_id, stepId)
+                        }
+                        onEditDueDate={
+                          !onEditDueDate
+                            ? undefined
+                            : (stepId, dueDate) =>
+                                onEditDueDate(c.customer.workspace_id, stepId, dueDate)
+                        }
+                        onEditDetails={
+                          !onEditDetails
+                            ? undefined
+                            : (stepId, details) =>
+                                onEditDetails(c.customer.workspace_id, stepId, details)
+                        }
+                        onEditTitle={
+                          !onEditTitle
+                            ? undefined
+                            : (stepId, title) =>
+                                onEditTitle(c.customer.workspace_id, stepId, title)
+                        }
+                        companyName={
+                          c.customer.company_name ?? c.customer.workspace_name ?? undefined
+                        }
+                        onAddStep={
+                          !onAddTodo || !c.customer.hubspot_company_id
+                            ? undefined
+                            : (group, fields) =>
+                                onAddTodo(c.customer.workspace_id, group, fields)
+                        }
+                        alwaysShowGroups={alwaysShowGroups}
+                      />
+                    ) : null}
                   </div>
                 ))
               )}
