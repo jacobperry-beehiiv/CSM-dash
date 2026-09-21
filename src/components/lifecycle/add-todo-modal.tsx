@@ -10,6 +10,7 @@ export interface AddTodoFields {
   surface_at: string | null;
   priority: TodoPriority | null;
   checklist_group: string;
+  details: string | null;
 }
 
 interface Props {
@@ -34,11 +35,17 @@ interface Props {
  * collects text and leaves persistence to its caller.
  */
 export function AddTodoModal({ companyName, initialGroup, onAdd, onClose }: Props) {
-  const [title, setTitle] = useState("");
+  // Pre-filled with the "{company} — " prefix, same autofill the main
+  // "Your to-dos" composer applies the moment a company is picked —
+  // here the company's already fixed by which card's "+" was clicked,
+  // so there's no separate selection moment to hang the autofill off
+  // of; it just starts pre-filled instead.
+  const [title, setTitle] = useState(`${companyName} — `);
   const [dueDate, setDueDate] = useState("");
   const [surfaceAt, setSurfaceAt] = useState("");
   const [priority, setPriority] = useState<TodoPriority | "">("");
   const [group, setGroup] = useState(initialGroup);
+  const [details, setDetails] = useState("");
 
   function handleAdd() {
     const trimmed = title.trim();
@@ -49,6 +56,7 @@ export function AddTodoModal({ companyName, initialGroup, onAdd, onClose }: Prop
       surface_at: surfaceAt || null,
       priority: priority || null,
       checklist_group: group,
+      details: details.trim() || null,
     });
     onClose();
   }
@@ -155,6 +163,16 @@ export function AddTodoModal({ companyName, initialGroup, onAdd, onClose }: Prop
               </select>
             </label>
           </div>
+          <textarea
+            rows={3}
+            value={details}
+            onChange={(e) => setDetails(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") onClose();
+            }}
+            placeholder="Add a note — blockers, context, links… (optional)"
+            className="w-full text-sm px-3 py-2 border border-border rounded-md resize-y bg-canvas text-fg focus:outline-none focus:ring-2 focus:ring-accent"
+          />
           <div className="flex justify-end gap-2">
             <button
               type="button"
