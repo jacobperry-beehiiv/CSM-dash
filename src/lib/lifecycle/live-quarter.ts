@@ -3,7 +3,7 @@ import type { PersonalTodo } from "@/lib/personal-todos/types";
 import { daysUntilRenewal } from "@/lib/renewals/date";
 import { matchPlaybookTodos } from "./todos";
 import { buildRenewalChecklist } from "./renewal-checklist";
-import { resolvePlaybookStepKey } from "./step-stage-config";
+import { resolveTodoStage } from "./step-stage-config";
 import { atRiskSummary, isEditableBy, type LifecycleCard } from "./card";
 
 /**
@@ -38,10 +38,21 @@ const RENEWAL_WINDOW_DAYS = 90;
 const Q3_WINDOW_DAYS = 180;
 const Q2_WINDOW_DAYS = 270;
 
-/** Columns a "live:" playbook step can be assigned to at
- *  /settings/lifecycle-steps. Excludes "Renewal" — that column never
- *  shows playbook steps, only the renewal-stage checklist. */
-export const LIVE_ASSIGNABLE_STAGES = ["Q1", "Q2", "Q3"];
+/** "Live" is the flat, undated grouping for manually-created "ongoing"
+ *  to-dos (see personal-todos-panel.tsx's checklist-group picker) —
+ *  unlike a real playbook step, a one-off task doesn't have a due-date
+ *  cadence that maps naturally onto a specific quarter. Listed first
+ *  in LIVE_ASSIGNABLE_STAGES so it renders above Q1/Q2/Q3 on the card
+ *  and appears first in the /settings/lifecycle-steps dropdown too —
+ *  an admin CAN also reassign a real playbook step here if they want
+ *  it treated as ongoing rather than quarter-specific. */
+export const LIVE_ONGOING_GROUP = "Live";
+
+/** Columns a "live:" playbook step (or a manually-created ongoing
+ *  to-do) can be assigned to at /settings/lifecycle-steps. Excludes
+ *  "Renewal" — that column never shows playbook steps, only the
+ *  renewal-stage checklist. */
+export const LIVE_ASSIGNABLE_STAGES = [LIVE_ONGOING_GROUP, "Q1", "Q2", "Q3"];
 
 /**
  * Buckets a customer into one of 4 columns by days-until-renewal.
@@ -103,7 +114,7 @@ export function buildLiveCard(
   }
 
   const liveTodos = matchPlaybookTodos(customer, csmTodos).filter((t) => {
-    const s = stepStages[resolvePlaybookStepKey(t) ?? ""];
+    const s = resolveTodoStage(t, stepStages);
     return s != null && LIVE_ASSIGNABLE_STAGES.includes(s);
   });
   const matched = [...liveTodos].sort((a, b) => {
@@ -124,7 +135,7 @@ export function buildLiveCard(
       title: t.title,
       completed: Boolean(t.completed_at),
       due_date: t.due_date,
-      stage: stepStages[resolvePlaybookStepKey(t) ?? ""] ?? null,
+      stage: resolveTodoStage(t, stepStages),
       details: t.details,
     })),
   };

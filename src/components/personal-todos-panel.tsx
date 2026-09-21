@@ -10,7 +10,8 @@ import {
   type TodoSource,
 } from "@/lib/personal-todos/types";
 import { normalizeSlackText } from "@/lib/personal-todos/normalize-text";
-import { PLAYBOOK_STEPS } from "@/lib/lifecycle/step-stage-config";
+import { ONBOARDING_ASSIGNABLE_STAGES } from "@/lib/lifecycle/onboarding";
+import { LIVE_ONGOING_GROUP } from "@/lib/lifecycle/live-quarter";
 import { hubspotCompanyUrl } from "@/lib/links";
 import { useViewerEmail } from "@/lib/auth-client";
 import { DoneCheckbox } from "./done-checkbox";
@@ -40,6 +41,19 @@ import type {
  * Source badge per row tells the CSM how it arrived: manually,
  * scheduled-then-activated, or one of three Slack input vectors.
  */
+
+/** Checklist-group picker options for the composer — always all 4,
+ *  regardless of which company is selected (few enough that filtering
+ *  by company wouldn't be worth the complexity). Mirrors the same
+ *  groupings the Lifecycle board itself renders (Onboarding's
+ *  Pre-kickoff/Post-kickoff/Migration & warm-up columns, Live's flat
+ *  "Live" ongoing bucket) — see resolveTodoStage in
+ *  step-stage-config.ts for how a todo tagged with one of these
+ *  actually lands on the right card. */
+const CHECKLIST_GROUP_OPTIONS: { value: string; section: "Onboarding" | "Live" }[] = [
+  ...ONBOARDING_ASSIGNABLE_STAGES.map((s) => ({ value: s, section: "Onboarding" as const })),
+  { value: LIVE_ONGOING_GROUP, section: "Live" as const },
+];
 
 const PRIORITY_OPTIONS: { value: TodoPriority; label: string; bg: string }[] = [
   {
@@ -151,13 +165,13 @@ export function PersonalTodosPanel({
   const [draftSurfaceAt, setDraftSurfaceAt] = useState("");
   const [draftPriority, setDraftPriority] = useState<TodoPriority | "">("");
   // Optional — only when BOTH are picked does the new todo get tagged
-  // as a real playbook step (source: "slack_assign" + the matching
-  // source_meta), so it shows up on that customer's Lifecycle board
-  // card exactly like an @bot-assign step would. Either alone is
-  // silently ignored — a step with no company (or vice versa) has
-  // nothing to attach to. See addFromComposer.
+  // (source: "slack_assign" + source_meta.checklist_group), so it
+  // shows up directly under that grouping on the customer's Lifecycle
+  // board card. Either alone is silently ignored — a checklist group
+  // with no company (or vice versa) has nothing to attach to. See
+  // addFromComposer.
   const [draftWorkspaceId, setDraftWorkspaceId] = useState("");
-  const [draftPlaybookStep, setDraftPlaybookStep] = useState("");
+  const [draftChecklistGroup, setDraftChecklistGroup] = useState("");
 
   // Pending text patches (same coalescer as team-tasks)
   const pendingPatchesRef = useRef<Map<string, Partial<PersonalTodo>>>(
@@ -341,17 +355,17 @@ export function PersonalTodosPanel({
     void sendOps([{ type: "delete", todoId }]);
   }
 
-  /** Auto-fills the title from the selected company + step, same
-   *  "{company} — {step title}" shape @bot assign itself produces —
-   *  but only while the title is still blank, so it never clobbers
-   *  something the CSM already typed. Called from both pickers'
-   *  onChange, since either one completing the pair should trigger it. */
-  function maybeAutofillTitle(workspaceId: string, stepKey: string) {
+  /** Auto-fills the title with a "{company} — " prefix as soon as a
+   *  company is picked, so the CSM just has to fill in what comes
+   *  after — but only while the title is still blank, so it never
+   *  clobbers something already typed. Doesn't wait on the checklist
+   *  group too — unlike a playbook step, a group has no title text of
+   *  its own to append. */
+  function maybeAutofillTitle(workspaceId: string) {
     if (draftTitle.trim()) return;
-    if (!workspaceId || !stepKey) return;
+    if (!workspaceId) return;
     const company = playbookCompanies.find((c) => c.workspace_id === workspaceId);
-    const step = PLAYBOOK_STEPS.find((s) => s.step_key === stepKey);
-    if (company && step) setDraftTitle(`${company.name} — ${step.title}`);
+    if (company) setDraftTitle(`${company.name} — `);
   }
 
   function addFromComposer() {
@@ -366,15 +380,12 @@ export function PersonalTodosPanel({
     const selectedCompany = draftWorkspaceId
       ? playbookCompanies.find((c) => c.workspace_id === draftWorkspaceId)
       : undefined;
-    const selectedStep = draftPlaybookStep
-      ? PLAYBOOK_STEPS.find((s) => s.step_key === draftPlaybookStep)
-      : undefined;
-    // Only tag it as a real playbook step when BOTH are picked — a
-    // step with no company (or vice versa) has nothing to attach to,
-    // so it falls through to today's plain manual/scheduled todo.
+    // Only tag it when BOTH are picked — a checklist group with no
+    // company (or vice versa) has nothing to attach to, so it falls
+    // through to today's plain manual/scheduled todo.
     const playbook =
-      selectedCompany && selectedStep
-        ? { company: selectedCompany, step: selectedStep }
+      selectedCompany && draftChecklistGroup
+        ? { company: selectedCompany, group: draftChecklistGroup }
         : null;
     const hubspotUrl = playbook
       ? hubspotCompanyUrl(playbook.company.hubspot_company_id)
@@ -384,7 +395,7 @@ export function PersonalTodosPanel({
       id: newTodoId(),
       title,
       details: playbook
-        ? `${playbook.step.details}\n\nManually added via the dashboard by ${
+        ? `Manually added via the dashboard by ${
             viewerEmail ?? "a teammate"
           } for ${playbook.company.name}.${hubspotUrl ? `\nHubSpot: ${hubspotUrl}` : ""}`
         : null,
@@ -395,7 +406,7 @@ export function PersonalTodosPanel({
       source_meta: playbook
         ? {
             hubspot_company_id: playbook.company.hubspot_company_id,
-            playbook_step: playbook.step.step_key,
+            checklist_group: playbook.group,
           }
         : null,
       completed_at: null,
@@ -410,7 +421,7 @@ export function PersonalTodosPanel({
     setDraftSurfaceAt("");
     setDraftPriority("");
     setDraftWorkspaceId("");
-    setDraftPlaybookStep("");
+    setDraftChecklistGroup("");
   }
 
   const today = todayYmdUtc();
@@ -543,9 +554,9 @@ export function PersonalTodosPanel({
                 value={draftWorkspaceId}
                 onChange={(e) => {
                   setDraftWorkspaceId(e.target.value);
-                  maybeAutofillTitle(e.target.value, draftPlaybookStep);
+                  maybeAutofillTitle(e.target.value);
                 }}
-                title="Pick a company + playbook step together to attach this to that customer's Lifecycle board checklist."
+                title="Pick a company + checklist group together to attach this to that customer's Lifecycle board card."
                 className="px-2 py-1 text-xs border border-border-strong rounded-md bg-surface text-fg max-w-[160px]"
               >
                 <option value="">No company</option>
@@ -556,28 +567,25 @@ export function PersonalTodosPanel({
                 ))}
               </select>
               <select
-                value={draftPlaybookStep}
-                onChange={(e) => {
-                  setDraftPlaybookStep(e.target.value);
-                  maybeAutofillTitle(draftWorkspaceId, e.target.value);
-                }}
-                title="Pick a company + playbook step together to attach this to that customer's Lifecycle board checklist."
+                value={draftChecklistGroup}
+                onChange={(e) => setDraftChecklistGroup(e.target.value)}
+                title="Pick a company + checklist group together to attach this to that customer's Lifecycle board card."
                 className="px-2 py-1 text-xs border border-border-strong rounded-md bg-surface text-fg max-w-[160px]"
               >
-                <option value="">No playbook step</option>
+                <option value="">No checklist group</option>
                 <optgroup label="Onboarding">
-                  {PLAYBOOK_STEPS.filter((s) => s.playbook === "onboarding").map(
-                    (s) => (
-                      <option key={s.step_key} value={s.step_key}>
-                        {s.title}
+                  {CHECKLIST_GROUP_OPTIONS.filter((g) => g.section === "Onboarding").map(
+                    (g) => (
+                      <option key={g.value} value={g.value}>
+                        {g.value}
                       </option>
                     )
                   )}
                 </optgroup>
                 <optgroup label="Live">
-                  {PLAYBOOK_STEPS.filter((s) => s.playbook === "live").map((s) => (
-                    <option key={s.step_key} value={s.step_key}>
-                      {s.title}
+                  {CHECKLIST_GROUP_OPTIONS.filter((g) => g.section === "Live").map((g) => (
+                    <option key={g.value} value={g.value}>
+                      {g.value}
                     </option>
                   ))}
                 </optgroup>

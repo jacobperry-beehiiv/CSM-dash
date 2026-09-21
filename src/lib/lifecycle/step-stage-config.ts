@@ -150,3 +150,29 @@ export function resolvePlaybookStepKey(todo: {
   const stepTitle = sepIndex >= 0 ? todo.title.slice(sepIndex + 3) : todo.title;
   return TITLE_TO_STEP_KEY[stepTitle] ?? null;
 }
+
+/**
+ * A todo's effective Lifecycle board grouping — tries, in order:
+ *   1. `source_meta.checklist_group`, set directly at creation time
+ *      for a manually-created one-off todo (personal-todos-panel.tsx's
+ *      checklist-group picker). Not a playbook_step at all, so it
+ *      skips the lookup below entirely.
+ *   2. The usual playbook_step -> configured-stage lookup (real
+ *      playbook steps, including ones recovered via
+ *      resolvePlaybookStepKey's title-matching fallback).
+ * Returns null when neither resolves — the caller treats that the
+ * same as "no known grouping" either way. */
+export function resolveTodoStage(
+  todo: {
+    title: string;
+    source_meta?: {
+      playbook_step?: string | null;
+      checklist_group?: string | null;
+    } | null;
+  },
+  stepStages: Record<string, string | null>
+): string | null {
+  const direct = todo.source_meta?.checklist_group;
+  if (direct) return direct;
+  return stepStages[resolvePlaybookStepKey(todo) ?? ""] ?? null;
+}
