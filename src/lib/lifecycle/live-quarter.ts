@@ -5,7 +5,12 @@ import { intervalBucket } from "@/lib/customer-helpers";
 import { matchPlaybookTodos } from "./todos";
 import { buildRenewalChecklist } from "./renewal-checklist";
 import { resolveTodoStage } from "./step-stage-config";
-import { atRiskSummary, isEditableBy, type LifecycleCard } from "./card";
+import {
+  atRiskSummary,
+  isEditableBy,
+  type LifecycleCard,
+  type LifecycleStep,
+} from "./card";
 
 /**
  * Lifecycle tab — Live board. Fully computed, not draggable, no
@@ -103,6 +108,28 @@ export function computeLiveQuarter(
   return "Q1";
 }
 
+function sortByDueDate(a: PersonalTodo, b: PersonalTodo): number {
+  if (!a.due_date) return 1;
+  if (!b.due_date) return -1;
+  return a.due_date.localeCompare(b.due_date);
+}
+
+function stepFromTodo(
+  t: PersonalTodo,
+  stepStages: Record<string, string | null>
+): LifecycleStep {
+  return {
+    id: t.id,
+    title: t.title,
+    completed: Boolean(t.completed_at),
+    due_date: t.due_date,
+    stage: resolveTodoStage(t, stepStages),
+    details: t.details,
+    completed_at: t.completed_at,
+    surface_at: t.surface_at,
+  };
+}
+
 export function buildLiveCard(
   customer: Customer & { workspace_id: string },
   csmTodos: PersonalTodo[],
@@ -116,6 +143,16 @@ export function buildLiveCard(
 
   if (stage === "Renewal") {
     const items = buildRenewalChecklist(lifecycleStageOverride);
+    // Same "Live" ongoing-checklist a Q1/Q2/Q3/Q4 card shows — an
+    // account in the Renewal column is still live day-to-day, so it
+    // keeps a place for ad-hoc to-dos separate from the fixed
+    // renewal-stage checklist above it. Filtered to ONLY the "Live"
+    // group (not the full LIVE_ASSIGNABLE_STAGES set) — Q1/Q2/Q3/Q4
+    // groupings don't make sense once a card has left the countdown
+    // and landed on Renewal.
+    const liveOngoingTodos = matchPlaybookTodos(customer, csmTodos)
+      .filter((t) => resolveTodoStage(t, stepStages) === LIVE_ONGOING_GROUP)
+      .sort(sortByDueDate);
     return {
       customer,
       stage,
@@ -128,6 +165,7 @@ export function buildLiveCard(
       checklist_kind: "renewal_stage",
       atRisk: atRiskSummary(atRiskAccount),
       steps: items,
+      liveOngoingSteps: liveOngoingTodos.map((t) => stepFromTodo(t, stepStages)),
     };
   }
 
@@ -135,11 +173,7 @@ export function buildLiveCard(
     const s = resolveTodoStage(t, stepStages);
     return s != null && LIVE_ASSIGNABLE_STAGES.includes(s);
   });
-  const matched = [...liveTodos].sort((a, b) => {
-    if (!a.due_date) return 1;
-    if (!b.due_date) return -1;
-    return a.due_date.localeCompare(b.due_date);
-  });
+  const matched = [...liveTodos].sort(sortByDueDate);
   return {
     customer,
     stage,
@@ -148,15 +182,6 @@ export function buildLiveCard(
     editable: isEditableBy(customer, viewerEmail),
     checklist_kind: "playbook",
     atRisk: atRiskSummary(atRiskAccount),
-    steps: matched.map((t) => ({
-      id: t.id,
-      title: t.title,
-      completed: Boolean(t.completed_at),
-      due_date: t.due_date,
-      stage: resolveTodoStage(t, stepStages),
-      details: t.details,
-      completed_at: t.completed_at,
-      surface_at: t.surface_at,
-    })),
+    steps: matched.map((t) => stepFromTodo(t, stepStages)),
   };
 }

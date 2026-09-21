@@ -89,6 +89,16 @@ export interface LifecycleCard {
   checklist_kind?: "playbook" | "renewal_stage";
   atRisk: { flags: Pick<RiskFlag, "code" | "label">[]; priorityScore: number } | null;
   steps: LifecycleStep[];
+  /** "renewal_stage" cards only: the same "Live" ongoing-checklist
+   *  todos a Q1/Q2/Q3/Q4 card would show, rendered as a second,
+   *  independent group beneath the fixed 5-item renewal checklist —
+   *  a Renewal-column account is still "live" day-to-day, so it keeps
+   *  a place for ad-hoc ongoing to-dos even while its renewal motion
+   *  is tracked separately. Undefined for a "playbook" checklist —
+   *  that card's own `steps` already covers the "Live" group. Always
+   *  a real (possibly empty) array for a "renewal_stage" card, never
+   *  undefined — see buildLiveCard. */
+  liveOngoingSteps?: LifecycleStep[];
 }
 
 export function atRiskSummary(

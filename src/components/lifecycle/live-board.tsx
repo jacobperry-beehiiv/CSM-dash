@@ -9,7 +9,11 @@ import {
   patchLifecycleStepTitle,
   addLifecycleStep,
 } from "@/lib/lifecycle/toggle-step";
-import { buildRenewalChecklist, setLifecycleStage } from "@/lib/lifecycle/renewal-checklist";
+import {
+  buildRenewalChecklist,
+  setLifecycleStage,
+  RENEWAL_STAGE_STEPS,
+} from "@/lib/lifecycle/renewal-checklist";
 import {
   LIVE_ASSIGNABLE_STAGES,
   LIVE_ONGOING_GROUP,
@@ -113,19 +117,39 @@ export function LiveBoard({ cards: initialCards, csms }: Props) {
   const openCard =
     cards.find((c) => c.customer.workspace_id === openWorkspaceId) ?? null;
 
+  /** Patches one step wherever it actually lives — `steps` for an
+   *  ordinary playbook checklist, OR (on a Renewal-stage card)
+   *  `liveOngoingSteps`, the second "Live" group rendered beneath the
+   *  fixed renewal checklist. Only one of the two `.map()`s below
+   *  will ever find a matching id; the other is a harmless no-op
+   *  pass-through — cheaper than looking up which array to touch. */
+  function patchStepInCards(
+    prev: LifecycleCard[],
+    workspaceId: string,
+    stepId: string,
+    patch: Partial<LifecycleStep>
+  ): LifecycleCard[] {
+    return prev.map((c) => {
+      if (c.customer.workspace_id !== workspaceId) return c;
+      const apply = (s: LifecycleStep) => (s.id === stepId ? { ...s, ...patch } : s);
+      return {
+        ...c,
+        steps: c.steps.map(apply),
+        liveOngoingSteps: c.liveOngoingSteps?.map(apply),
+      };
+    });
+  }
+
   async function handleTogglePlaybookStep(workspaceId: string, stepId: string) {
     const prevCards = cards;
+    const card = cards.find((c) => c.customer.workspace_id === workspaceId);
+    const target = card?.steps
+      .concat(card.liveOngoingSteps ?? [])
+      .find((s) => s.id === stepId);
     setCards((prev) =>
-      prev.map((c) =>
-        c.customer.workspace_id === workspaceId
-          ? {
-              ...c,
-              steps: c.steps.map((s) =>
-                s.id === stepId ? { ...s, completed: !s.completed } : s
-              ),
-            }
-          : c
-      )
+      patchStepInCards(prev, workspaceId, stepId, {
+        completed: !target?.completed,
+      })
     );
     try {
       await toggleLifecycleStep(stepId);
@@ -134,27 +158,17 @@ export function LiveBoard({ cards: initialCards, csms }: Props) {
     }
   }
 
-  // Only ever invoked for "playbook"-kind steps — kanban-columns.tsx
-  // never wires onEditDueDate for a Renewal-stage card, so there's no
-  // checklist_kind branch needed here (unlike handleToggleStep).
+  // Only ever invoked for "playbook"-kind steps (an ordinary card's
+  // own steps, or a Renewal-stage card's liveOngoingSteps) — never a
+  // renewal-stage item itself, since kanban-columns.tsx doesn't wire
+  // onEditDueDate for that checklist.
   async function handleEditDueDate(
     workspaceId: string,
     stepId: string,
     dueDate: string | null
   ) {
     const prevCards = cards;
-    setCards((prev) =>
-      prev.map((c) =>
-        c.customer.workspace_id === workspaceId
-          ? {
-              ...c,
-              steps: c.steps.map((s) =>
-                s.id === stepId ? { ...s, due_date: dueDate } : s
-              ),
-            }
-          : c
-      )
-    );
+    setCards((prev) => patchStepInCards(prev, workspaceId, stepId, { due_date: dueDate }));
     try {
       await patchLifecycleStepDueDate(stepId, dueDate);
     } catch {
@@ -162,26 +176,14 @@ export function LiveBoard({ cards: initialCards, csms }: Props) {
     }
   }
 
-  // Same reasoning as handleEditDueDate above — never invoked for a
-  // Renewal-stage card, so no checklist_kind branch needed.
+  // Same reasoning as handleEditDueDate above.
   async function handleEditDetails(
     workspaceId: string,
     stepId: string,
     details: string | null
   ) {
     const prevCards = cards;
-    setCards((prev) =>
-      prev.map((c) =>
-        c.customer.workspace_id === workspaceId
-          ? {
-              ...c,
-              steps: c.steps.map((s) =>
-                s.id === stepId ? { ...s, details } : s
-              ),
-            }
-          : c
-      )
-    );
+    setCards((prev) => patchStepInCards(prev, workspaceId, stepId, { details }));
     try {
       await patchLifecycleStepDetails(stepId, details);
     } catch {
@@ -189,20 +191,10 @@ export function LiveBoard({ cards: initialCards, csms }: Props) {
     }
   }
 
-  // Same reasoning as handleEditDueDate above — never invoked for a
-  // Renewal-stage card, so no checklist_kind branch needed.
+  // Same reasoning as handleEditDueDate above.
   async function handleEditTitle(workspaceId: string, stepId: string, title: string) {
     const prevCards = cards;
-    setCards((prev) =>
-      prev.map((c) =>
-        c.customer.workspace_id === workspaceId
-          ? {
-              ...c,
-              steps: c.steps.map((s) => (s.id === stepId ? { ...s, title } : s)),
-            }
-          : c
-      )
-    );
+    setCards((prev) => patchStepInCards(prev, workspaceId, stepId, { title }));
     try {
       await patchLifecycleStepTitle(stepId, title);
     } catch {
@@ -242,14 +234,16 @@ export function LiveBoard({ cards: initialCards, csms }: Props) {
     };
 
     const prevCards = cards;
+    // A Renewal-stage card's "Live" group lives in liveOngoingSteps,
+    // separate from its fixed 5-item renewal checklist in `steps` —
+    // every other card's "Live" group is just part of its own `steps`.
+    const isRenewalStageCard = card.checklist_kind === "renewal_stage";
     setCards((prev) =>
       prev.map((c) =>
         c.customer.workspace_id === workspaceId
-          ? {
-              ...c,
-              steps: [...c.steps, newStep],
-              totalCount: c.totalCount + 1,
-            }
+          ? isRenewalStageCard
+            ? { ...c, liveOngoingSteps: [...(c.liveOngoingSteps ?? []), newStep] }
+            : { ...c, steps: [...c.steps, newStep], totalCount: c.totalCount + 1 }
           : c
       )
     );
@@ -298,10 +292,14 @@ export function LiveBoard({ cards: initialCards, csms }: Props) {
   }
 
   function handleToggleStep(workspaceId: string, stepId: string) {
-    const card = cards.find((c) => c.customer.workspace_id === workspaceId);
-    if (card?.checklist_kind === "renewal_stage") {
-      // stepId is the stage label itself for this checklist kind —
-      // see renewal-checklist.ts's buildRenewalChecklist (id === label).
+    // Routed by the step id itself, not the card's checklist_kind —
+    // a Renewal-stage card can now carry BOTH kinds of step (its fixed
+    // renewal checklist AND a "Live" ongoing group beneath it), so
+    // checklist_kind alone no longer tells us which write path a given
+    // click needs. Renewal-stage step ids are always exactly one of
+    // the 5 known stage labels (buildRenewalChecklist sets id ===
+    // label); a real to-do's id is never one of those.
+    if (RENEWAL_STAGE_STEPS.includes(stepId)) {
       void handleSetRenewalStage(workspaceId, stepId);
     } else {
       void handleTogglePlaybookStep(workspaceId, stepId);
