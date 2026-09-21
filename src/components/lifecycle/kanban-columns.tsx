@@ -48,6 +48,11 @@ interface Props {
     stepId: string,
     details: string | null
   ) => void;
+  /** Present only on boards whose checklist steps can be renamed from
+   *  NoteEditorModal's own editable header — same scope as
+   *  onEditDueDate/onEditDetails. Never called for a Renewal-stage
+   *  card, whose step ids are stage labels rather than real todos. */
+  onEditTitle?: (workspaceId: string, stepId: string, title: string) => void;
   /** Present only on boards whose cards carry a checklist a CSM can
    *  add one-off items to (Onboarding, Live) — same scope as
    *  onEditDueDate/onEditDetails. Never called for a Renewal-stage
@@ -94,6 +99,7 @@ export function KanbanColumns({
   onToggleStep,
   onEditDueDate,
   onEditDetails,
+  onEditTitle,
   onAddTodo,
   renderCardMeta,
   renderEmptyChecklist,
@@ -251,6 +257,12 @@ export function KanbanColumns({
                                     stepId,
                                     details
                                   )
+                          }
+                          onEditTitle={
+                            c.checklist_kind === "renewal_stage" || !onEditTitle
+                              ? undefined
+                              : (stepId, title) =>
+                                  onEditTitle(c.customer.workspace_id, stepId, title)
                           }
                           flatGroupTitle={
                             c.checklist_kind === "renewal_stage"

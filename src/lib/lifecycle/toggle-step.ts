@@ -60,6 +60,30 @@ export async function patchLifecycleStepDetails(
   }
 }
 
+/** Same shape again, patching `title` — wired up only from the
+ *  Lifecycle board's own NoteEditorModal instance (via
+ *  stage-todo-list.tsx's onEditTitle), since that's the only place a
+ *  checklist step has no other way to rename itself; the main
+ *  "Your to-dos" panel edits title inline in its row instead. Only
+ *  ever called for "playbook"-kind steps, same reasoning as
+ *  patchLifecycleStepDueDate above. */
+export async function patchLifecycleStepTitle(
+  stepId: string,
+  title: string
+): Promise<void> {
+  const r = await fetch("/api/personal-todos", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      ops: [{ type: "patch", todoId: stepId, patch: { title } }],
+    }),
+  });
+  if (!r.ok) {
+    const j = (await r.json().catch(() => ({}))) as { error?: string };
+    throw new Error(j.error ?? `HTTP ${r.status}`);
+  }
+}
+
 /** Adds a brand-new step via the on-card "+" (add-todo-modal.tsx) —
  *  the same `add` op personal-todos-panel.tsx's composer already
  *  sends, so a todo created from either place is the exact same
