@@ -10,14 +10,14 @@ import {
   type TodoSource,
 } from "@/lib/personal-todos/types";
 import { normalizeSlackText } from "@/lib/personal-todos/normalize-text";
-import { ONBOARDING_ASSIGNABLE_STAGES } from "@/lib/lifecycle/onboarding";
-import { LIVE_ONGOING_GROUP } from "@/lib/lifecycle/live-quarter";
+import { CHECKLIST_GROUP_OPTIONS } from "@/lib/lifecycle/checklist-groups";
 import { hubspotCompanyUrl } from "@/lib/links";
 import { useViewerEmail } from "@/lib/auth-client";
 import { DoneCheckbox } from "./done-checkbox";
 import { SybillSyncControl } from "./sybill-sync-control";
 import { TodoCelebration } from "./todo-celebration";
 import { TodoActionButton } from "./todo-action-button";
+import { NoteEditorModal } from "./lifecycle/note-editor-modal";
 import type {
   AutomatedSource,
   TodoSourceConfig,
@@ -41,19 +41,6 @@ import type {
  * Source badge per row tells the CSM how it arrived: manually,
  * scheduled-then-activated, or one of three Slack input vectors.
  */
-
-/** Checklist-group picker options for the composer — always all 4,
- *  regardless of which company is selected (few enough that filtering
- *  by company wouldn't be worth the complexity). Mirrors the same
- *  groupings the Lifecycle board itself renders (Onboarding's
- *  Pre-kickoff/Post-kickoff/Migration & warm-up columns, Live's flat
- *  "Live" ongoing bucket) — see resolveTodoStage in
- *  step-stage-config.ts for how a todo tagged with one of these
- *  actually lands on the right card. */
-const CHECKLIST_GROUP_OPTIONS: { value: string; section: "Onboarding" | "Live" }[] = [
-  ...ONBOARDING_ASSIGNABLE_STAGES.map((s) => ({ value: s, section: "Onboarding" as const })),
-  { value: LIVE_ONGOING_GROUP, section: "Live" as const },
-];
 
 const PRIORITY_OPTIONS: { value: TodoPriority; label: string; bg: string }[] = [
   {
@@ -152,6 +139,13 @@ export function PersonalTodosPanel({
   const [saving, setSaving] = useState(false);
   const [showCompleted, setShowCompleted] = useState(false);
   const [showScheduled, setShowScheduled] = useState(false);
+  // Which row's note editor is open — a single modal at the panel
+  // level (not one per row), same shell as the Lifecycle board's
+  // NoteEditorModal, so notes work identically in both places. Stores
+  // just the id, not the todo itself, so the modal always shows the
+  // latest local state even if a background poll refreshes `todos`
+  // while it's open.
+  const [editingNotesId, setEditingNotesId] = useState<string | null>(null);
   // Automated-todo action registry — loaded once on mount. Sparse map
   // (only sources with a customized entry appear); TodoActionButton
   // reads out per-todo whether an outreach template is bound.
@@ -353,6 +347,21 @@ export function PersonalTodosPanel({
     if (!todos) return;
     setTodos(todos.filter((t) => t.id !== todoId));
     void sendOps([{ type: "delete", todoId }]);
+  }
+
+  /** Sent immediately via sendOps rather than the debounced patchTodo
+   *  coalescer — the note editor has an explicit Save button (not
+   *  save-on-blur), so there's no rapid-keystroke stream to batch. */
+  function saveDetails(todoId: string, details: string | null) {
+    if (!todos) return;
+    setTodos(
+      todos.map((t) =>
+        t.id === todoId
+          ? { ...t, details, updated_at: new Date().toISOString() }
+          : t
+      )
+    );
+    void sendOps([{ type: "patch", todoId, patch: { details } }]);
   }
 
   /** Auto-fills the title with a "{company} — " prefix as soon as a
@@ -619,6 +628,7 @@ export function PersonalTodosPanel({
               onToggle={() => toggleComplete(t.id)}
               onPatch={(patch) => patchTodo(t.id, patch)}
               onDelete={() => deleteTodo(t.id)}
+              onOpenNotes={() => setEditingNotesId(t.id)}
               sourceConfigs={sourceConfigs}
             />
           ))
@@ -644,6 +654,7 @@ export function PersonalTodosPanel({
                   onToggle={() => toggleComplete(t.id)}
                   onPatch={(patch) => patchTodo(t.id, patch)}
                   onDelete={() => deleteTodo(t.id)}
+                  onOpenNotes={() => setEditingNotesId(t.id)}
                   sourceConfigs={sourceConfigs}
                   dim
                 />
@@ -670,12 +681,28 @@ export function PersonalTodosPanel({
                   onToggle={() => toggleComplete(t.id)}
                   onPatch={(patch) => patchTodo(t.id, patch)}
                   onDelete={() => deleteTodo(t.id)}
+                  onOpenNotes={() => setEditingNotesId(t.id)}
                   sourceConfigs={sourceConfigs}
                   dim
                 />
               ))
             : null}
         </div>
+      ) : null}
+
+      {editingNotesId ? (
+        (() => {
+          const editing = todos?.find((t) => t.id === editingNotesId);
+          if (!editing) return null;
+          return (
+            <NoteEditorModal
+              stepTitle={editing.title}
+              initialValue={editing.details ?? ""}
+              onSave={(details) => saveDetails(editing.id, details)}
+              onClose={() => setEditingNotesId(null)}
+            />
+          );
+        })()
       ) : null}
     </section>
   );
@@ -686,6 +713,11 @@ interface RowProps {
   onToggle: () => void;
   onPatch: (patch: Partial<PersonalTodo>) => void;
   onDelete: () => void;
+  /** Opens the shared NoteEditorModal (rendered once at the panel
+   *  level) for this row — same modal + Save/Cancel workflow the
+   *  Lifecycle board's checklist items already use, so notes work
+   *  identically in both places. */
+  onOpenNotes: () => void;
   /** Automated-todo action registry loaded by the parent. Passed to
    *  TodoActionButton to decide whether a "Draft outreach" button
    *  renders for this todo. */
@@ -700,6 +732,7 @@ function TodoRow({
   onToggle,
   onPatch,
   onDelete,
+  onOpenNotes,
   sourceConfigs,
   dim,
 }: RowProps) {
@@ -749,6 +782,17 @@ function TodoRow({
               visualDone ? "line-through text-muted" : ""
             }`}
           />
+          <button
+            type="button"
+            onClick={onOpenNotes}
+            title={todo.details ? `Note: ${todo.details}` : "Add a note"}
+            aria-label={todo.details ? "Edit note" : "Add a note"}
+            className={`text-[13px] leading-none flex-shrink-0 ${
+              todo.details ? "" : "opacity-30 hover:opacity-70"
+            }`}
+          >
+            📝
+          </button>
           {todo.priority ? (
             <span
               className={`text-[11px] px-1.5 py-0.5 rounded ${priorityStyle(
