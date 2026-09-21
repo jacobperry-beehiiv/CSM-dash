@@ -98,6 +98,15 @@ export interface SlackSourceMeta {
    *  source-configs registry — same shape as renewal_milestone's
    *  per-stage bindings, keyed by this string instead of days. */
   playbook_step?: string;
+  /** For source === "slack_assign": direct Lifecycle-board checklist
+   *  grouping for a manually-created one-off todo (see
+   *  personal-todos-panel.tsx's checklist-group picker) — one of
+   *  ONBOARDING_ASSIGNABLE_STAGES or LIVE_ONGOING_GROUP. Unlike
+   *  `playbook_step`, this isn't a reference to one of the 21 known
+   *  playbook templates; it's set directly by the CSM at creation
+   *  time and read first, before any playbook_step lookup — see
+   *  resolveTodoStage in step-stage-config.ts. */
+  checklist_group?: string;
 }
 
 export interface PersonalTodo {
