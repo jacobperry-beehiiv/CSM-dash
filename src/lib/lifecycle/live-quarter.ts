@@ -3,6 +3,7 @@ import type { PersonalTodo } from "@/lib/personal-todos/types";
 import { daysUntilRenewal } from "@/lib/renewals/date";
 import { matchPlaybookTodos } from "./todos";
 import { buildRenewalChecklist } from "./renewal-checklist";
+import { resolvePlaybookStepKey } from "./step-stage-config";
 import { atRiskSummary, isEditableBy, type LifecycleCard } from "./card";
 
 /**
@@ -102,7 +103,7 @@ export function buildLiveCard(
   }
 
   const liveTodos = matchPlaybookTodos(customer, csmTodos).filter((t) => {
-    const s = stepStages[t.source_meta?.playbook_step ?? ""];
+    const s = stepStages[resolvePlaybookStepKey(t) ?? ""];
     return s != null && LIVE_ASSIGNABLE_STAGES.includes(s);
   });
   const matched = [...liveTodos].sort((a, b) => {
@@ -123,7 +124,7 @@ export function buildLiveCard(
       title: t.title,
       completed: Boolean(t.completed_at),
       due_date: t.due_date,
-      stage: stepStages[t.source_meta?.playbook_step ?? ""] ?? null,
+      stage: stepStages[resolvePlaybookStepKey(t) ?? ""] ?? null,
       details: t.details,
     })),
   };
