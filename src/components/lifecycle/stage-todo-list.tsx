@@ -57,6 +57,15 @@ interface Props {
   /** Customer name shown in AddTodoModal's header ("New to-do for
    *  {companyName}"). Required whenever onAddStep is provided. */
   companyName?: string;
+  /** Stage keys that should always render their own group — even with
+   *  zero matched steps — so there's still a container (and a "+") to
+   *  create the first one. Only the Live board needs this: unlike
+   *  Onboarding's Pre-kickoff/Post-kickoff/Migration & warm-up groups
+   *  (which always have real playbook steps from @bot assign),
+   *  LIVE_ONGOING_GROUP ("Live") never gets one — it's manual-only —
+   *  so a Q1/Q2/Q3 card with no Live-tagged to-dos yet would otherwise
+   *  show no "Live" section at all. Omitted everywhere else. */
+  alwaysShowGroups?: string[];
 }
 
 /** Above-the-fold cap on completed items per stage group — a
@@ -92,6 +101,7 @@ export function StageTodoList({
   flatGroupTitle,
   onAddStep,
   companyName,
+  alwaysShowGroups,
 }: Props) {
   const [editingDetailsId, setEditingDetailsId] = useState<string | null>(
     null
@@ -113,7 +123,11 @@ export function StageTodoList({
     Set<string>
   >(new Set());
 
-  if (steps.length === 0) return null;
+  // Normally an empty checklist renders nothing at all — but a board
+  // with an always-show group (Live's ongoing bucket) still needs to
+  // render that container even when there are zero steps anywhere on
+  // the card, so a CSM has somewhere to create the first one.
+  if (steps.length === 0 && !alwaysShowGroups?.length) return null;
 
   const today = todayYmdUtc();
 
@@ -130,7 +144,8 @@ export function StageTodoList({
     byStage.get(key)!.push(s);
   }
 
-  const hasStageLabels = seenOrder.some((k) => k !== "");
+  const hasStageLabels =
+    seenOrder.some((k) => k !== "") || Boolean(alwaysShowGroups?.length);
 
   function renderStep(s: LifecycleStep) {
     return (
@@ -234,7 +249,7 @@ export function StageTodoList({
   const groupKeys = !hasStageLabels
     ? [""]
     : [
-        ...stageOrder.filter((k) => byStage.has(k)),
+        ...stageOrder.filter((k) => byStage.has(k) || alwaysShowGroups?.includes(k)),
         ...seenOrder.filter((k) => !stageOrder.includes(k)),
       ];
 
@@ -254,7 +269,7 @@ export function StageTodoList({
     >
       {groupKeys.map((key) => {
         const groupSteps = byStage.get(key) ?? [];
-        if (groupSteps.length === 0) return null;
+        if (groupSteps.length === 0 && !alwaysShowGroups?.includes(key)) return null;
         const isCurrent = !hasStageLabels || key === currentStage;
         const doneCount = groupSteps.filter((s) => s.completed).length;
 
@@ -303,10 +318,16 @@ export function StageTodoList({
             defaultOpen={isCurrent}
             bodyClassName="p-2"
           >
-            <ul className="space-y-2">
-              {visiblePending.map(renderStep)}
-              {recentCompleted.map(renderStep)}
-            </ul>
+            {groupSteps.length === 0 ? (
+              <p className="text-[10px] text-subtle">
+                Nothing here yet{onAddStep && editable ? " — use + to add one" : ""}.
+              </p>
+            ) : (
+              <ul className="space-y-2">
+                {visiblePending.map(renderStep)}
+                {recentCompleted.map(renderStep)}
+              </ul>
+            )}
             {scheduledPending.length > 0 ? (
               <button
                 type="button"

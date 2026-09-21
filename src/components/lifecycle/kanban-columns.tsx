@@ -60,6 +60,13 @@ interface Props {
    *  no known HubSpot company id (nothing for a new todo to match
    *  on). */
   onAddTodo?: (workspaceId: string, group: string, fields: AddTodoFields) => void;
+  /** Stage keys that should always render their own checklist group,
+   *  even with zero matched steps — see StageTodoList's own doc
+   *  comment. Board-wide (like stageOrder), but gated off per-card
+   *  for a Renewal-stage card below, same as onAddTodo. Only the Live
+   *  board passes this (LIVE_ONGOING_GROUP) — Onboarding's groups
+   *  always have real playbook steps already. */
+  alwaysShowGroups?: string[];
   /** Replaces the default status-badge row on each card when
    *  provided (e.g. Live board swaps it for the renewal date, since
    *  "Live"/"Onboarding" is redundant with which board you're already
@@ -101,6 +108,7 @@ export function KanbanColumns({
   onEditDetails,
   onEditTitle,
   onAddTodo,
+  alwaysShowGroups,
   renderCardMeta,
   renderEmptyChecklist,
 }: Props) {
@@ -279,6 +287,11 @@ export function KanbanColumns({
                               ? undefined
                               : (group, fields) =>
                                   onAddTodo(c.customer.workspace_id, group, fields)
+                          }
+                          alwaysShowGroups={
+                            c.checklist_kind === "renewal_stage"
+                              ? undefined
+                              : alwaysShowGroups
                           }
                         />
                       )
