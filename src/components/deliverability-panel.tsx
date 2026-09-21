@@ -592,6 +592,7 @@ export function DeliverabilityPanel({
       return (
         a.post.workspace_name.toLowerCase().includes(q) ||
         a.post.subject.toLowerCase().includes(q) ||
+        (a.post.post_title?.toLowerCase().includes(q) ?? false) ||
         pubId.includes(q) ||
         pubId.includes(qNoPubPrefix) ||
         a.post.organization_id?.toLowerCase().includes(q) ||
@@ -672,7 +673,7 @@ export function DeliverabilityPanel({
         <SearchInput
           value={search}
           onChange={setSearch}
-          placeholder="Search workspace, subject, CSM, publication ID…"
+          placeholder="Search workspace, post title, subject, CSM, publication ID…"
         />
         <CsmSelector csms={csms} />
         {clearedCount > 0 ? (
@@ -1590,8 +1591,22 @@ function PublicationAlertRows({
             </div>
           ) : null}
         </td>
-        <td className="px-2 py-2 text-muted italic break-words hidden md:table-cell w-[22%]">
-          &ldquo;{alert.post.subject}&rdquo;
+        <td className="px-2 py-2 break-words hidden md:table-cell w-[22%]">
+          {/* Post title (internal name) on top, email subject line
+           *  below in muted italic. Older cached rows have no
+           *  post_title — omit the top line rather than show a
+           *  duplicate of the subject. When post_title and subject
+           *  are identical (some sends never rename the post),
+           *  collapse to a single subject line. */}
+          {alert.post.post_title &&
+          alert.post.post_title !== alert.post.subject ? (
+            <div className="text-fg font-medium text-[11px] leading-tight">
+              {alert.post.post_title}
+            </div>
+          ) : null}
+          <div className="text-muted italic">
+            &ldquo;{alert.post.subject}&rdquo;
+          </div>
         </td>
         <td className="px-2 py-2 text-right tabular-nums w-[7%]">
           {fmtNumber(alert.post.sent)}
