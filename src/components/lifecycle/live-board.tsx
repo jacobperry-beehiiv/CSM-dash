@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { compareByRenewalDate, type LifecycleCard } from "@/lib/lifecycle/card";
 import {
   toggleLifecycleStep,
@@ -50,6 +50,15 @@ export function LiveBoard({ cards: initialCards, csms }: Props) {
   const [search, setSearch] = useState("");
   const [zendeskOn, setZendeskOn] = useState(false);
   const zendeskOverlay = useZendeskOverlay();
+
+  // useState(initialCards) only seeds state on first mount — switching
+  // the CsmSelector calls router.refresh(), which re-runs the server
+  // component and hands this component a genuinely new `cards` prop,
+  // but without this, the already-mounted board would keep showing
+  // the previous CSM's stale local state instead of picking it up.
+  useEffect(() => {
+    setCards(initialCards);
+  }, [initialCards]);
 
   const columns = useMemo(() => [UNSORTED, ...LIVE_QUARTER_COLUMNS], []);
 
