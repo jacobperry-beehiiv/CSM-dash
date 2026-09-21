@@ -7,6 +7,7 @@ import { DoneCheckbox } from "../done-checkbox";
 import { NoteEditorModal } from "./note-editor-modal";
 import { AddTodoModal, type AddTodoFields } from "./add-todo-modal";
 import { CHECKLIST_GROUP_OPTIONS } from "@/lib/lifecycle/checklist-groups";
+import { stageDisplayLabel } from "@/lib/lifecycle/stage-labels";
 import { isScheduledFor, todayYmdUtc } from "@/lib/personal-todos/types";
 import { fmtDate } from "../format";
 
@@ -296,15 +297,15 @@ export function StageTodoList({
         return (
           <CollapsibleSection
             key={`${key}::${currentStage}`}
-            title={key || flatGroupTitle || "To-dos"}
+            title={key ? stageDisplayLabel(key) : flatGroupTitle || "To-dos"}
             trailing={
               <span className="flex items-center gap-1.5">
                 {onAddStep && editable && isAssignableGroup ? (
                   <button
                     type="button"
                     onClick={() => setAddingToGroup(key)}
-                    title={`Add a to-do to ${key}`}
-                    aria-label={`Add a to-do to ${key}`}
+                    title={`Add a to-do to ${stageDisplayLabel(key)}`}
+                    aria-label={`Add a to-do to ${stageDisplayLabel(key)}`}
                     className="text-subtle hover:text-fg leading-none w-4 h-4 flex items-center justify-center rounded hover:bg-canvas text-sm"
                   >
                     +

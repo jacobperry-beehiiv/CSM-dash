@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import { PLAYBOOK_STEPS } from "@/lib/lifecycle/step-stage-config";
 import { ONBOARDING_ASSIGNABLE_STAGES } from "@/lib/lifecycle/onboarding";
 import { LIVE_ASSIGNABLE_STAGES } from "@/lib/lifecycle/live-quarter";
+import { stageDisplayLabel } from "@/lib/lifecycle/stage-labels";
 
 /**
  * Client editor for /settings/lifecycle-steps. One dropdown row per
@@ -132,14 +133,14 @@ export function LifecycleStepStagesEditor({ initial }: Props) {
                   <optgroup label="Onboarding">
                     {ONBOARDING_ASSIGNABLE_STAGES.map((opt) => (
                       <option key={opt} value={opt}>
-                        {opt}
+                        {stageDisplayLabel(opt)}
                       </option>
                     ))}
                   </optgroup>
                   <optgroup label="Live">
                     {LIVE_ASSIGNABLE_STAGES.map((opt) => (
                       <option key={opt} value={opt}>
-                        {opt}
+                        {stageDisplayLabel(opt)}
                       </option>
                     ))}
                   </optgroup>
