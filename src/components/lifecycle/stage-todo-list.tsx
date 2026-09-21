@@ -139,12 +139,12 @@ export function StageTodoList({
                 s.completed ? "text-subtle line-through" : "text-fg"
               }`}
             >
-              {s.title}
               {s.details ? (
-                <span className="ml-1" aria-label="Has a note">
+                <span className="mr-1" aria-label="Has a note">
                   📝
                 </span>
               ) : null}
+              {s.title}
             </button>
           ) : (
             <span
@@ -153,12 +153,12 @@ export function StageTodoList({
                 s.completed ? "text-subtle line-through" : "text-fg"
               }`}
             >
-              {s.title}
               {onEditDetails && s.details ? (
-                <span className="ml-1" aria-label="Has a note">
+                <span className="mr-1" aria-label="Has a note">
                   📝
                 </span>
               ) : null}
+              {s.title}
             </span>
           )}
         </div>

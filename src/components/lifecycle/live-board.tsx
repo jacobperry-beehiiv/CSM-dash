@@ -11,8 +11,6 @@ import {
 import { buildRenewalChecklist, setLifecycleStage } from "@/lib/lifecycle/renewal-checklist";
 import { LIVE_ASSIGNABLE_STAGES } from "@/lib/lifecycle/live-quarter";
 import { useZendeskOverlay } from "@/lib/data/use-zendesk-overlay";
-import { useViewerEmail } from "@/lib/auth-client";
-import { hubspotCompanyUrl } from "@/lib/links";
 import { newTodoId } from "@/lib/personal-todos/types";
 import { normalizeSlackText } from "@/lib/personal-todos/normalize-text";
 import type { AddTodoFields } from "./add-todo-modal";
@@ -56,7 +54,6 @@ export function LiveBoard({ cards: initialCards, csms }: Props) {
   const [search, setSearch] = useState("");
   const [zendeskOn, setZendeskOn] = useState(false);
   const zendeskOverlay = useZendeskOverlay();
-  const viewerEmail = useViewerEmail();
 
   // useState(initialCards) only seeds state on first mount — switching
   // the CsmSelector calls router.refresh(), which re-runs the server
@@ -183,7 +180,11 @@ export function LiveBoard({ cards: initialCards, csms }: Props) {
    *  company+group pair, just sourced from the card's own customer
    *  instead of a picked-from-a-dropdown one. Never invoked for a
    *  Renewal-stage card — kanban-columns.tsx gates onAddStep the same
-   *  way it already gates onEditDueDate/onEditDetails. */
+   *  way it already gates onEditDueDate/onEditDetails. The modal
+   *  itself already pre-fills the title with "{company} — " (same
+   *  autofill the main composer does on company select), so there's
+   *  no auto-generated details text here — details is just whatever
+   *  the CSM typed into the modal's own notes field, or null. */
   async function handleAddTodo(
     workspaceId: string,
     group: string,
@@ -194,18 +195,13 @@ export function LiveBoard({ cards: initialCards, csms }: Props) {
     const title = normalizeSlackText(fields.title).trim();
     if (!title) return;
     const now = new Date().toISOString();
-    const companyName =
-      card.customer.company_name ?? card.customer.workspace_name ?? workspaceId;
-    const hubspotUrl = hubspotCompanyUrl(card.customer.hubspot_company_id);
     const newStep: LifecycleStep = {
       id: newTodoId(),
       title,
       completed: false,
       due_date: fields.due_date,
       stage: group,
-      details: `Manually added via the dashboard by ${
-        viewerEmail ?? "a teammate"
-      } for ${companyName}.${hubspotUrl ? `\nHubSpot: ${hubspotUrl}` : ""}`,
+      details: fields.details,
       completed_at: null,
     };
 
@@ -225,7 +221,7 @@ export function LiveBoard({ cards: initialCards, csms }: Props) {
       await addLifecycleStep({
         id: newStep.id,
         title,
-        details: newStep.details ?? null,
+        details: fields.details,
         due_date: fields.due_date,
         surface_at: fields.surface_at,
         priority: fields.priority,

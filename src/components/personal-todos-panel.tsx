@@ -11,8 +11,6 @@ import {
 } from "@/lib/personal-todos/types";
 import { normalizeSlackText } from "@/lib/personal-todos/normalize-text";
 import { CHECKLIST_GROUP_OPTIONS } from "@/lib/lifecycle/checklist-groups";
-import { hubspotCompanyUrl } from "@/lib/links";
-import { useViewerEmail } from "@/lib/auth-client";
 import { DoneCheckbox } from "./done-checkbox";
 import { SybillSyncControl } from "./sybill-sync-control";
 import { TodoCelebration } from "./todo-celebration";
@@ -132,7 +130,6 @@ export function PersonalTodosPanel({
   sybillIngestEnabled = false,
   playbookCompanies = [],
 }: PersonalTodosPanelProps = {}) {
-  const viewerEmail = useViewerEmail();
   const [todos, setTodos] = useState<PersonalTodo[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [savedAt, setSavedAt] = useState<string | null>(null);
@@ -396,18 +393,14 @@ export function PersonalTodosPanel({
       selectedCompany && draftChecklistGroup
         ? { company: selectedCompany, group: draftChecklistGroup }
         : null;
-    const hubspotUrl = playbook
-      ? hubspotCompanyUrl(playbook.company.hubspot_company_id)
-      : null;
 
     const todo: PersonalTodo = {
       id: newTodoId(),
       title,
-      details: playbook
-        ? `Manually added via the dashboard by ${
-            viewerEmail ?? "a teammate"
-          } for ${playbook.company.name}.${hubspotUrl ? `\nHubSpot: ${hubspotUrl}` : ""}`
-        : null,
+      // No auto-generated text here — the title itself already
+      // carries the "{company} — " prefix (see maybeAutofillTitle),
+      // so there's nothing left for details to restate.
+      details: null,
       due_date: draftDueDate || null,
       surface_at: draftSurfaceAt || null,
       priority: draftPriority || null,
@@ -782,17 +775,6 @@ function TodoRow({
               visualDone ? "line-through text-muted" : ""
             }`}
           />
-          <button
-            type="button"
-            onClick={onOpenNotes}
-            title={todo.details ? `Note: ${todo.details}` : "Add a note"}
-            aria-label={todo.details ? "Edit note" : "Add a note"}
-            className={`text-[13px] leading-none flex-shrink-0 ${
-              todo.details ? "" : "opacity-30 hover:opacity-70"
-            }`}
-          >
-            📝
-          </button>
           {todo.priority ? (
             <span
               className={`text-[11px] px-1.5 py-0.5 rounded ${priorityStyle(
@@ -881,9 +863,22 @@ function TodoRow({
             <span>Slack reminders</span>
           </label>
         </div>
-        {todo.details ? (
-          <div className="mt-1 text-xs text-muted">{renderDetails(todo.details)}</div>
-        ) : null}
+        <div className="mt-1 flex items-start gap-1.5">
+          <button
+            type="button"
+            onClick={onOpenNotes}
+            title={todo.details ? `Note: ${todo.details}` : "Add a note"}
+            aria-label={todo.details ? "Edit note" : "Add a note"}
+            className={`text-[13px] leading-none flex-shrink-0 ${
+              todo.details ? "" : "opacity-30 hover:opacity-70"
+            }`}
+          >
+            📝
+          </button>
+          {todo.details ? (
+            <div className="text-xs text-muted min-w-0">{renderDetails(todo.details)}</div>
+          ) : null}
+        </div>
       </div>
       <button
         type="button"
