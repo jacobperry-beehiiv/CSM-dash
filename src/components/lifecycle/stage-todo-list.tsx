@@ -39,6 +39,13 @@ interface Props {
   flatGroupTitle?: string;
 }
 
+/** Above-the-fold cap on completed items per stage group — a
+ *  long-lived account's checklist otherwise keeps every completed
+ *  item on the card forever, crowding out what's actually open.
+ *  Mirrors personal-todos-panel.tsx's "Show completed (N)" pattern,
+ *  just applied per stage group instead of once for the whole list. */
+const RECENT_COMPLETED_LIMIT = 5;
+
 /**
  * Card-level checklist, grouped by stage. When steps carry a `stage`
  * label (Onboarding board today), every stage that has any matched
@@ -66,6 +73,14 @@ export function StageTodoList({
   const [editingDetailsId, setEditingDetailsId] = useState<string | null>(
     null
   );
+  // Which stage groups have "Show N more completed" expanded — keyed
+  // by stage name (stable across a currentStage change, unlike
+  // CollapsibleSection's own remount-on-stage-change key below), so
+  // toggling one group open doesn't get silently reset when the card
+  // is dragged to a new column.
+  const [expandedCompletedGroups, setExpandedCompletedGroups] = useState<
+    Set<string>
+  >(new Set());
 
   if (steps.length === 0) return null;
 
@@ -83,6 +98,89 @@ export function StageTodoList({
   }
 
   const hasStageLabels = seenOrder.some((k) => k !== "");
+
+  function renderStep(s: LifecycleStep) {
+    return (
+      <li key={s.id} className="flex flex-col gap-0.5">
+        <div className="flex items-start gap-2 min-w-0">
+          <div className="flex-shrink-0 mt-px">
+            <DoneCheckbox
+              done={s.completed}
+              onToggle={() => editable && onToggle(s.id)}
+              size={18}
+              ariaLabel={`Mark "${s.title}" complete`}
+            />
+          </div>
+          {onEditDetails && editable ? (
+            <button
+              type="button"
+              title={
+                s.details
+                  ? `${s.title}\n\n${s.details}`
+                  : `${s.title} — click to add a note`
+              }
+              onClick={() => setEditingDetailsId(s.id)}
+              className={`text-xs min-w-0 break-words text-left hover:underline ${
+                s.completed ? "text-subtle line-through" : "text-fg"
+              }`}
+            >
+              {s.title}
+              {s.details ? (
+                <span className="ml-1" aria-label="Has a note">
+                  📝
+                </span>
+              ) : null}
+            </button>
+          ) : (
+            <span
+              title={s.details ? `${s.title}\n\n${s.details}` : s.title}
+              className={`text-xs min-w-0 break-words ${
+                s.completed ? "text-subtle line-through" : "text-fg"
+              }`}
+            >
+              {s.title}
+              {onEditDetails && s.details ? (
+                <span className="ml-1" aria-label="Has a note">
+                  📝
+                </span>
+              ) : null}
+            </span>
+          )}
+        </div>
+        {onEditDueDate ? (
+          <div className="pl-[26px] flex items-center gap-1">
+            <span className="text-[10px] text-subtle">due</span>
+            <input
+              type="date"
+              value={s.due_date ?? ""}
+              onChange={(e) =>
+                editable && onEditDueDate(s.id, e.target.value || null)
+              }
+              disabled={!editable}
+              draggable={false}
+              className="text-[10px] text-subtle bg-transparent border-none p-0 leading-none disabled:opacity-60"
+            />
+          </div>
+        ) : s.due_date ? (
+          <span className="text-[10px] text-subtle pl-[26px]">
+            due {fmtDate(s.due_date)}
+          </span>
+        ) : null}
+      </li>
+    );
+  }
+
+  function toggleCompletedGroup(key: string) {
+    setExpandedCompletedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.add(key);
+      }
+      return next;
+    });
+  }
 
   // Every stage with at least one matched to-do, in board order —
   // not just current-and-earlier. Falls back to array order for any
@@ -114,6 +212,15 @@ export function StageTodoList({
         if (groupSteps.length === 0) return null;
         const isCurrent = !hasStageLabels || key === currentStage;
         const doneCount = groupSteps.filter((s) => s.completed).length;
+
+        const pending = groupSteps.filter((s) => !s.completed);
+        const completedSorted = groupSteps
+          .filter((s) => s.completed)
+          .sort((a, b) => (b.completed_at ?? "").localeCompare(a.completed_at ?? ""));
+        const recentCompleted = completedSorted.slice(0, RECENT_COMPLETED_LIMIT);
+        const olderCompleted = completedSorted.slice(RECENT_COMPLETED_LIMIT);
+        const groupExpanded = expandedCompletedGroups.has(key);
+
         return (
           <CollapsibleSection
             key={`${key}::${currentStage}`}
@@ -127,76 +234,22 @@ export function StageTodoList({
             bodyClassName="p-2"
           >
             <ul className="space-y-2">
-              {groupSteps.map((s) => (
-                <li key={s.id} className="flex flex-col gap-0.5">
-                  <div className="flex items-start gap-2 min-w-0">
-                    <div className="flex-shrink-0 mt-px">
-                      <DoneCheckbox
-                        done={s.completed}
-                        onToggle={() => editable && onToggle(s.id)}
-                        size={18}
-                        ariaLabel={`Mark "${s.title}" complete`}
-                      />
-                    </div>
-                    {onEditDetails && editable ? (
-                      <button
-                        type="button"
-                        title={
-                          s.details
-                            ? `${s.title}\n\n${s.details}`
-                            : `${s.title} — click to add a note`
-                        }
-                        onClick={() => setEditingDetailsId(s.id)}
-                        className={`text-xs min-w-0 break-words text-left hover:underline ${
-                          s.completed ? "text-subtle line-through" : "text-fg"
-                        }`}
-                      >
-                        {s.title}
-                        {s.details ? (
-                          <span className="ml-1" aria-label="Has a note">
-                            📝
-                          </span>
-                        ) : null}
-                      </button>
-                    ) : (
-                      <span
-                        title={s.details ? `${s.title}\n\n${s.details}` : s.title}
-                        className={`text-xs min-w-0 break-words ${
-                          s.completed ? "text-subtle line-through" : "text-fg"
-                        }`}
-                      >
-                        {s.title}
-                        {onEditDetails && s.details ? (
-                          <span className="ml-1" aria-label="Has a note">
-                            📝
-                          </span>
-                        ) : null}
-                      </span>
-                    )}
-                  </div>
-                  {onEditDueDate ? (
-                    <div className="pl-[26px] flex items-center gap-1">
-                      <span className="text-[10px] text-subtle">due</span>
-                      <input
-                        type="date"
-                        value={s.due_date ?? ""}
-                        onChange={(e) =>
-                          editable &&
-                          onEditDueDate(s.id, e.target.value || null)
-                        }
-                        disabled={!editable}
-                        draggable={false}
-                        className="text-[10px] text-subtle bg-transparent border-none p-0 leading-none disabled:opacity-60"
-                      />
-                    </div>
-                  ) : s.due_date ? (
-                    <span className="text-[10px] text-subtle pl-[26px]">
-                      due {fmtDate(s.due_date)}
-                    </span>
-                  ) : null}
-                </li>
-              ))}
+              {pending.map(renderStep)}
+              {recentCompleted.map(renderStep)}
             </ul>
+            {olderCompleted.length > 0 ? (
+              <button
+                type="button"
+                onClick={() => toggleCompletedGroup(key)}
+                className="mt-1.5 text-[10px] text-subtle hover:text-fg"
+              >
+                {groupExpanded ? "▾" : "▸"} Show {olderCompleted.length} more
+                completed
+              </button>
+            ) : null}
+            {groupExpanded ? (
+              <ul className="space-y-2 mt-2">{olderCompleted.map(renderStep)}</ul>
+            ) : null}
           </CollapsibleSection>
         );
       })}

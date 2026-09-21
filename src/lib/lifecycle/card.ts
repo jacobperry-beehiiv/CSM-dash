@@ -14,6 +14,15 @@ export interface LifecycleStep {
   title: string;
   completed: boolean;
   due_date: string | null;
+  /** ISO timestamp the step was checked off, mirroring
+   *  PersonalTodo.completed_at — null while open. Drives the "most
+   *  recent 5 completed, rest behind a toggle" truncation in
+   *  stage-todo-list.tsx: without a real completion timestamp there'd
+   *  be no principled way to decide which completed items are
+   *  "recent." Undefined for a "renewal_stage" checklist (see
+   *  checklist_kind on LifecycleCard) — that view has no independent
+   *  per-item completion history to draw from. */
+  completed_at?: string | null;
   /** Which board column this step belongs to (e.g. "Pre-kickoff"),
    *  when the board has that concept — undefined for boards whose
    *  steps don't map onto a stage (e.g. Live's mixed playbook todos

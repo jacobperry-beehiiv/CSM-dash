@@ -137,6 +137,7 @@ export function buildLiveCard(
       due_date: t.due_date,
       stage: resolveTodoStage(t, stepStages),
       details: t.details,
+      completed_at: t.completed_at,
     })),
   };
 }
