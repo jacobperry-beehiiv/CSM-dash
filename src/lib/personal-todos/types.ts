@@ -177,9 +177,12 @@ export function newTodoId(): string {
 
 /** "Is this todo's surface date in the future?" — surface_at is
  *  YYYY-MM-DD; we compare as dates so timezones don't shift it by a
- *  day. Pass today's YMD (UTC) for stable cross-isolate behavior. */
+ *  day. Pass today's YMD (UTC) for stable cross-isolate behavior.
+ *  Takes a minimal structural type (not the full PersonalTodo) so the
+ *  Lifecycle board's LifecycleStep — same surface_at field, different
+ *  shape otherwise — can reuse this instead of re-implementing it. */
 export function isScheduledFor(
-  todo: PersonalTodo,
+  todo: { surface_at?: string | null },
   todayYmd: string
 ): boolean {
   if (!todo.surface_at) return false;
