@@ -10,17 +10,27 @@ import {
   addLifecycleStep,
 } from "@/lib/lifecycle/toggle-step";
 import { buildRenewalChecklist, setLifecycleStage } from "@/lib/lifecycle/renewal-checklist";
-import { LIVE_ASSIGNABLE_STAGES, LIVE_ONGOING_GROUP } from "@/lib/lifecycle/live-quarter";
+import {
+  LIVE_ASSIGNABLE_STAGES,
+  LIVE_ONGOING_GROUP,
+  MONTHLY_COLUMN,
+} from "@/lib/lifecycle/live-quarter";
 import { useZendeskOverlay } from "@/lib/data/use-zendesk-overlay";
 import { newTodoId } from "@/lib/personal-todos/types";
 import { normalizeSlackText } from "@/lib/personal-todos/normalize-text";
 import type { AddTodoFields } from "./add-todo-modal";
-import { KanbanColumns, UNSORTED } from "./kanban-columns";
+import { KanbanColumns } from "./kanban-columns";
 import { LifecycleCardModal } from "./lifecycle-card-modal";
 import { LifecycleFilterBar } from "./lifecycle-filter-bar";
 import { fmtDate } from "../format";
 
-const LIVE_QUARTER_COLUMNS = ["Q1", "Q2", "Q3", "Renewal"];
+// No "Unsorted" column here — unlike Onboarding, this board is fully
+// computed (computeLiveQuarter always returns one of these 5 labels,
+// never null), so an Unsorted catch-all would only ever sit empty.
+// "Q4" is the monthly-billed bucket — see live-quarter.ts's module
+// doc comment for why it's kept separate from the Q1→Renewal annual
+// countdown instead of folded in.
+const LIVE_QUARTER_COLUMNS = ["Q1", "Q2", "Q3", "Renewal", MONTHLY_COLUMN];
 
 interface Props {
   cards: LifecycleCard[];
@@ -65,7 +75,7 @@ export function LiveBoard({ cards: initialCards, csms }: Props) {
     setCards(initialCards);
   }, [initialCards]);
 
-  const columns = useMemo(() => [UNSORTED, ...LIVE_QUARTER_COLUMNS], []);
+  const columns = useMemo(() => LIVE_QUARTER_COLUMNS, []);
 
   const visibleCards = useMemo(() => {
     let out = cards;
@@ -89,8 +99,11 @@ export function LiveBoard({ cards: initialCards, csms }: Props) {
     const m = new Map<string, LifecycleCard[]>();
     for (const col of columns) m.set(col, []);
     for (const c of visibleCards) {
-      const col = c.stage ?? UNSORTED;
-      const list = m.get(col) ?? m.get(UNSORTED)!;
+      // computeLiveQuarter always returns one of LIVE_QUARTER_COLUMNS
+      // — the "Q1" fallback here only guards against a stage value
+      // this board's own column list hasn't been updated to include.
+      const col = c.stage ?? "Q1";
+      const list = m.get(col) ?? m.get("Q1")!;
       list.push(c);
     }
     for (const list of m.values()) list.sort(compareByRenewalDate);
@@ -324,11 +337,15 @@ export function LiveBoard({ cards: initialCards, csms }: Props) {
         onAddTodo={(workspaceId, group, fields) =>
           void handleAddTodo(workspaceId, group, fields)
         }
-        renderCardMeta={(c) => (
-          <span className="text-xs text-subtle">
-            Renews {fmtDate(c.customer.contract_renewal)}
-          </span>
-        )}
+        renderCardMeta={(c) =>
+          c.stage === MONTHLY_COLUMN ? (
+            <span className="text-xs text-subtle">Monthly billing</span>
+          ) : (
+            <span className="text-xs text-subtle">
+              Renews {fmtDate(c.customer.contract_renewal)}
+            </span>
+          )
+        }
       />
       {openCard ? (
         <LifecycleCardModal card={openCard} onClose={() => setOpenWorkspaceId(null)} />
