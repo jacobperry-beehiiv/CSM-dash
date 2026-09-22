@@ -187,7 +187,7 @@ export const SLACK_NOTIFICATION_DEFINITIONS: SlackNotificationDefinition[] = [
     kind: "enterprise_requests_digest",
     label: "Enterprise Request Loop — weekly digest",
     description:
-      "Monday DM per CSM listing every feature request from their book that shipped in the last 7 days and hasn't been marked Notified yet. Deep-links back into /csm?tab=live-this-week so the CSM can draft the outreach in one click.",
+      "Monday DM per CSM listing every feature request from their book that shipped in the last 7 days and hasn't been marked Notified yet. Deep-links back into /csm?tab=live-requests so the CSM can draft the outreach in one click.",
     schedule: "Mondays ~9:30am CT (cron only)",
     has_destination: false,
   },

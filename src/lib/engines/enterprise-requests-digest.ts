@@ -25,7 +25,7 @@ import { resolveConfidence } from "../data/enterprise-requests-types";
  * Groups by the customer's assigned CSM, opens a DM to each CSM via
  * `csm_user_ids[csm_handle]` → `resolveSlackChannelId`, and posts one
  * message per CSM listing every shipped-this-week request from their
- * book with a deep-link into `/csm?tab=live-this-week&csm=<handle>`
+ * book with a deep-link into `/csm?tab=live-requests&csm=<handle>`
  * so they can draft the outreach.
  *
  * Dry-run mode returns the composed message + row set without
@@ -97,9 +97,9 @@ function composeMessage(
     const account = r.workspace_name ? `*${r.workspace_name}*` : "(unknown)";
     return `• ${account}: ${linkedTitle}${beta}${shipLink}`;
   });
-  const cta = `\n_→ <${DASHBOARD_URL_BASE}/csm?tab=live-this-week&csm=${encodeURIComponent(
+  const cta = `\n_→ <${DASHBOARD_URL_BASE}/csm?tab=live-requests&csm=${encodeURIComponent(
     per.csm_handle
-  )}|Open the Live This Week queue on the dashboard>_`;
+  )}|Open your Live requests queue on the dashboard>_`;
   const overflow =
     rows.length > 10 ? `\n_…and ${rows.length - 10} more._` : "";
   return `${header}\n\n${bullets.join("\n")}${overflow}${cta}`;

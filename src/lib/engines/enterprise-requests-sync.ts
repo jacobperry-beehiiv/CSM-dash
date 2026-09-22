@@ -31,7 +31,7 @@ import type { Customer } from "../types";
  * fallback), and writes the whole snapshot to KV under
  * `csm:enterprise-requests:v1`.
  *
- * Consumers (customer profile Requests section, /csm live-this-week
+ * Consumers (customer profile Requests section, /csm live-requests
  * queue tab, filter chip) read the snapshot; nothing else calls
  * Linear at request time.
  *
