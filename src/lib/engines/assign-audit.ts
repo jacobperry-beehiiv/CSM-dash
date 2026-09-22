@@ -2,37 +2,56 @@
  * @bot assign partial-state audit.
  *
  * Cross-references the customer book against per-CSM personal-todo
- * blobs and HubSpot's `customer_folder` property to enumerate
- * accounts whose @bot assign flow appears to have died mid-flight
- * during the 2026-06-23 → 2026-09-22 window where the view-submission
+ * blobs and the HubSpot fields the assign flow writes, to enumerate
+ * accounts whose @bot assign appears to have died mid-flight during
+ * the 2026-06-23 → 2026-09-22 window where the view-submission
  * handler was blowing through Vercel's 15s serverless timeout. See
  * PR #254 for the async-dispatch fix; this engine is the audit trail.
  *
  * Read-only — never writes, never DMs. Feeds an /admin page that
  * lists the affected accounts so a CSM can decide per-row whether to
- *   • run the existing /api/lifecycle/backfill-onboarding endpoint
- *     to rebuild the missing to-do batch, and/or
- *   • run the /settings/customer-folders sweep to fuzzy-match an
- *     orphaned Drive folder back to HubSpot's customer_folder prop,
- *   • re-run @bot assign (now safe post-#254) as a full reset.
+ *   • re-run @bot assign (safe now, post-#254 — todo dedupe stays
+ *     idempotent, HubSpot writes are set-not-append)
+ *   • run /api/lifecycle/backfill-onboarding for just the todos step,
+ *   • run /settings/customer-folders sweep to fuzzy-match an
+ *     orphaned Drive folder back to HubSpot's customer_folder prop.
  *
- * Two signals — a row is included when either misses:
+ * Four signals covering the four HubSpot fields the assign flow
+ * writes, plus the todo batch:
  *
- *   1. `slack_assign` batch on the assigned CSM's personal to-do
- *      list, keyed by `source_meta.hubspot_company_id` → the todos
- *      step of the assign flow.
- *   2. `customer_folder` property on the HubSpot company → the Drive
- *      folder creation + template-seed + property PATCH steps.
+ *   1. `customer_success_manager` (step 1)              — the gate;
+ *      if missing, no @bot run has happened at all, so we don't
+ *      audit further (also skips manually-assigned rows that were
+ *      never routed through @bot).
+ *   2. `property_company_status` (step 1)               — "Live" /
+ *      "Onboarding" / other. Any non-empty value counts: CSMs can
+ *      legitimately change status later, so a downstream "Live"
+ *      still proves step 1 landed.
+ *   3. `property_risk_level` (step 1)                   — @bot writes
+ *      "Light Green" but CSMs can adjust later. Any non-empty value
+ *      counts, same reasoning as status.
+ *   4. `property_customer_folder` (step 5)              — the Drive
+ *      folder URL PATCH; missing means the second HubSpot PATCH
+ *      never ran (usually implies Drive step 4/4b also failed).
+ *   5. `slack_assign` open todo batch on the assigned CSM's list
+ *      (step 3)                                         — dedupe-
+ *      keyed on `source_meta.hubspot_company_id`.
  *
- * False positives — the audit intentionally over-includes; both are
- * cheap to dismiss on review:
- *   • Accounts reassigned manually in HubSpot (no @bot run) will look
- *     like "no todos", correctly — the same backfill flow works for
- *     them too (that's what /api/lifecycle/backfill-onboarding was
- *     originally built for).
- *   • Accounts where a CSM cleared the todo batch after completion
- *     will look like "no todos" — filtered somewhat by only counting
- *     open todos (this engine matches @bot's own dedupe check).
+ * A row is included when the CSM is set (guard #1 passes) but any
+ * of signals #2–#5 is missing. Rows sort by "most-broken first"
+ * then newest reassignment.
+ *
+ * False positives — intentional; both cheap to dismiss on review:
+ *   • Accounts reassigned manually in HubSpot (no @bot run) will
+ *     have CSM set but no todos, no folder. That's fine — the
+ *     backfill flow works for them too (that's what
+ *     /api/lifecycle/backfill-onboarding was originally built for).
+ *   • Accounts where the CSM cleared the todo batch after
+ *     completion appear as "missing todos". Reduced by only
+ *     counting OPEN todos, matching @bot's dedupe check.
+ *   • Older assignments that legitimately never had a Drive folder
+ *     (pre-2026-06-23) are filtered out via
+ *     `property_csm_owner_change_date >= TEMPLATE_SEED_INTRODUCED_AT`.
  */
 
 import { loadCustomers } from "../data/load-customers";
@@ -43,37 +62,17 @@ import type { Customer } from "../types";
 /** Date (inclusive) when template seeding first entered the @bot
  *  assign flow — PR #43, "Onboarding assign: pre-seed Drive folder
  *  from a template". Before this the flow ran in ~5s and fit under
- *  Vercel's 15s ceiling. Change-date filter uses this as the
- *  lower bound so pre-template-seed assignments (which weren't at
- *  risk) don't clutter the audit. */
+ *  Vercel's 15s ceiling. Change-date filter uses this as the lower
+ *  bound so pre-template-seed assignments (which weren't at risk)
+ *  don't clutter the audit. */
 export const TEMPLATE_SEED_INTRODUCED_AT = "2026-06-23";
 
-/** Fingerprint of which step of the assign flow appears to have
- *  timed out. Not perfectly resolvable without Vercel logs, but the
- *  combination of "todos" + "customer_folder" signals lets us guess:
- *
- *    no_todos_no_folder            — timed out at or before step 3
- *                                    (todo creation); nothing after
- *                                    the HubSpot PATCH landed
- *    todos_present_folder_missing  — timed out at step 4/4b/5 (Drive
- *                                    folder create → template seed →
- *                                    HubSpot customer_folder PATCH);
- *                                    todos exist but the folder link
- *                                    doesn't. Also matches step 4/4b
- *                                    where the folder itself was
- *                                    never created, so this bucket
- *                                    is a superset.
- *    folder_present_todos_missing  — atypical: HubSpot property set
- *                                    but no todos. Suggests the todo
- *                                    write raced with a dedup, or a
- *                                    manual customer_folder edit
- *                                    happened without a @bot run.
- */
-export type AssignAuditFingerprint =
-  | "no_todos_no_folder"
-  | "todos_present_folder_missing"
-  | "folder_present_todos_missing";
-
+/** One row per affected account. Boolean signals mirror the HubSpot
+ *  fields the assign flow sets, plus the todo batch — see the class
+ *  comment on this module for what each corresponds to in the flow.
+ *  Observed values on the enum fields are carried through for the UI
+ *  so a reviewer can see whether a status/risk was changed to a
+ *  legitimate later value vs. empty. */
 export interface AssignAuditRow {
   workspace_id: string;
   workspace_name: string;
@@ -81,9 +80,15 @@ export interface AssignAuditRow {
   hubspot_company_id: string;
   csm_email: string;
   csm_owner_change_date: string | null;
-  missing_todos: boolean;
+  missing_status: boolean;
+  missing_risk_level: boolean;
   missing_customer_folder: boolean;
-  fingerprint: AssignAuditFingerprint;
+  missing_todos: boolean;
+  observed_status: string | null;
+  observed_risk_level: string | null;
+  /** How many of the four signals are missing (0-4). Drives the
+   *  primary sort; higher = more work needed. */
+  missing_count: number;
 }
 
 export interface AssignAuditReport {
@@ -91,10 +96,18 @@ export interface AssignAuditReport {
   scanned_customers: number;
   scanned_csms: number;
   affected: AssignAuditRow[];
-  /** Totals per fingerprint for the summary card. */
-  totals: Record<AssignAuditFingerprint, number>;
-  /** ISO timestamp the audit ran. Used to stamp "as of" in the UI. */
+  totals: {
+    total_affected: number;
+    missing_status: number;
+    missing_risk_level: number;
+    missing_customer_folder: number;
+    missing_todos: number;
+  };
   ran_at: string;
+}
+
+function isEmpty(v: string | null | undefined): boolean {
+  return !v || v.trim() === "";
 }
 
 export async function runAssignAudit(): Promise<AssignAuditReport> {
@@ -113,11 +126,11 @@ export async function runAssignAudit(): Promise<AssignAuditReport> {
     if (!c.hubspot_company_id) continue;
     if (!c.workspace_id) continue;
 
-    // The CSM-owner-change-date filter scopes the audit to accounts
-    // reassigned during the affected window. Accounts with no
-    // recorded change date fall through unchanged — safer to over-
-    // audit than to miss a legitimately-broken assignment because
-    // HubSpot's property-history didn't stamp a date.
+    // Scope to accounts reassigned during the affected window.
+    // Accounts with no recorded change date fall through unchanged
+    // — safer to over-audit than to miss a legitimately-broken
+    // assignment because HubSpot's property-history didn't stamp a
+    // date.
     const changeDate = (c.property_csm_owner_change_date ?? "").slice(0, 10);
     if (changeDate && changeDate < TEMPLATE_SEED_INTRODUCED_AT) continue;
 
@@ -140,15 +153,16 @@ export async function runAssignAudit(): Promise<AssignAuditReport> {
       if (typeof cid === "string" && cid) assignBatchCompanies.add(cid);
     }
     for (const c of list) {
-      const hasTodos = assignBatchCompanies.has(c.hubspot_company_id!);
-      const hasFolder = Boolean(c.property_customer_folder?.trim());
-      if (hasTodos && hasFolder) continue;
-      const fingerprint: AssignAuditFingerprint =
-        !hasTodos && !hasFolder
-          ? "no_todos_no_folder"
-          : hasTodos && !hasFolder
-            ? "todos_present_folder_missing"
-            : "folder_present_todos_missing";
+      const missing_todos = !assignBatchCompanies.has(c.hubspot_company_id!);
+      const missing_status = isEmpty(c.property_company_status);
+      const missing_risk_level = isEmpty(c.property_risk_level);
+      const missing_customer_folder = isEmpty(c.property_customer_folder);
+      const missing_count =
+        (missing_todos ? 1 : 0) +
+        (missing_status ? 1 : 0) +
+        (missing_risk_level ? 1 : 0) +
+        (missing_customer_folder ? 1 : 0);
+      if (missing_count === 0) continue;
       affected.push({
         workspace_id: c.workspace_id!,
         workspace_name: c.workspace_name ?? "",
@@ -156,28 +170,42 @@ export async function runAssignAudit(): Promise<AssignAuditReport> {
         hubspot_company_id: c.hubspot_company_id!,
         csm_email: csm,
         csm_owner_change_date: c.property_csm_owner_change_date ?? null,
-        missing_todos: !hasTodos,
-        missing_customer_folder: !hasFolder,
-        fingerprint,
+        missing_status,
+        missing_risk_level,
+        missing_customer_folder,
+        missing_todos,
+        observed_status: c.property_company_status ?? null,
+        observed_risk_level: c.property_risk_level ?? null,
+        missing_count,
       });
     }
   }
 
-  // Newest reassignment first so a reviewer sees today's broken
-  // flows at the top; older cases sink to the bottom where they're
-  // likely already worked around.
+  // Most-broken first (all four missing → likely never ran past
+  // step 1), then newest reassignment date so today's live problems
+  // sit above months-old edge cases.
   affected.sort((a, b) => {
+    if (b.missing_count !== a.missing_count) {
+      return b.missing_count - a.missing_count;
+    }
     const ad = a.csm_owner_change_date ?? "";
     const bd = b.csm_owner_change_date ?? "";
     return bd.localeCompare(ad);
   });
 
-  const totals: Record<AssignAuditFingerprint, number> = {
-    no_todos_no_folder: 0,
-    todos_present_folder_missing: 0,
-    folder_present_todos_missing: 0,
+  const totals = {
+    total_affected: affected.length,
+    missing_status: 0,
+    missing_risk_level: 0,
+    missing_customer_folder: 0,
+    missing_todos: 0,
   };
-  for (const row of affected) totals[row.fingerprint]++;
+  for (const row of affected) {
+    if (row.missing_status) totals.missing_status++;
+    if (row.missing_risk_level) totals.missing_risk_level++;
+    if (row.missing_customer_folder) totals.missing_customer_folder++;
+    if (row.missing_todos) totals.missing_todos++;
+  }
 
   return {
     window_start: TEMPLATE_SEED_INTRODUCED_AT,
