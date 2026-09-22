@@ -12,6 +12,7 @@ import type {
   EnterpriseRequestRow,
   NotifiedEntry,
 } from "../data/enterprise-requests-types";
+import { resolveConfidence } from "../data/enterprise-requests-types";
 
 /**
  * Enterprise Request Loop — weekly per-CSM DM digest.
@@ -63,6 +64,11 @@ export interface DigestResult {
   per_csm: DigestPerCsm[];
   csms_notified: number;
   rows_notified: number;
+  /** Rows inside the 7-day window that were withheld because their
+   *  promotion is `needs_review`. Surfaced so a dry run tells you how
+   *  much is waiting in the exceptions queue rather than silently
+   *  reporting a quiet week. */
+  rows_skipped_needs_review: number;
   no_op: null | "disabled" | "cron_disabled" | "no_rows";
   dry_run: boolean;
 }
@@ -125,6 +131,7 @@ export async function runEnterpriseRequestsDigest(
       per_csm: [],
       csms_notified: 0,
       rows_notified: 0,
+      rows_skipped_needs_review: 0,
       no_op: "disabled",
       dry_run: dryRun,
     };
@@ -135,6 +142,7 @@ export async function runEnterpriseRequestsDigest(
       per_csm: [],
       csms_notified: 0,
       rows_notified: 0,
+      rows_skipped_needs_review: 0,
       no_op: "cron_disabled",
       dry_run: dryRun,
     };
@@ -159,6 +167,10 @@ export async function runEnterpriseRequestsDigest(
   }
 
   const cutoff = Date.now() - SEVEN_DAYS_MS;
+  // Rows in-window but withheld by the confidence gate. Reported on
+  // the result so a dry run distinguishes "quiet week" from "three
+  // things are sitting in the exceptions queue".
+  let skippedNeedsReview = 0;
   // Group by CSM handle.
   const byCsm = new Map<string, DigestRowSummary[]>();
   for (const [workspaceId, bucket] of Object.entries(snapshot.rows)) {
@@ -172,6 +184,18 @@ export async function runEnterpriseRequestsDigest(
       if (!row.promoted_at) continue;
       const promotedAt = Date.parse(row.promoted_at);
       if (!Number.isFinite(promotedAt) || promotedAt < cutoff) continue;
+      // Confidence gate. Only unambiguous ships reach a CSM's DMs:
+      // an exact changelog link, or a #devs-shipped hit on a Bug /
+      // UI-UX ticket. Features seen only in #devs-shipped, fuzzy
+      // changelog matches, and tickets whose work type we couldn't
+      // resolve all sit in the exceptions queue until a human
+      // confirms them — a late notification is recoverable, a CSM
+      // telling a customer "your request shipped" about something
+      // still behind a flag is not.
+      if (resolveConfidence(row) !== "confirmed") {
+        skippedNeedsReview += 1;
+        continue;
+      }
       const entry: NotifiedEntry = notifiedBucket[row.linear_issue_id] ?? {};
       if (entry.notified_at) continue;
       if (sentBucket[row.linear_issue_id]) continue; // Already DM'd.
@@ -198,6 +222,7 @@ export async function runEnterpriseRequestsDigest(
       per_csm: [],
       csms_notified: 0,
       rows_notified: 0,
+      rows_skipped_needs_review: skippedNeedsReview,
       no_op: "no_rows",
       dry_run: dryRun,
     };
@@ -271,6 +296,7 @@ export async function runEnterpriseRequestsDigest(
     ),
     csms_notified: csmsNotified,
     rows_notified: rowsNotified,
+    rows_skipped_needs_review: skippedNeedsReview,
     no_op: null,
     dry_run: dryRun,
   };

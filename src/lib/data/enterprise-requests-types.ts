@@ -46,6 +46,50 @@ export type PromotionSource =
   | "linear_state" // Linear state → Dismissed/Canceled (→ Not planned)
   | "manual"; // CSM/admin manually stamped via the exception queue
 
+/**
+ * How much we'd stake a customer conversation on a promotion.
+ * Deliberately separate from `derived_state`: the state is what we
+ * BELIEVE shipped, the confidence is whether we're willing to tell a
+ * CSM to go tell their customer about it.
+ *
+ * Only `confirmed` rows reach the weekly digest DM. `needs_review`
+ * rows still render on the customer profile (the signal is real and
+ * useful context) but never get pushed at a CSM until a human
+ * confirms them from the exceptions queue.
+ *
+ * The asymmetry is intentional: a false negative costs a CSM a week
+ * of latency on good news. A false positive has them tell a customer
+ * "your request shipped" about something still behind a flag — which
+ * burns trust we can't cheaply rebuild.
+ *
+ * Confirmed requires an unambiguous signal:
+ *   • an exact linear.app link in a #topic-product-changelog post
+ *     (the changelog IS the customer-facing release note), or
+ *   • a #devs-shipped hit on a ticket Linear labels Bug or
+ *     UI/UX Improvement (those ship straight to production — there's
+ *     no beta-flag rollout stage for a bugfix).
+ *
+ * Everything else is needs_review — see `decidePromotion`.
+ */
+export type PromotionConfidence = "confirmed" | "needs_review";
+
+/** Why a promotion landed in `needs_review`. Rendered verbatim in the
+ *  exceptions queue so a reviewer knows what to go check, rather than
+ *  re-deriving it from source + work_type. */
+export type NeedsReviewReason =
+  /** Feature seen only in #devs-shipped. Merged ≠ released: features
+   *  routinely sit behind a flag until the changelog post goes out. */
+  | "feature_awaiting_changelog"
+  /** Neither Linear's work_type label nor the #devs-shipped ship
+   *  parens resolved to Bug / UI-UX / Feature. We don't know what
+   *  this is, so we don't know whether "merged" means "customer can
+   *  see it". */
+  | "unresolved_work_type"
+  /** Changelog matched on feature name + description similarity
+   *  rather than an exact Linear link. Good enough to surface, not
+   *  good enough to notify on. */
+  | "changelog_fuzzy_match";
+
 /** Where a row entered the snapshot. Rows from the nightly Linear
  *  sync are "customer_needs" — the canonical path. Rows we picked up
  *  from a Slack post in #enterprise-bugs-and-feature-requests that
@@ -153,6 +197,25 @@ export interface EnterpriseRequestRow {
   ship_url: string | null;
   ship_date: string | null;
   promotion_history: PromotionHistoryEntry[];
+  /** Whether this promotion is trustworthy enough to DM a CSM about.
+   *  Optional because rows promoted before the confidence model
+   *  existed don't carry it — read those through
+   *  `resolveConfidence()`, which back-derives the value from
+   *  promotion_source + work_type rather than defaulting blindly. */
+  promotion_confidence?: PromotionConfidence | null;
+  /** Why the row needs review. Only meaningful when
+   *  `promotion_confidence === "needs_review"`. */
+  needs_review_reason?: NeedsReviewReason | null;
+  /** Set when a human cleared the row out of the exceptions queue —
+   *  either confirming the ship (confidence flips to `confirmed`,
+   *  making it digest-eligible) or dismissing it as not customer-
+   *  facing. */
+  review?: {
+    decided_at: string;
+    decided_by: string;
+    decision: "confirmed" | "dismissed";
+    note?: string | null;
+  } | null;
   /** How this row entered the snapshot. Absent on rows that predate
    *  the slack-intake sweep — those default to "customer_needs" on
    *  read for backward compatibility. */
@@ -193,6 +256,12 @@ export interface PendingShip {
   ship_url: string | null;
   ship_date: string | null;
   detected_at: string;
+  /** Carried through from the shipped-sweep's decision so the
+   *  deferred pass applies the same confidence it would have at
+   *  detection time. Optional for blobs written before the
+   *  confidence model — those resolve via `resolveConfidence()`. */
+  confidence?: PromotionConfidence;
+  needs_review_reason?: NeedsReviewReason | null;
   /** Snapshot of the project state at detection time — surfaced in
    *  the UI badge so a CSM can see "shipped, waiting on project X"
    *  without a second Linear round-trip. */
@@ -388,5 +457,47 @@ export function estimateToTShirt(estimate: number | null): string | null {
       return "XL";
     default:
       return null;
+  }
+}
+
+/**
+ * Read a row's promotion confidence, back-deriving it for rows that
+ * predate the confidence model.
+ *
+ * Legacy rows (promoted before `promotion_confidence` existed) carry
+ * the field as undefined. Defaulting those to `confirmed` would
+ * preserve exactly the false positives the model exists to stop;
+ * defaulting to `needs_review` would dump every already-notified row
+ * into the exceptions queue. So instead we re-derive what the current
+ * rules WOULD have decided from the fields the row already has:
+ *
+ *   • exact changelog match  → confirmed (unambiguous then and now)
+ *   • devs_shipped + Bug / UI-UX → confirmed
+ *   • anything else → needs_review
+ *
+ * `linear_state` promotions (→ Not planned) are confirmed: a canceled
+ * Linear ticket is a fact, not an inference, and the digest doesn't
+ * DM on them anyway.
+ */
+export function resolveConfidence(
+  row: Pick<
+    EnterpriseRequestRow,
+    "promotion_confidence" | "promotion_source" | "work_type"
+  >
+): PromotionConfidence {
+  if (row.promotion_confidence) return row.promotion_confidence;
+  switch (row.promotion_source) {
+    case "changelog":
+    case "linear_state":
+    case "manual":
+      return "confirmed";
+    case "devs_shipped":
+      return row.work_type === "Bug" || row.work_type === "UI/UX Improvement"
+        ? "confirmed"
+        : "needs_review";
+    case "changelog_fuzzy":
+      return "needs_review";
+    default:
+      return "needs_review";
   }
 }
