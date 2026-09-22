@@ -4,6 +4,10 @@ import { useEffect, useState } from "react";
 import type { Customer } from "@/lib/types";
 import { fmtDate, fmtCurrency } from "../format";
 import { OutreachModal } from "../outreach-modal";
+import {
+  ConfidenceExplainer,
+  confidenceBasis,
+} from "../enterprise-requests/confidence-copy";
 import type {
   CustomerImpactLabel,
   EnterpriseRequestDerivedState,
@@ -55,6 +59,8 @@ interface TicketGroup {
   promotion_source: PromotionSource | null;
   promotion_confidence: PromotionConfidence;
   needs_review_reason: NeedsReviewReason | null;
+  reviewed_by: string | null;
+  reviewed_at: string | null;
   ship_url: string | null;
   ship_date: string | null;
   promoted_at: string | null;
@@ -192,6 +198,8 @@ export function LiveRequests({ csmParam, customersByWorkspace }: Props) {
         the loop, then check Notified so the row drops off the weekly
         digest.
       </p>
+
+      <ConfidenceExplainer />
 
       <div className="flex flex-wrap items-center gap-3 rounded-lg border border-border bg-surface px-3 py-2">
         <label className="inline-flex items-center gap-1.5 text-xs text-fg">
@@ -397,6 +405,22 @@ function GroupCard({
             <div className="tabular-nums">{fmtCurrency(group.total_arr)} ARR</div>
           ) : null}
         </div>
+      </div>
+
+      <div
+        className={`mt-1.5 text-[10px] leading-snug ${
+          group.promotion_confidence === "confirmed"
+            ? "text-muted"
+            : "text-red-700 dark:text-red-300"
+        }`}
+      >
+        {confidenceBasis({
+          confidence: group.promotion_confidence,
+          source: group.promotion_source,
+          work_type: group.work_type,
+          needs_review_reason: group.needs_review_reason,
+          reviewed_by: group.reviewed_by,
+        })}
       </div>
 
       <ul className="mt-2 space-y-1">
