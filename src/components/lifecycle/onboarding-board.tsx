@@ -1,10 +1,22 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { compareByRenewalDate, type LifecycleCard } from "@/lib/lifecycle/card";
-import { toggleLifecycleStep } from "@/lib/lifecycle/toggle-step";
+import { compareByRenewalDate, type LifecycleCard, type LifecycleStep } from "@/lib/lifecycle/card";
+import {
+  toggleLifecycleStep,
+  patchLifecycleStepDueDate,
+  patchLifecycleStepDetails,
+  patchLifecycleStepTitle,
+  addLifecycleStep,
+} from "@/lib/lifecycle/toggle-step";
+import { useZendeskOverlay } from "@/lib/data/use-zendesk-overlay";
+import { newTodoId } from "@/lib/personal-todos/types";
+import { normalizeSlackText } from "@/lib/personal-todos/normalize-text";
+import type { AddTodoFields } from "./add-todo-modal";
 import { KanbanColumns, UNSORTED } from "./kanban-columns";
 import { LifecycleCardModal } from "./lifecycle-card-modal";
+import { LifecycleFilterBar } from "./lifecycle-filter-bar";
+import { BackfillOnboardingButton } from "./backfill-onboarding-button";
 import { fmtDate } from "../format";
 
 interface Props {
@@ -16,6 +28,10 @@ interface Props {
    *  — leftmost, per product decision, unlike the old Renewal board's
    *  trailing one. */
   stages: string[];
+  /** Every CSM handle in the current book — feeds the filter row's
+   *  CsmSelector, same list the book/at-risk/renewals tabs already
+   *  pass to theirs. */
+  csms: string[];
 }
 
 async function patchOnboardingStage(workspaceId: string, stage: string | null) {
@@ -44,10 +60,22 @@ async function patchOnboardingStage(workspaceId: string, stage: string | null) {
  * decision (src/app/csm/page.tsx re-fetches on next load), not
  * something this component does itself.
  */
-export function OnboardingBoard({ cards: initialCards, stages }: Props) {
+export function OnboardingBoard({ cards: initialCards, stages, csms }: Props) {
   const [cards, setCards] = useState(initialCards);
   const [openWorkspaceId, setOpenWorkspaceId] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
+  const [zendeskOn, setZendeskOn] = useState(false);
   const seeded = useRef(new Set<string>());
+  const zendeskOverlay = useZendeskOverlay();
+
+  // useState(initialCards) only seeds state on first mount — switching
+  // the CsmSelector calls router.refresh(), which re-runs the server
+  // component and hands this component a genuinely new `cards` prop,
+  // but without this, the already-mounted board would keep showing
+  // the previous CSM's stale local state instead of picking it up.
+  useEffect(() => {
+    setCards(initialCards);
+  }, [initialCards]);
 
   useEffect(() => {
     for (const c of cards) {
@@ -75,17 +103,35 @@ export function OnboardingBoard({ cards: initialCards, stages }: Props) {
 
   const columns = useMemo(() => [UNSORTED, ...stages], [stages]);
 
+  const visibleCards = useMemo(() => {
+    let out = cards;
+    const q = search.trim().toLowerCase();
+    if (q) {
+      out = out.filter((c) => {
+        const name = c.customer.company_name ?? c.customer.workspace_name ?? "";
+        return name.toLowerCase().includes(q);
+      });
+    }
+    if (zendeskOn && zendeskOverlay) {
+      out = out.filter((c) => {
+        const wsId = c.customer.workspace_id;
+        return wsId ? (zendeskOverlay.rows[wsId]?.total_30d ?? 0) > 0 : false;
+      });
+    }
+    return out;
+  }, [cards, search, zendeskOn, zendeskOverlay]);
+
   const cardsByColumn = useMemo(() => {
     const m = new Map<string, LifecycleCard[]>();
     for (const col of columns) m.set(col, []);
-    for (const c of cards) {
+    for (const c of visibleCards) {
       const col = c.stage ?? c.suggested_stage ?? UNSORTED;
       const list = m.get(col) ?? m.get(UNSORTED)!;
       list.push(c);
     }
     for (const list of m.values()) list.sort(compareByRenewalDate);
     return m;
-  }, [cards, columns]);
+  }, [visibleCards, columns]);
 
   const openCard =
     cards.find((c) => c.customer.workspace_id === openWorkspaceId) ?? null;
@@ -105,6 +151,21 @@ export function OnboardingBoard({ cards: initialCards, stages }: Props) {
     } catch {
       setCards(prevCards);
     }
+  }
+
+  function handleBackfilled(workspaceId: string, steps: LifecycleStep[]) {
+    setCards((prev) =>
+      prev.map((c) =>
+        c.customer.workspace_id === workspaceId
+          ? {
+              ...c,
+              steps,
+              totalCount: steps.length,
+              completedCount: steps.filter((s) => s.completed).length,
+            }
+          : c
+      )
+    );
   }
 
   async function handleToggleStep(workspaceId: string, stepId: string) {
@@ -128,8 +189,147 @@ export function OnboardingBoard({ cards: initialCards, stages }: Props) {
     }
   }
 
+  async function handleEditDueDate(
+    workspaceId: string,
+    stepId: string,
+    dueDate: string | null
+  ) {
+    const prevCards = cards;
+    setCards((prev) =>
+      prev.map((c) =>
+        c.customer.workspace_id === workspaceId
+          ? {
+              ...c,
+              steps: c.steps.map((s) =>
+                s.id === stepId ? { ...s, due_date: dueDate } : s
+              ),
+            }
+          : c
+      )
+    );
+    try {
+      await patchLifecycleStepDueDate(stepId, dueDate);
+    } catch {
+      setCards(prevCards);
+    }
+  }
+
+  async function handleEditDetails(
+    workspaceId: string,
+    stepId: string,
+    details: string | null
+  ) {
+    const prevCards = cards;
+    setCards((prev) =>
+      prev.map((c) =>
+        c.customer.workspace_id === workspaceId
+          ? {
+              ...c,
+              steps: c.steps.map((s) =>
+                s.id === stepId ? { ...s, details } : s
+              ),
+            }
+          : c
+      )
+    );
+    try {
+      await patchLifecycleStepDetails(stepId, details);
+    } catch {
+      setCards(prevCards);
+    }
+  }
+
+  async function handleEditTitle(workspaceId: string, stepId: string, title: string) {
+    const prevCards = cards;
+    setCards((prev) =>
+      prev.map((c) =>
+        c.customer.workspace_id === workspaceId
+          ? {
+              ...c,
+              steps: c.steps.map((s) => (s.id === stepId ? { ...s, title } : s)),
+            }
+          : c
+      )
+    );
+    try {
+      await patchLifecycleStepTitle(stepId, title);
+    } catch {
+      setCards(prevCards);
+    }
+  }
+
+  /** On-card "+" (AddTodoModal, via StageTodoList) — same PersonalTodo
+   *  shape personal-todos-panel.tsx's composer builds for a
+   *  company+group pair, just sourced from the card's own customer
+   *  instead of a picked-from-a-dropdown one. The modal itself already
+   *  pre-fills the title with "{company} — " (same autofill the main
+   *  composer does on company select), so there's no auto-generated
+   *  details text here — details is just whatever the CSM typed into
+   *  the modal's own notes field, or null. */
+  async function handleAddTodo(
+    workspaceId: string,
+    group: string,
+    fields: AddTodoFields
+  ) {
+    const card = cards.find((c) => c.customer.workspace_id === workspaceId);
+    if (!card?.customer.hubspot_company_id) return;
+    const title = normalizeSlackText(fields.title).trim();
+    if (!title) return;
+    const now = new Date().toISOString();
+    const newStep: LifecycleStep = {
+      id: newTodoId(),
+      title,
+      completed: false,
+      due_date: fields.due_date,
+      stage: group,
+      details: fields.details,
+      completed_at: null,
+      surface_at: fields.surface_at,
+    };
+
+    const prevCards = cards;
+    setCards((prev) =>
+      prev.map((c) =>
+        c.customer.workspace_id === workspaceId
+          ? {
+              ...c,
+              steps: [...c.steps, newStep],
+              totalCount: c.totalCount + 1,
+            }
+          : c
+      )
+    );
+    try {
+      await addLifecycleStep({
+        id: newStep.id,
+        title,
+        details: fields.details,
+        due_date: fields.due_date,
+        surface_at: fields.surface_at,
+        priority: fields.priority,
+        source: "slack_assign",
+        source_meta: {
+          hubspot_company_id: card.customer.hubspot_company_id,
+          checklist_group: group,
+        },
+        completed_at: null,
+        created_at: now,
+        updated_at: now,
+      });
+    } catch {
+      setCards(prevCards);
+    }
+  }
+
   return (
     <>
+      <LifecycleFilterBar
+        search={search}
+        onSearchChange={setSearch}
+        csms={csms}
+        zendeskOn={zendeskOn}
+        onToggleZendesk={() => setZendeskOn((v) => !v)}
+      />
       <KanbanColumns
         columns={columns}
         cardsByColumn={cardsByColumn}
@@ -139,6 +339,28 @@ export function OnboardingBoard({ cards: initialCards, stages }: Props) {
         onCardClick={setOpenWorkspaceId}
         onToggleStep={(workspaceId, stepId) =>
           void handleToggleStep(workspaceId, stepId)
+        }
+        onEditDueDate={(workspaceId, stepId, dueDate) =>
+          void handleEditDueDate(workspaceId, stepId, dueDate)
+        }
+        onEditDetails={(workspaceId, stepId, details) =>
+          void handleEditDetails(workspaceId, stepId, details)
+        }
+        onEditTitle={(workspaceId, stepId, title) =>
+          void handleEditTitle(workspaceId, stepId, title)
+        }
+        onAddTodo={(workspaceId, group, fields) =>
+          void handleAddTodo(workspaceId, group, fields)
+        }
+        renderEmptyChecklist={(c) =>
+          c.editable ? (
+            <BackfillOnboardingButton
+              workspaceId={c.customer.workspace_id}
+              onBackfilled={(steps) =>
+                handleBackfilled(c.customer.workspace_id, steps)
+              }
+            />
+          ) : null
         }
         renderCardMeta={(c) => {
           const isPastDue =

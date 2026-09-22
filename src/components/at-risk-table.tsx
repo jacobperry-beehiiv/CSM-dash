@@ -230,14 +230,23 @@ export function AtRiskTable({
   // page benefits especially because Flag H ("Stale HubSpot
   // activity") often fires on accounts a CSM actually emailed last
   // week; the Gmail overlay surfaces the correction visually.
-  const ownerEmailList = useMemo(
+  // Each row's Gmail lookup routes through THAT row's assigned CSM's
+  // token — so viewing Olivia's book shows Olivia-flavored "Last
+  // contacted" dates (and Gmail-aware Flag H) regardless of who's
+  // logged in. Rows whose assigned CSM has no owner_email fall back
+  // to the viewer's own Gmail cookie via the endpoint's default.
+  const gmailTargets = useMemo(
     () =>
       data.accounts
-        .map((a) => a.customer.owner_email ?? "")
-        .filter((e): e is string => Boolean(e)),
+        .filter((a) => Boolean(a.customer.owner_email))
+        .map((a) => ({
+          email: a.customer.owner_email as string,
+          csmEmail:
+            a.customer.customer_success_manager_email ?? null,
+        })),
     [data.accounts]
   );
-  const gmail = useGmailLastContact(ownerEmailList);
+  const gmail = useGmailLastContact(gmailTargets);
   // Per-table column visibility. Persists to
   // `csm:table-columns:at-risk` in localStorage so a CSM's
   // hide/show preferences survive reloads + nav.

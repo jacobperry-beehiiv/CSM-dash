@@ -14,9 +14,15 @@ interface Props {
   tabs: Tab[];
   defaultTab?: string;
   param?: string;
+  /** Drops the container's bottom border + margin so the tab strip
+   *  can sit inline as one element among others on a shared row
+   *  (e.g. Lifecycle's Onboarding/Live sub-tabs next to the CSM
+   *  selector) instead of owning its own full-width row. Each tab's
+   *  own active-state underline is unaffected. */
+  bare?: boolean;
 }
 
-export function TabBar({ tabs, defaultTab, param = "tab" }: Props) {
+export function TabBar({ tabs, defaultTab, param = "tab", bare = false }: Props) {
   const params = useSearchParams();
   const current = params.get(param) ?? defaultTab ?? tabs[0]?.id;
 
@@ -35,7 +41,11 @@ export function TabBar({ tabs, defaultTab, param = "tab" }: Props) {
     // slot anyway, which made the tab strip look like it was wrapped
     // in an iframe. Wrap instead if a future page adds enough tabs to
     // overflow the viewport.
-    <div className="border-b border-border mb-6 flex flex-wrap gap-1">
+    <div
+      className={`flex flex-wrap gap-1 ${
+        bare ? "" : "border-b border-border mb-6"
+      }`}
+    >
       {tabs.map((t) => {
         const active = current === t.id;
         return (

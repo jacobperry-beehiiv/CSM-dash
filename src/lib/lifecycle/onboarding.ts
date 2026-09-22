@@ -2,6 +2,7 @@ import type { AtRiskAccount, Customer } from "@/lib/types";
 import type { PersonalTodo } from "@/lib/personal-todos/types";
 import { daysUntilRenewal } from "@/lib/renewals/date";
 import { matchPlaybookTodos } from "./todos";
+import { resolvePlaybookStepKey, resolveTodoStage } from "./step-stage-config";
 import { atRiskSummary, isEditableBy, type LifecycleCard } from "./card";
 
 /**
@@ -80,15 +81,13 @@ function onboardingTodosOf(
   stepStages: Record<string, string | null>
 ): PersonalTodo[] {
   return matchedTodos.filter((t) => {
-    const stage = stepStages[t.source_meta?.playbook_step ?? ""];
+    const stage = resolveTodoStage(t, stepStages);
     return stage != null && ONBOARDING_ASSIGNABLE_STAGES.includes(stage);
   });
 }
 
 function hasLivePlaybookTodos(matchedTodos: PersonalTodo[]): boolean {
-  return matchedTodos.some((t) =>
-    t.source_meta?.playbook_step?.startsWith("live:")
-  );
+  return matchedTodos.some((t) => resolvePlaybookStepKey(t)?.startsWith("live:"));
 }
 
 /** This board's checklist, soonest due date first (nulls last) —
@@ -144,8 +143,7 @@ function suggestOnboardingStage(
   if (ordered.length === 0) return null;
   const firstOpen = ordered.find((t) => !t.completed_at);
   if (!firstOpen) return "Launch";
-  const stepKey = firstOpen.source_meta?.playbook_step ?? "";
-  return stepStages[stepKey] ?? null;
+  return resolveTodoStage(firstOpen, stepStages);
 }
 
 export function buildOnboardingCard(
@@ -184,7 +182,10 @@ export function buildOnboardingCard(
       title: t.title,
       completed: Boolean(t.completed_at),
       due_date: t.due_date,
-      stage: stepStages[t.source_meta?.playbook_step ?? ""] ?? null,
+      stage: resolveTodoStage(t, stepStages),
+      details: t.details,
+      completed_at: t.completed_at,
+      surface_at: t.surface_at,
     })),
   };
 }

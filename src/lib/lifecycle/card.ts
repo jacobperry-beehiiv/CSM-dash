@@ -14,6 +14,15 @@ export interface LifecycleStep {
   title: string;
   completed: boolean;
   due_date: string | null;
+  /** ISO timestamp the step was checked off, mirroring
+   *  PersonalTodo.completed_at — null while open. Drives the "most
+   *  recent 5 completed, rest behind a toggle" truncation in
+   *  stage-todo-list.tsx: without a real completion timestamp there'd
+   *  be no principled way to decide which completed items are
+   *  "recent." Undefined for a "renewal_stage" checklist (see
+   *  checklist_kind on LifecycleCard) — that view has no independent
+   *  per-item completion history to draw from. */
+  completed_at?: string | null;
   /** Which board column this step belongs to (e.g. "Pre-kickoff"),
    *  when the board has that concept — undefined for boards whose
    *  steps don't map onto a stage (e.g. Live's mixed playbook todos
@@ -22,6 +31,23 @@ export interface LifecycleStep {
    *  expanded when its stage matches the card's current stage,
    *  collapsed otherwise. */
   stage?: string | null;
+  /** Free-text CSM notes — the same PersonalTodo.details field the
+   *  Slack-generated playbook steps already carry (context, blockers,
+   *  outreach links). Undefined/null renders no note; present, it
+   *  drives the "has a note" icon and the click-to-edit textarea in
+   *  stage-todo-list.tsx. Only ever populated for "playbook"-kind
+   *  steps — the Renewal-stage checklist has no independent details
+   *  to carry. */
+  details?: string | null;
+  /** ISO YYYY-MM-DD, mirroring PersonalTodo.surface_at — when set to a
+   *  future date, the step is "scheduled": stage-todo-list.tsx hides
+   *  it behind a per-group "Scheduled (N)" toggle instead of showing
+   *  it inline, same dormant-until-its-date treatment the main
+   *  "Your to-dos" panel already gives these (see isScheduledFor in
+   *  personal-todos/types.ts, reused directly by stage-todo-list.tsx
+   *  rather than re-implemented). Undefined for a "renewal_stage"
+   *  checklist — same scope as completed_at/details. */
+  surface_at?: string | null;
 }
 
 export interface LifecycleCard {
@@ -63,6 +89,16 @@ export interface LifecycleCard {
   checklist_kind?: "playbook" | "renewal_stage";
   atRisk: { flags: Pick<RiskFlag, "code" | "label">[]; priorityScore: number } | null;
   steps: LifecycleStep[];
+  /** "renewal_stage" cards only: the same "Live" ongoing-checklist
+   *  todos a Q1/Q2/Q3/Q4 card would show, rendered as a second,
+   *  independent group beneath the fixed 5-item renewal checklist —
+   *  a Renewal-column account is still "live" day-to-day, so it keeps
+   *  a place for ad-hoc ongoing to-dos even while its renewal motion
+   *  is tracked separately. Undefined for a "playbook" checklist —
+   *  that card's own `steps` already covers the "Live" group. Always
+   *  a real (possibly empty) array for a "renewal_stage" card, never
+   *  undefined — see buildLiveCard. */
+  liveOngoingSteps?: LifecycleStep[];
 }
 
 export function atRiskSummary(

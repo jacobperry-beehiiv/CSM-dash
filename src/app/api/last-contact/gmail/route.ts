@@ -18,29 +18,55 @@ export const maxDuration = 60;
 /**
  * "Last contacted via Gmail" lookup.
  *
- *   GET  /api/last-contact/gmail?email=foo@acme.com  → single
- *   POST /api/last-contact/gmail                     → batch
- *        body: { emails: string[], forceFresh?: boolean }
+ *   GET  /api/last-contact/gmail?email=foo@acme.com[&csm_email=…] → single
+ *   POST /api/last-contact/gmail                                  → batch
  *
- * Auth: NextAuth session (dashboard pages call this) + must have an
- * active Gmail connection (csm_active_email cookie set on the
- * Gmail-OAuth callback). The Gmail query uses the active CSM's token,
- * so the response only reflects what THAT CSM has emailed / been
- * emailed by.
+ * Batch body accepts either shape:
+ *   • { targets: [{ email, csm_email? }, …], forceFresh? }  — new; per-
+ *     target CSM overrides so each row uses its ASSIGNED CSM's token
+ *     (Jacob viewing Olivia's book sees Olivia's Gmail dates, not his).
+ *   • { emails: string[], forceFresh? }  — legacy; treats every target
+ *     as belonging to the viewer's active Gmail connection.
+ *
+ * Auth: NextAuth session. When a target's `csm_email` names a CSM
+ * OTHER than the viewer, we use that CSM's stored OAuth token via
+ * getValidAccessTokenFor(). Any signed-in dashboard user can request
+ * a lookup under any known CSM — matches the "everyone sees the whole
+ * book" posture of the rest of the app. Targets whose csm_email has
+ * no valid token are simply skipped (row falls back to HubSpot-only).
+ *
+ * When no csm_email is set on a target (or the legacy `emails` shape
+ * is used), the endpoint falls back to the viewer's active Gmail
+ * cookie — preserves the pre-change behavior for callers that
+ * haven't migrated.
  *
  * Three failure modes the UI should distinguish:
  *
- *   401 → no NextAuth session OR no active Gmail connection.
- *         Body: { error, no_active_gmail: true } when it's the
- *         second case so the UI can point users to /settings/gmail.
- *   403 → Gmail token doesn't have gmail.readonly scope.
- *         Body: { error, needs_reconsent: true } so the UI can show
- *         the "Reconnect Gmail to enable Gmail-source contact dates"
- *         banner with a /settings/gmail link.
- *   200 → results map (POST) or single result (GET).
+ *   401 → no NextAuth session. If EVERY target routes to the viewer
+ *         fallback and the viewer has no active Gmail cookie, we
+ *         return { error, no_active_gmail: true } so the UI can
+ *         point them at /settings/gmail. When at least one target
+ *         has a csm_email override, we don't require the viewer's
+ *         own connection.
+ *   403 → Gmail token doesn't have gmail.readonly scope (surfaced
+ *         from at least one lookup in the batch).
+ *         Body: { error, needs_reconsent: true }.
+ *   200 → results map (POST) or single result (GET). Missing entries
+ *         mean either "no matching email" or "CSM token not
+ *         available"; caller can distinguish by falling back to
+ *         HubSpot data for the missing rows.
  */
 
+interface BatchTarget {
+  email: string;
+  csm_email?: string | null;
+}
+
 interface BatchBody {
+  /** New per-target shape. Preferred. */
+  targets?: BatchTarget[];
+  /** Legacy flat email list. Every entry routes to the viewer's
+   *  active Gmail cookie (pre-change behavior). */
   emails?: string[];
   forceFresh?: boolean;
 }
@@ -50,8 +76,25 @@ export async function GET(req: Request) {
   if (!session?.user?.email) {
     return NextResponse.json({ error: "Sign in required" }, { status: 401 });
   }
-  const activeEmail = await getActiveEmail();
-  if (!activeEmail) {
+  const url = new URL(req.url);
+  const target = (url.searchParams.get("email") ?? "").trim();
+  const forceFresh = url.searchParams.get("forceFresh") === "1";
+  // Optional: fetch under a specific CSM's Gmail token rather than
+  // the viewer's active-Gmail cookie. Threaded from the at-risk +
+  // customer tables so each row's "Last contacted" reflects the
+  // ASSIGNED CSM's inbox regardless of who's viewing.
+  const csmEmailParam = (url.searchParams.get("csm_email") ?? "").trim();
+  if (!target) {
+    return NextResponse.json(
+      { error: "Missing required query param: email" },
+      { status: 400 }
+    );
+  }
+  // Resolve the CSM whose token we'll use. Explicit param wins; else
+  // fall back to the viewer's active-Gmail cookie so pre-migration
+  // callers keep working.
+  const csmEmail = csmEmailParam || (await getActiveEmail());
+  if (!csmEmail) {
     return NextResponse.json(
       {
         error:
@@ -59,15 +102,6 @@ export async function GET(req: Request) {
         no_active_gmail: true,
       },
       { status: 401 }
-    );
-  }
-  const url = new URL(req.url);
-  const target = (url.searchParams.get("email") ?? "").trim();
-  const forceFresh = url.searchParams.get("forceFresh") === "1";
-  if (!target) {
-    return NextResponse.json(
-      { error: "Missing required query param: email" },
-      { status: 400 }
     );
   }
   try {
@@ -85,7 +119,7 @@ export async function GET(req: Request) {
       const sig = customerEmailSignals(cust);
       if (sig.emails.length > 0 || sig.domains.length > 0) {
         const entry = await lastEmailForCustomerCached(
-          activeEmail,
+          csmEmail,
           { key: targetLc, emails: sig.emails, domains: sig.domains },
           { forceFresh }
         );
@@ -100,7 +134,7 @@ export async function GET(req: Request) {
         });
       }
     }
-    const entry = await lastEmailWithCached(activeEmail, target, {
+    const entry = await lastEmailWithCached(csmEmail, target, {
       forceFresh,
     });
     return NextResponse.json({
@@ -123,7 +157,7 @@ export async function GET(req: Request) {
       );
     }
     const msg = e instanceof Error ? e.message : "Unknown error";
-    console.error("[last-contact/gmail GET]", { activeEmail, target, msg });
+    console.error("[last-contact/gmail GET]", { csmEmail, target, msg });
     return NextResponse.json({ error: msg }, { status: 500 });
   }
 }
@@ -133,8 +167,67 @@ export async function POST(req: Request) {
   if (!session?.user?.email) {
     return NextResponse.json({ error: "Sign in required" }, { status: 401 });
   }
-  const activeEmail = await getActiveEmail();
-  if (!activeEmail) {
+  let body: BatchBody;
+  try {
+    body = (await req.json()) as BatchBody;
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
+  }
+  // Normalize legacy `emails: string[]` shape into `targets` with no
+  // csm_email override. Legacy callers keep routing through the
+  // viewer's active-Gmail cookie exactly as before.
+  const rawTargets: BatchTarget[] = Array.isArray(body.targets)
+    ? body.targets
+    : Array.isArray(body.emails)
+      ? body.emails.map((e) => ({ email: e }))
+      : [];
+  if (rawTargets.length === 0) {
+    return NextResponse.json(
+      {
+        error:
+          "Body must include a non-empty `targets` array (or legacy `emails`)",
+      },
+      { status: 400 }
+    );
+  }
+  // Soft cap so a runaway client (or a customer book with thousands
+  // of unique owner emails) doesn't burn through Gmail quota in one
+  // request. The customer book is small in practice; 500 is generous.
+  const MAX_PER_BATCH = 500;
+  const truncated = rawTargets.slice(0, MAX_PER_BATCH);
+
+  // Bucket targets by which CSM token to use. Unspecified csm_email
+  // falls through to the viewer's active cookie. Empty-string CSM
+  // emails from the client (`csmEmail: ""` on some rows) treat as
+  // unspecified so we never try to look up a token for "".
+  const activeEmailForFallback = await getActiveEmail();
+  const buckets = new Map<string, BatchTarget[]>();
+  const missingTokenTargets: BatchTarget[] = [];
+  for (const t of truncated) {
+    const em = (t.email ?? "").trim().toLowerCase();
+    if (!em) continue;
+    const csm = (t.csm_email ?? "").trim().toLowerCase();
+    const bucketKey = csm || activeEmailForFallback || "";
+    if (!bucketKey) {
+      // No CSM specified AND viewer has no active Gmail → we can't
+      // resolve this row. Skip; caller falls back to HubSpot values.
+      missingTokenTargets.push(t);
+      continue;
+    }
+    const existing = buckets.get(bucketKey) ?? [];
+    existing.push({ email: em, csm_email: csm || null });
+    buckets.set(bucketKey, existing);
+  }
+
+  // If EVERY target routes to the viewer fallback and the viewer has
+  // no active connection, surface the same 401 shape the old handler
+  // returned so existing UI banners keep working. If at least one
+  // target has an explicit csm_email, we let the request proceed and
+  // just skip the viewer-scoped rows.
+  const allNeedViewer = truncated.every(
+    (t) => !((t.csm_email ?? "").trim())
+  );
+  if (allNeedViewer && !activeEmailForFallback) {
     return NextResponse.json(
       {
         error:
@@ -144,64 +237,94 @@ export async function POST(req: Request) {
       { status: 401 }
     );
   }
-  let body: BatchBody;
-  try {
-    body = (await req.json()) as BatchBody;
-  } catch {
-    return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
-  }
-  const emails = Array.isArray(body.emails) ? body.emails : [];
-  if (emails.length === 0) {
-    return NextResponse.json(
-      { error: "Body must include a non-empty `emails` array" },
-      { status: 400 }
-    );
-  }
-  // Soft cap so a runaway client (or a customer book with thousands
-  // of unique owner emails) doesn't burn through Gmail quota in one
-  // request. The customer book is small in practice; 500 is generous.
-  const MAX_PER_BATCH = 500;
-  const truncated = emails.slice(0, MAX_PER_BATCH);
 
   try {
     console.log("[last-contact/gmail POST]", {
-      activeEmail,
-      requested: emails.length,
+      viewer: session.user.email,
+      requested: rawTargets.length,
       processed: truncated.length,
+      buckets: buckets.size,
+      viewer_fallback: activeEmailForFallback ?? null,
       force_fresh: Boolean(body.forceFresh),
     });
-    // Resolve each input email to its customer record so we can do
-    // a per-customer multi-contact query (catches conversations
-    // with anyone at the customer's company, not just the primary
-    // owner). Inputs that don't match a customer fall through to
-    // the legacy per-email path.
     const customers = await loadCustomers();
     const byOwner = new Map<string, (typeof customers)[number]>();
     for (const c of customers) {
       const e = c.owner_email?.trim().toLowerCase();
       if (e) byOwner.set(e, c);
     }
-    const customerSignals: CustomerSignals[] = [];
-    const fallbackEmails: string[] = [];
-    for (const raw of truncated) {
-      const lc = raw.trim().toLowerCase();
-      if (!lc) continue;
-      const c = byOwner.get(lc);
-      if (!c) {
-        fallbackEmails.push(lc);
-        continue;
-      }
-      const sig = customerEmailSignals(c);
-      if (sig.emails.length === 0 && sig.domains.length === 0) {
-        fallbackEmails.push(lc);
-        continue;
-      }
-      customerSignals.push({
-        key: lc,
-        emails: sig.emails,
-        domains: sig.domains,
-      });
-    }
+
+    // Fan out one lookup per CSM bucket in parallel. Each bucket
+    // splits into per-customer targets (multi-contact match) and
+    // legacy fall-throughs (bare email).
+    const perBucketResults = await Promise.all(
+      Array.from(buckets.entries()).map(async ([csmEmail, bucketTargets]) => {
+        const customerSignals: CustomerSignals[] = [];
+        const fallbackEmails: string[] = [];
+        for (const t of bucketTargets) {
+          const c = byOwner.get(t.email);
+          if (!c) {
+            fallbackEmails.push(t.email);
+            continue;
+          }
+          const sig = customerEmailSignals(c);
+          if (sig.emails.length === 0 && sig.domains.length === 0) {
+            fallbackEmails.push(t.email);
+            continue;
+          }
+          customerSignals.push({
+            key: t.email,
+            emails: sig.emails,
+            domains: sig.domains,
+          });
+        }
+        const merged: Record<
+          string,
+          {
+            date: string | null;
+            subject: string | null;
+            from: string | null;
+            matched_email?: string | null;
+            fetched_at: string;
+            cached: boolean;
+          }
+        > = {};
+        try {
+          if (customerSignals.length > 0) {
+            const r = await lastEmailForCustomerBatch(
+              csmEmail,
+              customerSignals,
+              { forceFresh: Boolean(body.forceFresh) }
+            );
+            Object.assign(merged, r);
+          }
+          if (fallbackEmails.length > 0) {
+            const r = await lastEmailWithBatch(csmEmail, fallbackEmails, {
+              forceFresh: Boolean(body.forceFresh),
+            });
+            Object.assign(merged, r);
+          }
+        } catch (e) {
+          // A single CSM's token failing (revoked, missing scope,
+          // expired refresh) shouldn't kill the whole batch —
+          // other CSMs' rows still resolve. Bubble scope errors
+          // up to the caller only when the viewer's OWN bucket
+          // fails; other CSMs' scope issues are logged silently
+          // (they don't have a fix path from the viewer's UI).
+          if (
+            e instanceof GmailReadScopeError &&
+            csmEmail === activeEmailForFallback
+          ) {
+            throw e;
+          }
+          console.warn("[last-contact/gmail POST] bucket failed", {
+            csmEmail,
+            msg: e instanceof Error ? e.message : e,
+          });
+        }
+        return merged;
+      })
+    );
 
     const results: Record<
       string,
@@ -214,28 +337,13 @@ export async function POST(req: Request) {
         cached: boolean;
       }
     > = {};
-    if (customerSignals.length > 0) {
-      const customerResults = await lastEmailForCustomerBatch(
-        activeEmail,
-        customerSignals,
-        { forceFresh: Boolean(body.forceFresh) }
-      );
-      for (const [k, v] of Object.entries(customerResults)) {
-        results[k] = v;
-      }
-    }
-    if (fallbackEmails.length > 0) {
-      const legacy = await lastEmailWithBatch(activeEmail, fallbackEmails, {
-        forceFresh: Boolean(body.forceFresh),
-      });
-      for (const [k, v] of Object.entries(legacy)) {
-        results[k] = v;
-      }
-    }
+    for (const r of perBucketResults) Object.assign(results, r);
+
     return NextResponse.json({
       results,
       count: Object.keys(results).length,
-      truncated: emails.length > truncated.length,
+      truncated: rawTargets.length > truncated.length,
+      skipped_no_token: missingTokenTargets.length,
     });
   } catch (e) {
     if (e instanceof GmailReadScopeError) {
@@ -249,7 +357,10 @@ export async function POST(req: Request) {
       );
     }
     const msg = e instanceof Error ? e.message : "Unknown error";
-    console.error("[last-contact/gmail POST]", { activeEmail, msg });
+    console.error("[last-contact/gmail POST]", {
+      viewer: session.user.email,
+      msg,
+    });
     return NextResponse.json({ error: msg }, { status: 500 });
   }
 }

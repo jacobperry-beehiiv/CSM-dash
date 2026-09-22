@@ -1,0 +1,69 @@
+name: live-quarter-checkins
+
+# Live-board quarter check-in sweep. Creates a baseline "90-day
+# check-in" personal-todo for every eligible customer whose
+# days-until-renewal crosses into Q1, Q2, or Q3 today (computed
+# backward from their annual contract_renewal date) — a reminder to
+# touch base at least once every 90 days, tagged into the on-card
+# "Live" checklist grouping. Idempotent via a
+# (workspace_id, quarter, renewal_iso) dedupe set in KV.
+#
+# Required repo secrets (same ones renewal-milestones.yml already
+# uses — no new secrets needed):
+#   • CRON_SECRET                        — bearer; same value as the Vercel env var
+#   • DASHBOARD_URL                      — root URL, no trailing slash
+#   • VERCEL_AUTOMATION_BYPASS_SECRET    — Vercel Deployment Protection bypass
+#
+# Triggers:
+#   • daily at 13:00 UTC (ahead of the renewal-milestones sweep at
+#     15:00 UTC and the personal-todos activation sweep, so a
+#     same-day check-in todo is fully in place before either runs).
+#   • manually via "Run workflow".
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 13 * * *"
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify required secrets are set
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          DASHBOARD_URL: ${{ secrets.DASHBOARD_URL }}
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+        run: |
+          missing=()
+          for v in CRON_SECRET DASHBOARD_URL VERCEL_AUTOMATION_BYPASS_SECRET; do
+            if [ -z "${!v}" ]; then
+              missing+=("$v")
+            fi
+          done
+          if [ "${#missing[@]}" -ne 0 ]; then
+            echo "::error::Missing required repo secret(s): ${missing[*]}"
+            exit 1
+          fi
+          echo "All required secrets present."
+
+      - name: POST /api/lifecycle/live-quarter-checkin-sweep
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          DASHBOARD_URL: ${{ secrets.DASHBOARD_URL }}
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+        run: |
+          set -e
+          response=$(curl -sS -w "\n%{http_code}" -X POST \
+            -H "Authorization: Bearer ${CRON_SECRET}" \
+            -H "x-vercel-protection-bypass: ${VERCEL_AUTOMATION_BYPASS_SECRET}" \
+            -H "Content-Type: application/json" \
+            "${DASHBOARD_URL}/api/lifecycle/live-quarter-checkin-sweep")
+          body=$(echo "$response" | sed '$d')
+          code=$(echo "$response" | tail -n1)
+          echo "HTTP $code"
+          echo "$body"
+          if [ "$code" != "200" ]; then
+            echo "::error::Live-quarter check-in sweep failed with HTTP $code"
+            exit 1
+          fi
