@@ -21,6 +21,12 @@ const SECTIONS: Array<{ href: string; label: string; description: string }> = [
     description:
       "Tune the open-rate threshold, approach multipliers, and safety bound that drive the generated schedule.",
   },
+  {
+    href: "/admin/assign-audit",
+    label: "@bot assign audit",
+    description:
+      "Accounts whose Slack @bot assign flow partially landed during the 15s-timeout window (2026-06-23 → 2026-09-22). Links to the existing recovery tools.",
+  },
 ];
 
 /** Sidebar nav for /admin/* — mirrors SettingsSidebar's pattern.
