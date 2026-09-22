@@ -45,6 +45,11 @@ export default async function CustomerFoldersSettingsPage() {
        *  component so it can filter the queue to only rows whose
        *  candidate matches sit in the viewer's book by default. */
       customer_success_manager: c.customer_success_manager ?? null,
+      /** Needed so the "Customers without a folder" section can
+       *  disable the Create button for rows lacking a HubSpot link
+       *  (the create endpoint refuses those — no company to write
+       *  `customer_folder` back to). */
+      hubspot_company_id: c.hubspot_company_id ?? null,
     }));
 
   // Viewer's CSM handle — resolved from the customer book by matching
@@ -67,12 +72,15 @@ export default async function CustomerFoldersSettingsPage() {
         Customer folders sweep
       </h1>
       <p className="text-sm text-muted mb-4">
-        Scans the shared &ldquo;Customer Folders&rdquo; Drive parent, fuzzy-matches
-        each child folder to a customer in the book, and (after your
-        review) writes the folder URL into HubSpot&rsquo;s
-        {" "}<code className="font-mono text-xs">customer_folder</code>{" "}
-        property. Existing values are always preserved &mdash; the sweep only
-        backfills BLANK fields.
+        Two-sided reconciliation of HubSpot&rsquo;s{" "}
+        <code className="font-mono text-xs">customer_folder</code> property
+        against the shared &ldquo;Customer Folders&rdquo; Drive parent.
+        The <strong>scan</strong> finds orphan folders and fuzzy-matches
+        them back to a customer. The <strong>customers without a
+        folder</strong> section finds the inverse case &mdash; book
+        accounts with no folder at all &mdash; and lets you create one
+        in Drive + link it back to HubSpot in a single click. Existing
+        HubSpot values are always preserved.
       </p>
       <CustomerFoldersReview workspaces={workspaceIndex} viewerCsm={viewerCsm} />
     </div>
