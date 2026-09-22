@@ -13,6 +13,14 @@ import type {
   NotifiedEntry,
 } from "../data/enterprise-requests-types";
 import { resolveConfidence } from "../data/enterprise-requests-types";
+import { applyTodoOps, getTodosForUser } from "../personal-todos/store";
+import { userKeyFromEmail } from "../personal-todos/identity";
+import { newTodoId, type PersonalTodo } from "../personal-todos/types";
+import {
+  getConfigForSource,
+  applyTemplate,
+} from "../data/todo-source-configs";
+import { resolveTodoTiming } from "../data/todo-source-configs-types";
 
 /**
  * Enterprise Request Loop — weekly per-CSM DM digest.
@@ -73,6 +81,10 @@ export interface DigestResult {
    *  not just this week's. Drives the ops-channel nudge. */
   review_queue_depth: number;
   review_queue_posted: boolean;
+  /** Personal to-dos created across all CSMs this run. Lower than
+   *  rows_notified when a CSM already had an open to-do for the same
+   *  (customer, issue) from a previous run. */
+  todos_created: number;
   no_op: null | "disabled" | "cron_disabled" | "no_rows";
   dry_run: boolean;
 }
@@ -80,6 +92,15 @@ export interface DigestResult {
 const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
 const DASHBOARD_URL_BASE =
   process.env.DASHBOARD_URL ?? "https://csm-dash.vercel.app";
+
+/** Shift a YYYY-MM-DD string by whole days. Calendar-day math rather
+ *  than raw ms so a DST boundary can't slide a due date. */
+function shiftYmd(ymd: string, days: number): string {
+  const [y, m, d] = ymd.split("-").map((n) => Number.parseInt(n, 10));
+  const dt = new Date(Date.UTC(y, (m ?? 1) - 1, d ?? 1));
+  dt.setUTCDate(dt.getUTCDate() + days);
+  return dt.toISOString().slice(0, 10);
+}
 
 function humanCsm(csmHandle: string): string {
   return csmHandle.replace(/_/g, " ");
@@ -138,6 +159,7 @@ export async function runEnterpriseRequestsDigest(
       rows_skipped_needs_review: 0,
       review_queue_depth: 0,
       review_queue_posted: false,
+      todos_created: 0,
       no_op: "disabled",
       dry_run: dryRun,
     };
@@ -151,6 +173,7 @@ export async function runEnterpriseRequestsDigest(
       rows_skipped_needs_review: 0,
       review_queue_depth: 0,
       review_queue_posted: false,
+      todos_created: 0,
       no_op: "cron_disabled",
       dry_run: dryRun,
     };
@@ -293,6 +316,7 @@ export async function runEnterpriseRequestsDigest(
       rows_skipped_needs_review: skippedNeedsReview,
       review_queue_depth: reviewQueueDepth,
       review_queue_posted: reviewQueuePosted,
+      todos_created: 0,
       no_op: "no_rows",
       dry_run: dryRun,
     };
@@ -304,6 +328,11 @@ export async function runEnterpriseRequestsDigest(
     [];
   let csmsNotified = 0;
   let rowsNotified = 0;
+  let todosCreated = 0;
+  // Hoisted once — every CSM's to-dos render off the same config, and
+  // getConfigForSource hits KV.
+  const todoCfg = await getConfigForSource("enterprise_request_shipped");
+  const todoTiming = resolveTodoTiming(todoCfg, null);
 
   for (const [csmHandle, rowsForCsm] of byCsm) {
     rowsForCsm.sort((a, b) => b.promoted_at.localeCompare(a.promoted_at));
@@ -323,6 +352,101 @@ export async function runEnterpriseRequestsDigest(
       posted: false,
     };
     per.message = composeMessage(per, rowsForCsm);
+
+    // ── Personal to-dos.
+    //
+    // Created BEFORE the DM and independently of whether it lands: the
+    // to-do is the durable artifact. A CSM with no Slack user ID
+    // mapped (or a transient Slack failure) still needs the work item,
+    // and a DM is easy to scroll past even when it does arrive.
+    //
+    // Dedupe is the to-do store's own, not the digest's dm-sent blob —
+    // an OPEN to-do for the same (workspace, issue) means the CSM
+    // already has this on their list, so re-running the digest is a
+    // no-op. Same posture as the @bot assign playbook's
+    // hubspot_company_id check. A COMPLETED to-do doesn't block: if
+    // they closed it and the request resurfaced, a fresh one is
+    // correct.
+    if (!dryRun && csmEmail) {
+      try {
+        const userKey = userKeyFromEmail(csmEmail);
+        const existing = await getTodosForUser(userKey);
+        const openKeys = new Set(
+          existing
+            .filter(
+              (t) =>
+                t.source === "enterprise_request_shipped" &&
+                t.completed_at === null
+            )
+            .map(
+              (t) =>
+                `${t.source_meta?.workspace_id ?? ""}:${t.source_meta?.linear_issue_id ?? ""}`
+            )
+        );
+        const nowIso = new Date().toISOString();
+        const newTodos: PersonalTodo[] = [];
+        for (const r of rowsForCsm) {
+          const key = `${r.workspace_id}:${r.linear_issue_id}`;
+          if (openKeys.has(key)) continue;
+          const title = applyTemplate(todoCfg.phrasing_template, {
+            company_name: r.workspace_name ?? r.workspace_id,
+            workspace_name: r.workspace_name,
+            csm_name: csmHandle.replace(/_/g, " "),
+            request_title: r.title,
+            request_identifier: r.linear_identifier,
+          }).trim();
+          newTodos.push({
+            id: newTodoId(),
+            title: title || `Close the loop on ${r.linear_identifier}`,
+            details:
+              `${r.linear_identifier}: ${r.title}\n` +
+              `Linear: ${r.url}\n` +
+              (r.ship_url ? `Ship post: ${r.ship_url}\n` : "") +
+              `\nShipped ${r.promoted_at.slice(0, 10)} — draft the ` +
+              `close-the-loop note from the Live requests tab, then tick ` +
+              `Notified there so it drops off next week's digest.`,
+            due_date: shiftYmd(
+              nowIso.slice(0, 10),
+              todoTiming.due_offset_days ?? 3
+            ),
+            surface_at:
+              todoTiming.surface_offset_days != null &&
+              todoTiming.surface_offset_days > 0
+                ? shiftYmd(
+                    nowIso.slice(0, 10),
+                    todoTiming.surface_offset_days
+                  )
+                : null,
+            priority: null,
+            source: "enterprise_request_shipped",
+            source_meta: {
+              workspace_id: r.workspace_id,
+              linear_issue_id: r.linear_issue_id,
+              linear_identifier: r.linear_identifier,
+            },
+            completed_at: null,
+            remind_via_slack: true,
+            created_at: nowIso,
+            updated_at: nowIso,
+          });
+        }
+        if (newTodos.length > 0) {
+          await applyTodoOps(
+            userKey,
+            newTodos.map((todo) => ({ type: "add" as const, todo }))
+          );
+          todosCreated += newTodos.length;
+        }
+      } catch (e) {
+        // Never let a to-do write failure block the DM — they're
+        // independent closes on the same loop.
+        console.warn("[enterprise-requests-digest] todo write failed", {
+          csmHandle,
+          error: e instanceof Error ? e.message : e,
+        });
+      }
+    }
+
     if (!dryRun) {
       if (!userId) {
         per.error = `No Slack user ID mapped for ${csmHandle} in settings.slack.csm_user_ids — cannot DM.`;
@@ -369,6 +493,7 @@ export async function runEnterpriseRequestsDigest(
     rows_skipped_needs_review: skippedNeedsReview,
     review_queue_depth: reviewQueueDepth,
     review_queue_posted: reviewQueuePosted,
+    todos_created: todosCreated,
     no_op: null,
     dry_run: dryRun,
   };
