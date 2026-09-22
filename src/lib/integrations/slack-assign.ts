@@ -594,14 +594,33 @@ function readAssignForm(
   };
 }
 
+/**
+ * View-submission handler for the @bot assign modal.
+ *
+ * Splits the work into two phases so it fits inside Slack's 3-second
+ * ACK window and Vercel's per-function timeout, which used to guillotine
+ * the flow at 15s mid-Drive-copy:
+ *
+ *   1. THIS handler — sync validation only (form-field presence +
+ *      HubSpot paste parse). Fires a background POST to
+ *      /api/slack-webhook/assign-process and returns an empty ack
+ *      immediately, closing the modal within Slack's 3s window.
+ *   2. The background endpoint — runs `runAssignSideEffects` under
+ *      its own maxDuration=60 budget: HubSpot PATCH, deal-to-company
+ *      transpose, personal to-dos, Drive folder + template seed,
+ *      thread reply, DM confirmation.
+ *
+ * Trade-off: async validation errors (deal not found, company scope
+ * missing, HubSpot down) that used to re-render the modal now arrive
+ * as a DM instead. That's the price of no longer timing out mid-Drive-
+ * copy after 15s. Sync validation still surfaces inline as before.
+ */
 export const assignModalHandler: ViewSubmitHandler = async ({ payload }) => {
   const form = readAssignForm(payload);
   if (!form.ok) {
     return { response_action: "errors", errors: form.errors } as ViewSubmitResponse;
   }
-  const v = form.values;
-
-  const parsed = parseHubspotCompanyInput(v.hubspotCompanyInput);
+  const parsed = parseHubspotCompanyInput(form.values.hubspotCompanyInput);
   if (!parsed) {
     return {
       response_action: "errors",
@@ -610,6 +629,126 @@ export const assignModalHandler: ViewSubmitHandler = async ({ payload }) => {
           "Couldn't read a HubSpot company or deal ID. Paste a HubSpot company URL, a deal URL, or a bare company ID.",
       },
     } as ViewSubmitResponse;
+  }
+  try {
+    await dispatchAssignProcess(payload);
+  } catch (e) {
+    // Dispatch itself failed (target unreachable, secret misconfigured).
+    // DM the requester so the modal doesn't vanish into the void with
+    // nothing happening. Can't re-render the view — re-submit is their
+    // remediation.
+    console.error("[slack-assign] dispatch to assign-process failed", e);
+    await sendAssignDm(
+      payload.user.id,
+      `:x: The assign form couldn't be dispatched — ${
+        e instanceof Error ? e.message : String(e)
+      }. Nothing was applied; try again.`
+    );
+  }
+  return {};
+};
+
+/** Fire the background POST to /api/slack-webhook/assign-process. The
+ *  target ACKs immediately (via `after()`) and processes under its own
+ *  maxDuration=60, so this fetch resolves quickly and the modal closes
+ *  well within Slack's 3s window. */
+async function dispatchAssignProcess(payload: ViewSubmissionPayload): Promise<void> {
+  const secret = process.env.CRON_SECRET;
+  if (!secret) {
+    throw new Error(
+      "CRON_SECRET not configured — background assign dispatch unavailable"
+    );
+  }
+  const base =
+    process.env.NEXT_PUBLIC_APP_URL ||
+    (process.env.VERCEL_URL
+      ? `https://${process.env.VERCEL_URL}`
+      : "http://localhost:3000");
+  const bypass = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
+  const res = await fetch(`${base}/api/slack-webhook/assign-process`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${secret}`,
+      // Preview deployments have Vercel automation protection on by
+      // default; the same header the GH Actions crons use lets our
+      // own webhook reach its sibling endpoint.
+      ...(bypass ? { "x-vercel-protection-bypass": bypass } : {}),
+    },
+    body: JSON.stringify({ payload }),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(
+      `assign-process returned ${res.status}: ${text.slice(0, 200)}`
+    );
+  }
+}
+
+/** DM the requester with a status message. Standalone (not exported
+ *  through the webhook route's `ephemeralDm`) so `runAssignSideEffects`
+ *  can call it from the background endpoint without pulling that
+ *  route's imports back in. Best-effort — failures are logged but
+ *  never re-thrown; the assignment itself already landed by the time
+ *  we DM. */
+async function sendAssignDm(slackUserId: string, text: string): Promise<void> {
+  const token = process.env.SLACK_BOT_TOKEN;
+  if (!token) return;
+  try {
+    await fetch("https://slack.com/api/chat.postMessage", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json; charset=utf-8",
+      },
+      body: JSON.stringify({
+        channel: slackUserId,
+        text,
+        unfurl_links: false,
+        unfurl_media: false,
+      }),
+    });
+  } catch (e) {
+    console.warn("[slack-assign] sendAssignDm failed", e);
+  }
+}
+
+/**
+ * The heavy assign work, extracted from `assignModalHandler` when the
+ * flow started timing out at Vercel's 15s ceiling. Called from
+ * /api/slack-webhook/assign-process — that route's `after()` block
+ * gives us the full 60-second budget without blocking Slack's ACK.
+ *
+ * Every failure mode DMs the requester rather than returning to the
+ * caller: the view is already closed by the time this runs, so there's
+ * no modal left to re-render with inline errors.
+ */
+export async function runAssignSideEffects(
+  payload: ViewSubmissionPayload
+): Promise<void> {
+  // Re-validate defensively — the webhook side already ran these
+  // checks, so a failure here indicates payload corruption between
+  // hops rather than user error. Bubble to the requester so they
+  // don't wait forever on a silent flow.
+  const form = readAssignForm(payload);
+  if (!form.ok) {
+    const detail = Object.entries(form.errors)
+      .map(([k, v]) => `${k}: ${v}`)
+      .join(" · ");
+    await sendAssignDm(
+      payload.user.id,
+      `:x: Assign form validation failed after dispatch (${detail}). This is a bug — ping Jacob.`
+    );
+    return;
+  }
+  const v = form.values;
+  const parsed = parseHubspotCompanyInput(v.hubspotCompanyInput);
+  if (!parsed) {
+    await sendAssignDm(
+      payload.user.id,
+      ":x: Couldn't read a HubSpot company or deal ID after dispatch. This is a bug — ping Jacob."
+    );
+    return;
   }
 
   // Deal → resolve to associated company first. Surface a clear error
@@ -634,26 +773,22 @@ export const assignModalHandler: ViewSubmitHandler = async ({ payload }) => {
       const friendly = /403/.test(msg)
         ? "HubSpot deal lookup needs the `crm.objects.deals.read` scope on the Private App. Add it in HubSpot → Settings → Integrations → Private Apps → Scopes, then retry. (Or paste the company URL/ID directly.)"
         : `HubSpot deal lookup failed: ${msg.slice(0, 180)}`;
-      return {
-        response_action: "errors",
-        errors: { hubspot_company: friendly },
-      } as ViewSubmitResponse;
+      await sendAssignDm(payload.user.id, `:x: ${friendly}`);
+      return;
     }
     if (associated === null) {
-      return {
-        response_action: "errors",
-        errors: {
-          hubspot_company: `No HubSpot deal with ID ${parsed.id}.`,
-        },
-      } as ViewSubmitResponse;
+      await sendAssignDm(
+        payload.user.id,
+        `:x: No HubSpot deal with ID ${parsed.id}.`
+      );
+      return;
     }
     if (associated.length === 0) {
-      return {
-        response_action: "errors",
-        errors: {
-          hubspot_company: `Deal ${parsed.id} has no associated company. Link a company on the deal record in HubSpot, then re-open this form.`,
-        },
-      } as ViewSubmitResponse;
+      await sendAssignDm(
+        payload.user.id,
+        `:x: Deal ${parsed.id} has no associated company. Link a company on the deal record in HubSpot, then re-run the assign flow.`
+      );
+      return;
     }
     companyId = associated[0];
     dealResolution = {
@@ -667,26 +802,22 @@ export const assignModalHandler: ViewSubmitHandler = async ({ payload }) => {
   try {
     company = await fetchHubspotCompany(companyId);
   } catch (e) {
-    return {
-      response_action: "errors",
-      errors: {
-        hubspot_company: `HubSpot lookup failed: ${
-          (e instanceof Error ? e.message : String(e)).slice(0, 180)
-        }`,
-      },
-    } as ViewSubmitResponse;
+    await sendAssignDm(
+      payload.user.id,
+      `:x: HubSpot lookup failed: ${
+        (e instanceof Error ? e.message : String(e)).slice(0, 180)
+      }`
+    );
+    return;
   }
   if (!company) {
-    return {
-      response_action: "errors",
-      errors: {
-        hubspot_company: `No HubSpot company with ID ${companyId}${
-          dealResolution
-            ? ` (resolved from deal ${dealResolution.dealId})`
-            : ""
-        }.`,
-      },
-    } as ViewSubmitResponse;
+    await sendAssignDm(
+      payload.user.id,
+      `:x: No HubSpot company with ID ${companyId}${
+        dealResolution ? ` (resolved from deal ${dealResolution.dealId})` : ""
+      }.`
+    );
+    return;
   }
 
   const companyName = company.name?.trim() || `company ${company.id}`;
@@ -1034,8 +1165,12 @@ export const assignModalHandler: ViewSubmitHandler = async ({ payload }) => {
     }
   }
 
-  return { _ack_message: ackParts.join("\n") };
-};
+  // Modal was already closed by `assignModalHandler`; deliver the
+  // outcome as a DM so the requester has a permanent confirmation in
+  // their history (mirrors what the old `_ack_message` path did, just
+  // sent directly instead of returned to the view-submission plumbing).
+  await sendAssignDm(payload.user.id, ackParts.join("\n"));
+}
 
 // ─── To-do sequence ──────────────────────────────────────────────────
 // Templates themselves live in playbook-templates.ts (a pure, importable
