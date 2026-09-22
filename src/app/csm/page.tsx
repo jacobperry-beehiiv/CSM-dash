@@ -34,7 +34,7 @@ import { DeliverabilityLoading } from "@/components/deliverability-loading";
 import { QbrChartsTab } from "@/components/qbr-charts/qbr-charts-tab";
 import type { WorkspaceOption } from "@/components/qbr-charts/workspace-picker";
 import { WinsList } from "@/components/wins-list";
-import { LiveThisWeek } from "@/components/csm/live-this-week";
+import { LiveRequests } from "@/components/csm/live-requests";
 import { JulietFlagList } from "@/components/juliet-flag-list";
 import { RenewalsWithCalendar } from "@/components/renewals-with-calendar";
 import { isAdmin } from "@/lib/auth/admin";
@@ -110,7 +110,15 @@ export default async function CsmPage({
   // Legacy URLs may still link to ?tab=utilization. Feature/ad-network
   // filters now do that drill-down inside the consolidated book view.
   const rawTab = sp.tab ?? "book";
-  const tab = rawTab === "utilization" ? "book" : rawTab;
+  // Legacy tab aliases. `live-this-week` is still live in Slack DMs the
+  // weekly digest already sent, so it has to keep resolving after the
+  // rename to `live-requests`.
+  const tab =
+    rawTab === "utilization"
+      ? "book"
+      : rawTab === "live-this-week"
+        ? "live-requests"
+        : rawTab;
   const segment: Segment = (sp.segment as Segment) ?? "enterprise";
   const source = getDataSource();
 
@@ -158,7 +166,7 @@ export default async function CsmPage({
       ? [{ id: "wins" as const, label: "Wins & Opportunities" }]
       : []),
     ...(requestsEnabled
-      ? [{ id: "live-this-week" as const, label: "Live This Week" }]
+      ? [{ id: "live-requests" as const, label: "Live requests" }]
       : []),
   ];
 
@@ -233,7 +241,7 @@ export default async function CsmPage({
       );
     } else if (tab === "lifecycle" && !lifecycleEnabled) {
       // Flag-gated (see lifecycleEnabled above) — a direct ?tab=lifecycle
-      // link can't bypass the allowlist, same posture as wins/live-this-week.
+      // link can't bypass the allowlist, same posture as wins/live-requests.
       body = (
         <div className="text-sm text-muted italic">
           Lifecycle board isn&apos;t enabled for this account yet.
@@ -348,7 +356,7 @@ export default async function CsmPage({
         .filter((c) => c.workspace_id && flaggedIds.has(c.workspace_id))
         .map((c) => ({ customer: c, flag: flagMap[c.workspace_id as string] }));
       body = <JulietFlagList rows={rows} />;
-    } else if (tab === "live-this-week") {
+    } else if (tab === "live-requests") {
       if (!requestsEnabled) {
         body = (
           <div className="text-sm text-muted italic">
@@ -356,18 +364,20 @@ export default async function CsmPage({
           </div>
         );
       } else {
-        // Build the workspace-id → Customer map from the CSM-scoped
-        // book so the Draft outreach button opens with the full
-        // Customer object (needed for the merge-tag + recipient
-        // picker) without a second fetch. Filter by CSM up-front —
-        // an admin viewing another CSM's queue still gets that
-        // CSM's book scoped in.
-        const scoped = filterCustomers(all, { csm });
+        // Workspace-id → Customer map so Draft outreach can open the
+        // modal with the full Customer object (needed for merge tags
+        // + the recipient picker) without a second fetch.
+        //
+        // Deliberately the FULL book rather than the CSM-scoped slice:
+        // the live-requests API decides what's actionable via its
+        // per-customer `in_scope` flag, and the "All accounts" filter
+        // legitimately surfaces customers outside `csm`. Handing down
+        // only the scoped book would leave those rows unable to draft.
         const byWs: Record<string, import("@/lib/types").Customer> = {};
-        for (const c of scoped) {
+        for (const c of all) {
           if (c.workspace_id) byWs[c.workspace_id] = c;
         }
-        body = <LiveThisWeek csmParam={csm} customersByWorkspace={byWs} />;
+        body = <LiveRequests csmParam={csm} customersByWorkspace={byWs} />;
       }
     } else if (tab === "wins") {
       if (!winsEnabled) {

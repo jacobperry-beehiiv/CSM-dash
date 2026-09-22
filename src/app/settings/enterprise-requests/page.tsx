@@ -9,6 +9,7 @@ import {
   loadShippedCursor,
   loadSlackIntakeCursor,
 } from "@/lib/data/enterprise-requests";
+import { resolveConfidence } from "@/lib/data/enterprise-requests-types";
 import { fmtDate } from "@/components/format";
 import { ResyncControls } from "@/components/enterprise-requests/resync-controls";
 
@@ -50,6 +51,7 @@ export default async function EnterpriseRequestsSettingsPage() {
   let liveRows = 0;
   let slackIntakeRows = 0;
   let linearCommentRows = 0;
+  let needsReviewRows = 0;
   for (const bucket of Object.values(snapshot.rows)) {
     for (const row of Object.values(bucket)) {
       totalRows += 1;
@@ -61,6 +63,15 @@ export default async function EnterpriseRequestsSettingsPage() {
       }
       if (row.intake_source === "slack_intake") slackIntakeRows += 1;
       if (row.intake_source === "linear_comment") linearCommentRows += 1;
+      // Promoted but not confident enough to notify on, and not yet
+      // decided by a human — the depth of the exceptions queue.
+      if (
+        row.promoted_at &&
+        resolveConfidence(row) !== "confirmed" &&
+        row.review?.decision !== "dismissed"
+      ) {
+        needsReviewRows += 1;
+      }
     }
   }
   const pendingOrphans = Object.values(orphansBlob.orphans).filter(
@@ -85,7 +96,7 @@ export default async function EnterpriseRequestsSettingsPage() {
 
       <section className="mb-8 rounded-xl border border-border bg-canvas p-4">
         <h2 className="text-sm font-semibold text-fg mb-2">Snapshot status</h2>
-        <div className="grid grid-cols-2 md:grid-cols-5 gap-3 text-xs">
+        <div className="grid grid-cols-2 md:grid-cols-6 gap-3 text-xs">
           <Stat
             label="Rows in snapshot"
             value={totalRows.toString()}
@@ -114,6 +125,11 @@ export default async function EnterpriseRequestsSettingsPage() {
             label="Orphaned shipments"
             value={pendingOrphans.toString()}
             hint="Shipped-channel hits pending admin review (>14d old)."
+          />
+          <Stat
+            label="Needs review"
+            value={needsReviewRows.toString()}
+            hint="Shipped signals withheld from CSM DMs until a human confirms them."
           />
         </div>
         <div className="mt-3 grid grid-cols-1 md:grid-cols-4 gap-3 text-[11px] text-muted">
@@ -154,6 +170,14 @@ export default async function EnterpriseRequestsSettingsPage() {
               className="text-blue-600 dark:text-blue-400 hover:underline"
             >
               Orphaned shipments →
+            </Link>
+          </li>
+          <li>
+            <Link
+              href="/settings/enterprise-requests/exceptions"
+              className="text-blue-600 dark:text-blue-400 hover:underline"
+            >
+              Needs review ({needsReviewRows}) →
             </Link>
           </li>
         </ul>

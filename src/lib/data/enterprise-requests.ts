@@ -1,6 +1,7 @@
 import { kvGet, kvSet } from "../storage/kv";
 import type {
   DigestSentBlob,
+  EnterpriseRequestRow,
   EnterpriseRequestsBlob,
   LinearCommentScanCursorBlob,
   ManualMap,
@@ -11,6 +12,7 @@ import type {
   ShippedCursorBlob,
   SlackIntakeCursorBlob,
 } from "./enterprise-requests-types";
+import { linearStateToDerived } from "./enterprise-requests-types";
 
 /**
  * Enterprise Request Loop — server-side KV stores.
@@ -54,6 +56,69 @@ export async function saveEnterpriseRequestsSnapshot(
   blob: EnterpriseRequestsBlob
 ): Promise<void> {
   await kvSet<EnterpriseRequestsBlob>(SNAPSHOT_KEY, blob);
+}
+
+/**
+ * Apply a human review decision to one `needs_review` row.
+ *
+ * `confirmed` flips `promotion_confidence`, which makes the row
+ * digest-eligible on the next run — the weekly DM picks it up from
+ * there rather than sending anything itself. `dismissed` records the
+ * decision and demotes the derived state back off the shipped
+ * buckets, so the row stops claiming it's Live on the customer
+ * profile.
+ *
+ * The `review` block it stamps is also what stops a later sweep from
+ * re-queuing the row: `decidePromotion` treats a human `confirmed`
+ * as outranking its own heuristic.
+ *
+ * Read-modify-write on the snapshot blob, same posture (and the same
+ * ADR-0004 caveat) as the notified overlay's patch helper. Returns
+ * null when the row isn't in the snapshot — the caller 404s rather
+ * than silently writing a row that a later sync would clobber.
+ */
+export async function applyRequestReview(args: {
+  workspaceId: string;
+  linearIssueId: string;
+  decision: "confirmed" | "dismissed";
+  by: string;
+  note?: string | null;
+}): Promise<EnterpriseRequestRow | null> {
+  const blob = await loadEnterpriseRequestsSnapshot();
+  const bucket = blob.rows[args.workspaceId];
+  const row = bucket?.[args.linearIssueId];
+  if (!row) return null;
+
+  const now = new Date().toISOString();
+  const next: EnterpriseRequestRow = {
+    ...row,
+    promotion_confidence:
+      args.decision === "confirmed" ? "confirmed" : row.promotion_confidence,
+    // Dismissing means "this isn't a customer-visible ship". Drop it
+    // back to the Linear-derived state so the profile stops showing a
+    // Live badge we've just decided we don't believe.
+    derived_state:
+      args.decision === "dismissed"
+        ? linearStateToDerived(row.linear_state_type)
+        : row.derived_state,
+    needs_review_reason:
+      args.decision === "confirmed" ? null : row.needs_review_reason,
+    review: {
+      decided_at: now,
+      decided_by: args.by.toLowerCase(),
+      decision: args.decision,
+      note: args.note ?? null,
+    },
+  };
+
+  await saveEnterpriseRequestsSnapshot({
+    ...blob,
+    rows: {
+      ...blob.rows,
+      [args.workspaceId]: { ...bucket, [args.linearIssueId]: next },
+    },
+  });
+  return next;
 }
 
 // ─── Notified overrides (CSM-editable per-row state) ────────────────

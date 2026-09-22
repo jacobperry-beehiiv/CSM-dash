@@ -10,8 +10,11 @@ import type {
   EnterpriseRequestDerivedState,
   EnterpriseRequestRow,
   EnterpriseRequestsBlob,
+  NeedsReviewReason,
+  PromotionConfidence,
   PromotionSource,
 } from "../data/enterprise-requests-types";
+import { resolveConfidence } from "../data/enterprise-requests-types";
 import {
   fetchChannelMessages,
   fetchPermalink,
@@ -102,40 +105,63 @@ function decidePromotion(args: {
   source: PromotionSource;
   ship_url: string | null;
   ship_date: string | null;
+  confidence: PromotionConfidence;
+  needs_review_reason: NeedsReviewReason | null;
 } | null {
   const { row, devsShippedHit, changelogHit, changelogFuzzyMatch } = args;
   const currentState = row.derived_state;
+  // A human who already confirmed this row out of the exceptions
+  // queue outranks the heuristic. Without this, the next sweep to
+  // see the same #devs-shipped hit would knock a reviewed row back
+  // to needs_review and re-queue work someone already did.
+  const humanConfirmed = row.review?.decision === "confirmed";
 
-  // A changelog match (exact or fuzzy) always promotes to Live. When
-  // both channels hit, changelog wins as the source of truth for the
-  // ship_url since the changelog links to the customer-facing release.
+  // A changelog match promotes to Live. When both channels hit,
+  // changelog wins as the source of truth for the ship_url since the
+  // changelog links to the customer-facing release.
+  //
+  // Confidence splits on HOW it matched: an exact linear.app link in
+  // the Resources/links block is unambiguous. A fuzzy name +
+  // description match is a guess — good enough to show on the
+  // profile, not good enough to DM a CSM about.
   if (changelogHit) {
+    const exact = Boolean(changelogHit.linear_key);
+    const source: PromotionSource = exact
+      ? "changelog"
+      : changelogFuzzyMatch
+        ? "changelog_fuzzy"
+        : "changelog";
+    const confidence: PromotionConfidence =
+      exact || humanConfirmed ? "confirmed" : "needs_review";
     // Skip if we've already promoted from this exact source with
-    // the same permalink — idempotent re-runs.
+    // the same permalink AND the same confidence — idempotent re-runs.
     if (
-      row.promotion_source === "changelog" &&
+      row.promotion_source === source &&
       row.ship_url === changelogHit.ship_permalink &&
-      currentState === "Live"
+      currentState === "Live" &&
+      resolveConfidence(row) === confidence
     ) {
       return null;
     }
     return {
       target_state: "Live",
-      source: changelogHit.linear_key
-        ? "changelog"
-        : (changelogFuzzyMatch ? "changelog_fuzzy" : "changelog"),
+      source,
       ship_url: changelogHit.ship_permalink,
       ship_date: changelogHit.message_ts
         ? new Date(
             Number.parseFloat(changelogHit.message_ts) * 1000
           ).toISOString()
         : null,
+      confidence,
+      needs_review_reason:
+        confidence === "needs_review" ? "changelog_fuzzy_match" : null,
     };
   }
 
   // #devs-shipped only — the classification depends on the ROW's
   // work_type label (from Linear), not what the ship parens say,
   // because Linear is authoritative on what the ticket actually is.
+  // Ship parens are only consulted when Linear carries no label.
   if (devsShippedHit) {
     const rowType =
       row.work_type === "Bug"
@@ -145,12 +171,17 @@ function decidePromotion(args: {
           : row.work_type === "Feature"
             ? "feature"
             : normalizeWorkType(devsShippedHit.work_type_raw);
-    if (rowType === "bug" || rowType === "ui_ux" || rowType === "other") {
-      // Not a feature → straight to Live.
+
+    // Bug / UI-UX ship straight to production — there's no beta-flag
+    // rollout stage for a bugfix, so a #devs-shipped hit means the
+    // customer can see it. This is the one path where #devs-shipped
+    // alone is enough to notify on.
+    if (rowType === "bug" || rowType === "ui_ux") {
       if (
         currentState === "Live" &&
         row.promotion_source === "devs_shipped" &&
-        row.ship_url === devsShippedHit.ship_permalink
+        row.ship_url === devsShippedHit.ship_permalink &&
+        resolveConfidence(row) === "confirmed"
       ) {
         return null;
       }
@@ -159,13 +190,32 @@ function decidePromotion(args: {
         source: "devs_shipped",
         ship_url: devsShippedHit.ship_permalink,
         ship_date: devsShippedHit.deployed_at_iso,
+        confidence: "confirmed",
+        needs_review_reason: null,
       };
     }
-    // Feature without a changelog match → beta caveat.
+
+    // Everything else out of #devs-shipped is uncertain:
+    //   • Feature — merged ≠ released; features routinely sit behind
+    //     a flag until the changelog post goes out.
+    //   • Unresolvable work type — neither Linear's label nor the
+    //     ship parens told us what this is, so we can't reason about
+    //     whether "merged" means "customer-visible". (This case used
+    //     to fall through to a confident Live, which is exactly the
+    //     false positive the confidence model exists to stop.)
+    // Both land in the exceptions queue instead of a CSM's DMs.
+    const reason: NeedsReviewReason =
+      rowType === "feature"
+        ? "feature_awaiting_changelog"
+        : "unresolved_work_type";
+    const confidence: PromotionConfidence = humanConfirmed
+      ? "confirmed"
+      : "needs_review";
     if (
       currentState === "Live, possibly in beta" &&
       row.promotion_source === "devs_shipped" &&
-      row.ship_url === devsShippedHit.ship_permalink
+      row.ship_url === devsShippedHit.ship_permalink &&
+      resolveConfidence(row) === confidence
     ) {
       return null;
     }
@@ -177,6 +227,8 @@ function decidePromotion(args: {
       source: "devs_shipped",
       ship_url: devsShippedHit.ship_permalink,
       ship_date: devsShippedHit.deployed_at_iso,
+      confidence,
+      needs_review_reason: confidence === "needs_review" ? reason : null,
     };
   }
 
@@ -340,6 +392,8 @@ export async function runEnterpriseRequestsShippedSweep(): Promise<ShippedSweepR
             ship_url: decision.ship_url,
             ship_date: decision.ship_date,
             detected_at: now,
+            confidence: decision.confidence,
+            needs_review_reason: decision.needs_review_reason,
             project_name: row.project_name,
             project_status_type: row.project_status_type ?? null,
           },
@@ -354,6 +408,8 @@ export async function runEnterpriseRequestsShippedSweep(): Promise<ShippedSweepR
         promoted_at: now,
         ship_url: decision.ship_url,
         ship_date: decision.ship_date,
+        promotion_confidence: decision.confidence,
+        needs_review_reason: decision.needs_review_reason,
         promotion_history: [
           ...row.promotion_history,
           {

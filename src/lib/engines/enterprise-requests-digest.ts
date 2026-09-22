@@ -12,6 +12,7 @@ import type {
   EnterpriseRequestRow,
   NotifiedEntry,
 } from "../data/enterprise-requests-types";
+import { resolveConfidence } from "../data/enterprise-requests-types";
 
 /**
  * Enterprise Request Loop — weekly per-CSM DM digest.
@@ -24,7 +25,7 @@ import type {
  * Groups by the customer's assigned CSM, opens a DM to each CSM via
  * `csm_user_ids[csm_handle]` → `resolveSlackChannelId`, and posts one
  * message per CSM listing every shipped-this-week request from their
- * book with a deep-link into `/csm?tab=live-this-week&csm=<handle>`
+ * book with a deep-link into `/csm?tab=live-requests&csm=<handle>`
  * so they can draft the outreach.
  *
  * Dry-run mode returns the composed message + row set without
@@ -63,6 +64,15 @@ export interface DigestResult {
   per_csm: DigestPerCsm[];
   csms_notified: number;
   rows_notified: number;
+  /** Rows inside the 7-day window that were withheld because their
+   *  promotion is `needs_review`. Surfaced so a dry run tells you how
+   *  much is waiting in the exceptions queue rather than silently
+   *  reporting a quiet week. */
+  rows_skipped_needs_review: number;
+  /** Total un-decided `needs_review` rows across the whole snapshot,
+   *  not just this week's. Drives the ops-channel nudge. */
+  review_queue_depth: number;
+  review_queue_posted: boolean;
   no_op: null | "disabled" | "cron_disabled" | "no_rows";
   dry_run: boolean;
 }
@@ -87,9 +97,9 @@ function composeMessage(
     const account = r.workspace_name ? `*${r.workspace_name}*` : "(unknown)";
     return `• ${account}: ${linkedTitle}${beta}${shipLink}`;
   });
-  const cta = `\n_→ <${DASHBOARD_URL_BASE}/csm?tab=live-this-week&csm=${encodeURIComponent(
+  const cta = `\n_→ <${DASHBOARD_URL_BASE}/csm?tab=live-requests&csm=${encodeURIComponent(
     per.csm_handle
-  )}|Open the Live This Week queue on the dashboard>_`;
+  )}|Open your Live requests queue on the dashboard>_`;
   const overflow =
     rows.length > 10 ? `\n_…and ${rows.length - 10} more._` : "";
   return `${header}\n\n${bullets.join("\n")}${overflow}${cta}`;
@@ -125,6 +135,9 @@ export async function runEnterpriseRequestsDigest(
       per_csm: [],
       csms_notified: 0,
       rows_notified: 0,
+      rows_skipped_needs_review: 0,
+      review_queue_depth: 0,
+      review_queue_posted: false,
       no_op: "disabled",
       dry_run: dryRun,
     };
@@ -135,6 +148,9 @@ export async function runEnterpriseRequestsDigest(
       per_csm: [],
       csms_notified: 0,
       rows_notified: 0,
+      rows_skipped_needs_review: 0,
+      review_queue_depth: 0,
+      review_queue_posted: false,
       no_op: "cron_disabled",
       dry_run: dryRun,
     };
@@ -159,6 +175,10 @@ export async function runEnterpriseRequestsDigest(
   }
 
   const cutoff = Date.now() - SEVEN_DAYS_MS;
+  // Rows in-window but withheld by the confidence gate. Reported on
+  // the result so a dry run distinguishes "quiet week" from "three
+  // things are sitting in the exceptions queue".
+  let skippedNeedsReview = 0;
   // Group by CSM handle.
   const byCsm = new Map<string, DigestRowSummary[]>();
   for (const [workspaceId, bucket] of Object.entries(snapshot.rows)) {
@@ -172,6 +192,18 @@ export async function runEnterpriseRequestsDigest(
       if (!row.promoted_at) continue;
       const promotedAt = Date.parse(row.promoted_at);
       if (!Number.isFinite(promotedAt) || promotedAt < cutoff) continue;
+      // Confidence gate. Only unambiguous ships reach a CSM's DMs:
+      // an exact changelog link, or a #devs-shipped hit on a Bug /
+      // UI-UX ticket. Features seen only in #devs-shipped, fuzzy
+      // changelog matches, and tickets whose work type we couldn't
+      // resolve all sit in the exceptions queue until a human
+      // confirms them — a late notification is recoverable, a CSM
+      // telling a customer "your request shipped" about something
+      // still behind a flag is not.
+      if (resolveConfidence(row) !== "confirmed") {
+        skippedNeedsReview += 1;
+        continue;
+      }
       const entry: NotifiedEntry = notifiedBucket[row.linear_issue_id] ?? {};
       if (entry.notified_at) continue;
       if (sentBucket[row.linear_issue_id]) continue; // Already DM'd.
@@ -192,12 +224,75 @@ export async function runEnterpriseRequestsDigest(
     }
   }
 
+  // ── Review-queue nudge to one ops channel.
+  //
+  // Deliberately NOT per-CSM: these are ships we deliberately withheld
+  // from CSMs, so pushing them at CSMs would defeat the gate. One
+  // person clears the queue; confirming a row there makes it eligible
+  // for next week's digest, which is what actually notifies.
+  //
+  // Counted across the whole snapshot rather than the 7-day window —
+  // the queue's problem is rows accumulating unreviewed, and a stale
+  // row is exactly the one worth nagging about.
+  let reviewQueueDepth = 0;
+  let oldestPendingAt: string | null = null;
+  for (const bucket of Object.values(snapshot.rows)) {
+    for (const row of Object.values(bucket) as EnterpriseRequestRow[]) {
+      if (!row.promoted_at) continue;
+      if (resolveConfidence(row) === "confirmed") continue;
+      if (row.review?.decision === "dismissed") continue;
+      reviewQueueDepth += 1;
+      if (!oldestPendingAt || row.promoted_at < oldestPendingAt) {
+        oldestPendingAt = row.promoted_at;
+      }
+    }
+  }
+  const reviewPref = resolveSlackNotificationPref(
+    settings,
+    "enterprise_requests_review_queue"
+  );
+  let reviewQueuePosted = false;
+  if (
+    reviewQueueDepth > 0 &&
+    reviewPref.enabled &&
+    !(isCron && reviewPref.cron_enabled === false) &&
+    reviewPref.destination &&
+    !dryRun
+  ) {
+    const oldestAge = oldestPendingAt
+      ? Math.floor(
+          (Date.now() - Date.parse(oldestPendingAt)) / (24 * 60 * 60 * 1000)
+        )
+      : null;
+    const text =
+      `:mag: *Enterprise Request Loop — ${reviewQueueDepth} shipped signal${reviewQueueDepth === 1 ? "" : "s"} waiting on review*\n` +
+      `${reviewQueueDepth === 1 ? "This ship" : "These ships"} matched a customer request but couldn't be confidently called customer-visible, so no CSM has been notified.` +
+      (oldestAge !== null && oldestAge > 0
+        ? ` Oldest has been waiting ${oldestAge} day${oldestAge === 1 ? "" : "s"}.`
+        : "") +
+      `\n_→ <${DASHBOARD_URL_BASE}/settings/enterprise-requests/exceptions|Review the queue>_`;
+    try {
+      const channelId = await resolveSlackChannelId(reviewPref.destination);
+      if (channelId) {
+        await postSlackMessage({ channel: channelId, text });
+        reviewQueuePosted = true;
+      }
+    } catch (e) {
+      console.warn("[enterprise-requests-digest] review-queue ping failed", {
+        error: e instanceof Error ? e.message : e,
+      });
+    }
+  }
+
   if (byCsm.size === 0) {
     return {
       generated_at,
       per_csm: [],
       csms_notified: 0,
       rows_notified: 0,
+      rows_skipped_needs_review: skippedNeedsReview,
+      review_queue_depth: reviewQueueDepth,
+      review_queue_posted: reviewQueuePosted,
       no_op: "no_rows",
       dry_run: dryRun,
     };
@@ -271,6 +366,9 @@ export async function runEnterpriseRequestsDigest(
     ),
     csms_notified: csmsNotified,
     rows_notified: rowsNotified,
+    rows_skipped_needs_review: skippedNeedsReview,
+    review_queue_depth: reviewQueueDepth,
+    review_queue_posted: reviewQueuePosted,
     no_op: null,
     dry_run: dryRun,
   };

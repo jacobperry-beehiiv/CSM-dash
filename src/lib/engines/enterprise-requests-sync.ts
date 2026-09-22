@@ -12,7 +12,10 @@ import type {
   UnmatchedNeed,
   WorkTypeLabel,
 } from "../data/enterprise-requests-types";
-import { linearStateToDerived } from "../data/enterprise-requests-types";
+import {
+  linearStateToDerived,
+  resolveConfidence,
+} from "../data/enterprise-requests-types";
 import {
   fetchAllIssuesWithCustomerNeeds,
   type LinearCustomer,
@@ -28,7 +31,7 @@ import type { Customer } from "../types";
  * fallback), and writes the whole snapshot to KV under
  * `csm:enterprise-requests:v1`.
  *
- * Consumers (customer profile Requests section, /csm live-this-week
+ * Consumers (customer profile Requests section, /csm live-requests
  * queue tab, filter chip) read the snapshot; nothing else calls
  * Linear at request time.
  *
@@ -321,6 +324,18 @@ export async function runEnterpriseRequestsSync(): Promise<SyncResult> {
         promoted_at: now,
         ship_url: pending.ship_url ?? row.ship_url,
         ship_date: pending.ship_date ?? row.ship_date,
+        // Apply the confidence the shipped-sweep decided at detection
+        // time. Blobs written before the confidence model carry no
+        // value — re-derive rather than defaulting to confirmed, so a
+        // deferred promotion can't sneak past the digest gate.
+        promotion_confidence:
+          pending.confidence ??
+          resolveConfidence({
+            promotion_confidence: null,
+            promotion_source: pending.source,
+            work_type: row.work_type,
+          }),
+        needs_review_reason: pending.needs_review_reason ?? null,
         promotion_history: [
           ...(row.promotion_history ?? []),
           {
