@@ -69,6 +69,10 @@ export interface DigestResult {
    *  much is waiting in the exceptions queue rather than silently
    *  reporting a quiet week. */
   rows_skipped_needs_review: number;
+  /** Total un-decided `needs_review` rows across the whole snapshot,
+   *  not just this week's. Drives the ops-channel nudge. */
+  review_queue_depth: number;
+  review_queue_posted: boolean;
   no_op: null | "disabled" | "cron_disabled" | "no_rows";
   dry_run: boolean;
 }
@@ -132,6 +136,8 @@ export async function runEnterpriseRequestsDigest(
       csms_notified: 0,
       rows_notified: 0,
       rows_skipped_needs_review: 0,
+      review_queue_depth: 0,
+      review_queue_posted: false,
       no_op: "disabled",
       dry_run: dryRun,
     };
@@ -143,6 +149,8 @@ export async function runEnterpriseRequestsDigest(
       csms_notified: 0,
       rows_notified: 0,
       rows_skipped_needs_review: 0,
+      review_queue_depth: 0,
+      review_queue_posted: false,
       no_op: "cron_disabled",
       dry_run: dryRun,
     };
@@ -216,6 +224,66 @@ export async function runEnterpriseRequestsDigest(
     }
   }
 
+  // ── Review-queue nudge to one ops channel.
+  //
+  // Deliberately NOT per-CSM: these are ships we deliberately withheld
+  // from CSMs, so pushing them at CSMs would defeat the gate. One
+  // person clears the queue; confirming a row there makes it eligible
+  // for next week's digest, which is what actually notifies.
+  //
+  // Counted across the whole snapshot rather than the 7-day window —
+  // the queue's problem is rows accumulating unreviewed, and a stale
+  // row is exactly the one worth nagging about.
+  let reviewQueueDepth = 0;
+  let oldestPendingAt: string | null = null;
+  for (const bucket of Object.values(snapshot.rows)) {
+    for (const row of Object.values(bucket) as EnterpriseRequestRow[]) {
+      if (!row.promoted_at) continue;
+      if (resolveConfidence(row) === "confirmed") continue;
+      if (row.review?.decision === "dismissed") continue;
+      reviewQueueDepth += 1;
+      if (!oldestPendingAt || row.promoted_at < oldestPendingAt) {
+        oldestPendingAt = row.promoted_at;
+      }
+    }
+  }
+  const reviewPref = resolveSlackNotificationPref(
+    settings,
+    "enterprise_requests_review_queue"
+  );
+  let reviewQueuePosted = false;
+  if (
+    reviewQueueDepth > 0 &&
+    reviewPref.enabled &&
+    !(isCron && reviewPref.cron_enabled === false) &&
+    reviewPref.destination &&
+    !dryRun
+  ) {
+    const oldestAge = oldestPendingAt
+      ? Math.floor(
+          (Date.now() - Date.parse(oldestPendingAt)) / (24 * 60 * 60 * 1000)
+        )
+      : null;
+    const text =
+      `:mag: *Enterprise Request Loop — ${reviewQueueDepth} shipped signal${reviewQueueDepth === 1 ? "" : "s"} waiting on review*\n` +
+      `${reviewQueueDepth === 1 ? "This ship" : "These ships"} matched a customer request but couldn't be confidently called customer-visible, so no CSM has been notified.` +
+      (oldestAge !== null && oldestAge > 0
+        ? ` Oldest has been waiting ${oldestAge} day${oldestAge === 1 ? "" : "s"}.`
+        : "") +
+      `\n_→ <${DASHBOARD_URL_BASE}/settings/enterprise-requests/exceptions|Review the queue>_`;
+    try {
+      const channelId = await resolveSlackChannelId(reviewPref.destination);
+      if (channelId) {
+        await postSlackMessage({ channel: channelId, text });
+        reviewQueuePosted = true;
+      }
+    } catch (e) {
+      console.warn("[enterprise-requests-digest] review-queue ping failed", {
+        error: e instanceof Error ? e.message : e,
+      });
+    }
+  }
+
   if (byCsm.size === 0) {
     return {
       generated_at,
@@ -223,6 +291,8 @@ export async function runEnterpriseRequestsDigest(
       csms_notified: 0,
       rows_notified: 0,
       rows_skipped_needs_review: skippedNeedsReview,
+      review_queue_depth: reviewQueueDepth,
+      review_queue_posted: reviewQueuePosted,
       no_op: "no_rows",
       dry_run: dryRun,
     };
@@ -297,6 +367,8 @@ export async function runEnterpriseRequestsDigest(
     csms_notified: csmsNotified,
     rows_notified: rowsNotified,
     rows_skipped_needs_review: skippedNeedsReview,
+    review_queue_depth: reviewQueueDepth,
+    review_queue_posted: reviewQueuePosted,
     no_op: null,
     dry_run: dryRun,
   };

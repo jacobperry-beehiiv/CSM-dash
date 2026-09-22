@@ -110,7 +110,8 @@ export type SlackNotificationKind =
    *  hasn't been marked Notified yet. Delivered per-CSM DM (uses
    *  csm_user_ids), so has_destination:false — the settings row
    *  only carries the on/off + cron toggle. */
-  | "enterprise_requests_digest";
+  | "enterprise_requests_digest"
+  | "enterprise_requests_review_queue";
 
 /** Per-notification preference stored in KV. Destination is a Slack
  *  channel ID (C…) or user ID (U…) for a DM. */
@@ -189,6 +190,14 @@ export const SLACK_NOTIFICATION_DEFINITIONS: SlackNotificationDefinition[] = [
       "Monday DM per CSM listing every feature request from their book that shipped in the last 7 days and hasn't been marked Notified yet. Deep-links back into /csm?tab=live-this-week so the CSM can draft the outreach in one click.",
     schedule: "Mondays ~9:30am CT (cron only)",
     has_destination: false,
+  },
+  {
+    kind: "enterprise_requests_review_queue",
+    label: "Enterprise Request Loop — review queue depth",
+    description:
+      "Weekly nudge to one ops channel when shipped signals are waiting on a human. These are ships we matched to a customer but couldn't confidently call customer-visible (feature with no changelog post, unknown work type, fuzzy changelog match), so no CSM has been told. Rides the same Monday cron as the digest.",
+    schedule: "Mondays ~9:30am CT (cron only)",
+    has_destination: true,
   },
 ];
 
