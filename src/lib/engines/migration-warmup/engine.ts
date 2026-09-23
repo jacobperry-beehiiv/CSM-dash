@@ -291,6 +291,118 @@ function _maxBatches(tier: TierConfig, spw: number): number {
   return Math.min(def, spwInt);
 }
 
+/** Ceiling on the multiplier the deadline solver will consider.
+ *  Per-week caps clamp cumulative volume AFTER the multiplier is
+ *  applied, so past the point where every week already fills its cap
+ *  a larger multiplier produces a byte-identical schedule. This bound
+ *  exists to terminate the search, not to limit volume. */
+const MAX_DEADLINE_MULTIPLIER = 8;
+
+/** Bisection steps. 20 halvings of [1, 8] resolves the multiplier to
+ *  ~7e-6, far finer than the rounding ladder can express — the answer
+ *  stops changing long before we stop looking. */
+const DEADLINE_SOLVE_STEPS = 20;
+
+/**
+ * Fewest weeks this list can be migrated in without breaching a cap.
+ *
+ * Runs the schedule at MAX_DEADLINE_MULTIPLIER, which saturates every
+ * week's cap. Because caps are enforced after the multiplier, this is
+ * a hard physical floor: no approach, multiplier, or deadline can
+ * beat it. It's what makes "this deadline is not achievable" a
+ * statement about deliverability limits rather than about our
+ * scheduling heuristics.
+ */
+export function minimumSafeWeeks(
+  tier: TierConfig,
+  spw: number,
+  listSize: number,
+  overrides?: MigrationOverrides
+): number {
+  return _buildWeeks(
+    tier,
+    "aggressive",
+    spw,
+    listSize,
+    overrides,
+    MAX_DEADLINE_MULTIPLIER
+  ).length;
+}
+
+export interface DeadlineSolution {
+  /** Multiplier to build the final schedule with. */
+  multiplier: number;
+  /** Weeks the solved schedule actually takes. */
+  weeks: number;
+  /** False when even a cap-saturating schedule overruns the deadline. */
+  achievable: boolean;
+  /** The cap-ladder floor, for the warning copy. */
+  minimum_weeks: number;
+}
+
+/**
+ * Find the gentlest multiplier that still finishes inside
+ * `deadlineWeeks`.
+ *
+ * Deliberately a search for the SMALLEST sufficient multiplier rather
+ * than just maxing it out. Both hit the deadline, but the minimal one
+ * keeps every batch as small as the timeline permits, which is the
+ * whole point of a warm-up — front-loading to the cap when the
+ * deadline doesn't demand it spends deliverability headroom for
+ * nothing.
+ *
+ * Monotonicity assumption: a larger multiplier never produces MORE
+ * weeks. Batch sizes scale up and caps only clamp down, so cumulative
+ * volume at any week is non-decreasing in the multiplier. That makes
+ * bisection valid.
+ *
+ * When the deadline is shorter than the cap ladder allows, returns
+ * the saturating schedule with `achievable: false` — we still hand
+ * back the fastest safe plan rather than refusing, because "here's
+ * the best we can do and here's why it's not enough" is more useful
+ * to a CSM negotiating a date than an error.
+ */
+export function solveForDeadline(
+  tier: TierConfig,
+  spw: number,
+  listSize: number,
+  deadlineWeeks: number,
+  overrides?: MigrationOverrides
+): DeadlineSolution {
+  const floor = minimumSafeWeeks(tier, spw, listSize, overrides);
+  if (floor > deadlineWeeks) {
+    return {
+      multiplier: MAX_DEADLINE_MULTIPLIER,
+      weeks: floor,
+      achievable: false,
+      minimum_weeks: floor,
+    };
+  }
+
+  let lo = 1;
+  let hi = MAX_DEADLINE_MULTIPLIER;
+  let best = MAX_DEADLINE_MULTIPLIER;
+  let bestWeeks = floor;
+  for (let i = 0; i < DEADLINE_SOLVE_STEPS; i++) {
+    const mid = (lo + hi) / 2;
+    const w = _buildWeeks(tier, "aggressive", spw, listSize, overrides, mid)
+      .length;
+    if (w <= deadlineWeeks) {
+      best = mid;
+      bestWeeks = w;
+      hi = mid;
+    } else {
+      lo = mid;
+    }
+  }
+  return {
+    multiplier: best,
+    weeks: bestWeeks,
+    achievable: true,
+    minimum_weeks: floor,
+  };
+}
+
 function _weekLabel(weekIdx: number, biWeekly: boolean): string {
   if (biWeekly) {
     const start = weekIdx * 2 - 1;
@@ -304,10 +416,17 @@ function _buildWeeks(
   approach: Approach,
   spw: number,
   listSize: number,
-  overrides?: MigrationOverrides
+  overrides?: MigrationOverrides,
+  /** Overrides the approach's own multiplier. Used by the deadline
+   *  solver, which searches for the gentlest multiplier that still
+   *  lands inside the requested timeline. Caps are enforced after
+   *  the multiplier either way, so this can never widen the
+   *  deliverability envelope — only move batches around inside it. */
+  multiplierOverride?: number
 ): Week[] {
   const knobs = resolveKnobs(overrides);
-  const multiplier = knobs.approachMultipliers[approach];
+  const multiplier =
+    multiplierOverride ?? knobs.approachMultipliers[approach];
   const maxWeeks =
     approach === "conservative"
       ? knobs.maxWeeksConservative
@@ -395,7 +514,36 @@ export function generateSchedule(
   const openRate = normalizeOpenRate(li.open_rate);
   const tier = tierFor(subs);
   const approach = determineApproach(li, spw, overrides);
-  const weeks = _buildWeeks(tier, approach, spw, subs, overrides);
+
+  // When a deadline is set and the standard ramp overruns it,
+  // `determineApproach` returns "aggressive". That used to mean a
+  // flat 1.25x, which nudged toward the deadline without actually
+  // guaranteeing it — a schedule could still overshoot and nobody
+  // was told. Solve for the deadline instead: find the gentlest
+  // multiplier that lands inside it, and if the cap ladder makes
+  // that impossible, say so.
+  let deadlineSolution: DeadlineSolution | null = null;
+  if (
+    approach === "aggressive" &&
+    li.deadline_weeks !== null &&
+    li.deadline_weeks !== undefined
+  ) {
+    deadlineSolution = solveForDeadline(
+      tier,
+      spw,
+      subs,
+      li.deadline_weeks,
+      overrides
+    );
+  }
+  const weeks = _buildWeeks(
+    tier,
+    approach,
+    spw,
+    subs,
+    overrides,
+    deadlineSolution?.multiplier
+  );
 
   const flags: string[] = [];
   if (cadenceFlag) flags.push(cadenceFlag);
@@ -412,9 +560,21 @@ export function generateSchedule(
     flags.push("Deliverability concern flagged — conservative approach.");
   }
   if (approach === "aggressive") {
-    flags.push(
-      `Deadline (${li.deadline_weeks}w) tighter than standard timeline — aggressive approach.`
-    );
+    if (deadlineSolution && !deadlineSolution.achievable) {
+      // The important one. Caps are a deliverability limit, not a
+      // preference — a CSM needs to renegotiate the date rather than
+      // assume the schedule below hits it.
+      flags.push(
+        `Deadline of ${li.deadline_weeks}w is NOT achievable safely. ` +
+          `Import caps allow completion no earlier than week ${deadlineSolution.minimum_weeks}. ` +
+          `Schedule below is the fastest safe plan — renegotiate the date or split the list.`
+      );
+    } else {
+      flags.push(
+        `Deadline (${li.deadline_weeks}w) tighter than standard timeline — ` +
+          `compressed to ${deadlineSolution?.weeks ?? weeks.length}w.`
+      );
+    }
   }
 
   // Invariants: cumulative must end at exactly list_size and no
