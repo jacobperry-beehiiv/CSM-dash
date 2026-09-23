@@ -43,6 +43,12 @@ import type {
  * scheduled-then-activated, or one of three Slack input vectors.
  */
 
+/** localStorage key for the "Hide company to-dos" toggle — per-viewer,
+ *  per-browser only (no server round-trip, no cross-device sync
+ *  intended; it's the same category of preference as a remembered
+ *  tab or filter). */
+const HIDE_COMPANY_TODOS_KEY = "personal-todos:hide-company-todos";
+
 const PRIORITY_OPTIONS: { value: TodoPriority; label: string; bg: string }[] = [
   {
     value: "high",
@@ -152,7 +158,10 @@ export function PersonalTodosPanel({
   // go-to place for everything NOT tracked on a Lifecycle board card
   // (the board is where company-grouped to-dos live instead). Only
   // ever exposed when lifecycleBoardEnabled is true; harmless default
-  // (false = show everything) otherwise.
+  // (false = show everything) otherwise. Starts false (not read from
+  // localStorage synchronously) so the server-rendered HTML and the
+  // client's first render always agree — see the restore effect below
+  // for why the saved value is applied a beat later instead.
   const [hideCompanyTodos, setHideCompanyTodos] = useState(false);
   // Which row's note editor is open — a single modal at the panel
   // level (not one per row), same shell as the Lifecycle board's
@@ -188,6 +197,33 @@ export function PersonalTodosPanel({
     new Map()
   );
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Restore "Hide company to-dos" from localStorage once, right after
+  // mount — this panel remounts fresh every time its page is
+  // navigated away from and back to (e.g. a trip out to the Lifecycle
+  // board and back), so the plain useState above wouldn't survive
+  // that on its own. Applied a beat after mount rather than read
+  // synchronously in the initializer so it never disagrees with the
+  // server-rendered HTML on first paint.
+  useEffect(() => {
+    try {
+      if (localStorage.getItem(HIDE_COMPANY_TODOS_KEY) === "1") {
+        setHideCompanyTodos(true);
+      }
+    } catch {
+      // Private browsing / blocked storage — just keep the default.
+    }
+  }, []);
+
+  // ...and persist it back on every change, so the next mount picks
+  // up whatever the CSM last chose.
+  useEffect(() => {
+    try {
+      localStorage.setItem(HIDE_COMPANY_TODOS_KEY, hideCompanyTodos ? "1" : "0");
+    } catch {
+      // Ignore — worst case the preference just doesn't stick.
+    }
+  }, [hideCompanyTodos]);
 
   // Load the automated-todo action registry once on mount so we
   // know which sources have a linked outreach template. Ignore
