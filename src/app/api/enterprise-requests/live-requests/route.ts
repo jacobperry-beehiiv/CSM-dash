@@ -84,6 +84,12 @@ interface TicketGroup {
   promotion_source: PromotionSource | null;
   promotion_confidence: PromotionConfidence;
   needs_review_reason: NeedsReviewReason | null;
+  /** Set when a human cleared this row out of the exceptions queue.
+   *  Lets the UI distinguish "confirmed by rule" from "a person
+   *  vouched for this", which is a materially different level of
+   *  assurance when you're about to email a customer. */
+  reviewed_by: string | null;
+  reviewed_at: string | null;
   ship_url: string | null;
   ship_date: string | null;
   /** Newest promoted_at across attached customers — the ship moment
@@ -245,6 +251,12 @@ export async function GET(req: Request) {
       promotion_source: head.promotion_source,
       promotion_confidence: resolveConfidence(head),
       needs_review_reason: head.needs_review_reason ?? null,
+      reviewed_by:
+        head.review?.decision === "confirmed"
+          ? head.review.decided_by
+          : null,
+      reviewed_at:
+        head.review?.decision === "confirmed" ? head.review.decided_at : null,
       ship_url: head.ship_url,
       ship_date: head.ship_date,
       promoted_at: newestPromotedAt,

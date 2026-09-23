@@ -83,6 +83,13 @@ export interface RenderContext {
    *  message body / step title the engine assembled. Falls through
    *  unchanged when no template merge tag references it. */
   original_text?: string | null;
+  /** For enterprise_request_shipped — the Linear issue title, so a
+   *  template can name the thing that shipped rather than just the
+   *  customer. */
+  request_title?: string | null;
+  /** For enterprise_request_shipped — the Linear key (e.g.
+   *  "REQ-2207"). */
+  request_identifier?: string | null;
 }
 
 /** Substitute `{{token}}` occurrences with values from `ctx`. Unknown

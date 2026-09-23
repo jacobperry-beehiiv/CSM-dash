@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { fmtDate } from "../format";
 import type { NeedsReviewReason } from "@/lib/data/enterprise-requests-types";
+import { REASON_COPY } from "./confidence-copy";
 
 /** One `needs_review` row, flattened by the page so this component
  *  doesn't need the full snapshot shape or the workspace lookup. */
@@ -31,34 +32,6 @@ interface RowState {
   decided: "confirmed" | "dismissed" | null;
   error: string | null;
 }
-
-/** Plain-language framing of each reason, plus what the reviewer
- *  should actually go check. The reason codes are precise but opaque
- *  on their own — someone clearing this queue shouldn't have to read
- *  the sweep source to know what "unresolved_work_type" implies. */
-const REASON_COPY: Record<
-  NeedsReviewReason,
-  { label: string; detail: string; tone: string }
-> = {
-  feature_awaiting_changelog: {
-    label: "Feature, no changelog post yet",
-    detail:
-      "Seen in #devs-shipped but not #topic-product-changelog. Merged isn't released — features routinely sit behind a flag. Confirm only if you can verify the customer can actually see it.",
-    tone: "bg-amber-100 text-amber-900 dark:bg-amber-500/20 dark:text-amber-200",
-  },
-  unresolved_work_type: {
-    label: "Unknown work type",
-    detail:
-      "Neither Linear's label nor the ship parens said Bug / UI-UX / Feature, so we can't reason about whether merged means customer-visible. Check the Linear ticket.",
-    tone: "bg-red-100 text-red-800 dark:bg-red-500/20 dark:text-red-200",
-  },
-  changelog_fuzzy_match: {
-    label: "Fuzzy changelog match",
-    detail:
-      "Matched a changelog post on title/description similarity rather than an exact Linear link. Verify it's the same thing before confirming.",
-    tone: "bg-slate-100 text-slate-700 dark:bg-slate-500/20 dark:text-slate-200",
-  },
-};
 
 export function ExceptionsReview({ rows }: Props) {
   const [state, setState] = useState<Record<string, RowState>>({});

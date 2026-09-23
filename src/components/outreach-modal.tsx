@@ -73,6 +73,10 @@ function htmlToText(html: string): string {
     .trim();
 }
 
+/** Contact count past which the recipient list gets a filter box.
+ *  Below this, scanning the grid is faster than typing. */
+const FILTER_THRESHOLD = 12;
+
 export function OutreachModal({
   customer,
   onClose,
@@ -128,6 +132,7 @@ export function OutreachModal({
     return out;
   }, [customer]);
 
+  const [recipientFilter, setRecipientFilter] = useState("");
   const [selectedRecipients, setSelectedRecipients] = useState<Set<string>>(
     () => new Set(recipientOptions.filter((r) => r.isOwner).map((r) => r.email.toLowerCase()))
   );
@@ -150,6 +155,19 @@ export function OutreachModal({
     .filter((r) => selectedRecipients.has(r.email.toLowerCase()))
     .map((r) => r.email);
   const toLine = recipientEmails.join(", ");
+
+  // Filtering only narrows what's RENDERED — selection state lives in
+  // `selectedRecipients` keyed by email, so someone already ticked
+  // stays ticked (and stays in `toLine`) while filtered out of view.
+  const visibleRecipientOptions = useMemo(() => {
+    const q = recipientFilter.trim().toLowerCase();
+    if (!q) return recipientOptions;
+    return recipientOptions.filter(
+      (r) =>
+        r.email.toLowerCase().includes(q) ||
+        (r.name ?? "").toLowerCase().includes(q)
+    );
+  }, [recipientOptions, recipientFilter]);
 
   useEffect(() => {
     let cancelled = false;
@@ -335,12 +353,34 @@ export function OutreachModal({
         </div>
 
         {recipientOptions.length > 0 ? (
-          <div className="px-4 py-3 border-b border-border bg-canvas">
-            <div className="text-xs text-muted mb-2">
-              Recipients ({recipientEmails.length} selected)
+          // `shrink-0` + a capped inner scroll: without the cap this
+          // block takes its full intrinsic height, and on an account
+          // with ~70 contacts that alone exceeds the modal's 90vh —
+          // pushing the body AND the Create-draft footer under the
+          // outer `overflow-hidden` with no way to scroll to them.
+          <div className="px-4 py-3 border-b border-border bg-canvas shrink-0">
+            <div className="flex items-center gap-2 mb-2">
+              <div className="text-xs text-muted">
+                Recipients ({recipientEmails.length} selected of{" "}
+                {recipientOptions.length})
+              </div>
+              {recipientOptions.length > FILTER_THRESHOLD ? (
+                <input
+                  type="text"
+                  value={recipientFilter}
+                  onChange={(e) => setRecipientFilter(e.currentTarget.value)}
+                  placeholder="Filter by name or email…"
+                  className="ml-auto px-2 py-1 text-xs border border-border-strong rounded-md bg-surface text-fg w-56"
+                />
+              ) : null}
             </div>
-            <ul className="grid grid-cols-1 sm:grid-cols-2 gap-x-3 gap-y-1">
-              {recipientOptions.map((r) => {
+            <ul className="grid grid-cols-1 sm:grid-cols-2 gap-x-3 gap-y-1 max-h-[32vh] overflow-y-auto">
+              {visibleRecipientOptions.length === 0 ? (
+                <li className="text-xs text-muted italic py-1">
+                  No contacts match &ldquo;{recipientFilter}&rdquo;.
+                </li>
+              ) : null}
+              {visibleRecipientOptions.map((r) => {
                 const checked = selectedRecipients.has(r.email.toLowerCase());
                 return (
                   <li key={r.email} className="text-xs">
