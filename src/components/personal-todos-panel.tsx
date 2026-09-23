@@ -12,6 +12,8 @@ import {
 import { normalizeSlackText } from "@/lib/personal-todos/normalize-text";
 import { CHECKLIST_GROUP_OPTIONS } from "@/lib/lifecycle/checklist-groups";
 import { stageDisplayLabel } from "@/lib/lifecycle/stage-labels";
+import { isCompanyGroupedTodo } from "@/lib/lifecycle/todos";
+import Link from "next/link";
 import { DoneCheckbox } from "./done-checkbox";
 import { SybillSyncControl } from "./sybill-sync-control";
 import { TodoCelebration } from "./todo-celebration";
@@ -126,11 +128,19 @@ interface PersonalTodosPanelProps {
    *  sybillIngestEnabled. Empty array (not undefined) when the viewer
    *  has no book — the pickers just render with nothing to choose. */
   playbookCompanies?: PlaybookCompanyOption[];
+  /** True when the viewer has the `lifecycle-board` feature flag on —
+   *  gates the "Hide company to-dos" toggle and the "Lifecycle View"
+   *  link next to the panel title. Both reference a feature the
+   *  viewer can't otherwise open, so they stay hidden without it —
+   *  same rule for any future addition to this panel (or any other
+   *  page outside the Lifecycle tab) that assumes the board exists. */
+  lifecycleBoardEnabled?: boolean;
 }
 
 export function PersonalTodosPanel({
   sybillIngestEnabled = false,
   playbookCompanies = [],
+  lifecycleBoardEnabled = false,
 }: PersonalTodosPanelProps = {}) {
   const [todos, setTodos] = useState<PersonalTodo[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -138,6 +148,12 @@ export function PersonalTodosPanel({
   const [saving, setSaving] = useState(false);
   const [showCompleted, setShowCompleted] = useState(false);
   const [showScheduled, setShowScheduled] = useState(false);
+  // "Hide company to-dos" — lets a CSM treat this panel as their
+  // go-to place for everything NOT tracked on a Lifecycle board card
+  // (the board is where company-grouped to-dos live instead). Only
+  // ever exposed when lifecycleBoardEnabled is true; harmless default
+  // (false = show everything) otherwise.
+  const [hideCompanyTodos, setHideCompanyTodos] = useState(false);
   // Which row's note editor is open — a single modal at the panel
   // level (not one per row), same shell as the Lifecycle board's
   // NoteEditorModal, so notes work identically in both places. Stores
@@ -440,7 +456,10 @@ export function PersonalTodosPanel({
     const active: PersonalTodo[] = [];
     const scheduled: PersonalTodo[] = [];
     const completed: PersonalTodo[] = [];
-    for (const t of todos) {
+    const visible = hideCompanyTodos
+      ? todos.filter((t) => !isCompanyGroupedTodo(t))
+      : todos;
+    for (const t of visible) {
       if (t.completed_at) {
         completed.push(t);
       } else if (t.surface_at && t.surface_at > today) {
@@ -472,15 +491,39 @@ export function PersonalTodosPanel({
       (b.completed_at ?? "").localeCompare(a.completed_at ?? "")
     );
     return { activeTodos: active, scheduledTodos: scheduled, completedTodos: completed };
-  }, [todos, today]);
+  }, [todos, today, hideCompanyTodos]);
 
   return (
     <section className="bg-surface rounded-xl border border-border shadow-card overflow-hidden mt-6">
       <header className="px-5 py-4 border-b border-border flex flex-wrap items-center gap-4">
         <div className="min-w-0">
-          <h2 className="text-[17px] font-semibold text-fg tracking-tight">
-            Your to-dos
-          </h2>
+          <div className="flex flex-wrap items-center gap-2">
+            <h2 className="text-[17px] font-semibold text-fg tracking-tight">
+              Your to-dos
+            </h2>
+            {lifecycleBoardEnabled ? (
+              <>
+                <button
+                  type="button"
+                  onClick={() => setHideCompanyTodos((v) => !v)}
+                  className={`inline-flex items-center gap-1 px-2 py-0.5 text-[11px] rounded-md border transition-colors ${
+                    hideCompanyTodos
+                      ? "bg-accent text-accent-fg border-accent font-medium"
+                      : "bg-surface text-fg border-border-strong hover:bg-canvas"
+                  }`}
+                  title="Hide to-dos that are assigned to a customer and grouped on their Lifecycle board card (Pre-kickoff, Post-kickoff, etc.) — check those on the Lifecycle board instead."
+                >
+                  {hideCompanyTodos ? "Show" : "Hide"} company to-dos
+                </button>
+                <Link
+                  href="/csm?tab=lifecycle"
+                  className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] rounded-md border border-border-strong bg-surface text-fg hover:bg-canvas transition-colors"
+                >
+                  Lifecycle View →
+                </Link>
+              </>
+            ) : null}
+          </div>
           <p className="text-[13px] text-muted mt-0.5">
             Personal list — manual, scheduled, or via Slack (`/todo`, DM the bot,
             or react to a message with the trigger emoji).
