@@ -14,6 +14,7 @@ import { CHECKLIST_GROUP_OPTIONS } from "@/lib/lifecycle/checklist-groups";
 import { stageDisplayLabel } from "@/lib/lifecycle/stage-labels";
 import { isCompanyGroupedTodo } from "@/lib/lifecycle/todos";
 import Link from "next/link";
+import { CompanySearchSelect } from "./company-search-select";
 import { DoneCheckbox } from "./done-checkbox";
 import { SybillSyncControl } from "./sybill-sync-control";
 import { TodoCelebration } from "./todo-celebration";
@@ -642,24 +643,19 @@ export function PersonalTodosPanel({
             <option value="medium">Medium</option>
             <option value="low">Low</option>
           </select>
-          {playbookCompanies.length > 0 ? (
+          {lifecycleBoardEnabled && playbookCompanies.length > 0 ? (
             <>
-              <select
+              <CompanySearchSelect
+                companies={playbookCompanies}
                 value={draftWorkspaceId}
-                onChange={(e) => {
-                  setDraftWorkspaceId(e.target.value);
-                  maybeAutofillTitle(e.target.value);
+                onChange={(workspaceId) => {
+                  setDraftWorkspaceId(workspaceId);
+                  maybeAutofillTitle(workspaceId);
                 }}
+                placeholder="No company"
                 title="Pick a company + checklist group together to attach this to that customer's Lifecycle board card."
-                className="px-2 py-1 text-xs border border-border-strong rounded-md bg-surface text-fg max-w-[160px]"
-              >
-                <option value="">No company</option>
-                {playbookCompanies.map((c) => (
-                  <option key={c.workspace_id} value={c.workspace_id}>
-                    {c.name}
-                  </option>
-                ))}
-              </select>
+                className="w-[160px]"
+              />
               <select
                 value={draftChecklistGroup}
                 onChange={(e) => setDraftChecklistGroup(e.target.value)}
