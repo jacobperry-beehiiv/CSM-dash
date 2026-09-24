@@ -276,12 +276,29 @@ export interface PendingShip {
 export interface LinearCommentMeta {
   issue_id: string;
   issue_identifier: string;
-  comment_id: string;
+  /** Where on the ticket the customer signal was found.
+   *
+   *  "comment" — the original path: a comment (typically from
+   *  Juliet's feature-request-creator skill) naming a Publication ID
+   *  or User Email.
+   *
+   *  "description" — the same structured block written into the
+   *  issue body instead of a comment. Added after BEE-24879 shipped
+   *  for Daily Drop without ever reaching the tracker: it carried a
+   *  perfectly parseable `Publication ID` / `User Email` block, just
+   *  in the description, which nothing read. Absent on rows written
+   *  before the description pass existed — treat undefined as
+   *  "comment". */
+  source?: "comment" | "description";
+  /** Null for description matches — there's no comment to anchor to. */
+  comment_id: string | null;
   /** Direct URL to the comment (issue URL + `#comment-<id>` fragment).
-   *  Linear renders this as a scroll-to-anchor. */
+   *  Linear renders this as a scroll-to-anchor. For a description
+   *  match this is the plain issue URL. */
   permalink: string;
   /** Comment author email (available on the Linear comment.user
-   *  relation). Kept for the profile display + admin audit. */
+   *  relation); for a description match, the issue creator. Kept for
+   *  the profile display + admin audit. */
   author_email: string | null;
   author_name: string | null;
   posted_at: string;

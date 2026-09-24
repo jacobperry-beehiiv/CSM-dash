@@ -13,6 +13,7 @@ import type {
 } from "../data/enterprise-requests-types";
 import { linearStateToDerived } from "../data/enterprise-requests-types";
 import {
+  completedTailActive,
   fetchOpenIssuesWithCommentsPage,
   type LinearComment,
   type LinearIssueWithComments,
@@ -54,6 +55,14 @@ const MAX_PAGES_BACKFILL = 100; // 100 × 50 = 5000 issues (belt-and-suspenders)
 export interface LinearCommentScanResult {
   processed_issues: number;
   processed_comments: number;
+  /** Issue descriptions that carried a parseable customer signal.
+   *  Reported separately from comments so a run makes it obvious
+   *  whether the description path is pulling its weight. */
+  processed_descriptions: number;
+  /** False when Linear's schema rejected the completed-tail filter and
+   *  the scan fell back to open issues only. Reported because a silent
+   *  downgrade is indistinguishable from "nothing shipped recently". */
+  completed_tail_active: boolean;
   annotated: number;
   injected: number;
   skipped_no_customer_signal: number;
@@ -251,6 +260,8 @@ export async function runLinearCommentScan(
   const result: LinearCommentScanResult = {
     processed_issues: 0,
     processed_comments: 0,
+    processed_descriptions: 0,
+    completed_tail_active: false,
     annotated: 0,
     injected: 0,
     skipped_no_customer_signal: 0,
@@ -267,7 +278,10 @@ export async function runLinearCommentScan(
   // trimmed issues fit in a few MB.
   interface CollectedComment {
     issue: LinearIssueWithComments;
-    comment: LinearComment;
+    /** Null when the signal came from the issue DESCRIPTION rather
+     *  than a comment — there's no comment to anchor the permalink
+     *  to, so the meta falls back to the issue URL + creator. */
+    comment: LinearComment | null;
     parsed: ReturnType<typeof parseIntakeMessage>;
   }
   const collected: CollectedComment[] = [];
@@ -282,6 +296,40 @@ export async function runLinearCommentScan(
     if (issues.length === 0) break;
     for (const issue of issues) {
       result.processed_issues += 1;
+
+      // Description pass. Juliet's skill writes the structured
+      // `Publication ID` / `User Email` block into either a comment
+      // or the issue body depending on how the ticket was filed;
+      // only the comment case was ever read. BEE-24879 shipped for
+      // Daily Drop carrying a perfectly parseable block in its
+      // description and never reached the tracker.
+      //
+      // Runs before comments so the description becomes the intake
+      // anchor when both carry a signal — the description is where
+      // the skill puts the canonical record, and a later comment
+      // shouldn't displace it.
+      if (issue.description) {
+        const descParsed = parseIntakeMessage(issue.description);
+        if (
+          descParsed.publication_ids.length > 0 ||
+          descParsed.owner_emails.length > 0
+        ) {
+          // Incremental runs skip issues untouched since the cursor.
+          // Unlike comments (which carry their own updatedAt) the
+          // description's freshness is the issue's updatedAt.
+          if (cutoff == null || Date.parse(issue.updatedAt) >= cutoff) {
+            collected.push({ issue, comment: null, parsed: descParsed });
+            allPubIds.push(...descParsed.publication_ids);
+            result.processed_descriptions += 1;
+          }
+        }
+      }
+      if (
+        issue.updatedAt &&
+        (!newestUpdatedAt || issue.updatedAt > newestUpdatedAt)
+      ) {
+        newestUpdatedAt = issue.updatedAt;
+      }
       // Advance the "newest seen" tracker off whichever comment has
       // the highest updatedAt on this issue (fallback to the issue's
       // own state — we can't read updatedAt at issue level from this
@@ -341,17 +389,31 @@ export async function runLinearCommentScan(
       continue;
     }
     const { workspaceId, matched_via } = resolved;
-    const meta: LinearCommentMeta = {
-      issue_id: issue.id,
-      issue_identifier: issue.identifier,
-      comment_id: comment.id,
-      permalink: comment.url,
-      author_email: comment.user?.email ?? null,
-      author_name: comment.user?.name ?? null,
-      posted_at: comment.createdAt,
-      body_preview: commentPreview(comment.body ?? ""),
-      matched_via,
-    };
+    const meta: LinearCommentMeta = comment
+      ? {
+          issue_id: issue.id,
+          issue_identifier: issue.identifier,
+          source: "comment",
+          comment_id: comment.id,
+          permalink: comment.url,
+          author_email: comment.user?.email ?? null,
+          author_name: comment.user?.name ?? null,
+          posted_at: comment.createdAt,
+          body_preview: commentPreview(comment.body ?? ""),
+          matched_via,
+        }
+      : {
+          issue_id: issue.id,
+          issue_identifier: issue.identifier,
+          source: "description",
+          comment_id: null,
+          permalink: issue.url,
+          author_email: issue.creator?.email ?? null,
+          author_name: issue.creator?.name ?? null,
+          posted_at: issue.createdAt,
+          body_preview: commentPreview(issue.description ?? ""),
+          matched_via,
+        };
     const bucket = rows[workspaceId] ?? {};
     const existing = bucket[issue.id];
     if (existing) {
@@ -369,6 +431,8 @@ export async function runLinearCommentScan(
     rows[workspaceId] = bucket;
     result.injected += 1;
   }
+
+  result.completed_tail_active = completedTailActive();
 
   const nextBlob: EnterpriseRequestsBlob = {
     ...snapshot,

@@ -391,6 +391,14 @@ export interface LinearIssueWithComments {
     status: { name: string; type: string } | null;
   } | null;
   completedAt: string | null;
+  /** Issue body. Juliet's feature-request-creator skill sometimes
+   *  writes the structured `Publication ID` / `User Email` block here
+   *  rather than in a comment — BEE-24879 shipped for Daily Drop that
+   *  way and never reached the tracker, because nothing parsed it. */
+  description: string | null;
+  createdAt: string;
+  updatedAt: string;
+  creator: { email: string | null; name: string | null } | null;
   comments: { nodes: LinearComment[]; pageInfo: { hasNextPage: boolean } };
 }
 
@@ -410,18 +418,10 @@ interface OpenIssuesResponse {
  *  the wild, the engine can fall back to a per-issue comment fetch,
  *  but we don't need that yet. Filter uses `state: { type }` which
  *  is on IssueFilter (validated in the Linear GraphQL playground). */
-const OPEN_ISSUES_WITH_COMMENTS_QUERY = /* GraphQL */ `
-  query OpenIssuesWithComments($after: String, $first: Int!) {
-    issues(
-      first: $first
-      after: $after
-      filter: {
-        state: {
-          type: { nin: ["completed", "canceled"] }
-        }
-      }
-      orderBy: updatedAt
-    ) {
+/** Field selections shared by both filter variants. Kept as one
+ *  string so the two queries can't drift — a field added for the
+ *  description path must exist on whichever query actually runs. */
+const OPEN_ISSUES_SELECTION = `
       pageInfo {
         hasNextPage
         endCursor
@@ -451,6 +451,13 @@ const OPEN_ISSUES_WITH_COMMENTS_QUERY = /* GraphQL */ `
           }
         }
         completedAt
+        description
+        createdAt
+        updatedAt
+        creator {
+          email
+          name
+        }
         comments(first: 20) {
           nodes {
             id
@@ -468,9 +475,76 @@ const OPEN_ISSUES_WITH_COMMENTS_QUERY = /* GraphQL */ `
           }
         }
       }
+`;
+
+/** Preferred query: open issues PLUS anything completed since
+ *  `$completedSince`. See COMPLETED_TAIL_DAYS for why the tail
+ *  matters. */
+const OPEN_ISSUES_WITH_TAIL_QUERY = `
+  query OpenIssuesWithComments(
+    $after: String
+    $first: Int!
+    $completedSince: DateTimeOrDuration!
+  ) {
+    issues(
+      first: $first
+      after: $after
+      filter: {
+        or: [
+          { state: { type: { nin: ["completed", "canceled"] } } }
+          { completedAt: { gte: $completedSince } }
+        ]
+      }
+      orderBy: updatedAt
+    ) {
+${OPEN_ISSUES_SELECTION}
     }
   }
 `;
+
+/** Fallback: the original open-only filter, no date variable.
+ *
+ *  The tail query's `completedAt: { gte: ... }` comparator shape
+ *  couldn't be validated against Linear's live schema from here (no
+ *  API key in local dev, and the published docs don't carry the
+ *  GraphQL reference). Rather than gamble the whole sweep on it, a
+ *  validation error downgrades to this query for the rest of the
+ *  process — the scan then behaves exactly as it did before the
+ *  completed-tail change, and the description-parsing half of the
+ *  fix still works. */
+const OPEN_ISSUES_ONLY_QUERY = `
+  query OpenIssuesWithComments($after: String, $first: Int!) {
+    issues(
+      first: $first
+      after: $after
+      filter: {
+        state: {
+          type: { nin: ["completed", "canceled"] }
+        }
+      }
+      orderBy: updatedAt
+    ) {
+${OPEN_ISSUES_SELECTION}
+    }
+  }
+`;
+
+/** Tri-state: null = not yet attempted, true = tail filter accepted,
+ *  false = schema rejected it, use the open-only query. Module-level
+ *  so one rejection isn't re-learned on every page of a run. */
+let completedTailSupported: boolean | null = null;
+
+/** A GraphQL validation failure — wrong field, wrong scalar, unknown
+ *  argument. Distinguished from auth/rate-limit/network failures,
+ *  which must keep propagating rather than silently narrowing the
+ *  scan. */
+function isSchemaRejection(e: unknown): boolean {
+  const msg = e instanceof Error ? e.message : String(e);
+  if (!/Linear GraphQL errors/.test(msg)) return false;
+  return /completedSince|completedAt|DateTimeOrDuration|Unknown argument|Cannot query|expected type|Variable/i.test(
+    msg
+  );
+}
 
 export interface FetchOpenIssuesPage {
   issues: LinearIssueWithComments[];
@@ -478,17 +552,70 @@ export interface FetchOpenIssuesPage {
   hasNextPage: boolean;
 }
 
+/** How far back to include ALREADY-COMPLETED issues.
+ *
+ *  The scan originally walked open issues only, which is the cheaper
+ *  read but misses the case that matters most: a request that shipped
+ *  before anyone attached a customer need. BEE-24879 went from filed
+ *  to Done in eight days — the entire window in which an open-only
+ *  scan could have caught it. Since close-the-loop value is
+ *  concentrated exactly in shipped tickets, a recently-completed tail
+ *  is worth the extra pages.
+ *
+ *  Canceled issues stay excluded: "we're not building this" isn't a
+ *  ship to tell a customer about, and the main sync already handles
+ *  canceled → Not planned for issues that do have needs. */
+export const COMPLETED_TAIL_DAYS = 30;
+
 export async function fetchOpenIssuesWithCommentsPage(
   after: string | null = null,
-  first: number = 50
+  first: number = 50,
+  completedSinceIso?: string
 ): Promise<FetchOpenIssuesPage> {
-  const res = await callLinear<OpenIssuesResponse>(
-    OPEN_ISSUES_WITH_COMMENTS_QUERY,
-    { after, first }
-  );
-  return {
+  const completedSince =
+    completedSinceIso ??
+    new Date(
+      Date.now() - COMPLETED_TAIL_DAYS * 24 * 60 * 60 * 1000
+    ).toISOString();
+
+  const unpack = (res: OpenIssuesResponse): FetchOpenIssuesPage => ({
     issues: res.data?.issues?.nodes ?? [],
     endCursor: res.data?.issues?.pageInfo?.endCursor ?? null,
     hasNextPage: !!res.data?.issues?.pageInfo?.hasNextPage,
-  };
+  });
+
+  if (completedTailSupported !== false) {
+    try {
+      const res = await callLinear<OpenIssuesResponse>(
+        OPEN_ISSUES_WITH_TAIL_QUERY,
+        { after, first, completedSince }
+      );
+      completedTailSupported = true;
+      return unpack(res);
+    } catch (e) {
+      if (!isSchemaRejection(e)) throw e;
+      completedTailSupported = false;
+      console.warn(
+        "[linear] completed-tail filter rejected by the schema — " +
+          "falling back to open-issues-only for this process. Recently " +
+          "shipped tickets will not be scanned; fix the filter shape in " +
+          "OPEN_ISSUES_WITH_TAIL_QUERY. Error: " +
+          (e instanceof Error ? e.message : String(e))
+      );
+    }
+  }
+
+  const res = await callLinear<OpenIssuesResponse>(OPEN_ISSUES_ONLY_QUERY, {
+    after,
+    first,
+  });
+  return unpack(res);
+}
+
+/** Whether the last fetch used the completed tail. Surfaced on the
+ *  scan result so a run says plainly which query shape it ran —
+ *  otherwise a silent downgrade looks identical to "nothing shipped
+ *  recently". */
+export function completedTailActive(): boolean {
+  return completedTailSupported === true;
 }
