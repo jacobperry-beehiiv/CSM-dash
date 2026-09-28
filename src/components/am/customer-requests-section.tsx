@@ -216,12 +216,27 @@ export function CustomerRequestsSection({
           {STATE_ORDER.map((state) => {
             const rows = grouped?.get(state) ?? [];
             if (rows.length === 0) return null;
+            // "In progress" is where Linear-Done-but-unshipped tickets
+            // land. The per-row badge says so, but without a heading
+            // note a CSM scanning the group still reads the grouping
+            // itself as stale. Only shown when the group actually
+            // contains one, so it isn't permanent chrome.
+            const doneUnshipped =
+              state === "In progress" &&
+              rows.some((r) => r.linear_state_type === "completed");
             return (
               <div key={state}>
                 <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-subtle">
                   {state}
                   <span className="ml-1.5 text-muted">({rows.length})</span>
                 </div>
+                {doneUnshipped ? (
+                  <p className="mb-1 text-[10px] leading-snug text-muted">
+                    Includes tickets Linear marks Done. Merged isn&rsquo;t
+                    released — these move to Live once a #devs-shipped or
+                    changelog post confirms the ship.
+                  </p>
+                ) : null}
                 <ul className="space-y-1.5">
                   {rows.map((row) => (
                     <li
@@ -258,6 +273,22 @@ export function CustomerRequestsSection({
                             {row.resurfaced ? (
                               <span className="px-1 py-0.5 rounded border border-amber-400 text-amber-700 dark:text-amber-300">
                                 Resurfaced
+                              </span>
+                            ) : null}
+                            {/* Rows group by derived_state, and Linear
+                                `completed` maps to "In progress"
+                                deliberately — merged is not released,
+                                and only a matched ship post promotes to
+                                Live. Without saying so, a Done ticket
+                                filed under "In progress" reads as the
+                                tracker being wrong. */}
+                            {row.linear_state_type === "completed" &&
+                            row.derived_state !== "Live" ? (
+                              <span
+                                className="px-1 py-0.5 rounded border border-slate-400 text-slate-700 dark:text-slate-200"
+                                title={`Linear state: ${row.linear_state_name}. No #devs-shipped or changelog post has been matched to this ticket yet, so it isn't confirmed customer-visible.`}
+                              >
+                                Done in Linear · ship unconfirmed
                               </span>
                             ) : null}
                             {row.project_name ? (
