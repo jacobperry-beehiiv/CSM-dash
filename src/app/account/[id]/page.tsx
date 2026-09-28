@@ -1,4 +1,6 @@
 import { notFound } from "next/navigation";
+import { auth } from "@/auth";
+import { isFeatureEnabledFor } from "@/lib/auth/feature-flags";
 import { loadCustomers } from "@/lib/data/load-customers";
 import { lastContacted } from "@/lib/customer-helpers";
 import { listSignals } from "@/lib/data/customer-signals";
@@ -10,6 +12,7 @@ import { HubSpotContactsSection } from "@/components/hubspot-contacts-section";
 import { CustomerSignalsSection } from "@/components/customer-signals-section";
 import { CustomerPublicationsList } from "@/components/customer-publications-list";
 import { ProfileFieldsSection } from "@/components/profile-fields-section";
+import { CustomerRequestsSection } from "@/components/am/customer-requests-section";
 
 export const dynamic = "force-dynamic";
 
@@ -33,6 +36,16 @@ export default async function AccountPage({
   // posted via /api/customer-signals. Empty array when nothing's been
   // posted yet — the section renders a friendly empty state.
   const signals = c.workspace_id ? await listSignals(c.workspace_id) : [];
+
+  // Enterprise Request Loop gate. Same flag the /csm detail panel
+  // uses — resolved here too because this page renders standalone
+  // (deep link from Slack, a bookmark) and never goes through the
+  // /csm tree that would otherwise thread the value down.
+  const session = await auth();
+  const requestsEnabled = await isFeatureEnabledFor(
+    "enterprise-requests",
+    session?.user?.email ?? null
+  );
 
   const utilPct =
     c.percent_of_max_subs != null
@@ -179,6 +192,17 @@ export default async function AccountPage({
       <div className="mb-6">
         <CustomerSignalsSection signals={signals} />
       </div>
+
+      {/* Enterprise Request Loop — the same section the /csm detail
+       *  panel renders. Mounted here so a deep link to an account
+       *  doesn't silently omit what the panel shows; the standalone
+       *  page is what gets pasted into Slack and opened before a
+       *  renewal call. */}
+      {requestsEnabled ? (
+        <div className="mb-6">
+          <CustomerRequestsSection customer={c} enabled={requestsEnabled} />
+        </div>
+      ) : null}
 
       <HubSpotContactsSection
         contacts={c.hubspot_contacts}
