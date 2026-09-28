@@ -70,12 +70,32 @@ export async function GET(req: Request) {
   const cutoff = Date.now() - SEVEN_DAYS_MS;
   const open = new Set<string>();
   const notifiedGap = new Set<string>();
+  // Per-workspace tallies for the customer-table column. The Sets
+  // above stay as they are — the filter chip is keyed on membership,
+  // and changing its contract to feed a new column would be a
+  // gratuitous break.
+  const counts: Record<
+    string,
+    { open: number; shipped: number; total: number }
+  > = {};
   for (const workspaceId of scoped) {
     const bucket = snapshot.rows[workspaceId];
     if (!bucket) continue;
     for (const row of Object.values(bucket) as EnterpriseRequestRow[]) {
+      const t = (counts[workspaceId] ??= { open: 0, shipped: 0, total: 0 });
+      t.total += 1;
       if (OPEN_STATE_TYPES.has(row.linear_state_type)) {
         open.add(workspaceId);
+        t.open += 1;
+      }
+      // "shipped" counts the derived bucket, not Linear's state — a
+      // ticket Done in Linear isn't customer-visible until a ship post
+      // is matched, and the column shouldn't claim otherwise.
+      if (
+        row.derived_state === "Live" ||
+        row.derived_state === "Live, possibly in beta"
+      ) {
+        t.shipped += 1;
       }
       if (row.promoted_at) {
         const promotedAt = Date.parse(row.promoted_at);
@@ -95,6 +115,7 @@ export async function GET(req: Request) {
   return NextResponse.json({
     csm: csmParam || viewerEmail.toLowerCase(),
     open_workspace_ids: [...open],
+    counts,
     live_this_week_workspace_ids: [...notifiedGap],
     last_synced_at: snapshot.fetched_at,
   });

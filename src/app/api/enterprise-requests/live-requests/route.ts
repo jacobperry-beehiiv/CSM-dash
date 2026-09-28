@@ -80,6 +80,16 @@ interface TicketGroup {
   title: string;
   url: string;
   derived_state: EnterpriseRequestDerivedState;
+  /** Linear's own state, carried alongside the derived bucket.
+   *
+   *  `linearStateToDerived` maps Linear `completed` to "In progress"
+   *  on purpose — merged is not released, and only the shipped-sweep
+   *  may promote to Live. Correct, but it means a genuinely-Done
+   *  ticket renders as "In progress" until a Slack ship post is
+   *  matched. In an inventory view that reads as a bug, so the raw
+   *  state travels with the row and the UI shows both. */
+  linear_state_name: string;
+  linear_state_type: string;
   work_type: WorkTypeLabel | null;
   promotion_source: PromotionSource | null;
   promotion_confidence: PromotionConfidence;
@@ -119,6 +129,19 @@ export async function GET(req: Request) {
   const windowMs = windowKey in WINDOW_MS ? WINDOW_MS[windowKey] : WINDOW_MS["30d"];
   const confidenceParam = url.searchParams.get("confidence") ?? "confirmed";
   const confirmedOnly = confidenceParam !== "all";
+  // mode=shipped (default) — the outreach queue: only rows the
+  // shipped-sweep promoted, inside a recency window.
+  // mode=all — the book's whole request inventory regardless of
+  // whether anything shipped, which is the question "what has my book
+  // asked for, and where does it stand?". Same grouping and customer
+  // attachment either way; only the row filter differs.
+  const mode = url.searchParams.get("mode") === "all" ? "all" : "shipped";
+  // Comma-separated derived_state values. Only meaningful in `all`
+  // mode — in shipped mode the promotion filter already implies it.
+  const stateParam = (url.searchParams.get("states") ?? "").trim();
+  const wantedStates = new Set(
+    stateParam ? stateParam.split(",").map((s) => s.trim()).filter(Boolean) : []
+  );
 
   const [customers, snapshot, notified] = await Promise.all([
     loadCustomers(),
@@ -173,11 +196,26 @@ export async function GET(req: Request) {
   >();
   for (const [workspaceId, bucket] of Object.entries(snapshot.rows)) {
     for (const row of Object.values(bucket) as EnterpriseRequestRow[]) {
-      if (!row.promoted_at) continue;
-      const promotedAt = Date.parse(row.promoted_at);
-      if (!Number.isFinite(promotedAt)) continue;
-      if (cutoff !== null && promotedAt < cutoff) continue;
-      if (confirmedOnly && resolveConfidence(row) !== "confirmed") continue;
+      if (mode === "shipped") {
+        if (!row.promoted_at) continue;
+        const promotedAt = Date.parse(row.promoted_at);
+        if (!Number.isFinite(promotedAt)) continue;
+        if (cutoff !== null && promotedAt < cutoff) continue;
+        if (confirmedOnly && resolveConfidence(row) !== "confirmed") continue;
+      } else {
+        // `all` mode ignores promotion entirely — an Open request that
+        // has never shipped is exactly what this view exists to show.
+        // The window still applies when one is set, but against the
+        // request's SUBMISSION date rather than a ship it may never
+        // have had.
+        if (wantedStates.size > 0 && !wantedStates.has(row.derived_state)) {
+          continue;
+        }
+        if (cutoff !== null) {
+          const submitted = Date.parse(row.submitted_at ?? "");
+          if (Number.isFinite(submitted) && submitted < cutoff) continue;
+        }
+      }
       // A dismissed review means we decided this isn't a real
       // customer-visible ship — it shouldn't show up as one.
       if (row.review?.decision === "dismissed") continue;
@@ -247,6 +285,8 @@ export async function GET(req: Request) {
       title: head.title,
       url: head.url,
       derived_state: head.derived_state,
+      linear_state_name: head.linear_state_name,
+      linear_state_type: head.linear_state_type,
       work_type: head.work_type,
       promotion_source: head.promotion_source,
       promotion_confidence: resolveConfidence(head),
@@ -268,12 +308,22 @@ export async function GET(req: Request) {
   }
 
   // Newest ship first.
-  groups.sort((a, b) =>
-    (b.promoted_at ?? "").localeCompare(a.promoted_at ?? "")
-  );
+  // Newest first. In `all` mode most rows have no promoted_at, so fall
+  // back to the newest submission date across attached customers —
+  // otherwise every un-shipped request would sort as an equal blank.
+  groups.sort((a, b) => {
+    const key = (g: TicketGroup) =>
+      g.promoted_at ??
+      g.customers.reduce<string>(
+        (max, c) => ((c.submitted_at ?? "") > max ? c.submitted_at ?? "" : max),
+        ""
+      );
+    return key(b).localeCompare(key(a));
+  });
 
   return NextResponse.json({
     csm: wantAll ? "all" : csmParam || viewerEmail.toLowerCase(),
+    mode,
     window: windowKey in WINDOW_MS ? windowKey : "30d",
     confidence: confirmedOnly ? "confirmed" : "all",
     groups,

@@ -55,6 +55,8 @@ interface TicketGroup {
   title: string;
   url: string;
   derived_state: EnterpriseRequestDerivedState;
+  linear_state_name: string;
+  linear_state_type: string;
   work_type: WorkTypeLabel | null;
   promotion_source: PromotionSource | null;
   promotion_confidence: PromotionConfidence;
@@ -80,7 +82,21 @@ interface ApiResponse {
   last_synced_at: string;
 }
 
+const ALL_STATES = [
+  "Open",
+  "In progress",
+  "Live",
+  "Live, possibly in beta",
+  "Not planned",
+] as const;
+
 interface Props {
+  /** "shipped" — the outreach queue (promoted rows only, recency
+   *  window, confidence gate). "all" — the book's whole request
+   *  inventory regardless of whether anything shipped. Same grouping
+   *  either way; the mode changes which rows the API returns and
+   *  which controls make sense to show. */
+  mode?: "shipped" | "all";
   /** CSM handle (or email) to scope to. Empty = the viewer. */
   csmParam: string | null;
   /** Book indexed by workspace_id so the Draft-outreach modal can
@@ -95,11 +111,17 @@ const WINDOW_OPTIONS: Array<{ value: string; label: string }> = [
   { value: "all", label: "All time" },
 ];
 
-export function LiveRequests({ csmParam, customersByWorkspace }: Props) {
+export function LiveRequests({
+  mode = "shipped",
+  csmParam,
+  customersByWorkspace,
+}: Props) {
+  const isAll = mode === "all";
   const [data, setData] = useState<ApiResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [windowKey, setWindowKey] = useState("30d");
+  const [windowKey, setWindowKey] = useState(mode === "all" ? "all" : "30d");
+  const [states, setStates] = useState<string[]>([]);
   const [scopeAll, setScopeAll] = useState(false);
   const [showNotified, setShowNotified] = useState(false);
   const [includeNeedsReview, setIncludeNeedsReview] = useState(false);
@@ -115,6 +137,8 @@ export function LiveRequests({ csmParam, customersByWorkspace }: Props) {
     const qs = new URLSearchParams();
     qs.set("csm", scopeAll ? "all" : (csmParam ?? ""));
     qs.set("window", windowKey);
+    if (isAll) qs.set("mode", "all");
+    if (isAll && states.length > 0) qs.set("states", states.join(","));
     if (showNotified) qs.set("include_notified", "1");
     if (includeNeedsReview) qs.set("confidence", "all");
     fetch(`/api/enterprise-requests/live-requests?${qs}`, {
@@ -133,7 +157,7 @@ export function LiveRequests({ csmParam, customersByWorkspace }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [csmParam, windowKey, scopeAll, showNotified, includeNeedsReview]);
+  }, [csmParam, windowKey, scopeAll, showNotified, includeNeedsReview, isAll, states]);
 
   /** Patch one customer's notified state inside the grouped shape. */
   function patchNotified(
@@ -193,10 +217,23 @@ export function LiveRequests({ csmParam, customersByWorkspace }: Props) {
   return (
     <div className="space-y-4">
       <p className="text-sm text-muted max-w-prose">
-        Feature requests that shipped, grouped by Linear ticket so you
-        can see every customer who asked for it. Draft a note to close
-        the loop, then check Notified so the row drops off the weekly
-        digest.
+        {isAll ? (
+          <>
+            Every feature request logged against your book, grouped by
+            Linear ticket so you can see each customer who asked for it.
+            <strong> Live</strong> here means a ship post was matched to
+            the ticket — a ticket marked Done in Linear stays
+            un-promoted until then, and is badged so the difference is
+            visible.
+          </>
+        ) : (
+          <>
+            Feature requests that shipped, grouped by Linear ticket so
+            you can see every customer who asked for it. Draft a note to
+            close the loop, then check Notified so the row drops off the
+            weekly digest.
+          </>
+        )}
       </p>
 
       <ConfidenceExplainer />
@@ -249,6 +286,37 @@ export function LiveRequests({ csmParam, customersByWorkspace }: Props) {
           />
           Include unconfirmed
         </label>
+
+        {isAll ? (
+          <div className="flex flex-wrap items-center gap-1.5 w-full">
+            <span className="text-[11px] uppercase tracking-wide text-subtle w-14 shrink-0">
+              State
+            </span>
+            {ALL_STATES.map((st) => {
+              const on = states.includes(st);
+              return (
+                <button
+                  key={st}
+                  type="button"
+                  onClick={() =>
+                    setStates((prev) =>
+                      prev.includes(st)
+                        ? prev.filter((v) => v !== st)
+                        : [...prev, st]
+                    )
+                  }
+                  className={`px-2 py-0.5 rounded-full text-[11px] border transition-colors ${
+                    on
+                      ? "bg-accent text-accent-fg border-accent"
+                      : "bg-surface text-fg border-border-strong hover:bg-canvas"
+                  }`}
+                >
+                  {st}
+                </button>
+              );
+            })}
+          </div>
+        ) : null}
 
         {data ? (
           <span className="ml-auto text-[11px] text-muted">
@@ -371,6 +439,24 @@ function GroupCard({
           <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[10px] text-muted">
             <span>Shipped {fmtDate(group.ship_date ?? group.promoted_at)}</span>
             {group.work_type ? <span>· {group.work_type}</span> : null}
+            <span
+              className="rounded bg-canvas border border-border px-1 py-0.5 text-[9px] text-fg"
+              title={`Linear state: ${group.linear_state_name}`}
+            >
+              {group.derived_state}
+            </span>
+            {group.linear_state_type === "completed" &&
+            group.derived_state !== "Live" ? (
+              // Done in Linear but never matched to a ship post. Worth
+              // calling out explicitly: without it the row reads "In
+              // progress" and looks like the tracker is just wrong.
+              <span
+                className="rounded border border-slate-400 bg-slate-50 dark:bg-slate-500/10 px-1 py-0.5 text-[9px] font-semibold text-slate-700 dark:text-slate-200"
+                title="Linear says Done, but no #devs-shipped or changelog post has been matched to it, so it hasn't been confirmed as customer-visible."
+              >
+                DONE IN LINEAR · SHIP UNCONFIRMED
+              </span>
+            ) : null}
             {group.derived_state === "Live, possibly in beta" ? (
               <span className="rounded border border-amber-400 bg-amber-50 dark:bg-amber-500/10 px-1 py-0.5 text-amber-800 dark:text-amber-200 text-[9px] font-semibold">
                 POSSIBLY IN BETA
