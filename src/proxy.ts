@@ -113,6 +113,27 @@ export default auth((req) => {
   // .github/workflows/renewal-milestones.yml.
   if (pathname.startsWith("/api/renewals/milestone-sweep")) return;
 
+  // Enterprise Request Loop — the whole /api/enterprise-requests
+  // namespace, deliberately as a PREFIX rather than one entry per
+  // endpoint like the exemptions above.
+  //
+  // This namespace has five cron-driven routes (sync, shipped-sweep,
+  // slack-intake-sweep, linear-comment-scan, digest) and none of them
+  // were exempted when they shipped. Every nightly run since the
+  // feature landed 307'd to /login and the workflow exited 1 —
+  // enterprise-requests-sync failed 6/6 nights and the Monday digest
+  // failed on both of its runs. The loop had never once executed in
+  // production. Listing endpoints one at a time is what let that
+  // happen: the next route added here would have hit the same trap.
+  //
+  // Safe as a prefix because every route under it does its own
+  // `await auth()` (UI reads) or dual session/Bearer-CRON_SECRET
+  // check (the sweeps). The proxy exemption only skips the redirect
+  // to /login — it grants nothing. An unauthenticated caller still
+  // gets a 401 JSON from the route, which is the correct answer for
+  // an API path anyway; the 307-to-HTML was never useful here.
+  if (pathname.startsWith("/api/enterprise-requests")) return;
+
   if (!req.auth) {
     const url = req.nextUrl.clone();
     url.pathname = "/login";
