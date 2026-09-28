@@ -16,6 +16,9 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run lint
+      # Guards against the 307-to-/login class: a cron endpoint that
+      # isn't proxy-exempt fails silently in Actions for weeks.
+      - run: npm run check:cron
       - run: npm run build
         env:
           DATA_SOURCE: snapshot

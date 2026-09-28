@@ -134,6 +134,15 @@ export default auth((req) => {
   // an API path anyway; the 307-to-HTML was never useful here.
   if (pathname.startsWith("/api/enterprise-requests")) return;
 
+  // Lifecycle board — same story as the namespace above. The
+  // live-quarter check-in sweep (daily cron) 307'd to /login on every
+  // run since it shipped; the workflow failed 5/5 nights.
+  //
+  // Prefix again, for the same reason: both routes under it do their
+  // own auth — backfill-onboarding is session + feature-flag gated,
+  // live-quarter-checkin-sweep is dual session/Bearer-CRON_SECRET.
+  if (pathname.startsWith("/api/lifecycle")) return;
+
   if (!req.auth) {
     const url = req.nextUrl.clone();
     url.pathname = "/login";
