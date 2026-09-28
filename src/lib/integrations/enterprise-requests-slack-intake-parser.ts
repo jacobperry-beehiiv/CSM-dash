@@ -86,6 +86,55 @@ export interface SlackIntakeParseResult {
 /** Turn a message body into structured signals. Idempotent — parsing
  *  the same message twice yields the same output. Safe on empty
  *  strings; returns everything empty. */
+/**
+ * Normalize a body before pattern-matching.
+ *
+ * Every pattern here was written against Slack message text. The same
+ * structured block arriving from a LINEAR ISSUE DESCRIPTION carries
+ * two encodings Slack never produces, and both silently defeated
+ * extraction — the nightly scan reported 228 descriptions parsed and
+ * 228 unresolvable, i.e. a 100% miss rate on the description path,
+ * while all 21 comment-sourced matches resolved fine.
+ *
+ *   1. Blockquote prefixes. Linear renders the skill's block as a
+ *      quote, so the value sits on the next line behind "> ". The
+ *      label patterns allow only `\s*` between label and value, and
+ *      ">" is not whitespace, so `Publication ID` never matched.
+ *
+ *   2. URL-encoded pipes. Linear writes a mailto as a markdown link —
+ *      [mailto:a@x|a@x](<mailto:a@x%7Ca@x>) — and MAILTO_RE treats
+ *      "|" as the separator between address and display text. With
+ *      the pipe encoded as %7C it isn't seen, so the whole
+ *      "a@x%7Ca@x" was captured as one address.
+ *
+ * Verified against BEE-24879 (Daily Drop), which shipped a public
+ * subscription-export API and never reached the tracker: identical
+ * text parsed correctly in Slack shape and yielded nothing usable in
+ * Linear shape.
+ */
+/** Strip wrapper punctuation off a captured address.
+ *
+ *  A markdown mailto link opens with "[mailto:" — once the encoded
+ *  pipe is restored the capture terminates in the right place, but
+ *  the leading bracket and scheme ride along, yielding
+ *  "[mailto:austin@dailydrop.com". Harmless (it resolves to nothing)
+ *  but it pollutes the parsed set and could in principle collide, so
+ *  trim it rather than leave it for a reader to puzzle over. */
+function cleanEmail(raw: string): string {
+  return raw
+    .trim()
+    .replace(/^[[(<"']+/, "")
+    .replace(/^mailto:/i, "")
+    .replace(/[\])>"'.,;]+$/, "")
+    .toLowerCase();
+}
+
+function normalizeForParsing(text: string): string {
+  return text
+    .replace(/^[ \t]*>[ \t]?/gm, "")
+    .replace(/%7C/gi, "|");
+}
+
 export function parseIntakeMessage(text: string): SlackIntakeParseResult {
   const linearKeys = new Set<string>();
   const pubIds = new Set<string>();
@@ -99,6 +148,11 @@ export function parseIntakeMessage(text: string): SlackIntakeParseResult {
       body_preview: "",
     };
   }
+
+  // Everything below matches against the normalized copy. The preview
+  // is built from it too — dropping "> " makes the profile row read
+  // better, and the caller keeps the original.
+  text = normalizeForParsing(text);
 
   // Linear ticket URLs — captureAll via a fresh regex to reset state.
   const linearMatches = text.matchAll(new RegExp(LINEAR_URL_RE.source, "gi"));
@@ -116,10 +170,15 @@ export function parseIntakeMessage(text: string): SlackIntakeParseResult {
 
   // Structured User Email line.
   const emailLine = text.match(USER_EMAIL_LINE_RE);
-  if (emailLine && emailLine[1]) emails.add(emailLine[1].trim().toLowerCase());
+  if (emailLine && emailLine[1]) {
+    const e = cleanEmail(emailLine[1]);
+    if (e.includes("@")) emails.add(e);
+  }
   // Any other mailto:.
   for (const m of text.matchAll(new RegExp(MAILTO_RE.source, "gi"))) {
-    if (m[1]) emails.add(m[1].trim().toLowerCase());
+    if (!m[1]) continue;
+    const e = cleanEmail(m[1]);
+    if (e.includes("@")) emails.add(e);
   }
 
   // Clean the preview: strip Slack `<url|display>` wrappers to the
