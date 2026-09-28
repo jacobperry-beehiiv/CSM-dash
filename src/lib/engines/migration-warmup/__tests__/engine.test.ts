@@ -11,7 +11,11 @@
 
 import {
   generateSchedule,
+  minimumSafeWeeks,
+  normalizeCadence,
   normalizeSubscribers,
+  solveForDeadline,
+  tierFor,
 } from "../engine";
 import type { ListInput } from "../types";
 
@@ -157,6 +161,114 @@ for (const size of sweepSizes) {
 }
 check("Invariants across sweep", invariantFailures, 0);
 console.log(`(swept ${totalCases} cases)`);
+
+// ----------------------------------------------------------------- //
+// Deadline solving
+// ----------------------------------------------------------------- //
+
+// A deadline looser than the natural ramp must change nothing — we
+// only compress when asked to, never pre-emptively.
+{
+  const base = generateSchedule(li("Loose", 150_000, "3x/week", { open_rate: 0.4 }));
+  const withLooseDeadline = generateSchedule(
+    li("Loose", 150_000, "3x/week", {
+      open_rate: 0.4,
+      deadline_weeks: base.total_weeks + 10,
+    })
+  );
+  check("loose deadline: approach unchanged", withLooseDeadline.approach, "standard");
+  check(
+    "loose deadline: schedule unchanged",
+    cumulatives(withLooseDeadline),
+    cumulatives(base)
+  );
+}
+
+// A feasible-but-tight deadline must actually land inside it. This is
+// the behaviour the flat 1.25x multiplier didn't guarantee.
+{
+  // 400k @ 1x/week has ~4 weeks of headroom between the cap floor and
+  // the natural ramp. High-cadence senders have none — their standard
+  // schedule already sits on the cap ladder — so a compression test
+  // has to pick a low-cadence case to have anything to compress.
+  const subs = 400_000;
+  const { spw } = normalizeCadence("1x/week");
+  const floor = minimumSafeWeeks(tierFor(subs), spw, subs);
+  const base = generateSchedule(li("Tight", subs, "1x/week", { open_rate: 0.4 }));
+  // Pick a target strictly between the floor and the natural ramp, so
+  // it's genuinely a compression and genuinely achievable.
+  const target = Math.floor((floor + base.total_weeks) / 2);
+  if (target > floor && target < base.total_weeks) {
+    const tight = generateSchedule(
+      li("Tight", subs, "1x/week", { open_rate: 0.4, deadline_weeks: target })
+    );
+    check("tight deadline: approach aggressive", tight.approach, "aggressive");
+    check("tight deadline: fits within deadline", tight.total_weeks <= target, true);
+    check(
+      "tight deadline: still completes the list",
+      tight.weeks[tight.weeks.length - 1].cumulative,
+      subs
+    );
+  }
+}
+
+// An impossible deadline must be reported, not silently missed. The
+// returned schedule is the fastest SAFE plan, not a schedule that
+// breaches caps to hit the date.
+{
+  const subs = 500_000;
+  const { spw } = normalizeCadence("1x/week");
+  const floor = minimumSafeWeeks(tierFor(subs), spw, subs);
+  const impossible = Math.max(1, floor - 3);
+  const sol = solveForDeadline(tierFor(subs), spw, subs, impossible);
+  check("impossible deadline: not achievable", sol.achievable, false);
+  check("impossible deadline: reports the floor", sol.minimum_weeks, floor);
+  check("impossible deadline: returns floor-length plan", sol.weeks, floor);
+
+  const sched = generateSchedule(
+    li("Impossible", subs, "1x/week", {
+      open_rate: 0.4,
+      deadline_weeks: impossible,
+    })
+  );
+  check(
+    "impossible deadline: warns the CSM",
+    sched.flags.some((f) => f.includes("NOT achievable safely")),
+    true
+  );
+  check(
+    "impossible deadline: does not fake the date",
+    sched.total_weeks >= floor,
+    true
+  );
+}
+
+// The safety property that matters: compression must never breach a
+// cap. generateSchedule already asserts this internally, so a sweep
+// that completes without throwing IS the assertion.
+{
+  let swept = 0;
+  let threw = 0;
+  for (const subs of [30_000, 120_000, 400_000, 900_000]) {
+    for (const cadence of ["1x/week", "2x/week", "3x/week", "daily"]) {
+      for (const deadline of [1, 2, 4, 8, 16]) {
+        swept += 1;
+        try {
+          generateSchedule(
+            li("Sweep", subs, cadence, {
+              open_rate: 0.4,
+              deadline_weeks: deadline,
+            })
+          );
+        } catch {
+          threw += 1;
+        }
+      }
+    }
+  }
+  check("deadline sweep: no cap breaches", threw, 0);
+  console.log(`(swept ${swept} deadline cases)`);
+}
 
 // ----------------------------------------------------------------- //
 // Summary

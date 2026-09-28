@@ -47,6 +47,7 @@ const NAV = [
   { href: "/am", label: "AM" },
   { href: "/feature-requests", label: "Feature requests" },
   { href: "/csm/migration-warmup", label: "Migration warm-up" },
+  { href: "/csm/ad-campaigns", label: "Ad campaigns" },
   { href: "/settings", label: "Settings" },
 ];
 
