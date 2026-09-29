@@ -22,7 +22,7 @@ export function CollapsibleSection({
   trailing,
   defaultOpen = false,
   children,
-  className = "",
+  className,
   bodyClassName = "",
 }: {
   /** Title shown in the click-to-toggle header. */
@@ -36,6 +36,10 @@ export function CollapsibleSection({
    *  whichever section you actually need. */
   defaultOpen?: boolean;
   children: React.ReactNode;
+  /** Replaces the default `bg-surface border-border` on the outer
+   *  wrapper (rather than appending to it) — appending would leave
+   *  the two background/border-color classes racing in the compiled
+   *  stylesheet with no guaranteed winner. Omit for the default look. */
   className?: string;
   /** Extra classes on the body wrapper. Defaults to `p-3` for the
    *  common "padded card body" case; pass empty string when the body
@@ -44,7 +48,7 @@ export function CollapsibleSection({
 }) {
   const [open, setOpen] = useState(defaultOpen);
   return (
-    <div className={`bg-surface rounded-md border border-border ${className}`}>
+    <div className={`rounded-md border ${className ?? "bg-surface border-border"}`}>
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}

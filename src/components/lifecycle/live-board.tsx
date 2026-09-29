@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { compareByRenewalDate, type LifecycleCard, type LifecycleStep } from "@/lib/lifecycle/card";
+import { compareByUrgency, type LifecycleCard, type LifecycleStep } from "@/lib/lifecycle/card";
 import {
   toggleLifecycleStep,
   patchLifecycleStepDueDate,
@@ -110,7 +110,7 @@ export function LiveBoard({ cards: initialCards, csms }: Props) {
       const list = m.get(col) ?? m.get("Q1")!;
       list.push(c);
     }
-    for (const list of m.values()) list.sort(compareByRenewalDate);
+    for (const list of m.values()) list.sort((x, y) => compareByUrgency(x, y));
     return m;
   }, [visibleCards, columns]);
 
@@ -335,6 +335,7 @@ export function LiveBoard({ cards: initialCards, csms }: Props) {
         onAddTodo={(workspaceId, group, fields) =>
           void handleAddTodo(workspaceId, group, fields)
         }
+        showUrgencyColors
         renderCardMeta={(c) => (
           <span className="text-xs text-subtle">
             Renews {fmtDate(c.customer.contract_renewal)}

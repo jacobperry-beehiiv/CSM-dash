@@ -80,6 +80,13 @@ interface Props {
    *  checklist doesn't have an equivalent recovery action. Omitted
    *  entirely on boards where an empty checklist is unremarkable. */
   renderEmptyChecklist?: (card: LifecycleCard) => React.ReactNode;
+  /** Colors each checklist group's header by how soon its earliest
+   *  actionable to-do is due (urgencyHeaderClass in
+   *  @/lib/lifecycle/card) — only the Live board passes this today.
+   *  Onboarding's cards are manually placed by stage already, so a
+   *  date-urgency signal is less useful there; left off rather than
+   *  risk two competing visual cues. */
+  showUrgencyColors?: boolean;
 }
 
 /**
@@ -112,6 +119,7 @@ export function KanbanColumns({
   alwaysShowGroups,
   renderCardMeta,
   renderEmptyChecklist,
+  showUrgencyColors,
 }: Props) {
   const [dragOverColumn, setDragOverColumn] = useState<string | null>(null);
 
@@ -296,6 +304,7 @@ export function KanbanColumns({
                               ? undefined
                               : alwaysShowGroups
                           }
+                          showUrgencyColors={showUrgencyColors}
                         />
                       )
                     ) : null}
@@ -344,6 +353,7 @@ export function KanbanColumns({
                                 onAddTodo(c.customer.workspace_id, group, fields)
                         }
                         alwaysShowGroups={alwaysShowGroups}
+                        showUrgencyColors={showUrgencyColors}
                       />
                     ) : null}
                   </div>
