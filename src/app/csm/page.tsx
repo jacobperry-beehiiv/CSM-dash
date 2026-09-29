@@ -522,13 +522,9 @@ async function CsmWorkspace({ csmParam }: { csmParam?: string }) {
 
   return (
     <div className="space-y-5">
-      <div className="flex items-end justify-between gap-3 flex-wrap">
-        <div>
-          <p className="text-xs text-muted">
-            {customers.length} accounts
-            {csm ? ` · ${csm.replace(/_/g, " ")}` : ""}
-          </p>
-        </div>
+      {/* Controls only. The account count lives on the rail, next to
+          the list it counts, rather than orphaned up here. */}
+      <div className="flex items-center justify-end gap-3 flex-wrap">
         <div className="flex items-center gap-3">
           <Link
             href="/csm?view=sweep"
@@ -543,6 +539,7 @@ async function CsmWorkspace({ csmParam }: { csmParam?: string }) {
       <WorkspaceShell
         customers={customers}
         requestsEnabled={requestsEnabled}
+        csmLabel={csm ? csm.replace(/_/g, " ") : null}
       />
     </div>
   );

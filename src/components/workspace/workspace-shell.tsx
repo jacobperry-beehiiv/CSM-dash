@@ -9,7 +9,6 @@ import { CustomerRequestsSection } from "@/components/am/customer-requests-secti
 import {
   accountTone,
   decideBlocks,
-  summarize,
   type BlockPlan,
   type BlockVerdict,
   type Tone,
@@ -18,24 +17,23 @@ import {
 /**
  * The Workspace shell — one page, forever.
  *
- * Replaces the tab strip as the CSM front door. A thin account rail on
- * the left; on the right, only the blocks that have something to say
- * about the selected account today. Quiet accounts render two blocks.
- * Accounts in trouble fill the screen.
+ * Layout note, because the first build got this wrong: the blocks are
+ * full-width BANDS in a single column, not cards in a grid. A grid
+ * sized for the busy case leaves half a row empty on the quiet one,
+ * and most accounts are quiet — so the common view was a void with two
+ * cards floating in it. Bands fill the width at any count, read
+ * top-to-bottom in severity order, and a one-block account looks
+ * deliberate rather than broken.
  *
- * The footer listing what ISN'T shown is load-bearing, not decoration.
- * A layout that changes per account is otherwise indistinguishable
- * from a broken one — you can't tell "no deliverability problem" from
- * "deliverability isn't on this screen". Naming every absence, with
- * its reason, is what makes the variation legible.
- *
- * Cross-account work hasn't gone anywhere: the old tab strip lives at
- * ?view=sweep and is one click away in the header.
+ * Cross-account work lives at ?view=sweep — the old tab strip, intact.
  */
 
 interface Props {
   customers: Customer[];
   requestsEnabled: boolean;
+  /** Whose book this is, already humanised. Shown on the rail so the
+   *  count sits beside the list it counts. */
+  csmLabel?: string | null;
 }
 
 type RequestCounts = Record<
@@ -57,16 +55,26 @@ function requestsFor(
 const DOT: Record<Tone, string> = {
   urgent: "bg-red-500 dark:bg-red-400",
   watch: "bg-amber-500 dark:bg-amber-400",
-  calm: "bg-emerald-500/60 dark:bg-emerald-400/60",
+  calm: "bg-emerald-500/50 dark:bg-emerald-400/50",
 };
 
-const EDGE: Record<Tone, string> = {
-  urgent: "border-l-red-500 dark:border-l-red-400",
-  watch: "border-l-amber-500 dark:border-l-amber-400",
-  calm: "border-l-border",
+const BAR: Record<Tone, string> = {
+  urgent: "bg-red-500 dark:bg-red-400",
+  watch: "bg-amber-500 dark:bg-amber-400",
+  calm: "bg-border",
 };
 
-export function WorkspaceShell({ customers, requestsEnabled }: Props) {
+const FACT: Record<Tone, string> = {
+  urgent: "text-red-700 dark:text-red-300",
+  watch: "text-amber-700 dark:text-amber-300",
+  calm: "text-muted",
+};
+
+export function WorkspaceShell({
+  customers,
+  requestsEnabled,
+  csmLabel,
+}: Props) {
   const [selectedId, setSelectedId] = useState<string | null>(
     customers[0]?.workspace_id ?? null
   );
@@ -104,16 +112,45 @@ export function WorkspaceShell({ customers, requestsEnabled }: Props) {
     visible.find((c) => c.workspace_id === selectedId) ?? visible[0] ?? null;
 
   return (
-    <div className="flex gap-6 items-start">
-      <AccountRail
-        customers={visible}
-        selectedId={selected?.workspace_id ?? null}
-        onSelect={setSelectedId}
-        filter={filter}
-        onFilter={setFilter}
-        counts={counts}
-        requestsEnabled={requestsEnabled}
-      />
+    <div className="flex gap-8 items-start">
+      <aside className="w-52 shrink-0 hidden md:flex flex-col gap-2 sticky top-4">
+        <div className="flex items-baseline gap-2">
+          <span className="text-[10px] font-semibold tracking-wide text-subtle">
+            {visible.length === customers.length
+              ? `${customers.length} ACCOUNTS`
+              : `${visible.length} OF ${customers.length}`}
+          </span>
+          {csmLabel ? (
+            <span className="text-[10px] text-subtle truncate">
+              {csmLabel}
+            </span>
+          ) : null}
+        </div>
+        <label htmlFor="ws-filter" className="sr-only">
+          Filter accounts
+        </label>
+        <input
+          id="ws-filter"
+          type="search"
+          value={filter}
+          onChange={(e) => setFilter(e.currentTarget.value)}
+          placeholder="Filter accounts…"
+          className="w-full px-1 py-1.5 text-[13px] bg-transparent border-0 border-b border-border text-fg placeholder:text-subtle focus:outline-none focus:border-fg"
+        />
+        <div className="flex flex-col max-h-[40rem] overflow-y-auto">
+          {visible.map((c) => (
+            <RailRow
+              key={c.workspace_id ?? c.workspace_name}
+              customer={c}
+              selected={c.workspace_id === selected?.workspace_id}
+              onSelect={setSelectedId}
+              counts={counts}
+              requestsEnabled={requestsEnabled}
+            />
+          ))}
+        </div>
+      </aside>
+
       <div className="flex-1 min-w-0">
         {selected ? (
           <AccountView
@@ -127,52 +164,6 @@ export function WorkspaceShell({ customers, requestsEnabled }: Props) {
         )}
       </div>
     </div>
-  );
-}
-
-function AccountRail({
-  customers,
-  selectedId,
-  onSelect,
-  filter,
-  onFilter,
-  counts,
-  requestsEnabled,
-}: {
-  customers: Customer[];
-  selectedId: string | null;
-  onSelect: (id: string | null) => void;
-  filter: string;
-  onFilter: (v: string) => void;
-  counts: RequestCounts | null;
-  requestsEnabled: boolean;
-}) {
-  return (
-    <aside className="w-56 shrink-0 hidden md:flex flex-col gap-2 sticky top-4">
-      <label htmlFor="ws-filter" className="sr-only">
-        Filter accounts
-      </label>
-      <input
-        id="ws-filter"
-        type="search"
-        value={filter}
-        onChange={(e) => onFilter(e.currentTarget.value)}
-        placeholder="Filter…"
-        className="w-full px-2.5 py-1.5 text-[13px] bg-surface border border-border rounded-lg text-fg focus:outline-none focus:ring-2 focus:ring-accent"
-      />
-      <div className="flex flex-col gap-px max-h-[38rem] overflow-y-auto -mx-1 px-1">
-        {customers.map((c) => (
-          <RailRow
-            key={c.workspace_id ?? c.workspace_name}
-            customer={c}
-            selected={c.workspace_id === selectedId}
-            onSelect={onSelect}
-            counts={counts}
-            requestsEnabled={requestsEnabled}
-          />
-        ))}
-      </div>
-    </aside>
   );
 }
 
@@ -198,30 +189,28 @@ function RailRow({
     requests: requestsFor(c.workspace_id, counts, requestsEnabled),
   });
   const tone = accountTone(plan);
-  const liveCount = plan.live.length;
 
   return (
     <button
       type="button"
       onClick={() => onSelect(c.workspace_id ?? null)}
       aria-current={selected ? "true" : undefined}
-      className={`flex items-center gap-2 w-full px-2 py-1.5 rounded-md text-left transition-colors ${
-        selected ? "bg-surface" : "hover:bg-surface/60"
+      className={`group flex items-center gap-2.5 w-full py-[5px] pl-2.5 text-left border-l-2 transition-colors ${
+        selected
+          ? "border-l-fg"
+          : "border-l-transparent hover:border-l-border-strong"
       }`}
     >
       <span
-        className={`w-1.5 h-1.5 rounded-full shrink-0 ${DOT[tone]}`}
+        className={`w-[5px] h-[5px] rounded-full shrink-0 ${DOT[tone]}`}
         aria-hidden="true"
       />
       <span
-        className={`flex-1 min-w-0 truncate text-[13px] ${
-          selected ? "text-fg font-medium" : "text-fg/80"
+        className={`flex-1 min-w-0 truncate text-[12.5px] leading-tight ${
+          selected ? "text-fg font-medium" : "text-muted group-hover:text-fg"
         }`}
       >
         {c.company_name ?? c.workspace_name}
-      </span>
-      <span className="text-[10px] text-subtle tabular-nums shrink-0">
-        {liveCount || "—"}
       </span>
     </button>
   );
@@ -251,43 +240,64 @@ function AccountView({
     [c, zendesk, requests]
   );
 
+  const urgent = plan.live.filter((b) => b.tone === "urgent").length;
+
   return (
-    <div className="space-y-5">
-      <header className="flex items-end gap-3 flex-wrap">
-        <h1 className="font-display text-4xl font-medium text-fg leading-none">
-          {c.company_name ?? c.workspace_name}
-        </h1>
-        <span className="text-sm text-muted pb-1">
-          {fmtCurrency(c.arr)} · {c.stripe_plan ?? "—"} ·{" "}
-          {c.company_engagement ?? "—"}
-        </span>
-        <span className="flex-1" />
-        <span className="text-xs text-muted pb-1.5">{summarize(plan)}</span>
-        {c.workspace_id ? (
-          <Link
-            href={`/account/${c.workspace_id}`}
-            className="pb-1 text-xs text-blue-600 dark:text-blue-400 hover:underline"
-          >
-            Full profile ↗
-          </Link>
-        ) : null}
+    <div className="max-w-3xl">
+      {/* ── Masthead ─────────────────────────────────────────────── */}
+      <header className="pb-3 border-b-2 border-fg">
+        <div className="flex items-baseline gap-3">
+          <h1 className="font-display text-[2.5rem] leading-[1.05] font-medium text-fg min-w-0 break-words">
+            {c.company_name ?? c.workspace_name}
+          </h1>
+          <span className="flex-1" />
+          {c.workspace_id ? (
+            <Link
+              href={`/account/${c.workspace_id}`}
+              className="shrink-0 text-xs text-muted hover:text-fg underline decoration-dotted underline-offset-4"
+            >
+              Full profile
+            </Link>
+          ) : null}
+        </div>
+        <div className="mt-2 flex items-center gap-x-4 gap-y-1 flex-wrap text-xs text-muted">
+          <span className="tabular-nums text-fg font-medium">
+            {fmtCurrency(c.arr)}
+          </span>
+          <span>{c.stripe_plan ?? "—"}</span>
+          <span>{c.company_engagement ?? "—"}</span>
+          <span className="tabular-nums">
+            {fmtNumber(c.active_subs)} subscribers
+          </span>
+          <span className="flex-1" />
+          <span className={urgent > 0 ? FACT.urgent : "text-muted"}>
+            {urgent > 0
+              ? `${urgent} need${urgent === 1 ? "s" : ""} attention`
+              : plan.live.length > 0
+                ? `${plan.live.length} worth knowing`
+                : "nothing today"}
+          </span>
+        </div>
       </header>
 
+      {/* ── Bands ────────────────────────────────────────────────── */}
       {plan.live.length === 0 ? (
-        <p className="text-sm text-muted italic">
-          Nothing is true about this account today that needs your
-          attention.
+        <p className="py-7 text-[15px] leading-relaxed text-muted max-w-prose">
+          Nothing about this account needs you today. Everything we check
+          is listed below, with where it stands.
         </p>
       ) : (
-        <div className="grid grid-cols-1 lg:grid-cols-6 gap-3">
+        <div className="divide-y divide-border">
           {plan.live.map((b) => (
-            <Block key={b.id} block={b} customer={c} />
+            <Band key={b.id} block={b} customer={c} />
           ))}
         </div>
       )}
 
       {typeof requests === "object" && requests.total > 0 ? (
-        <CustomerRequestsSection customer={c} enabled={requestsEnabled} />
+        <div className="mt-5">
+          <CustomerRequestsSection customer={c} enabled={requestsEnabled} />
+        </div>
       ) : null}
 
       <AbsenceNote plan={plan} />
@@ -295,7 +305,15 @@ function AccountView({
   );
 }
 
-function Block({
+/**
+ * One block, as a full-width band.
+ *
+ * Label and headline fact sit in a fixed left column so they line up
+ * down the page and the eye can run the left edge; the sentence takes
+ * the rest of the width. A 2px tone bar is the only colour — enough to
+ * find the urgent ones without the page becoming a traffic light.
+ */
+function Band({
   block: b,
   customer: c,
 }: {
@@ -303,43 +321,38 @@ function Block({
   customer: Customer;
 }) {
   return (
-    <section
-      className={`lg:col-span-${b.span} rounded-xl border border-border border-l-[3px] ${EDGE[b.tone]} bg-surface p-4`}
-      style={{ gridColumn: `span ${b.span} / span ${b.span}` }}
-    >
-      <div className="flex items-baseline gap-2 flex-wrap">
-        <h2 className="text-sm font-semibold text-fg">{b.label}</h2>
-        <span
-          className={`text-xs tabular-nums ${
-            b.tone === "urgent"
-              ? "text-red-700 dark:text-red-300"
-              : b.tone === "watch"
-                ? "text-amber-700 dark:text-amber-300"
-                : "text-muted"
-          }`}
-        >
+    <section className="flex gap-5 py-4">
+      <span
+        className={`w-[2px] shrink-0 rounded-full ${BAR[b.tone]}`}
+        aria-hidden="true"
+      />
+      <div className="w-32 shrink-0">
+        <h2 className="text-[13px] font-semibold text-fg leading-snug">
+          {b.label}
+        </h2>
+        <p className={`mt-0.5 text-[13px] tabular-nums ${FACT[b.tone]}`}>
           {b.fact}
-        </span>
+        </p>
       </div>
-      <p className="mt-2 text-[13px] leading-relaxed text-fg">{b.detail}</p>
-      <BlockExtra block={b} customer={c} />
+      <div className="flex-1 min-w-0">
+        <p className="text-[15px] leading-relaxed text-fg">{b.detail}</p>
+        <BandExtra block={b} customer={c} />
+      </div>
     </section>
   );
 }
 
-/** The one or two concrete details a block earns beyond its sentence.
- *  Deliberately thin — the full profile is a click away and this is
- *  meant to be read, not mined. */
-function BlockExtra({
+function BandExtra({
   block: b,
   customer: c,
 }: {
   block: BlockVerdict;
   customer: Customer;
 }) {
+  const cls = "mt-1.5 text-xs text-muted tabular-nums";
   if (b.id === "renewal" && c.renewal_date) {
     return (
-      <p className="mt-2 text-[11px] text-muted tabular-nums">
+      <p className={cls}>
         {fmtDate(c.renewal_date)}
         {c.next_invoice ? ` · next invoice ${fmtDate(c.next_invoice)}` : ""}
       </p>
@@ -347,25 +360,21 @@ function BlockExtra({
   }
   if (b.id === "utilization") {
     return (
-      <p className="mt-2 text-[11px] text-muted tabular-nums">
+      <p className={cls}>
         {fmtNumber(c.active_subs)} of {fmtNumber(c.max_subscriptions)}
       </p>
     );
   }
   if (b.id === "sends" && c.last_send) {
-    return (
-      <p className="mt-2 text-[11px] text-muted tabular-nums">
-        last send {fmtDate(c.last_send)}
-      </p>
-    );
+    return <p className={cls}>last send {fmtDate(c.last_send)}</p>;
   }
   if (b.id === "people") {
-    const contacts = (c.hubspot_contacts ?? []).slice(0, 3);
+    const contacts = (c.hubspot_contacts ?? []).slice(0, 4);
     return (
-      <ul className="mt-2 space-y-0.5">
+      <ul className="mt-1.5 flex flex-wrap gap-x-4 gap-y-0.5">
         {contacts.map((p, i) => (
-          <li key={`${p.email ?? i}`} className="text-[11px] text-muted truncate">
-            {p.name ?? p.email}
+          <li key={p.email ?? i} className="text-xs text-muted">
+            <span className="text-fg/80">{p.name ?? p.email}</span>
             {p.job_title ? ` · ${p.job_title}` : ""}
           </li>
         ))}
@@ -378,25 +387,25 @@ function BlockExtra({
 /**
  * What isn't on screen, and why.
  *
- * The counterweight to a variable layout. Without it you can't tell a
- * quiet account from a broken page, and people stop trusting the
- * absence of a block to mean anything.
+ * A two-column definition list rather than the run-on grey paragraph
+ * this started as — that version was the widest, greyest thing on the
+ * page, which handed the least important content the most weight.
  */
 function AbsenceNote({ plan }: { plan: BlockPlan }) {
   if (plan.absent.length === 0) return null;
   return (
-    <div className="rounded-xl border border-dashed border-border px-4 py-3">
-      <p className="text-[11px] leading-relaxed text-muted">
-        <span className="font-medium text-subtle">Not shown, because: </span>
-        {plan.absent.map((a, i) => (
-          <span key={a.id}>
-            {i > 0 ? " · " : ""}
-            <span className="text-fg/70">{a.label}</span>
-            <span className="text-subtle"> &mdash; </span>
-            {a.why}
-          </span>
+    <div className="mt-6 pt-4 border-t border-border">
+      <h2 className="text-[10px] font-semibold tracking-wide text-subtle">
+        CHECKED, NOT SHOWN
+      </h2>
+      <dl className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-1">
+        {plan.absent.map((a) => (
+          <div key={a.id} className="flex gap-2 text-xs">
+            <dt className="w-24 shrink-0 text-fg/60">{a.label}</dt>
+            <dd className="flex-1 min-w-0 text-muted">{a.why}</dd>
+          </div>
         ))}
-      </p>
+      </dl>
     </div>
   );
 }
