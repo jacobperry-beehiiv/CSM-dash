@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
+import { isFeatureEnabledFor } from "@/lib/auth/feature-flags";
 import {
   clearRequestNotified,
   loadEnterpriseRequestsSnapshot,
@@ -42,6 +43,14 @@ export async function POST(req: Request) {
   if (!email) {
     return NextResponse.json({ error: "Sign in required." }, { status: 401 });
   }
+  // The Enterprise Request Loop ships dark. The UI honours the flag,
+  // but hiding a tab doesn't hide its endpoint — without this, any
+  // signed-in CSM could read the whole book's request data straight
+  // off the API. 404, not 403, to match the pages.
+  if (!(await isFeatureEnabledFor("enterprise-requests", email))) {
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
+  }
+
   let body: Body;
   try {
     body = (await req.json()) as Body;

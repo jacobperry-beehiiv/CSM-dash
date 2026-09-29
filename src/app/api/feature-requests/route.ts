@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
+import { isFeatureEnabledFor } from "@/lib/auth/feature-flags";
 import {
   applyFeatureRequestOps,
   loadFeatureRequests,
@@ -33,8 +34,15 @@ export const dynamic = "force-dynamic";
 
 export async function GET() {
   const session = await auth();
-  if (!session?.user?.email) {
+  const email = session?.user?.email ?? null;
+  if (!email) {
     return NextResponse.json({ error: "Sign in required" }, { status: 401 });
+  }
+  // Same `feature-request-board` gate as the page. Hiding a page
+  // doesn't hide its endpoint — without this, anyone signed in could
+  // read and mutate the board by calling the API directly.
+  if (!(await isFeatureEnabledFor("feature-request-board", email))) {
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
   const list = await loadFeatureRequests();
   return NextResponse.json(list);
@@ -73,8 +81,14 @@ function normalizeOps(
 
 export async function PATCH(req: Request) {
   const session = await auth();
-  if (!session?.user?.email) {
+  const email = session?.user?.email ?? null;
+  if (!email) {
     return NextResponse.json({ error: "Sign in required" }, { status: 401 });
+  }
+  // Same gate as GET — mutations especially shouldn't be reachable
+  // from outside the allowlist.
+  if (!(await isFeatureEnabledFor("feature-request-board", email))) {
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
   let body: PatchBody;
   try {
@@ -103,8 +117,8 @@ export async function PATCH(req: Request) {
       );
     }
   }
-  const viewerEmail = session.user.email;
-  const normalized = normalizeOps(ops, viewerEmail);
+  // `email` is already narrowed to string by the 401 guard above.
+  const normalized = normalizeOps(ops, email);
 
   try {
     const list = await applyFeatureRequestOps(normalized);

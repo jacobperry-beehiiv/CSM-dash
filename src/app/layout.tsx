@@ -18,6 +18,7 @@ import { isAdmin } from "@/lib/auth/admin";
 import { isCsmWithGmail } from "@/lib/auth/csm-eligibility";
 import { isCsmTeamMember } from "@/lib/auth/csm-team";
 import { isFeatureEnabledFor } from "@/lib/auth/feature-flags";
+import type { FeatureId } from "@/lib/data/admin-flags-types";
 import { loadPersonalization } from "@/lib/data/personalization";
 import { CsmTeamProvider } from "@/components/csm-team-provider";
 
@@ -42,12 +43,38 @@ export async function generateMetadata(): Promise<Metadata> {
   };
 }
 
-const NAV = [
+/**
+ * Primary nav, in display order. An entry with a `feature` only
+ * renders for viewers who pass that flag.
+ *
+ * One ordered list rather than a base array plus positional inserts:
+ * the insert version needed each entry's index to be interpreted
+ * against the array mid-build, which is easy to get wrong and did go
+ * wrong — Ad campaigns rendered after Settings. Order here is the
+ * order on screen.
+ *
+ * The flag is not the security boundary — each page gates itself and
+ * `notFound()`s. This just avoids showing someone a link that would
+ * 404, which is worse than no link and advertises the surface too.
+ */
+const NAV: ReadonlyArray<{
+  href: string;
+  label: string;
+  feature?: FeatureId;
+}> = [
   { href: "/csm", label: "CSM" },
   { href: "/am", label: "AM" },
-  { href: "/feature-requests", label: "Feature requests" },
+  {
+    href: "/feature-requests",
+    label: "Feature requests",
+    feature: "feature-request-board",
+  },
   { href: "/csm/migration-warmup", label: "Migration warm-up" },
-  { href: "/csm/ad-campaigns", label: "Ad campaigns" },
+  {
+    href: "/csm/ad-campaigns",
+    label: "Ad campaigns",
+    feature: "ad-campaigns",
+  },
   { href: "/settings", label: "Settings" },
 ];
 
@@ -80,7 +107,21 @@ export default async function RootLayout({
 }: Readonly<{ children: React.ReactNode }>) {
   const session = await auth();
   const viewerIsAdmin = isAdmin(session?.user?.email);
-  const nav = viewerIsAdmin ? [...NAV, ...ADMIN_NAV] : NAV;
+  // Resolve every flagged entry in parallel, then keep the ones that
+  // passed — order is preserved from NAV, so nothing has to be
+  // re-sorted afterwards.
+  const navEmail = session?.user?.email ?? null;
+  const navVisibility = await Promise.all(
+    NAV.map(async (entry) =>
+      entry.feature
+        ? await isFeatureEnabledFor(entry.feature, navEmail)
+        : true
+    )
+  );
+  const baseNav = NAV.filter((_, i) => navVisibility[i]).map(
+    ({ href, label }) => ({ href, label })
+  );
+  const nav = viewerIsAdmin ? [...baseNav, ...ADMIN_NAV] : baseNav;
   // Per-user personalization — three layered gates:
   //   1. Eligibility (CSM with Gmail connected) — protects against
   //      random viewers skinning the dashboard.
