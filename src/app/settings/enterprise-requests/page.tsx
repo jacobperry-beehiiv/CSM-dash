@@ -9,7 +9,10 @@ import {
   loadShippedCursor,
   loadSlackIntakeCursor,
 } from "@/lib/data/enterprise-requests";
-import { resolveConfidence } from "@/lib/data/enterprise-requests-types";
+import {
+  isLive,
+  resolveConfidence,
+} from "@/lib/data/enterprise-requests-types";
 import { fmtDate } from "@/components/format";
 import { ResyncControls } from "@/components/enterprise-requests/resync-controls";
 
@@ -55,10 +58,7 @@ export default async function EnterpriseRequestsSettingsPage() {
   for (const bucket of Object.values(snapshot.rows)) {
     for (const row of Object.values(bucket)) {
       totalRows += 1;
-      if (
-        row.derived_state === "Live" ||
-        row.derived_state === "Live, possibly in beta"
-      ) {
+      if (isLive(row)) {
         liveRows += 1;
       }
       if (row.intake_source === "slack_intake") slackIntakeRows += 1;

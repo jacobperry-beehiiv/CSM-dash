@@ -60,6 +60,9 @@ interface TicketGroup {
   work_type: WorkTypeLabel | null;
   promotion_source: PromotionSource | null;
   promotion_confidence: PromotionConfidence;
+  devs_shipped_match: boolean;
+  devs_shipped_url: string | null;
+  devs_shipped_at: string | null;
   needs_review_reason: NeedsReviewReason | null;
   reviewed_by: string | null;
   reviewed_at: string | null;
@@ -83,19 +86,21 @@ interface ApiResponse {
 }
 
 const ALL_STATES = [
-  "Open",
+  "Triage",
+  "Backlog",
+  "Todo",
   "In progress",
-  "Live",
-  "Live, possibly in beta",
-  "Not planned",
+  "Done (live in app)",
+  "Canceled",
+  "Duplicate",
 ] as const;
 
 interface Props {
-  /** "shipped" — the outreach queue (promoted rows only, recency
-   *  window, confidence gate). "all" — the book's whole request
-   *  inventory regardless of whether anything shipped. Same grouping
-   *  either way; the mode changes which rows the API returns and
-   *  which controls make sense to show. */
+  /** "shipped" — the outreach queue: rows Linear marks live in the
+   *  app, inside a recency window. "all" — the book's whole request
+   *  inventory in every state. Same grouping either way; the mode
+   *  changes which rows the API returns and which controls make sense
+   *  to show. */
   mode?: "shipped" | "all";
   /** CSM handle (or email) to scope to. Empty = the viewer. */
   csmParam: string | null;
@@ -124,7 +129,9 @@ export function LiveRequests({
   const [states, setStates] = useState<string[]>([]);
   const [scopeAll, setScopeAll] = useState(false);
   const [showNotified, setShowNotified] = useState(false);
-  const [includeNeedsReview, setIncludeNeedsReview] = useState(false);
+  // Opt-in narrowing: "show me only the ones a release post confirms".
+  // Off by default — the tab shows everything Linear calls live.
+  const [shipMatchedOnly, setShipMatchedOnly] = useState(false);
   const [drafting, setDrafting] = useState<{
     group: TicketGroup;
     customer: GroupCustomer;
@@ -140,7 +147,7 @@ export function LiveRequests({
     if (isAll) qs.set("mode", "all");
     if (isAll && states.length > 0) qs.set("states", states.join(","));
     if (showNotified) qs.set("include_notified", "1");
-    if (includeNeedsReview) qs.set("confidence", "all");
+    if (shipMatchedOnly) qs.set("confidence", "confirmed");
     fetch(`/api/enterprise-requests/live-requests?${qs}`, {
       cache: "no-store",
     })
@@ -157,7 +164,7 @@ export function LiveRequests({
     return () => {
       cancelled = true;
     };
-  }, [csmParam, windowKey, scopeAll, showNotified, includeNeedsReview, isAll, states]);
+  }, [csmParam, windowKey, scopeAll, showNotified, shipMatchedOnly, isAll, states]);
 
   /** Patch one customer's notified state inside the grouped shape. */
   function patchNotified(
@@ -221,17 +228,20 @@ export function LiveRequests({
           <>
             Every feature request logged against your book, grouped by
             Linear ticket so you can see each customer who asked for it.
-            <strong> Live</strong> here means a ship post was matched to
-            the ticket — a ticket marked Done in Linear stays
-            un-promoted until then, and is badged so the difference is
-            visible.
+            States mirror Linear&rsquo;s own —{" "}
+            <strong>Done (live in app)</strong> is the delivered bucket,
+            and each row there also says whether a{" "}
+            <code className="font-mono">#devs-shipped</code> release post
+            was matched to the ticket.
           </>
         ) : (
           <>
-            Feature requests that shipped, grouped by Linear ticket so
-            you can see every customer who asked for it. Draft a note to
-            close the loop, then check Notified so the row drops off the
-            weekly digest.
+            Requests Linear marks <strong>Done (live in app)</strong>,
+            grouped by ticket so you can see every customer who asked
+            for it. Draft a note to close the loop, then check Notified
+            so the row drops off the weekly digest. Rows badged{" "}
+            <strong>no ship post matched</strong> are worth verifying
+            first.
           </>
         )}
       </p>
@@ -276,15 +286,15 @@ export function LiveRequests({
 
         <label
           className="inline-flex items-center gap-1.5 text-xs text-fg cursor-pointer select-none"
-          title="Include ships we couldn't confidently call customer-visible. These are withheld from the weekly digest and normally live in the review queue — verify before telling a customer."
+          title="Narrow to requests where a #devs-shipped release post carried the Linear ticket, so the code is provably out. Off by default — everything Linear marks live in the app shows here."
         >
           <input
             type="checkbox"
-            checked={includeNeedsReview}
-            onChange={(e) => setIncludeNeedsReview(e.currentTarget.checked)}
+            checked={shipMatchedOnly}
+            onChange={(e) => setShipMatchedOnly(e.currentTarget.checked)}
             className="h-3.5 w-3.5 rounded border-border-strong cursor-pointer"
           />
-          Include unconfirmed
+          Only ship-matched
         </label>
 
         {isAll ? (
@@ -378,10 +388,12 @@ export function LiveRequests({
               : drafting.group.promoted_at
                 ? fmtDate(drafting.group.promoted_at)
                 : null,
-            beta_caveat:
-              drafting.group.derived_state === "Live, possibly in beta"
-                ? "This is currently in beta rollout — happy to share more if you'd like early access."
-                : "",
+            // Reuses the existing `beta_caveat` merge tag so templates
+            // don't need rewriting; it now fires on the weaker signal
+            // (live per Linear, no release post found).
+            beta_caveat: drafting.group.devs_shipped_match
+              ? ""
+              : "This may still be rolling out — worth confirming before you promise a date.",
           }}
           onDraftLifecycle={(state) => {
             if (state === "drafted" || state === "sent") {
@@ -413,6 +425,19 @@ export function LiveRequests({
   );
 }
 
+/** Oldest submission across the customers attached to a ticket — the
+ *  "this has been asked since" date, used when a request has no ship
+ *  date to show. */
+function oldestSubmittedAt(group: TicketGroup): string | null {
+  let oldest: string | null = null;
+  for (const c of group.customers) {
+    const at = c.submitted_at;
+    if (!at) continue;
+    if (!oldest || at < oldest) oldest = at;
+  }
+  return oldest;
+}
+
 function GroupCard({
   group,
   customersByWorkspace,
@@ -437,7 +462,16 @@ function GroupCard({
             {group.linear_identifier}: {group.title}
           </a>
           <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[10px] text-muted">
-            <span>Shipped {fmtDate(group.ship_date ?? group.promoted_at)}</span>
+            {/* `all` mode lists requests that have never shipped, so
+                the date only renders when there is one — otherwise
+                every open request reads "Shipped -". */}
+            {group.ship_date || group.promoted_at ? (
+              <span>
+                Shipped {fmtDate(group.ship_date ?? group.promoted_at)}
+              </span>
+            ) : (
+              <span>Submitted {fmtDate(oldestSubmittedAt(group))}</span>
+            )}
             {group.work_type ? <span>· {group.work_type}</span> : null}
             <span
               className="rounded bg-canvas border border-border px-1 py-0.5 text-[9px] text-fg"
@@ -445,30 +479,30 @@ function GroupCard({
             >
               {group.derived_state}
             </span>
-            {group.linear_state_type === "completed" &&
-            group.derived_state !== "Live" ? (
-              // Done in Linear but never matched to a ship post. Worth
-              // calling out explicitly: without it the row reads "In
-              // progress" and looks like the tracker is just wrong.
-              <span
-                className="rounded border border-slate-400 bg-slate-50 dark:bg-slate-500/10 px-1 py-0.5 text-[9px] font-semibold text-slate-700 dark:text-slate-200"
-                title="Linear says Done, but no #devs-shipped or changelog post has been matched to it, so it hasn't been confirmed as customer-visible."
-              >
-                DONE IN LINEAR · SHIP UNCONFIRMED
-              </span>
-            ) : null}
-            {group.derived_state === "Live, possibly in beta" ? (
-              <span className="rounded border border-amber-400 bg-amber-50 dark:bg-amber-500/10 px-1 py-0.5 text-amber-800 dark:text-amber-200 text-[9px] font-semibold">
-                POSSIBLY IN BETA
-              </span>
-            ) : null}
-            {group.promotion_confidence !== "confirmed" ? (
-              <span
-                className="rounded border border-red-400 bg-red-50 dark:bg-red-500/10 px-1 py-0.5 text-red-800 dark:text-red-200 text-[9px] font-semibold"
-                title="Not confirmed customer-visible — withheld from the weekly digest. Verify before telling a customer."
-              >
-                UNCONFIRMED
-              </span>
+            {/* The ship-corroboration flag. Linear owns the state
+                badge above; this one answers the separate question of
+                whether a #devs-shipped release post carried the
+                ticket. Only meaningful on delivered rows. */}
+            {group.derived_state === "Done (live in app)" ? (
+              group.devs_shipped_match ? (
+                <span
+                  className="rounded border border-emerald-400 bg-emerald-50 dark:bg-emerald-500/10 px-1 py-0.5 text-[9px] font-semibold text-emerald-800 dark:text-emerald-200"
+                  title={
+                    group.devs_shipped_at
+                      ? `Matched to a #devs-shipped release post on ${fmtDate(group.devs_shipped_at)}.`
+                      : "Matched to a release post in #devs-shipped."
+                  }
+                >
+                  SHIP MATCHED ✓
+                </span>
+              ) : (
+                <span
+                  className="rounded border border-slate-400 bg-slate-50 dark:bg-slate-500/10 px-1 py-0.5 text-[9px] font-semibold text-slate-700 dark:text-slate-200"
+                  title="Linear says this is live in the app, but no #devs-shipped post carrying the ticket was found. Either the release wasn't parsed or the ticket was closed without the code going out — verify before telling a customer."
+                >
+                  NO SHIP POST MATCHED
+                </span>
+              )
             ) : null}
             {group.ship_url ? (
               <a
@@ -493,21 +527,28 @@ function GroupCard({
         </div>
       </div>
 
-      <div
-        className={`mt-1.5 text-[10px] leading-snug ${
-          group.promotion_confidence === "confirmed"
-            ? "text-muted"
-            : "text-red-700 dark:text-red-300"
-        }`}
-      >
-        {confidenceBasis({
-          confidence: group.promotion_confidence,
-          source: group.promotion_source,
-          work_type: group.work_type,
-          needs_review_reason: group.needs_review_reason,
-          reviewed_by: group.reviewed_by,
-        })}
-      </div>
+      {/* The basis line only makes sense on a delivered row — on an
+          open request there's nothing to be sure about yet. Amber, not
+          red: an unmatched ship is a "double-check this", not an
+          error. */}
+      {group.derived_state === "Done (live in app)" ? (
+        <div
+          className={`mt-1.5 text-[10px] leading-snug ${
+            group.devs_shipped_match
+              ? "text-muted"
+              : "text-amber-700 dark:text-amber-300"
+          }`}
+        >
+          {confidenceBasis({
+            confidence: group.promotion_confidence,
+            source: group.promotion_source,
+            work_type: group.work_type,
+            needs_review_reason: group.needs_review_reason,
+            reviewed_by: group.reviewed_by,
+            devsShippedMatch: group.devs_shipped_match,
+          })}
+        </div>
+      ) : null}
 
       <ul className="mt-2 space-y-1">
         {group.customers.map((c) => {
@@ -516,8 +557,14 @@ function GroupCard({
             c.company_name ??
             c.workspace_name ??
             c.workspace_id;
+          // The outreach template is "your request shipped" — offering
+          // it on a request still in Triage (or one that was canceled)
+          // hands the CSM a note they can't send. `shipped` mode is
+          // all-delivered by construction; `all` mode is not.
           const canDraft =
-            c.in_scope && Boolean(customersByWorkspace[c.workspace_id]);
+            c.in_scope &&
+            Boolean(customersByWorkspace[c.workspace_id]) &&
+            group.derived_state === "Done (live in app)";
           return (
             <li
               key={c.workspace_id}

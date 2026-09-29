@@ -5,7 +5,12 @@ import {
   loadEnterpriseRequestsSnapshot,
   loadNotifiedOverlay,
 } from "@/lib/data/enterprise-requests";
-import { resolveConfidence } from "@/lib/data/enterprise-requests-types";
+import {
+  hasDevsShippedMatch,
+  isLive,
+  liveAt,
+  resolveConfidence,
+} from "@/lib/data/enterprise-requests-types";
 import type {
   CustomerImpactLabel,
   EnterpriseRequestDerivedState,
@@ -93,6 +98,10 @@ interface TicketGroup {
   work_type: WorkTypeLabel | null;
   promotion_source: PromotionSource | null;
   promotion_confidence: PromotionConfidence;
+  /** Yes/no: did a #devs-shipped release post carry this ticket? */
+  devs_shipped_match: boolean;
+  devs_shipped_url: string | null;
+  devs_shipped_at: string | null;
   needs_review_reason: NeedsReviewReason | null;
   /** Set when a human cleared this row out of the exceptions queue.
    *  Lets the UI distinguish "confirmed by rule" from "a person
@@ -127,8 +136,12 @@ export async function GET(req: Request) {
   const includeNotified = url.searchParams.get("include_notified") === "1";
   const windowKey = url.searchParams.get("window") ?? "30d";
   const windowMs = windowKey in WINDOW_MS ? WINDOW_MS[windowKey] : WINDOW_MS["30d"];
-  const confidenceParam = url.searchParams.get("confidence") ?? "confirmed";
-  const confirmedOnly = confidenceParam !== "all";
+  // Default flipped from "confirmed" to "all" with the move to
+  // Linear-owned state. It used to mean "only rows Slack corroborated",
+  // which in practice hid nearly every delivered request and made this
+  // tab look empty. Narrowing to ship-matched rows is now opt-in.
+  const confidenceParam = url.searchParams.get("confidence") ?? "all";
+  const confirmedOnly = confidenceParam === "confirmed";
   // mode=shipped (default) — the outreach queue: only rows the
   // shipped-sweep promoted, inside a recency window.
   // mode=all — the book's whole request inventory regardless of
@@ -197,11 +210,19 @@ export async function GET(req: Request) {
   for (const [workspaceId, bucket] of Object.entries(snapshot.rows)) {
     for (const row of Object.values(bucket) as EnterpriseRequestRow[]) {
       if (mode === "shipped") {
-        if (!row.promoted_at) continue;
-        const promotedAt = Date.parse(row.promoted_at);
-        if (!Number.isFinite(promotedAt)) continue;
-        if (cutoff !== null && promotedAt < cutoff) continue;
-        if (confirmedOnly && resolveConfidence(row) !== "confirmed") continue;
+        // "Shipped" is now Linear's call, not Slack's: the row is in
+        // the state whose Linear name is "Done (live in app)". The
+        // window runs off when it entered that state.
+        if (!isLive(row)) continue;
+        const wentLive = liveAt(row);
+        if (!wentLive) continue;
+        const liveMs = Date.parse(wentLive);
+        if (!Number.isFinite(liveMs)) continue;
+        if (cutoff !== null && liveMs < cutoff) continue;
+        // `confirmed` now means "we also found a #devs-shipped post
+        // carrying this ticket". Opt-in filter, not a default gate —
+        // gating on it by default is what made this tab look empty.
+        if (confirmedOnly && !hasDevsShippedMatch(row)) continue;
       } else {
         // `all` mode ignores promotion entirely — an Open request that
         // has never shipped is exactly what this view exists to show.
@@ -253,8 +274,9 @@ export async function GET(req: Request) {
         inScopeCount += 1;
       }
       totalArr += row.arr_snapshot ?? 0;
-      if (!newestPromotedAt || (row.promoted_at ?? "") > newestPromotedAt) {
-        newestPromotedAt = row.promoted_at;
+      const rowLiveAt = liveAt(row);
+      if (!newestPromotedAt || (rowLiveAt ?? "") > newestPromotedAt) {
+        newestPromotedAt = rowLiveAt;
       }
       groupCustomers.push({
         workspace_id: workspaceId,
@@ -290,6 +312,9 @@ export async function GET(req: Request) {
       work_type: head.work_type,
       promotion_source: head.promotion_source,
       promotion_confidence: resolveConfidence(head),
+      devs_shipped_match: hasDevsShippedMatch(head),
+      devs_shipped_url: head.devs_shipped_url ?? null,
+      devs_shipped_at: head.devs_shipped_at ?? null,
       needs_review_reason: head.needs_review_reason ?? null,
       reviewed_by:
         head.review?.decision === "confirmed"

@@ -269,17 +269,23 @@ export async function runEnterpriseRequestsSync(): Promise<SyncResult> {
         // blocks for the profile UI.
         row.slack_intake = priorRow.slack_intake ?? null;
         row.linear_comment = priorRow.linear_comment ?? null;
-        row.pending_ship = priorRow.pending_ship ?? null;
-        // If the shipped sweep had already promoted this row past
-        // the Linear-native derived state, keep it. A Linear state
-        // change (e.g. reopened for a follow-up) shouldn't demote
-        // a shipped feature back to Open.
-        if (
-          priorRow.derived_state === "Live" ||
-          priorRow.derived_state === "Live, possibly in beta"
-        ) {
-          row.derived_state = priorRow.derived_state;
-        }
+        // Carry the #devs-shipped match forward. The sweep reads Slack
+        // incrementally from a cursor, so a match found last week is
+        // NOT re-derivable on a later run — dropping it here would
+        // silently reset the flag to "no" on every nightly sync.
+        row.devs_shipped_match = priorRow.devs_shipped_match;
+        row.devs_shipped_url = priorRow.devs_shipped_url ?? null;
+        row.devs_shipped_at = priorRow.devs_shipped_at ?? null;
+        row.promotion_source = priorRow.promotion_source;
+        row.ship_url = priorRow.ship_url;
+        row.ship_date = priorRow.ship_date;
+        row.promoted_at = priorRow.promoted_at;
+        row.promotion_history = priorRow.promotion_history ?? [];
+        row.review = priorRow.review;
+        // NOTE: `derived_state` is deliberately NOT carried forward.
+        // Linear is the source of truth for it now, so a freshly
+        // mapped state always wins — including a reopen, which should
+        // move the row back out of Done rather than pinning it there.
       }
       // Any row that flows out of the customer_needs sync is
       // canonically customer_needs, regardless of whether the
@@ -291,72 +297,17 @@ export async function runEnterpriseRequestsSync(): Promise<SyncResult> {
     }
   }
 
-  // ─── Deferred-promotion pass ────────────────────────────────────
-  // The shipped-sweep captures a `pending_ship` block whenever a
-  // Slack ship hit lands on a ticket whose parent project isn't
-  // `completed` yet (e.g. BEE-24713 shipping under the still-in-
-  // progress "Workspace Library" project). Now that we've refreshed
-  // every row's `project_status_type` from Linear, walk every
-  // pending row: if the project just crossed into `completed`,
-  // apply the deferred promotion. This is the only path outside
-  // the shipped-sweep that mutates `derived_state`.
-  let deferred_applied = 0;
-  for (const [workspaceId, bucket] of Object.entries(rows)) {
-    for (const [issueId, row] of Object.entries(bucket)) {
-      const pending = row.pending_ship;
-      if (!pending) continue;
-      if (row.project_status_type !== "completed") continue;
-      // Never demote: if this row has already been promoted past
-      // pending's target state, don't step backwards.
-      if (
-        (pending.target_state === "Live, possibly in beta" &&
-          row.derived_state === "Live") ||
-        row.derived_state === pending.target_state
-      ) {
-        bucket[issueId] = { ...row, pending_ship: null };
-        continue;
-      }
-      const now = new Date().toISOString();
-      bucket[issueId] = {
-        ...row,
-        derived_state: pending.target_state,
-        promotion_source: pending.source,
-        promoted_at: now,
-        ship_url: pending.ship_url ?? row.ship_url,
-        ship_date: pending.ship_date ?? row.ship_date,
-        // Apply the confidence the shipped-sweep decided at detection
-        // time. Blobs written before the confidence model carry no
-        // value — re-derive rather than defaulting to confirmed, so a
-        // deferred promotion can't sneak past the digest gate.
-        promotion_confidence:
-          pending.confidence ??
-          resolveConfidence({
-            promotion_confidence: null,
-            promotion_source: pending.source,
-            work_type: row.work_type,
-          }),
-        needs_review_reason: pending.needs_review_reason ?? null,
-        promotion_history: [
-          ...(row.promotion_history ?? []),
-          {
-            from_state: row.derived_state,
-            to_state: pending.target_state,
-            source: pending.source,
-            at: now,
-            permalink: pending.ship_url,
-          },
-        ],
-        pending_ship: null,
-      };
-      deferred_applied += 1;
-    }
-    rows[workspaceId] = bucket;
-  }
-  if (deferred_applied > 0) {
-    console.log(
-      `[enterprise-requests-sync] applied ${deferred_applied} deferred-project promotions`
-    );
-  }
+  // ─── Deferred-promotion pass (retired) ──────────────────────────
+  // This used to hold a Slack ship hit in a `pending_ship` block until
+  // the ticket's parent project reached `completed`, then promote the
+  // row to Live. The gate existed because a Slack hit alone was being
+  // used to claim "live", and shipping one ticket out of an unfinished
+  // project is a bad reason to tell a customer their request landed.
+  //
+  // Linear now owns the state outright, so there is no promotion to
+  // defer: a #devs-shipped match records a fact on the row and nothing
+  // else. Removed rather than left inert so nothing silently rewrites
+  // a state Linear just gave us.
 
   const fetched_at = new Date().toISOString();
   const unmatched = Array.from(unmatchedBy.values());

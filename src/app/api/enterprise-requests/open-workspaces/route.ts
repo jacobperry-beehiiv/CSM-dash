@@ -3,6 +3,7 @@ import { auth } from "@/auth";
 import { loadCustomers } from "@/lib/data/load-customers";
 import { loadEnterpriseRequestsSnapshot } from "@/lib/data/enterprise-requests";
 import {
+  isLive,
   OPEN_STATE_TYPES,
   type EnterpriseRequestRow,
 } from "@/lib/data/enterprise-requests-types";
@@ -88,13 +89,11 @@ export async function GET(req: Request) {
         open.add(workspaceId);
         t.open += 1;
       }
-      // "shipped" counts the derived bucket, not Linear's state — a
-      // ticket Done in Linear isn't customer-visible until a ship post
-      // is matched, and the column shouldn't claim otherwise.
-      if (
-        row.derived_state === "Live" ||
-        row.derived_state === "Live, possibly in beta"
-      ) {
+      // "shipped" = Linear says the request is live in the app. The
+      // #devs-shipped match is recorded per row but doesn't gate this
+      // count; a request can be delivered without its ticket appearing
+      // in a release post we parsed.
+      if (isLive(row)) {
         t.shipped += 1;
       }
       if (row.promoted_at) {

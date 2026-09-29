@@ -3,7 +3,11 @@ import { auth } from "@/auth";
 import { isFeatureEnabledFor } from "@/lib/auth/feature-flags";
 import { loadCustomers } from "@/lib/data/load-customers";
 import { loadEnterpriseRequestsSnapshot } from "@/lib/data/enterprise-requests";
-import { resolveConfidence } from "@/lib/data/enterprise-requests-types";
+import {
+  hasDevsShippedMatch,
+  isLive,
+  liveAt,
+} from "@/lib/data/enterprise-requests-types";
 import type { EnterpriseRequestRow } from "@/lib/data/enterprise-requests-types";
 import {
   ExceptionsReview,
@@ -13,18 +17,22 @@ import {
 export const dynamic = "force-dynamic";
 
 /**
- * /settings/enterprise-requests/exceptions — review queue for shipped
- * signals we matched to a customer but couldn't confidently classify.
+ * /settings/enterprise-requests/exceptions — reconciliation queue for
+ * requests Linear calls live that no release post corroborates.
  *
- * Distinct from the neighbouring orphans queue: orphans are ship
- * posts we couldn't match to ANY request. These are rows we DID
- * match, where the evidence isn't strong enough to tell a CSM to go
- * tell their customer. Confirming one makes it digest-eligible;
- * dismissing drops the Live badge off the customer profile.
+ * The queue's meaning changed when Linear took ownership of state. It
+ * used to hold ships we were WITHHOLDING from CSMs pending review, and
+ * confirming a row is what released it. Nothing is withheld now —
+ * every Linear-live request reaches its CSM, flagged if unmatched.
  *
- * Nothing auto-confirms — a row sits here until a human decides. The
- * tradeoff is deliberate: late good news is recoverable, a premature
- * "your request shipped" is not.
+ * What lands here is a mismatch worth a human eye: the Linear ticket
+ * says Done (live in app), but we never found a #devs-shipped post
+ * carrying it. Usually benign (shipped under a project ticket, or
+ * before we started watching the channel); occasionally it means a
+ * ticket was closed without the code going out.
+ *
+ * Distinct from the neighbouring orphans queue: orphans are ship posts
+ * we couldn't match to ANY request — the mirror image of this.
  */
 export default async function ExceptionsPage() {
   const session = await auth();
@@ -56,14 +64,13 @@ export default async function ExceptionsPage() {
   const rows: ExceptionRow[] = [];
   for (const [workspaceId, bucket] of Object.entries(snapshot.rows)) {
     for (const row of Object.values(bucket) as EnterpriseRequestRow[]) {
-      // Only rows the sweep actually promoted — an un-promoted row
-      // has no ship signal to review.
-      if (!row.promoted_at) continue;
-      if (resolveConfidence(row) === "confirmed") continue;
-      // Already decided by a human — confirmed rows flip confidence
-      // (so they're filtered above), dismissed ones shouldn't
-      // reappear in the queue.
-      if (row.review?.decision === "dismissed") continue;
+      // Linear says it's delivered...
+      if (!isLive(row)) continue;
+      // ...but no release post backs that up. Rows with a match need
+      // no reconciling.
+      if (hasDevsShippedMatch(row)) continue;
+      // Already decided by a human — neither decision should reappear.
+      if (row.review?.decision) continue;
       const meta = wsMeta.get(workspaceId);
       rows.push({
         workspace_id: workspaceId,
@@ -77,13 +84,13 @@ export default async function ExceptionsPage() {
         work_type: row.work_type ?? null,
         reason: row.needs_review_reason ?? null,
         promotion_source: row.promotion_source ?? null,
-        promoted_at: row.promoted_at,
+        promoted_at: liveAt(row),
         ship_url: row.ship_url,
       });
     }
   }
-  // Newest detection first — the freshest signals are the ones where
-  // a CSM is most likely still waiting to hear something.
+  // Newest first — a request that just went live is the one whose
+  // customer is most likely still waiting to hear.
   rows.sort((a, b) => (b.promoted_at ?? "").localeCompare(a.promoted_at ?? ""));
 
   return (
@@ -92,12 +99,14 @@ export default async function ExceptionsPage() {
         Enterprise Request Loop — needs review
       </h1>
       <p className="text-sm text-muted mb-4 max-w-prose">
-        Shipped signals we matched to a customer request but can&rsquo;t
-        confidently call customer-visible. These never reach a
-        CSM&rsquo;s DMs until someone confirms them here. Bug and UI/UX
-        fixes seen in <code className="font-mono text-xs">#devs-shipped</code>{" "}
-        clear automatically, as do exact changelog links &mdash;
-        everything else lands in this queue.
+        Requests Linear marks{" "}
+        <code className="font-mono text-xs">Done (live in app)</code> where
+        we found no matching release post in{" "}
+        <code className="font-mono text-xs">#devs-shipped</code>. These{" "}
+        <strong>do</strong> reach their CSM &mdash; flagged, not withheld.
+        This queue exists so someone can reconcile them in a batch:
+        confirm the ones that really did ship, dismiss the ones where
+        the ticket was closed without the code going out.
       </p>
       <ExceptionsReview rows={rows} />
     </div>

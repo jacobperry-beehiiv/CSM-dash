@@ -10,7 +10,11 @@ import type {
   EnterpriseRequestRow,
   NotifiedEntry,
 } from "@/lib/data/enterprise-requests-types";
-import { estimateToTShirt } from "@/lib/data/enterprise-requests-types";
+import {
+  estimateToTShirt,
+  hasDevsShippedMatch,
+  isLive,
+} from "@/lib/data/enterprise-requests-types";
 
 /**
  * Requests section on the customer detail panel.
@@ -55,27 +59,33 @@ interface ApiResponse {
 }
 
 /** Order the state buckets so the render reads top-to-bottom in
- *  "what needs attention" order — Live-possibly-in-beta first (the
- *  CSM's outreach queue is here), then Live, then Open work, then
- *  the archived Not-planned bucket. */
+ *  "what needs attention" order — delivered work first (that's the
+ *  CSM's outreach queue), then active work in pipeline order, then
+ *  the two closed buckets. Mirrors Linear's own vocabulary. */
 const STATE_ORDER: EnterpriseRequestDerivedState[] = [
-  "Live, possibly in beta",
-  "Live",
+  "Done (live in app)",
   "In progress",
-  "Open",
-  "Not planned",
+  "Todo",
+  "Backlog",
+  "Triage",
+  "Canceled",
+  "Duplicate",
 ];
 
 const STATE_BADGE_CLASS: Record<EnterpriseRequestDerivedState, string> = {
-  Live:
+  "Done (live in app)":
     "border-emerald-400 dark:border-emerald-500/60 bg-emerald-50 dark:bg-emerald-500/10 text-emerald-800 dark:text-emerald-200",
-  "Live, possibly in beta":
-    "border-amber-400 dark:border-amber-500/60 bg-amber-50 dark:bg-amber-500/10 text-amber-800 dark:text-amber-200",
   "In progress":
     "border-blue-400 dark:border-blue-500/60 bg-blue-50 dark:bg-blue-500/10 text-blue-800 dark:text-blue-200",
-  Open:
-    "border-border bg-surface text-fg",
-  "Not planned":
+  Todo:
+    "border-border-strong bg-surface text-fg",
+  Backlog:
+    "border-border bg-surface text-subtle",
+  Triage:
+    "border-amber-400 dark:border-amber-500/60 bg-amber-50 dark:bg-amber-500/10 text-amber-800 dark:text-amber-200",
+  Canceled:
+    "border-slate-400 dark:border-slate-500/40 bg-slate-100 dark:bg-slate-500/10 text-slate-700 dark:text-slate-300",
+  Duplicate:
     "border-slate-400 dark:border-slate-500/40 bg-slate-100 dark:bg-slate-500/10 text-slate-700 dark:text-slate-300",
 };
 
@@ -216,14 +226,13 @@ export function CustomerRequestsSection({
           {STATE_ORDER.map((state) => {
             const rows = grouped?.get(state) ?? [];
             if (rows.length === 0) return null;
-            // "In progress" is where Linear-Done-but-unshipped tickets
-            // land. The per-row badge says so, but without a heading
-            // note a CSM scanning the group still reads the grouping
-            // itself as stale. Only shown when the group actually
-            // contains one, so it isn't permanent chrome.
+            // Delivered rows carry a per-row ship-match badge; when
+            // any of them lack a matching release post, say so once at
+            // the top of the group rather than leaving the CSM to
+            // infer it from the badges.
             const doneUnshipped =
-              state === "In progress" &&
-              rows.some((r) => r.linear_state_type === "completed");
+              state === "Done (live in app)" &&
+              rows.some((r) => !hasDevsShippedMatch(r));
             return (
               <div key={state}>
                 <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-subtle">
@@ -232,9 +241,10 @@ export function CustomerRequestsSection({
                 </div>
                 {doneUnshipped ? (
                   <p className="mb-1 text-[10px] leading-snug text-muted">
-                    Includes tickets Linear marks Done. Merged isn&rsquo;t
-                    released — these move to Live once a #devs-shipped or
-                    changelog post confirms the ship.
+                    Some of these have no matching #devs-shipped post.
+                    Linear says they&rsquo;re live; we couldn&rsquo;t find the
+                    release that carried them. Worth confirming before
+                    you tell the customer.
                   </p>
                 ) : null}
                 <ul className="space-y-1.5">
@@ -275,21 +285,32 @@ export function CustomerRequestsSection({
                                 Resurfaced
                               </span>
                             ) : null}
-                            {/* Rows group by derived_state, and Linear
-                                `completed` maps to "In progress"
-                                deliberately — merged is not released,
-                                and only a matched ship post promotes to
-                                Live. Without saying so, a Done ticket
-                                filed under "In progress" reads as the
-                                tracker being wrong. */}
-                            {row.linear_state_type === "completed" &&
-                            row.derived_state !== "Live" ? (
-                              <span
-                                className="px-1 py-0.5 rounded border border-slate-400 text-slate-700 dark:text-slate-200"
-                                title={`Linear state: ${row.linear_state_name}. No #devs-shipped or changelog post has been matched to this ticket yet, so it isn't confirmed customer-visible.`}
-                              >
-                                Done in Linear · ship unconfirmed
-                              </span>
+                            {/* Ship corroboration. Linear decides the
+                                state; this says whether we can also
+                                point at a #devs-shipped release post
+                                carrying the ticket. Only shown on
+                                delivered rows — on an open request
+                                "no ship post" is just noise. */}
+                            {isLive(row) ? (
+                              hasDevsShippedMatch(row) ? (
+                                <span
+                                  className="px-1 py-0.5 rounded border border-emerald-400 text-emerald-700 dark:text-emerald-300"
+                                  title={
+                                    row.devs_shipped_at
+                                      ? `Matched to a #devs-shipped release post on ${fmtDate(row.devs_shipped_at)}.`
+                                      : "Matched to a release post in #devs-shipped."
+                                  }
+                                >
+                                  Ship matched ✓
+                                </span>
+                              ) : (
+                                <span
+                                  className="px-1 py-0.5 rounded border border-slate-400 text-slate-700 dark:text-slate-200"
+                                  title={`Linear state: ${row.linear_state_name}. No #devs-shipped post carrying this ticket was found — either the release wasn't parsed, or the ticket was closed without the code going out. Worth a check before telling the customer.`}
+                                >
+                                  No ship post matched
+                                </span>
+                              )
                             ) : null}
                             {row.project_name ? (
                               row.project_url ? (
@@ -318,14 +339,6 @@ export function CustomerRequestsSection({
                                   📁 {row.project_name}
                                 </span>
                               )
-                            ) : null}
-                            {row.pending_ship ? (
-                              <span
-                                className="px-1 py-0.5 rounded border border-amber-400 bg-amber-50 dark:bg-amber-500/10 text-amber-800 dark:text-amber-200"
-                                title={`Ticket shipped ${row.pending_ship.ship_date ? "on " + fmtDate(row.pending_ship.ship_date) + " " : ""}but the parent project (${row.pending_ship.project_name ?? "unknown"}) is still ${row.pending_ship.project_status_type ?? "in progress"}. The row will flip to ${row.pending_ship.target_state} on the next sync after the project is marked completed.`}
-                              >
-                                ⏳ Shipped · project pending
-                              </span>
                             ) : null}
                           </div>
                           <div className="mt-0.5 text-[10px] text-muted">
@@ -409,7 +422,7 @@ export function CustomerRequestsSection({
                           {state}
                         </span>
                       </div>
-                      {(state === "Live" || state === "Live, possibly in beta") ? (
+                      {state === "Done (live in app)" ? (
                         <div className="mt-1.5 flex items-center gap-2">
                           <button
                             type="button"
@@ -489,10 +502,14 @@ export function CustomerRequestsSection({
               : draftingRow.promoted_at
                 ? fmtDate(draftingRow.promoted_at)
                 : null,
-            beta_caveat:
-              draftingRow.derived_state === "Live, possibly in beta"
-                ? "This is currently in beta rollout — happy to share more if you'd like early access."
-                : "",
+            // Kept under the existing `beta_caveat` merge tag so
+            // templates don't need rewriting. It now fires on the
+            // weaker signal: Linear says live, but no release post
+            // corroborates it, so the CSM should verify before
+            // promising anything.
+            beta_caveat: hasDevsShippedMatch(draftingRow)
+              ? ""
+              : "This may still be rolling out — worth confirming before you promise a date.",
           }}
           onDraftLifecycle={(state) => {
             // When the CSM actually creates the Gmail draft (not
