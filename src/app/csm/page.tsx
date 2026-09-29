@@ -165,8 +165,20 @@ export default async function CsmPage({
     ...(winsEnabled
       ? [{ id: "wins" as const, label: "Wins & Opportunities" }]
       : []),
+    // NOTE: appending here is a merge hazard — this list and the
+    // lifecycle/wins entries above it are all appended to by different
+    // branches, so a conflict resolution that takes one side wholesale
+    // silently drops the other's tabs. That already happened once: this
+    // reverted to the old single "Live This Week" entry while the tab
+    // BODY below still dispatched on `all-requests` / `live-requests`,
+    // so All requests became unreachable from the UI and nothing failed
+    // to compile. If you resolve a conflict in this array, check it
+    // against the ids the body actually handles.
     ...(requestsEnabled
-      ? [{ id: "live-this-week" as const, label: "Live This Week" }]
+      ? [
+          { id: "all-requests" as const, label: "All requests" },
+          { id: "live-requests" as const, label: "Live requests" },
+        ]
       : []),
   ];
 
