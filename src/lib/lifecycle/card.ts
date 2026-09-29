@@ -173,15 +173,43 @@ function daysBetweenYmd(fromYmd: string, toYmd: string): number {
   return Math.round((Date.UTC(ty, tm - 1, td) - Date.UTC(fy, fm - 1, fd)) / 86400000);
 }
 
+/** The four due-date urgency bands, most urgent first — each band's
+ *  `className` is both what urgencyHeaderClass applies to a checklist
+ *  group's header AND what the Live board's legend (lifecycle-filter-
+ *  bar.tsx) swatches render, so the key can't drift out of sync with
+ *  the actual coloring. Both light- and dark-mode colors are set
+ *  explicitly (light bg + dark:bg-{color}-500/10, not just a text-
+ *  color swap) so it stays legible with the app's dark mode on — see
+ *  RiskLevelChip's "light green" row for the same pattern done right,
+ *  vs. its red/yellow/green rows done wrong. */
+export const URGENCY_BANDS = [
+  {
+    label: "Overdue",
+    maxDays: 0,
+    className: "bg-rose-50 dark:bg-rose-500/10 border-rose-200 dark:border-rose-500/30",
+  },
+  {
+    label: "≤ 7 days",
+    maxDays: 7,
+    className: "bg-orange-50 dark:bg-orange-500/10 border-orange-200 dark:border-orange-500/30",
+  },
+  {
+    label: "≤ 14 days",
+    maxDays: 14,
+    className: "bg-amber-50 dark:bg-amber-500/10 border-amber-200 dark:border-amber-500/30",
+  },
+  {
+    label: "≤ 30 days",
+    maxDays: 30,
+    className: "bg-emerald-50 dark:bg-emerald-500/10 border-emerald-200 dark:border-emerald-500/30",
+  },
+] as const;
+
 /** Pastel background/border classes for a checklist group's header on
  *  the Live board, banded by how soon its earliest actionable due date
- *  is (overdue / ≤7d / ≤14d / ≤30d) — undefined (unchanged header)
- *  when nothing's actionable or nothing actionable has a due date.
- *  Both light- and dark-mode colors are set explicitly (light bg +
- *  dark:bg-{color}-500/10, not just a text-color swap) so the chip
- *  stays legible with the app's dark mode on — see RiskLevelChip's
- *  "light green" row for the same pattern done right, vs. its
- *  red/yellow/green rows done wrong. */
+ *  is (see URGENCY_BANDS) — undefined (unchanged header) when nothing's
+ *  actionable, nothing actionable has a due date, or the soonest one is
+ *  more than 30 days out. */
 export function urgencyHeaderClass(
   groupSteps: LifecycleStep[],
   today: string
@@ -189,19 +217,8 @@ export function urgencyHeaderClass(
   const dueDate = earliestDueDate(actionableSteps(groupSteps, today));
   if (!dueDate) return undefined;
   const days = daysBetweenYmd(today, dueDate);
-  if (days < 0) {
-    return "bg-rose-50 dark:bg-rose-500/10 border-rose-200 dark:border-rose-500/30";
-  }
-  if (days <= 7) {
-    return "bg-orange-50 dark:bg-orange-500/10 border-orange-200 dark:border-orange-500/30";
-  }
-  if (days <= 14) {
-    return "bg-amber-50 dark:bg-amber-500/10 border-amber-200 dark:border-amber-500/30";
-  }
-  if (days <= 30) {
-    return "bg-emerald-50 dark:bg-emerald-500/10 border-emerald-200 dark:border-emerald-500/30";
-  }
-  return undefined;
+  if (days < 0) return URGENCY_BANDS[0].className;
+  return URGENCY_BANDS.find((b) => b.maxDays > 0 && days <= b.maxDays)?.className;
 }
 
 /** Live board's per-column card order: a card with an actionable to-do

@@ -314,6 +314,7 @@ export function LiveBoard({ cards: initialCards, csms }: Props) {
         csms={csms}
         zendeskOn={zendeskOn}
         onToggleZendesk={() => setZendeskOn((v) => !v)}
+        showUrgencyLegend
       />
       <KanbanColumns
         columns={columns}
