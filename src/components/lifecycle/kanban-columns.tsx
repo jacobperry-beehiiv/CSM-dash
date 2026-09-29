@@ -236,7 +236,7 @@ export function KanbanColumns({
                       {c.customer.company_name ?? c.customer.workspace_name}
                     </div>
                     <div className="text-xs text-muted mt-1">
-                      {fmtCurrency(c.customer.arr)}
+                      ARR: {fmtCurrency(c.customer.arr)}
                     </div>
                     {(() => {
                       const meta = renderCardMeta ? (
@@ -434,7 +434,7 @@ function CardActions({
 
   return (
     <div
-      className="flex items-center justify-end gap-1 mt-2"
+      className="flex items-center justify-start gap-1 mt-2"
       onMouseDown={(e) => e.stopPropagation()}
       draggable={false}
     >
