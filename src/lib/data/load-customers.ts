@@ -143,7 +143,13 @@ export async function loadCustomers(): Promise<Customer[]> {
   // keeping it outside the override loop guarantees its placeholder
   // values can't be accidentally mutated.
   const withOverrides = raw.map((c) => applyOverride(c, overrides));
-  const withHubspot = mergeOverlayInto(withOverrides, hubspotOverlay);
+  // Overrides go in so the overlay can tell a CSM's edit from a stale
+  // HubSpot read and not clobber the former. See mergeOverlayInto.
+  const withHubspot = mergeOverlayInto(
+    withOverrides,
+    hubspotOverlay,
+    overrides
+  );
   const withCadence = mergeCadenceInto(withHubspot, cadenceOverlay);
   return [...withCadence, TEST_CUSTOMER];
 }

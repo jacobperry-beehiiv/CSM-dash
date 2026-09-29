@@ -1,5 +1,6 @@
 import { kvGet, kvSet } from "../storage/kv";
 import type { Customer, HubSpotContactRef } from "../types";
+import type { OverrideMap } from "./customer-overrides";
 
 /**
  * Live HubSpot-overlay for the customer book.
@@ -86,29 +87,83 @@ export async function pruneHubspotOverlay(keep: Set<string>): Promise<number> {
   return removed;
 }
 
-/** Merge an overlay blob into an in-memory customer list. Pure —
- *  returns a new array with overlaid rows. Customers not in the
- *  overlay map are passed through unchanged. */
+/**
+ * Fields this overlay writes that a CSM can ALSO edit from the
+ * dashboard, via the mapped-field editor.
+ *
+ * These are the contended ones. Everything else the overlay carries
+ * (contacts, last activity) has no edit path, so the overlay is
+ * unambiguously the better value and just wins.
+ */
+const EDITABLE_OVERLAY_FIELDS = [
+  "property_risk_level",
+  "company_engagement",
+  "property_customer_folder",
+] as const;
+
+/**
+ * Merge an overlay blob into an in-memory customer list. Pure —
+ * returns a new array with overlaid rows. Customers not in the
+ * overlay map are passed through unchanged.
+ *
+ * `overrides` decides who wins on a contended field.
+ *
+ * This used to take no overrides and overwrite unconditionally, which
+ * silently discarded CSM edits. `loadCustomers` applies overrides and
+ * THEN merges this overlay on top, so for any workspace that had ever
+ * been resynced, editing Risk level wrote the override, pushed to
+ * HubSpot, and then rendered the overlay's months-old value anyway —
+ * the edit looked like it hadn't saved.
+ *
+ * Resolution is by timestamp rather than a blanket "override wins",
+ * because both directions are legitimate:
+ *
+ *   • Edit in the dashboard  → override.updated_at is newest, and the
+ *     dashboard also pushes to HubSpot, so the two agree.
+ *   • Edit in HubSpot, then Resync → row.fetched_at is newest and
+ *     carries the external change, which should win.
+ *
+ * `fetched_at` is when we READ HubSpot, so it's an upper bound on how
+ * current that value is — good enough to order against an edit we
+ * timestamped ourselves.
+ */
 export function mergeOverlayInto(
   customers: Customer[],
-  overlay: HubSpotOverlayBlob
+  overlay: HubSpotOverlayBlob,
+  overrides: OverrideMap = {}
 ): Customer[] {
   if (Object.keys(overlay.rows).length === 0) return customers;
   return customers.map((c) => {
     if (!c.workspace_id) return c;
     const row = overlay.rows[c.workspace_id];
     if (!row) return c;
+
+    // A contended field takes the overlay's value only when the
+    // overlay is at least as fresh as the CSM's edit. `c` already has
+    // the override applied, so "keep c's value" is how the override
+    // wins.
+    const bag = overrides[c.workspace_id]?.field_overrides ?? {};
+    const overlayWins = (field: (typeof EDITABLE_OVERLAY_FIELDS)[number]) => {
+      const edited = bag[field]?.updated_at;
+      if (!edited) return true;
+      return row.fetched_at >= edited;
+    };
+
     return {
       ...c,
       hubspot_contacts: row.hubspot_contacts ?? c.hubspot_contacts,
       last_activity_at: row.last_activity_at ?? c.last_activity_at,
       last_activity_source:
         row.last_activity_source ?? c.last_activity_source,
-      property_customer_folder:
-        row.property_customer_folder ?? c.property_customer_folder,
-      company_engagement: row.company_engagement ?? c.company_engagement,
-      property_risk_level:
-        row.property_risk_level ?? c.property_risk_level,
+      property_customer_folder: overlayWins("property_customer_folder")
+        ? (row.property_customer_folder ?? c.property_customer_folder)
+        : c.property_customer_folder,
+      company_engagement: overlayWins("company_engagement")
+        ? (row.company_engagement ?? c.company_engagement)
+        : c.company_engagement,
+      property_risk_level: overlayWins("property_risk_level")
+        ? (row.property_risk_level ?? c.property_risk_level)
+        : c.property_risk_level,
     };
   });
 }
