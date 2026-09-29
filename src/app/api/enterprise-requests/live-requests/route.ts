@@ -230,17 +230,25 @@ export async function GET(req: Request) {
         // gating on it by default is what made this tab look empty.
         if (confirmedOnly && !hasDevsShippedMatch(row)) continue;
       } else {
-        // `all` mode ignores promotion entirely — an Open request that
-        // has never shipped is exactly what this view exists to show.
-        // The window still applies when one is set, but against the
-        // request's SUBMISSION date rather than a ship it may never
-        // have had.
+        // `all` mode ignores shipping entirely — an open request that
+        // will never ship is exactly what this view exists to show.
         if (wantedStates.size > 0 && !wantedStates.has(row.derived_state)) {
           continue;
         }
+        // The window runs off ENGAGEMENT, not submission.
+        //
+        // Submission was the obvious choice and the wrong one: it
+        // answers "what was filed recently", when the question this
+        // view is for is "what has moved recently". REQ-2928 was filed
+        // in March and had a customer attached on 24 Sep — under a
+        // submission window it fell outside 7 days, which is the exact
+        // thing you'd open a 7-day view to find.
         if (cutoff !== null) {
-          const submitted = Date.parse(row.submitted_at ?? "");
-          if (Number.isFinite(submitted) && submitted < cutoff) continue;
+          const engagedAt = row.last_engaged_at ?? lastEngagedAt(row);
+          const engagedMs = Date.parse(engagedAt ?? "");
+          // A row with no usable date at all stays rather than being
+          // dropped by a filter it can't be judged against.
+          if (Number.isFinite(engagedMs) && engagedMs < cutoff) continue;
         }
       }
       // A dismissed review means we decided this isn't a real

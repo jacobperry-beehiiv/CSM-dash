@@ -244,7 +244,10 @@ export function LiveRequests({
             <strong>Done (live in app)</strong> is the delivered bucket,
             and each row there also says whether a{" "}
             <code className="font-mono">#devs-shipped</code> release post
-            was matched to the ticket.
+            was matched to the ticket. Sorted and filtered by{" "}
+            <strong>last engaged</strong>, so an old request someone
+            attached a customer to this week surfaces rather than
+            sinking to the bottom.
           </>
         ) : (
           <>
@@ -261,8 +264,15 @@ export function LiveRequests({
       <ConfidenceExplainer />
 
       <div className="flex flex-wrap items-center gap-3 rounded-lg border border-border bg-surface px-3 py-2">
-        <label className="inline-flex items-center gap-1.5 text-xs text-fg">
-          <span className="text-muted">Shipped</span>
+        <label
+          className="inline-flex items-center gap-1.5 text-xs text-fg"
+          title={
+            isAll
+              ? "Filters on the last time anything happened on the request — a customer attached, a comment added, or the ship. Not when it was filed."
+              : "Filters on when the request went live."
+          }
+        >
+          <span className="text-muted">{isAll ? "Engaged" : "Shipped"}</span>
           <select
             value={windowKey}
             onChange={(e) => setWindowKey(e.currentTarget.value)}
