@@ -26,6 +26,8 @@ import type { AddTodoFields } from "./add-todo-modal";
 import { KanbanColumns } from "./kanban-columns";
 import { LifecycleCardModal } from "./lifecycle-card-modal";
 import { LifecycleFilterBar } from "./lifecycle-filter-bar";
+import { OutreachModal } from "../outreach-modal";
+import type { Customer } from "@/lib/types";
 import { fmtDate } from "../format";
 
 // No "Unsorted" column here — unlike Onboarding, this board is fully
@@ -68,6 +70,7 @@ interface Props {
 export function LiveBoard({ cards: initialCards, csms }: Props) {
   const [cards, setCards] = useState(initialCards);
   const [openWorkspaceId, setOpenWorkspaceId] = useState<string | null>(null);
+  const [outreachFor, setOutreachFor] = useState<Customer | null>(null);
   const [search, setSearch] = useState("");
   const [zendeskOn, setZendeskOn] = useState(false);
   const zendeskOverlay = useZendeskOverlay();
@@ -339,6 +342,7 @@ export function LiveBoard({ cards: initialCards, csms }: Props) {
           void handleAddTodo(workspaceId, group, fields)
         }
         showUrgencyColors
+        onDraft={setOutreachFor}
         renderCardMeta={(c) => (
           <span className="text-xs text-subtle">
             {c.customer.contract_renewal ? (
@@ -360,6 +364,9 @@ export function LiveBoard({ cards: initialCards, csms }: Props) {
       />
       {openCard ? (
         <LifecycleCardModal card={openCard} onClose={() => setOpenWorkspaceId(null)} />
+      ) : null}
+      {outreachFor ? (
+        <OutreachModal customer={outreachFor} onClose={() => setOutreachFor(null)} />
       ) : null}
     </>
   );

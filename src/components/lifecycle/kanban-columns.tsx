@@ -2,6 +2,8 @@
 
 import { useState } from "react";
 import type { LifecycleCard } from "@/lib/lifecycle/card";
+import type { Customer } from "@/lib/types";
+import { hubspotCompanyUrl, masqueradeUrl } from "@/lib/links";
 import { fmtCurrency } from "../format";
 import { StatusBadge } from "../status-badge";
 import { StageTodoList } from "./stage-todo-list";
@@ -87,6 +89,13 @@ interface Props {
    *  date-urgency signal is less useful there; left off rather than
    *  risk two competing visual cues. */
   showUrgencyColors?: boolean;
+  /** Opens the outreach template-picker modal for this card's customer
+   *  — the caller owns the modal itself (renders <OutreachModal> once
+   *  at the board level, same pattern as RowActions on the customer
+   *  table), this just supplies the click. Omitted entirely hides the
+   *  Draft icon; Masq/HubSpot render regardless since they're plain
+   *  links needing no board-level state. */
+  onDraft?: (customer: Customer) => void;
 }
 
 /**
@@ -120,6 +129,7 @@ export function KanbanColumns({
   renderCardMeta,
   renderEmptyChecklist,
   showUrgencyColors,
+  onDraft,
 }: Props) {
   const [dragOverColumn, setDragOverColumn] = useState<string | null>(null);
 
@@ -226,14 +236,7 @@ export function KanbanColumns({
                       <div className="font-medium text-sm text-fg truncate">
                         {c.customer.company_name ?? c.customer.workspace_name}
                       </div>
-                      {c.atRisk ? (
-                        <span
-                          title={c.atRisk.flags.map((f) => f.label).join(", ")}
-                          className="flex-shrink-0 inline-block px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-red-100 text-red-800 dark:text-red-300 whitespace-nowrap"
-                        >
-                          at-risk
-                        </span>
-                      ) : null}
+                      <CardActions card={c} onDraft={onDraft} />
                     </div>
                     <div className="text-xs text-muted mt-1">
                       {fmtCurrency(c.customer.arr)}
@@ -363,6 +366,89 @@ export function KanbanColumns({
           </div>
         );
       })}
+    </div>
+  );
+}
+
+/**
+ * Top-right icon cluster on each card: an at-risk flag (if any) beside
+ * a small vertical stack of the same Masq/HubSpot/Draft actions the
+ * customer table's RowActions offers, just icon-sized rather than
+ * full-width labeled buttons — a card this small can't afford three
+ * ~90px buttons. No icon library in this repo (see RowActions' own
+ * comment), so these are plain glyphs/monograms rather than SVGs.
+ *
+ * stopPropagation on both click and mousedown, same as
+ * stage-todo-list.tsx's own checklist wrapper — without it, a click
+ * here would also fire the card's onClick (opening the detail modal)
+ * and, on the draggable Onboarding board, a real anchor/button inside
+ * a draggable=true ancestor can still register the mousedown as the
+ * start of a card drag rather than a plain click.
+ */
+function CardActions({
+  card,
+  onDraft,
+}: {
+  card: LifecycleCard;
+  onDraft?: (customer: Customer) => void;
+}) {
+  const masquerade = masqueradeUrl(card.customer.owner_email);
+  const hubspot = hubspotCompanyUrl(card.customer.hubspot_company_id);
+  if (!card.atRisk && !masquerade && !hubspot && !onDraft) return null;
+
+  return (
+    <div
+      className="flex items-start gap-1 flex-shrink-0"
+      onClick={(e) => e.stopPropagation()}
+      onMouseDown={(e) => e.stopPropagation()}
+      draggable={false}
+    >
+      {card.atRisk ? (
+        <span
+          title={`At risk: ${card.atRisk.flags.map((f) => f.label).join(", ")}`}
+          aria-label="At risk"
+          className="text-xs leading-none mt-0.5"
+        >
+          🚩
+        </span>
+      ) : null}
+      <div className="flex flex-col items-center gap-1">
+        {masquerade ? (
+          <a
+            href={masquerade}
+            target="_blank"
+            rel="noopener noreferrer"
+            title="Masquerade into workspace"
+            aria-label="Masquerade"
+            className="text-xs leading-none hover:opacity-70"
+          >
+            👻
+          </a>
+        ) : null}
+        {hubspot ? (
+          <a
+            href={hubspot}
+            target="_blank"
+            rel="noopener noreferrer"
+            title="Open company in HubSpot"
+            aria-label="HubSpot"
+            className="text-[9px] font-bold leading-none text-[#ff7a59] hover:opacity-70"
+          >
+            HS
+          </a>
+        ) : null}
+        {onDraft ? (
+          <button
+            type="button"
+            onClick={() => onDraft(card.customer)}
+            title="Draft outreach (template picker)"
+            aria-label="Draft outreach"
+            className="text-xs leading-none hover:opacity-70"
+          >
+            ✉️
+          </button>
+        ) : null}
+      </div>
     </div>
   );
 }
