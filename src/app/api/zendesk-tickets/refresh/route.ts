@@ -18,9 +18,19 @@ export const maxDuration = 120;
  *     tolerate the "all book" flow so the daily cron can call with
  *     no body and get the whole overlay refreshed.
  *
- * Auth: signed-in CSM. Not admin-gated because refresh is idempotent
- * and only writes into the shared overlay; a CSM triggering their
- * own book's refresh is the common path.
+ * Auth: dual — signed-in CSM, OR `Bearer CRON_SECRET` for the
+ * 6-hourly zendesk-refresh workflow. Not admin-gated because refresh
+ * is idempotent and only writes into the shared overlay; a CSM
+ * triggering their own book's refresh is the common path.
+ *
+ * The Bearer path is why this file changed. The module docstring on
+ * `zendesk-tickets.ts` has always described a "6-hour cron sweep" and
+ * this route called itself "workflow-gated", but the workflow was
+ * never written AND this handler was session-only, so a cron couldn't
+ * have authenticated even if one existed. The overlay was only ever
+ * populated by someone hitting this endpoint by hand, and a workspace
+ * missing from it renders as "—" — identical to a workspace with no
+ * tickets, which is why nobody noticed.
  *
  * Runs one Metabase Postgres query per scope. On a book of ~1500
  * workspaces this completes well under maxDuration=120s.
@@ -36,8 +46,17 @@ export async function POST(req: Request) {
   try {
     const session = await auth();
     const email = session?.user?.email ?? null;
-    if (!email) {
-      return NextResponse.json({ error: "Sign in required." }, { status: 401 });
+    // Cron callers have no session. Compare against CRON_SECRET the
+    // same way every other scheduled endpoint here does.
+    const cronSecret = process.env.CRON_SECRET;
+    const isCron = Boolean(
+      cronSecret && req.headers.get("authorization") === `Bearer ${cronSecret}`
+    );
+    if (!email && !isCron) {
+      return NextResponse.json(
+        { error: "Sign in or Bearer CRON_SECRET required." },
+        { status: 401 }
+      );
     }
 
     let body: Body = {};
@@ -78,8 +97,10 @@ export async function POST(req: Request) {
     // Best-effort audit — when a CSM triggers a manual refresh for a
     // specific set of workspaces, drop a note on each so the profile
     // Notes surface shows the sweep happened. Skip on the book-wide
-    // path (would flood every customer profile).
-    if (body.workspace_ids && body.workspace_ids.length <= 25) {
+    // path (would flood every customer profile), and on the cron path,
+    // which has no actor to attribute it to and sweeps the whole book
+    // anyway.
+    if (email && body.workspace_ids && body.workspace_ids.length <= 25) {
       try {
         await appendActionLog(
           body.workspace_ids.map((id) => ({
