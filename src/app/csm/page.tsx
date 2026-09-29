@@ -1,3 +1,6 @@
+import Link from "next/link";
+import { CsmSelector } from "@/components/csm-selector";
+import { WorkspaceShell } from "@/components/workspace/workspace-shell";
 import { Suspense } from "react";
 import {
   filterCustomers,
@@ -61,6 +64,12 @@ const TABS_AFTER_LIFECYCLE = [
 ];
 
 interface SP {
+  /** "sweep" renders the legacy tab strip — the cross-account tools
+   *  (At-risk, Renewals, Deliverability, QBR, Wins, Lifecycle, Juliet,
+   *  Feature requests). Anything else, including absent, lands on the
+   *  Workspace. Kept as its own param so `?tab=` deep links from
+   *  Slack digests and bookmarks still resolve once you're in sweep. */
+  view?: string;
   tab?: string;
   /** Sub-tab within the Lifecycle tab — "onboarding" | "live" |
    *  "renewal". Its own param (mirrors how `tab` itself works) so it
@@ -107,6 +116,17 @@ export default async function CsmPage({
   searchParams: Promise<SP>;
 }) {
   const sp = await searchParams;
+  // The Workspace is the CSM dashboard now. The nine-tab strip is not
+  // deleted — it holds every cross-account tool, which the Workspace
+  // (one account at a time, by construction) has no home for — but it
+  // stops being the front door.
+  //
+  // A `?tab=` link with no `?view=` still lands on sweep, so every
+  // deep link already sent out in a digest DM keeps working.
+  const wantsSweep = sp.view === "sweep" || (!sp.view && Boolean(sp.tab));
+  if (!wantsSweep) {
+    return <CsmWorkspace csmParam={sp.csm} />;
+  }
   // Legacy URLs may still link to ?tab=utilization. Feature/ad-network
   // filters now do that drill-down inside the consolidated book view.
   const rawTab = sp.tab ?? "book";
@@ -439,6 +459,13 @@ export default async function CsmPage({
         </p>
       </div>
 
+      <p className="-mt-4 mb-4 text-xs text-muted">
+        Cross-account tools.{" "}
+        <Link href="/csm" className="text-blue-600 dark:text-blue-400 hover:underline">
+          ← Back to your workspace
+        </Link>
+      </p>
+
       <TabBar tabs={TABS} defaultTab="book" />
 
       {error ? (
@@ -450,5 +477,73 @@ export default async function CsmPage({
         body
       )}
     </>
+  );
+}
+
+/**
+ * The Workspace — the CSM dashboard's front door.
+ *
+ * Loads the viewer's book and hands it to the client shell, which
+ * decides per account which blocks are true today. Scoped by the same
+ * `?csm=` param as every other surface.
+ *
+ * Deliberately NOT wrapped in the tab chrome: the whole point is that
+ * there is one place, and a tab strip above it would reintroduce the
+ * question the design exists to remove.
+ */
+async function CsmWorkspace({ csmParam }: { csmParam?: string }) {
+  const session = await auth();
+  const viewerEmail = session?.user?.email ?? null;
+  const requestsEnabled = await isFeatureEnabledFor(
+    "enterprise-requests",
+    viewerEmail
+  );
+
+  let customers: Customer[];
+  let csms: string[];
+  let csm: string | null;
+  try {
+    const all = await loadCustomers();
+    csms = uniqueCsms(all);
+    csm = resolveCsmFilter(csmParam, all, viewerEmail);
+    customers = filterCustomers(all, { csm, segment: "enterprise" });
+  } catch (e) {
+    return (
+      <div className="bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/30 rounded-lg p-4">
+        <p className="text-red-800 dark:text-red-300 font-medium">
+          Failed to load your book
+        </p>
+        <p className="text-red-600 text-sm mt-1">
+          {e instanceof Error ? e.message : String(e)}
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-5">
+      <div className="flex items-end justify-between gap-3 flex-wrap">
+        <div>
+          <p className="text-xs text-muted">
+            {customers.length} accounts
+            {csm ? ` · ${csm.replace(/_/g, " ")}` : ""}
+          </p>
+        </div>
+        <div className="flex items-center gap-3">
+          <Link
+            href="/csm?view=sweep"
+            className="text-xs text-blue-600 dark:text-blue-400 hover:underline"
+          >
+            Sweep across accounts →
+          </Link>
+          <CsmSelector csms={csms} />
+        </div>
+      </div>
+
+      <WorkspaceShell
+        customers={customers}
+        requestsEnabled={requestsEnabled}
+      />
+    </div>
   );
 }
