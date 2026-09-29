@@ -60,16 +60,54 @@ async function authHeaders(): Promise<Record<string, string>> {
   return { "X-Metabase-Session": await getSession() };
 }
 
+/**
+ * Wall-clock cap on a single Metabase request.
+ *
+ * Without one, a query that Metabase itself will never finish just
+ * runs until the serverless function is killed, and the caller gets
+ * Vercel's FUNCTION_INVOCATION_TIMEOUT page — no status, no message,
+ * nothing pointing at which question was slow. Some QBR questions do
+ * exactly this on the largest orgs: "Subscribers to Start" (card
+ * 1850) scans every subscription row for the org before filtering to
+ * one month, which is fine for a one-publication account and hopeless
+ * for a 1,554-publication one.
+ *
+ * 45s so it fires comfortably inside every route's maxDuration and
+ * the caller can turn it into a real error.
+ */
+const METABASE_TIMEOUT_MS = 45_000;
+
+export class MetabaseTimeoutError extends Error {
+  constructor(public readonly path: string) {
+    super(
+      `Metabase did not respond within ${Math.round(
+        METABASE_TIMEOUT_MS / 1000
+      )}s (${path}). The query is too slow to run interactively for this account.`
+    );
+    this.name = "MetabaseTimeoutError";
+  }
+}
+
 async function metabaseFetch(path: string, options: RequestInit = {}) {
   const doFetch = async () => {
     const auth = await authHeaders();
+    // AbortSignal.timeout rather than a manual controller: it clears
+    // itself, so a slow-but-successful request can't leak a timer.
     return fetch(`${baseUrl()}${path}`, {
       ...options,
+      signal: AbortSignal.timeout(METABASE_TIMEOUT_MS),
       headers: {
         ...options.headers,
         ...auth,
         "Content-Type": "application/json",
       },
+    }).catch((e) => {
+      // Node raises TimeoutError; older runtimes raise AbortError.
+      const name = e instanceof Error ? e.name : "";
+      if (name === "TimeoutError" || name === "AbortError") {
+        throw new MetabaseTimeoutError(path);
+      }
+      throw e;
     });
   };
 
