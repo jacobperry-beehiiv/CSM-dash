@@ -339,7 +339,20 @@ export function LiveBoard({ cards: initialCards, csms }: Props) {
         showUrgencyColors
         renderCardMeta={(c) => (
           <span className="text-xs text-subtle">
-            Renews {fmtDate(c.customer.contract_renewal)}
+            {c.customer.contract_renewal ? (
+              `Renews ${fmtDate(c.customer.contract_renewal)}`
+            ) : c.stage === MONTHLY_COLUMN ? (
+              // Monthly-billed accounts have no annual contract to
+              // renew — contract_renewal is null by design here (see
+              // its doc comment in types.ts), not missing data, so
+              // showing "Renews -" would misleadingly suggest a blank
+              // field rather than "this account is billed monthly."
+              "Monthly billing"
+            ) : (
+              // Rare: a non-monthly account with no contract date on
+              // file either (same null case, just outside Q4).
+              "No renewal date on file"
+            )}
           </span>
         )}
       />
