@@ -52,7 +52,20 @@ export type TodoSource =
    *  on-card grouping a CSM would use to add one manually.
    *  source_meta.live_quarter + workspace_id form the dedupe key so
    *  a daily re-run doesn't double-fire within the same cycle. */
-  | "live_quarter_checkin";
+  | "live_quarter_checkin"
+  /** Created by the Enterprise Request Loop's weekly digest when a
+   *  request from a CSM's book goes live, so closing the loop with
+   *  the customer lands on their to-do list rather than only in a
+   *  Slack DM they may scroll past. source_meta carries
+   *  workspace_id + linear_issue_id as the dedupe key.
+   *
+   *  NOTE: this member and the `enterprise_request_shipped` entry in
+   *  AUTOMATED_SOURCES (todo-source-configs-types.ts) must move
+   *  together — they were added by one commit and a later merge kept
+   *  one side and dropped this one, which broke `main`. The
+   *  `satisfies ReadonlyArray<TodoSource>` on that array is what
+   *  catches it, so the build will tell you immediately. */
+  | "enterprise_request_shipped";
 
 /** Slack-side provenance carried on rows created from Slack. Filled in
  *  by the inbound webhook so the UI can render a "↗ View in Slack"
