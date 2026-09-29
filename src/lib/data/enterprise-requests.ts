@@ -12,7 +12,10 @@ import type {
   ShippedCursorBlob,
   SlackIntakeCursorBlob,
 } from "./enterprise-requests-types";
-import { linearStateToDerived } from "./enterprise-requests-types";
+import {
+  lastEngagedAt,
+  linearStateToDerived,
+} from "./enterprise-requests-types";
 
 /**
  * Enterprise Request Loop — server-side KV stores.
@@ -68,18 +71,48 @@ const EMPTY_SNAPSHOT: EnterpriseRequestsBlob = {
  * never resolved to a Linear issue) keep whatever they were stored
  * with — re-deriving from an empty string would move them all to
  * Triage on the strength of nothing.
+ *
+ * The same pass computes `last_engaged_at`, for the same reason: it's
+ * a max over fields already on the rows, so deriving it here keeps it
+ * correct without a resync and without every caller re-implementing
+ * the fold.
  */
-function withFreshDerivedState(
+function withDerivedFields(
   blob: EnterpriseRequestsBlob
 ): EnterpriseRequestsBlob {
+  // Pass 1 — newest engagement per ISSUE, not per row.
+  //
+  // Rows fan out one per (workspace, issue), so a CSM attaching a
+  // second customer to an old ticket creates a row over here while the
+  // original customer's row over there keeps its months-old date. The
+  // ticket was engaged with; both rows should say so. Max across every
+  // workspace's row for the issue gives that.
+  const newestByIssue = new Map<string, string>();
+  for (const bucket of Object.values(blob.rows ?? {})) {
+    for (const row of Object.values(bucket)) {
+      const at = lastEngagedAt(row);
+      if (!at) continue;
+      const current = newestByIssue.get(row.linear_issue_id);
+      if (!current || at > current) {
+        newestByIssue.set(row.linear_issue_id, at);
+      }
+    }
+  }
+
+  // Pass 2 — stamp both computed fields.
   const rows: EnterpriseRequestsBlob["rows"] = {};
   for (const [workspaceId, bucket] of Object.entries(blob.rows ?? {})) {
     const next: (typeof rows)[string] = {};
     for (const [issueId, row] of Object.entries(bucket)) {
       const stateType = row.linear_state_type?.trim();
-      next[issueId] = stateType
-        ? { ...row, derived_state: linearStateToDerived(stateType) }
-        : row;
+      next[issueId] = {
+        ...row,
+        ...(stateType
+          ? { derived_state: linearStateToDerived(stateType) }
+          : null),
+        last_engaged_at:
+          newestByIssue.get(row.linear_issue_id) ?? lastEngagedAt(row),
+      };
     }
     rows[workspaceId] = next;
   }
@@ -89,7 +122,7 @@ function withFreshDerivedState(
 export async function loadEnterpriseRequestsSnapshot(): Promise<EnterpriseRequestsBlob> {
   const blob = await kvGet<EnterpriseRequestsBlob>(SNAPSHOT_KEY);
   if (!blob) return EMPTY_SNAPSHOT;
-  return withFreshDerivedState(blob);
+  return withDerivedFields(blob);
 }
 
 export async function saveEnterpriseRequestsSnapshot(

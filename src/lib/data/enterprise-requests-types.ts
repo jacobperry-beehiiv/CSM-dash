@@ -243,6 +243,29 @@ export interface EnterpriseRequestRow {
   /** When that release post went out (from the Slack `ts`, which is
    *  always a reliable epoch — unlike the human "Deployed by …" line). */
   devs_shipped_at?: string | null;
+  /**
+   * Newest comment seen on the Linear ISSUE, across every comment —
+   * not just the ones that resolved to a customer.
+   *
+   * Issue-level, so it's the same value on every workspace's row for
+   * that ticket. Written by the comment-scan, which already walks
+   * comments; a dev note, a PM question and a CSM adding a second
+   * customer all count. Only open issues are walked, so this stops
+   * moving once a ticket completes — `linear_completed_at` covers the
+   * tail.
+   */
+  last_comment_at?: string | null;
+  /**
+   * When anyone last did anything to this request — computed, never
+   * stored authoritatively. See `lastEngagedAt()`.
+   *
+   * The problem it solves: an old ticket that a CSM just attached a
+   * new customer to looked months stale, because the only date on
+   * screen was when the request was first logged. REQ-2928 was filed
+   * in March and picked up a new customer on 24 Sep; nothing in the
+   * view said so.
+   */
+  last_engaged_at?: string | null;
   /** Ship metadata — populated by the shipped-sweep engine. */
   promotion_source: PromotionSource | null;
   promoted_at: string | null;
@@ -617,6 +640,47 @@ export function isLive(
  * by the old engine and never re-synced, so the Live requests tab
  * doesn't lose its existing history the day this ships.
  */
+/**
+ * Newest engagement timestamp for one row.
+ *
+ * "Engaged" is deliberately broad — the question a CSM is asking is
+ * "has anything happened on this lately?", and the answer shouldn't
+ * depend on which mechanism happened to carry it:
+ *
+ *   • `submitted_at`        — this customer's need / intake comment /
+ *                             Slack post. For a row created by the
+ *                             comment-scan this IS the comment date.
+ *   • `last_comment_at`     — newest comment anywhere on the issue,
+ *                             which catches re-engagement on a ticket
+ *                             the customer was ALREADY attached to
+ *                             (no new row, so `submitted_at` wouldn't
+ *                             move).
+ *   • `linear_completed_at` — shipping it is engagement too, and
+ *                             without this a just-delivered request
+ *                             would read as stale.
+ *
+ * Deliberately NOT the issue's `updatedAt`: that bumps on label,
+ * assignee and state edits, so one bulk relabel would light up the
+ * whole board as freshly engaged.
+ */
+export function lastEngagedAt(
+  row: Pick<
+    EnterpriseRequestRow,
+    "submitted_at" | "last_comment_at" | "linear_completed_at"
+  >
+): string | null {
+  let newest: string | null = null;
+  for (const candidate of [
+    row.submitted_at,
+    row.last_comment_at,
+    row.linear_completed_at,
+  ]) {
+    if (!candidate) continue;
+    if (!newest || candidate > newest) newest = candidate;
+  }
+  return newest;
+}
+
 export function liveAt(
   row: Pick<EnterpriseRequestRow, "linear_completed_at" | "promoted_at">
 ): string | null {

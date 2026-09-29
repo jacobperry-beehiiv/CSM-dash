@@ -67,6 +67,11 @@ export interface LinearCommentScanResult {
   injected: number;
   skipped_no_customer_signal: number;
   skipped_unresolvable: number;
+  /** Rows whose `last_comment_at` this run moved forward. Counts rows,
+   *  not issues — one comment on a ticket with four attached customers
+   *  stamps four. Reported so a run that resolved nothing still shows
+   *  it did engagement work. */
+  engagement_stamped: number;
   cursor_advanced_to: string | null;
   backfill: boolean;
   ok: boolean;
@@ -266,6 +271,7 @@ export async function runLinearCommentScan(
     injected: 0,
     skipped_no_customer_signal: 0,
     skipped_unresolvable: 0,
+    engagement_stamped: 0,
     cursor_advanced_to: cursor.scan_after,
     backfill,
     ok: true,
@@ -286,6 +292,10 @@ export async function runLinearCommentScan(
   }
   const collected: CollectedComment[] = [];
   const allPubIds: string[] = [];
+  /** issue id → newest comment createdAt seen this run. Feeds
+   *  `last_comment_at`, which is issue-level: it gets stamped on every
+   *  workspace's row for the ticket, not just ones this run resolved. */
+  const newestCommentByIssue = new Map<string, string>();
 
   const maxPages = backfill ? MAX_PAGES_BACKFILL : MAX_PAGES_INCREMENTAL;
   let after: string | null = null;
@@ -338,6 +348,23 @@ export async function runLinearCommentScan(
       for (const c of issue.comments?.nodes ?? []) {
         result.processed_comments += 1;
         if (!localMaxTs || c.updatedAt > localMaxTs) localMaxTs = c.updatedAt;
+        // Engagement tracking, separate from the intake parse below.
+        // EVERY comment counts here — a dev note, a PM question, a CSM
+        // attaching a second customer. The parse further down only
+        // cares about comments carrying a customer signal, but "when
+        // was this ticket last touched" shouldn't require one.
+        //
+        // createdAt, not updatedAt: editing a two-year-old comment
+        // shouldn't read as fresh engagement. Not gated on the
+        // incremental cutoff either — we want the true newest comment
+        // on the issue, and the 20 we're handed are cheap to fold.
+        if (
+          c.createdAt &&
+          (!newestCommentByIssue.has(issue.id) ||
+            c.createdAt > (newestCommentByIssue.get(issue.id) as string))
+        ) {
+          newestCommentByIssue.set(issue.id, c.createdAt);
+        }
         // Incremental cutoff — orderBy is by issue.updatedAt DESC
         // in Linear (Linear defaults to DESC on `updatedAt` orderBy),
         // so once every comment on a page is older than our cutoff
@@ -431,6 +458,31 @@ export async function runLinearCommentScan(
     rows[workspaceId] = bucket;
     result.injected += 1;
   }
+
+  // ── Engagement stamp ────────────────────────────────────────────
+  // Separate pass, and deliberately AFTER the injection pass so rows
+  // created above get stamped too.
+  //
+  // This is the half that makes an old ticket read as recently
+  // engaged. The injection pass only touches workspaces a comment
+  // RESOLVED to; a comment on a ticket whose customers are already
+  // attached resolves to rows that already exist, and one that
+  // resolves to nobody is skipped entirely. In both cases the ticket
+  // was still worked on, and every row for it should say so.
+  let engagementStamped = 0;
+  for (const [issueId, commentAt] of newestCommentByIssue) {
+    for (const [workspaceId, bucket] of Object.entries(rows)) {
+      const row = bucket[issueId];
+      if (!row) continue;
+      if (row.last_comment_at && row.last_comment_at >= commentAt) continue;
+      rows[workspaceId] = {
+        ...bucket,
+        [issueId]: { ...row, last_comment_at: commentAt },
+      };
+      engagementStamped += 1;
+    }
+  }
+  result.engagement_stamped = engagementStamped;
 
   result.completed_tail_active = completedTailActive();
 

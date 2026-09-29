@@ -8,6 +8,7 @@ import {
 import {
   hasDevsShippedMatch,
   isLive,
+  lastEngagedAt,
   liveAt,
   resolveConfidence,
 } from "@/lib/data/enterprise-requests-types";
@@ -114,6 +115,11 @@ interface TicketGroup {
   /** Newest promoted_at across attached customers — the ship moment
    *  for the ticket as a whole. Drives sort + the window filter. */
   promoted_at: string | null;
+  /** Newest engagement across every customer attached to this ticket —
+   *  a need logged, a comment added, or the ship. What the list sorts
+   *  by, so a months-old request that someone touched yesterday
+   *  surfaces instead of sinking. */
+  last_engaged_at: string | null;
   customers: GroupCustomer[];
   customer_count: number;
   /** How many attached customers sit in the requested scope. Lets the
@@ -254,6 +260,7 @@ export async function GET(req: Request) {
     let inScopeCount = 0;
     let totalArr = 0;
     let newestPromotedAt: string | null = null;
+    let newestEngagedAt: string | null = null;
     // Representative row for the ticket-level fields. Every row for
     // the same issue carries identical Linear metadata (the fan-out
     // only varies the customer side), so the first is as good as any
@@ -277,6 +284,10 @@ export async function GET(req: Request) {
       const rowLiveAt = liveAt(row);
       if (!newestPromotedAt || (rowLiveAt ?? "") > newestPromotedAt) {
         newestPromotedAt = rowLiveAt;
+      }
+      const rowEngagedAt = row.last_engaged_at ?? lastEngagedAt(row);
+      if (rowEngagedAt && (!newestEngagedAt || rowEngagedAt > newestEngagedAt)) {
+        newestEngagedAt = rowEngagedAt;
       }
       groupCustomers.push({
         workspace_id: workspaceId,
@@ -325,6 +336,7 @@ export async function GET(req: Request) {
       ship_url: head.ship_url,
       ship_date: head.ship_date,
       promoted_at: newestPromotedAt,
+      last_engaged_at: newestEngagedAt,
       customers: groupCustomers,
       customer_count: groupCustomers.length,
       in_scope_count: inScopeCount,
@@ -332,12 +344,16 @@ export async function GET(req: Request) {
     });
   }
 
-  // Newest ship first.
-  // Newest first. In `all` mode most rows have no promoted_at, so fall
-  // back to the newest submission date across attached customers —
-  // otherwise every un-shipped request would sort as an equal blank.
+  // Most recently engaged first.
+  //
+  // Was "newest ship, falling back to newest submission", which buried
+  // exactly the rows worth seeing: a request filed in March that a CSM
+  // attached a new customer to last week sorted by March. Engagement
+  // folds the ship date, the submission dates and any comment activity
+  // into one key, so recency means recency.
   groups.sort((a, b) => {
     const key = (g: TicketGroup) =>
+      g.last_engaged_at ??
       g.promoted_at ??
       g.customers.reduce<string>(
         (max, c) => ((c.submitted_at ?? "") > max ? c.submitted_at ?? "" : max),

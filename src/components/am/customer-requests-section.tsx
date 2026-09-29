@@ -349,6 +349,20 @@ export function CustomerRequestsSection({
                             {row.ship_date
                               ? ` · Shipped ${fmtDate(row.ship_date)}`
                               : ""}
+                            {/* Only worth printing when it differs from
+                                the submission date — on a request
+                                nobody has touched since, repeating the
+                                same day adds noise. */}
+                            {row.last_engaged_at &&
+                            fmtDate(row.last_engaged_at) !==
+                              fmtDate(row.submitted_at) ? (
+                              <span
+                                title="Most recent activity on this ticket — another customer attached, a comment added, or the ship."
+                              >
+                                {" · Last engaged "}
+                                {fmtDate(row.last_engaged_at)}
+                              </span>
+                            ) : null}
                             {row.ship_url ? (
                               <>
                                 {" · "}

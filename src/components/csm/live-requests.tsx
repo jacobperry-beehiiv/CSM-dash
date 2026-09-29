@@ -70,6 +70,7 @@ interface TicketGroup {
   ship_url: string | null;
   ship_date: string | null;
   promoted_at: string | null;
+  last_engaged_at: string | null;
   customers: GroupCustomer[];
   customer_count: number;
   in_scope_count: number;
@@ -493,6 +494,23 @@ function GroupCard({
             ) : (
               <span>Submitted {fmtDate(oldestSubmittedAt(group))}</span>
             )}
+            {/* The list sorts by this, so it has to be on screen —
+                otherwise an old ticket sitting at the top looks like a
+                sorting bug rather than something that was just worked
+                on. Suppressed when it matches the date already shown,
+                to avoid printing the same day twice. */}
+            {group.last_engaged_at &&
+            fmtDate(group.last_engaged_at) !==
+              fmtDate(
+                group.ship_date ?? group.promoted_at ?? oldestSubmittedAt(group)
+              ) ? (
+              <span
+                className="rounded bg-canvas border border-border px-1 py-0.5 text-[9px] text-fg"
+                title="Most recent activity on this ticket — a customer attached, a comment added, or the ship. This is what the list is sorted by."
+              >
+                Last engaged {fmtDate(group.last_engaged_at)}
+              </span>
+            ) : null}
             {group.work_type ? <span>· {group.work_type}</span> : null}
             <span
               className="rounded bg-canvas border border-border px-1 py-0.5 text-[9px] text-fg"
