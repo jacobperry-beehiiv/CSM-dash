@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import type { Customer } from "@/lib/types";
 import { fmtDate, fmtCurrency } from "../format";
+import { CsmSelector } from "../csm-selector";
 import { OutreachModal } from "../outreach-modal";
 import {
   ConfidenceExplainer,
@@ -55,15 +56,21 @@ interface TicketGroup {
   title: string;
   url: string;
   derived_state: EnterpriseRequestDerivedState;
+  linear_state_name: string;
+  linear_state_type: string;
   work_type: WorkTypeLabel | null;
   promotion_source: PromotionSource | null;
   promotion_confidence: PromotionConfidence;
+  devs_shipped_match: boolean;
+  devs_shipped_url: string | null;
+  devs_shipped_at: string | null;
   needs_review_reason: NeedsReviewReason | null;
   reviewed_by: string | null;
   reviewed_at: string | null;
   ship_url: string | null;
   ship_date: string | null;
   promoted_at: string | null;
+  last_engaged_at: string | null;
   customers: GroupCustomer[];
   customer_count: number;
   in_scope_count: number;
@@ -80,9 +87,30 @@ interface ApiResponse {
   last_synced_at: string;
 }
 
+const ALL_STATES = [
+  "Triage",
+  "Backlog",
+  "Todo",
+  "In progress",
+  "Done (live in app)",
+  "Canceled",
+  "Duplicate",
+] as const;
+
 interface Props {
-  /** CSM handle (or email) to scope to. Empty = the viewer. */
+  /** "shipped" — the outreach queue: rows Linear marks live in the
+   *  app, inside a recency window. "all" — the book's whole request
+   *  inventory in every state. Same grouping either way; the mode
+   *  changes which rows the API returns and which controls make sense
+   *  to show. */
+  mode?: "shipped" | "all";
+  /** CSM handle (or email) to scope to, already resolved server-side
+   *  by `resolveCsmFilter`. `null` means the page resolved to "all
+   *  CSMs" — either because `?csm=all` is set, or because the viewer
+   *  isn't in the book at all. */
   csmParam: string | null;
+  /** Every CSM handle in the book, for the scope dropdown. */
+  csms: string[];
   /** Book indexed by workspace_id so the Draft-outreach modal can
    *  open with the full Customer record without an extra fetch. */
   customersByWorkspace: Record<string, Customer>;
@@ -95,14 +123,22 @@ const WINDOW_OPTIONS: Array<{ value: string; label: string }> = [
   { value: "all", label: "All time" },
 ];
 
-export function LiveRequests({ csmParam, customersByWorkspace }: Props) {
+export function LiveRequests({
+  mode = "shipped",
+  csmParam,
+  csms,
+  customersByWorkspace,
+}: Props) {
+  const isAll = mode === "all";
   const [data, setData] = useState<ApiResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [windowKey, setWindowKey] = useState("30d");
-  const [scopeAll, setScopeAll] = useState(false);
+  const [windowKey, setWindowKey] = useState(mode === "all" ? "all" : "30d");
+  const [states, setStates] = useState<string[]>([]);
   const [showNotified, setShowNotified] = useState(false);
-  const [includeNeedsReview, setIncludeNeedsReview] = useState(false);
+  // Opt-in narrowing: "show me only the ones a release post confirms".
+  // Off by default — the tab shows everything Linear calls live.
+  const [shipMatchedOnly, setShipMatchedOnly] = useState(false);
   const [drafting, setDrafting] = useState<{
     group: TicketGroup;
     customer: GroupCustomer;
@@ -113,10 +149,17 @@ export function LiveRequests({ csmParam, customersByWorkspace }: Props) {
     setLoading(true);
     setError(null);
     const qs = new URLSearchParams();
-    qs.set("csm", scopeAll ? "all" : (csmParam ?? ""));
+    // `csmParam` is null when the page resolved to "all CSMs". Send
+    // the explicit sentinel rather than an empty string: the API
+    // treats a blank `csm` as "fall back to the viewer", which would
+    // silently re-scope the view to your own book the moment someone
+    // picked All CSMs.
+    qs.set("csm", csmParam ?? "all");
     qs.set("window", windowKey);
+    if (isAll) qs.set("mode", "all");
+    if (isAll && states.length > 0) qs.set("states", states.join(","));
     if (showNotified) qs.set("include_notified", "1");
-    if (includeNeedsReview) qs.set("confidence", "all");
+    if (shipMatchedOnly) qs.set("confidence", "confirmed");
     fetch(`/api/enterprise-requests/live-requests?${qs}`, {
       cache: "no-store",
     })
@@ -133,7 +176,7 @@ export function LiveRequests({ csmParam, customersByWorkspace }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [csmParam, windowKey, scopeAll, showNotified, includeNeedsReview]);
+  }, [csmParam, windowKey, showNotified, shipMatchedOnly, isAll, states]);
 
   /** Patch one customer's notified state inside the grouped shape. */
   function patchNotified(
@@ -193,17 +236,43 @@ export function LiveRequests({ csmParam, customersByWorkspace }: Props) {
   return (
     <div className="space-y-4">
       <p className="text-sm text-muted max-w-prose">
-        Feature requests that shipped, grouped by Linear ticket so you
-        can see every customer who asked for it. Draft a note to close
-        the loop, then check Notified so the row drops off the weekly
-        digest.
+        {isAll ? (
+          <>
+            Every feature request logged against your book, grouped by
+            Linear ticket so you can see each customer who asked for it.
+            States mirror Linear&rsquo;s own —{" "}
+            <strong>Done (live in app)</strong> is the delivered bucket,
+            and each row there also says whether a{" "}
+            <code className="font-mono">#devs-shipped</code> release post
+            was matched to the ticket. Sorted and filtered by{" "}
+            <strong>last engaged</strong>, so an old request someone
+            attached a customer to this week surfaces rather than
+            sinking to the bottom.
+          </>
+        ) : (
+          <>
+            Requests Linear marks <strong>Done (live in app)</strong>,
+            grouped by ticket so you can see every customer who asked
+            for it. Draft a note to close the loop, then check Notified
+            so the row drops off the weekly digest. Rows badged{" "}
+            <strong>no ship post matched</strong> are worth verifying
+            first.
+          </>
+        )}
       </p>
 
       <ConfidenceExplainer />
 
       <div className="flex flex-wrap items-center gap-3 rounded-lg border border-border bg-surface px-3 py-2">
-        <label className="inline-flex items-center gap-1.5 text-xs text-fg">
-          <span className="text-muted">Shipped</span>
+        <label
+          className="inline-flex items-center gap-1.5 text-xs text-fg"
+          title={
+            isAll
+              ? "Filters on the last time anything happened on the request — a customer attached, a comment added, or the ship. Not when it was filed."
+              : "Filters on when the request went live."
+          }
+        >
+          <span className="text-muted">{isAll ? "Engaged" : "Shipped"}</span>
           <select
             value={windowKey}
             onChange={(e) => setWindowKey(e.currentTarget.value)}
@@ -217,14 +286,14 @@ export function LiveRequests({ csmParam, customersByWorkspace }: Props) {
           </select>
         </label>
 
-        <label className="inline-flex items-center gap-1.5 text-xs text-fg cursor-pointer select-none">
-          <input
-            type="checkbox"
-            checked={scopeAll}
-            onChange={(e) => setScopeAll(e.currentTarget.checked)}
-            className="h-3.5 w-3.5 rounded border-border-strong cursor-pointer"
-          />
-          All accounts (not just my book)
+        {/* Scope. Replaces an "All accounts" checkbox that could only
+            say me-or-everyone, and which silently overrode the page's
+            own ?csm= when ticked. The shared selector is what every
+            other tab uses, it writes the same URL param, and picking
+            "All CSMs" reproduces exactly what the checkbox did. */}
+        <label className="inline-flex items-center gap-1.5 text-xs text-fg">
+          <span className="text-muted">CSM</span>
+          <CsmSelector csms={csms} />
         </label>
 
         <label className="inline-flex items-center gap-1.5 text-xs text-fg cursor-pointer select-none">
@@ -239,16 +308,47 @@ export function LiveRequests({ csmParam, customersByWorkspace }: Props) {
 
         <label
           className="inline-flex items-center gap-1.5 text-xs text-fg cursor-pointer select-none"
-          title="Include ships we couldn't confidently call customer-visible. These are withheld from the weekly digest and normally live in the review queue — verify before telling a customer."
+          title="Narrow to requests where a #devs-shipped release post carried the Linear ticket, so the code is provably out. Off by default — everything Linear marks live in the app shows here."
         >
           <input
             type="checkbox"
-            checked={includeNeedsReview}
-            onChange={(e) => setIncludeNeedsReview(e.currentTarget.checked)}
+            checked={shipMatchedOnly}
+            onChange={(e) => setShipMatchedOnly(e.currentTarget.checked)}
             className="h-3.5 w-3.5 rounded border-border-strong cursor-pointer"
           />
-          Include unconfirmed
+          Only ship-matched
         </label>
+
+        {isAll ? (
+          <div className="flex flex-wrap items-center gap-1.5 w-full">
+            <span className="text-[11px] uppercase tracking-wide text-subtle w-14 shrink-0">
+              State
+            </span>
+            {ALL_STATES.map((st) => {
+              const on = states.includes(st);
+              return (
+                <button
+                  key={st}
+                  type="button"
+                  onClick={() =>
+                    setStates((prev) =>
+                      prev.includes(st)
+                        ? prev.filter((v) => v !== st)
+                        : [...prev, st]
+                    )
+                  }
+                  className={`px-2 py-0.5 rounded-full text-[11px] border transition-colors ${
+                    on
+                      ? "bg-accent text-accent-fg border-accent"
+                      : "bg-surface text-fg border-border-strong hover:bg-canvas"
+                  }`}
+                >
+                  {st}
+                </button>
+              );
+            })}
+          </div>
+        ) : null}
 
         {data ? (
           <span className="ml-auto text-[11px] text-muted">
@@ -267,8 +367,18 @@ export function LiveRequests({ csmParam, customersByWorkspace }: Props) {
         </div>
       ) : !data || data.groups.length === 0 ? (
         <p className="text-sm text-muted italic">
-          Nothing shipped in this window. Try widening the date range or
-          turning on &ldquo;All accounts&rdquo;.
+          {isAll ? (
+            <>
+              No requests match these filters. Try clearing the state
+              chips, widening the date range, or switching the CSM to
+              &ldquo;All CSMs&rdquo;.
+            </>
+          ) : (
+            <>
+              Nothing went live in this window. Try widening the date
+              range or switching the CSM to &ldquo;All CSMs&rdquo;.
+            </>
+          )}
         </p>
       ) : (
         <div className="space-y-3">
@@ -310,10 +420,12 @@ export function LiveRequests({ csmParam, customersByWorkspace }: Props) {
               : drafting.group.promoted_at
                 ? fmtDate(drafting.group.promoted_at)
                 : null,
-            beta_caveat:
-              drafting.group.derived_state === "Live, possibly in beta"
-                ? "This is currently in beta rollout — happy to share more if you'd like early access."
-                : "",
+            // Reuses the existing `beta_caveat` merge tag so templates
+            // don't need rewriting; it now fires on the weaker signal
+            // (live per Linear, no release post found).
+            beta_caveat: drafting.group.devs_shipped_match
+              ? ""
+              : "This may still be rolling out — worth confirming before you promise a date.",
           }}
           onDraftLifecycle={(state) => {
             if (state === "drafted" || state === "sent") {
@@ -345,6 +457,19 @@ export function LiveRequests({ csmParam, customersByWorkspace }: Props) {
   );
 }
 
+/** Oldest submission across the customers attached to a ticket — the
+ *  "this has been asked since" date, used when a request has no ship
+ *  date to show. */
+function oldestSubmittedAt(group: TicketGroup): string | null {
+  let oldest: string | null = null;
+  for (const c of group.customers) {
+    const at = c.submitted_at;
+    if (!at) continue;
+    if (!oldest || at < oldest) oldest = at;
+  }
+  return oldest;
+}
+
 function GroupCard({
   group,
   customersByWorkspace,
@@ -369,20 +494,64 @@ function GroupCard({
             {group.linear_identifier}: {group.title}
           </a>
           <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[10px] text-muted">
-            <span>Shipped {fmtDate(group.ship_date ?? group.promoted_at)}</span>
-            {group.work_type ? <span>· {group.work_type}</span> : null}
-            {group.derived_state === "Live, possibly in beta" ? (
-              <span className="rounded border border-amber-400 bg-amber-50 dark:bg-amber-500/10 px-1 py-0.5 text-amber-800 dark:text-amber-200 text-[9px] font-semibold">
-                POSSIBLY IN BETA
+            {/* `all` mode lists requests that have never shipped, so
+                the date only renders when there is one — otherwise
+                every open request reads "Shipped -". */}
+            {group.ship_date || group.promoted_at ? (
+              <span>
+                Shipped {fmtDate(group.ship_date ?? group.promoted_at)}
+              </span>
+            ) : (
+              <span>Submitted {fmtDate(oldestSubmittedAt(group))}</span>
+            )}
+            {/* The list sorts by this, so it has to be on screen —
+                otherwise an old ticket sitting at the top looks like a
+                sorting bug rather than something that was just worked
+                on. Suppressed when it matches the date already shown,
+                to avoid printing the same day twice. */}
+            {group.last_engaged_at &&
+            fmtDate(group.last_engaged_at) !==
+              fmtDate(
+                group.ship_date ?? group.promoted_at ?? oldestSubmittedAt(group)
+              ) ? (
+              <span
+                className="rounded bg-canvas border border-border px-1 py-0.5 text-[9px] text-fg"
+                title="Most recent activity on this ticket — a customer attached, a comment added, or the ship. This is what the list is sorted by."
+              >
+                Last engaged {fmtDate(group.last_engaged_at)}
               </span>
             ) : null}
-            {group.promotion_confidence !== "confirmed" ? (
-              <span
-                className="rounded border border-red-400 bg-red-50 dark:bg-red-500/10 px-1 py-0.5 text-red-800 dark:text-red-200 text-[9px] font-semibold"
-                title="Not confirmed customer-visible — withheld from the weekly digest. Verify before telling a customer."
-              >
-                UNCONFIRMED
-              </span>
+            {group.work_type ? <span>· {group.work_type}</span> : null}
+            <span
+              className="rounded bg-canvas border border-border px-1 py-0.5 text-[9px] text-fg"
+              title={`Linear state: ${group.linear_state_name}`}
+            >
+              {group.derived_state}
+            </span>
+            {/* The ship-corroboration flag. Linear owns the state
+                badge above; this one answers the separate question of
+                whether a #devs-shipped release post carried the
+                ticket. Only meaningful on delivered rows. */}
+            {group.derived_state === "Done (live in app)" ? (
+              group.devs_shipped_match ? (
+                <span
+                  className="rounded border border-emerald-400 bg-emerald-50 dark:bg-emerald-500/10 px-1 py-0.5 text-[9px] font-semibold text-emerald-800 dark:text-emerald-200"
+                  title={
+                    group.devs_shipped_at
+                      ? `Matched to a #devs-shipped release post on ${fmtDate(group.devs_shipped_at)}.`
+                      : "Matched to a release post in #devs-shipped."
+                  }
+                >
+                  SHIP MATCHED ✓
+                </span>
+              ) : (
+                <span
+                  className="rounded border border-slate-400 bg-slate-50 dark:bg-slate-500/10 px-1 py-0.5 text-[9px] font-semibold text-slate-700 dark:text-slate-200"
+                  title="Linear says this is live in the app, but no #devs-shipped post carrying the ticket was found. Either the release wasn't parsed or the ticket was closed without the code going out — verify before telling a customer."
+                >
+                  NO SHIP POST MATCHED
+                </span>
+              )
             ) : null}
             {group.ship_url ? (
               <a
@@ -407,21 +576,28 @@ function GroupCard({
         </div>
       </div>
 
-      <div
-        className={`mt-1.5 text-[10px] leading-snug ${
-          group.promotion_confidence === "confirmed"
-            ? "text-muted"
-            : "text-red-700 dark:text-red-300"
-        }`}
-      >
-        {confidenceBasis({
-          confidence: group.promotion_confidence,
-          source: group.promotion_source,
-          work_type: group.work_type,
-          needs_review_reason: group.needs_review_reason,
-          reviewed_by: group.reviewed_by,
-        })}
-      </div>
+      {/* The basis line only makes sense on a delivered row — on an
+          open request there's nothing to be sure about yet. Amber, not
+          red: an unmatched ship is a "double-check this", not an
+          error. */}
+      {group.derived_state === "Done (live in app)" ? (
+        <div
+          className={`mt-1.5 text-[10px] leading-snug ${
+            group.devs_shipped_match
+              ? "text-muted"
+              : "text-amber-700 dark:text-amber-300"
+          }`}
+        >
+          {confidenceBasis({
+            confidence: group.promotion_confidence,
+            source: group.promotion_source,
+            work_type: group.work_type,
+            needs_review_reason: group.needs_review_reason,
+            reviewed_by: group.reviewed_by,
+            devsShippedMatch: group.devs_shipped_match,
+          })}
+        </div>
+      ) : null}
 
       <ul className="mt-2 space-y-1">
         {group.customers.map((c) => {
@@ -430,8 +606,14 @@ function GroupCard({
             c.company_name ??
             c.workspace_name ??
             c.workspace_id;
+          // The outreach template is "your request shipped" — offering
+          // it on a request still in Triage (or one that was canceled)
+          // hands the CSM a note they can't send. `shipped` mode is
+          // all-delivered by construction; `all` mode is not.
           const canDraft =
-            c.in_scope && Boolean(customersByWorkspace[c.workspace_id]);
+            c.in_scope &&
+            Boolean(customersByWorkspace[c.workspace_id]) &&
+            group.derived_state === "Done (live in app)";
           return (
             <li
               key={c.workspace_id}

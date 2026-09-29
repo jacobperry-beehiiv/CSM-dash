@@ -12,7 +12,12 @@ import type {
   EnterpriseRequestRow,
   NotifiedEntry,
 } from "../data/enterprise-requests-types";
-import { resolveConfidence } from "../data/enterprise-requests-types";
+import {
+  hasDevsShippedMatch,
+  isLive,
+  liveAt,
+  resolveConfidence,
+} from "../data/enterprise-requests-types";
 import { applyTodoOps, getTodosForUser } from "../personal-todos/store";
 import { userKeyFromEmail } from "../personal-todos/identity";
 import { newTodoId, type PersonalTodo } from "../personal-todos/types";
@@ -54,7 +59,10 @@ export interface DigestRowSummary {
   url: string;
   ship_url: string | null;
   promoted_at: string;
-  beta: boolean;
+  /** Did we match this ticket to a #devs-shipped release post? Shown
+   *  in the DM so a CSM knows whether "live" is corroborated by a
+   *  deploy we can point at, or is Linear's word alone. */
+  devs_shipped_match: boolean;
 }
 
 export interface DigestPerCsm {
@@ -113,7 +121,9 @@ function composeMessage(
   const header = `:package: *Enterprise Request Loop — shipped this week*\nHi ${humanCsm(per.csm_handle).split(" ")[0]}, ${rows.length} feature request${rows.length === 1 ? "" : "s"} from your book shipped in the last 7 days. Draft outreach so we close the loop with the customer.`;
   const bullets = rows.slice(0, 10).map((r) => {
     const linkedTitle = `<${r.url}|${r.linear_identifier}: ${r.title}>`;
-    const beta = r.beta ? " _(possibly in beta)_" : "";
+    const beta = r.devs_shipped_match
+      ? ""
+      : " _(no ship post matched — confirm before sending)_";
     const shipLink = r.ship_url ? ` — <${r.ship_url}|ship link>` : "";
     const account = r.workspace_name ? `*${r.workspace_name}*` : "(unknown)";
     return `• ${account}: ${linkedTitle}${beta}${shipLink}`;
@@ -212,21 +222,23 @@ export async function runEnterpriseRequestsDigest(
     const sentBucket =
       sent.sent[(meta.csm_email ?? meta.csm_handle).toLowerCase()] ?? {};
     for (const row of Object.values(bucket) as EnterpriseRequestRow[]) {
-      if (!row.promoted_at) continue;
-      const promotedAt = Date.parse(row.promoted_at);
-      if (!Number.isFinite(promotedAt) || promotedAt < cutoff) continue;
-      // Confidence gate. Only unambiguous ships reach a CSM's DMs:
-      // an exact changelog link, or a #devs-shipped hit on a Bug /
-      // UI-UX ticket. Features seen only in #devs-shipped, fuzzy
-      // changelog matches, and tickets whose work type we couldn't
-      // resolve all sit in the exceptions queue until a human
-      // confirms them — a late notification is recoverable, a CSM
-      // telling a customer "your request shipped" about something
-      // still behind a flag is not.
-      if (resolveConfidence(row) !== "confirmed") {
-        skippedNeedsReview += 1;
-        continue;
-      }
+      // Linear decides what's live. Anything short of it isn't news.
+      if (!isLive(row)) continue;
+      const wentLive = liveAt(row);
+      if (!wentLive) continue;
+      const liveMs = Date.parse(wentLive);
+      if (!Number.isFinite(liveMs) || liveMs < cutoff) continue;
+      // No confidence gate on the way out any more.
+      //
+      // It used to sit here, and it was the reason CSMs heard almost
+      // nothing: a ship had to be an exact changelog link or a
+      // #devs-shipped hit on a Bug/UI-UX ticket, and in practice
+      // neither fired. Linear's "Done (live in app)" is a person
+      // asserting the customer can use it, which is a better signal
+      // than anything we were inferring. Rows with no matching ship
+      // post still go out — flagged as such in the message, so the
+      // CSM can check before they send rather than never hearing.
+      if (!hasDevsShippedMatch(row)) skippedNeedsReview += 1;
       const entry: NotifiedEntry = notifiedBucket[row.linear_issue_id] ?? {};
       if (entry.notified_at) continue;
       if (sentBucket[row.linear_issue_id]) continue; // Already DM'd.
@@ -238,8 +250,8 @@ export async function runEnterpriseRequestsDigest(
         title: row.title,
         url: row.url,
         ship_url: row.ship_url,
-        promoted_at: row.promoted_at,
-        beta: row.derived_state === "Live, possibly in beta",
+        promoted_at: wentLive,
+        devs_shipped_match: hasDevsShippedMatch(row),
       };
       const list = byCsm.get(meta.csm_handle) ?? [];
       list.push(arr);
@@ -249,24 +261,28 @@ export async function runEnterpriseRequestsDigest(
 
   // ── Review-queue nudge to one ops channel.
   //
-  // Deliberately NOT per-CSM: these are ships we deliberately withheld
-  // from CSMs, so pushing them at CSMs would defeat the gate. One
-  // person clears the queue; confirming a row there makes it eligible
-  // for next week's digest, which is what actually notifies.
+  // The queue's meaning changed with the model. It used to hold ships
+  // we were withholding from CSMs pending review. Nothing is withheld
+  // now — the queue is a reconciliation list: requests Linear says are
+  // live in the app where we never found a matching #devs-shipped
+  // post. That's either a ship we failed to parse, or a ticket closed
+  // out without the code actually going out. Both are worth a look,
+  // neither should block the CSM hearing about it.
   //
-  // Counted across the whole snapshot rather than the 7-day window —
-  // the queue's problem is rows accumulating unreviewed, and a stale
-  // row is exactly the one worth nagging about.
+  // Deliberately NOT per-CSM: it's one person's sweep, not N people's
+  // inbox. Counted across the whole snapshot rather than the 7-day
+  // window — the problem is rows accumulating unreconciled.
   let reviewQueueDepth = 0;
   let oldestPendingAt: string | null = null;
   for (const bucket of Object.values(snapshot.rows)) {
     for (const row of Object.values(bucket) as EnterpriseRequestRow[]) {
-      if (!row.promoted_at) continue;
-      if (resolveConfidence(row) === "confirmed") continue;
+      if (!isLive(row)) continue;
+      if (hasDevsShippedMatch(row)) continue;
       if (row.review?.decision === "dismissed") continue;
+      const wentLive = liveAt(row);
       reviewQueueDepth += 1;
-      if (!oldestPendingAt || row.promoted_at < oldestPendingAt) {
-        oldestPendingAt = row.promoted_at;
+      if (wentLive && (!oldestPendingAt || wentLive < oldestPendingAt)) {
+        oldestPendingAt = wentLive;
       }
     }
   }

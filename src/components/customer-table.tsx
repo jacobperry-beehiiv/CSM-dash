@@ -48,7 +48,7 @@ import {
   techStackChoices,
 } from "@/lib/data/profile-field-options-types";
 
-type SortKey = keyof CustomerWithMetrics | "features_enabled";
+type SortKey = keyof CustomerWithMetrics | "features_enabled" | "requests";
 type SortDir = "asc" | "desc";
 
 interface ColumnDef {
@@ -103,6 +103,9 @@ const COLUMNS: ColumnDef[] = [
   { key: "property_risk_level", label: "Risk", width: "w-[8%]", showAt: "md" },
   { key: "next_invoice", label: "Next charge", width: "w-[8%]", showAt: "md" },
   { key: "last_send", label: "Last send", width: "w-[7%]", showAt: "lg" },
+  // Enterprise Request Loop counts. Synthetic like features_enabled —
+  // not a Customer field, resolved from the open-workspaces fetch.
+  { key: "requests", label: "Requests", width: "w-[7%]", align: "right", showAt: "xl" },
   // 8% comfortably fits "Jan 27, 2026" on one line at every viewport
   // we render at.
   { key: "property_notes_last_contacted", label: "Last contacted", width: "w-[8%]", showAt: "xl" },
@@ -328,6 +331,11 @@ export function CustomerTable({
   const [openRequestIds, setOpenRequestIds] = useState<Set<string> | null>(
     null
   );
+  /** Per-workspace request tallies backing the Requests column.
+   *  Empty until the open-workspaces fetch lands. */
+  const [requestCounts, setRequestCounts] = useState<
+    Record<string, { open: number; shipped: number; total: number }>
+  >({});
   const [openRequestsChipOn, setOpenRequestsChipOn] = useState(false);
   const [openRequestsLoading, setOpenRequestsLoading] = useState(false);
   // "Has Zendesk tickets" chip — narrows the book to workspaces
@@ -403,31 +411,44 @@ export function CustomerTable({
     []
   );
 
-  // Lazy-fetch the open-requests set the first time the chip goes
-  // on. The endpoint is scoped to the viewer's book by default, so
-  // no `csm` param needed. Re-fetches whenever the chip toggles from
-  // off → on so a fresh sync's data is visible without a page reload.
+  // One fetch on mount (when the flag is on) feeding BOTH the filter
+  // chip's membership set and the Requests column's per-workspace
+  // counts. This used to be lazy — deferred until the chip was first
+  // toggled on — which was right when the chip was the only consumer.
+  // A column renders on every row, so the data is needed regardless
+  // and deferring it would just make the column pop in late.
   useEffect(() => {
-    if (!openRequestsChipOn || !requestsEnabled) return;
+    if (!requestsEnabled) return;
     let cancelled = false;
     setOpenRequestsLoading(true);
     fetch("/api/enterprise-requests/open-workspaces", { cache: "no-store" })
       .then(async (r) => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        return (await r.json()) as { open_workspace_ids: string[] };
+        return (await r.json()) as {
+          open_workspace_ids: string[];
+          counts?: Record<
+            string,
+            { open: number; shipped: number; total: number }
+          >;
+        };
       })
       .then((body) => {
-        if (!cancelled) setOpenRequestIds(new Set(body.open_workspace_ids));
+        if (cancelled) return;
+        setOpenRequestIds(new Set(body.open_workspace_ids));
+        setRequestCounts(body.counts ?? {});
       })
       .catch((e) => {
         console.warn("[open-requests] fetch failed", e);
-        if (!cancelled) setOpenRequestIds(new Set());
+        if (!cancelled) {
+          setOpenRequestIds(new Set());
+          setRequestCounts({});
+        }
       })
       .finally(() => !cancelled && setOpenRequestsLoading(false));
     return () => {
       cancelled = true;
     };
-  }, [openRequestsChipOn, requestsEnabled]);
+  }, [requestsEnabled]);
 
   const featureWorkspaceIds = useMemo(
     () =>
@@ -520,12 +541,13 @@ export function CustomerTable({
     }
 
     list = [...list].sort((a, b) => {
-      const av = pickSortValue(a, sortKey, {
-        gmailDateFor: (c) => gmailDateFor(c),
-      });
-      const bv = pickSortValue(b, sortKey, {
-        gmailDateFor: (c) => gmailDateFor(c),
-      });
+      const sortOpts = {
+        gmailDateFor: (c: Customer) => gmailDateFor(c),
+        openRequestsFor: (c: Customer) =>
+          c.workspace_id ? requestCounts[c.workspace_id]?.open : undefined,
+      };
+      const av = pickSortValue(a, sortKey, sortOpts);
+      const bv = pickSortValue(b, sortKey, sortOpts);
       if (av == null && bv == null) return 0;
       if (av == null) return 1;
       if (bv == null) return -1;
@@ -1019,6 +1041,31 @@ export function CustomerTable({
         return (
           <span className="text-muted text-xs">{fmtDate(c.last_send)}</span>
         );
+      case "requests": {
+        if (!requestsEnabled) return <span className="text-subtle">—</span>;
+        const t = c.workspace_id ? requestCounts[c.workspace_id] : undefined;
+        if (!t || t.total === 0) {
+          return <span className="text-subtle text-xs">—</span>;
+        }
+        return (
+          <span
+            className="text-xs tabular-nums"
+            title={`${t.total} logged request${t.total === 1 ? "" : "s"} · ${t.open} still open · ${t.shipped} shipped`}
+          >
+            <span className="text-fg">{t.open}</span>
+            <span className="text-subtle"> open</span>
+            {t.shipped > 0 ? (
+              <>
+                <span className="text-subtle"> · </span>
+                <span className="text-emerald-700 dark:text-emerald-300">
+                  {t.shipped}
+                </span>
+                <span className="text-subtle"> live</span>
+              </>
+            ) : null}
+          </span>
+        );
+      }
       case "property_notes_last_contacted": {
         // Resolve max(HubSpot activity rollup, notes_last_contacted,
         // Gmail). Gmail overlay comes from the per-CSM /api/last-
@@ -1435,9 +1482,20 @@ export function CustomerTable({
 function pickSortValue(
   c: CustomerWithMetrics,
   key: SortKey,
-  opts?: { gmailDateFor?: (c: Customer) => string | undefined }
+  opts?: {
+    gmailDateFor?: (c: Customer) => string | undefined;
+    /** Open-request count for the synthetic "requests" column. Passed
+     *  in rather than read off the customer because the counts live in
+     *  component state (fetched from open-workspaces), not on the
+     *  Customer record — same reason gmailDateFor is injected. */
+    openRequestsFor?: (c: Customer) => number | undefined;
+  }
 ): unknown {
   if (key === "features_enabled") return featureCounts(c).active;
+  // Sort on open count — the number the column leads with. Without
+  // this the synthetic key falls through to c["requests"], which is
+  // undefined for every row, and the header click does nothing.
+  if (key === "requests") return opts?.openRequestsFor?.(c) ?? 0;
   // Sort the "Last contacted" column by the merged date — including
   // the Gmail overlay when the parent passed gmailDateFor — so what
   // the user sees and sorts on match.

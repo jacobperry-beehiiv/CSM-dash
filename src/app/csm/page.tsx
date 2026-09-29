@@ -166,7 +166,10 @@ export default async function CsmPage({
       ? [{ id: "wins" as const, label: "Wins & Opportunities" }]
       : []),
     ...(requestsEnabled
-      ? [{ id: "live-requests" as const, label: "Live requests" }]
+      ? [
+          { id: "all-requests" as const, label: "All requests" },
+          { id: "live-requests" as const, label: "Live requests" },
+        ]
       : []),
   ];
 
@@ -356,7 +359,7 @@ export default async function CsmPage({
         .filter((c) => c.workspace_id && flaggedIds.has(c.workspace_id))
         .map((c) => ({ customer: c, flag: flagMap[c.workspace_id as string] }));
       body = <JulietFlagList rows={rows} />;
-    } else if (tab === "live-requests") {
+    } else if (tab === "all-requests" || tab === "live-requests") {
       if (!requestsEnabled) {
         body = (
           <div className="text-sm text-muted italic">
@@ -377,7 +380,14 @@ export default async function CsmPage({
         for (const c of all) {
           if (c.workspace_id) byWs[c.workspace_id] = c;
         }
-        body = <LiveRequests csmParam={csm} customersByWorkspace={byWs} />;
+        body = (
+          <LiveRequests
+            mode={tab === "all-requests" ? "all" : "shipped"}
+            csmParam={csm}
+            csms={csms}
+            customersByWorkspace={byWs}
+          />
+        );
       }
     } else if (tab === "wins") {
       if (!winsEnabled) {

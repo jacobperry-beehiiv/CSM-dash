@@ -82,9 +82,9 @@ export function ExceptionsReview({ rows }: Props) {
   if (rows.length === 0) {
     return (
       <div className="rounded-lg border border-border bg-surface p-6 text-sm text-muted">
-        Nothing waiting on review. Every shipped signal in the snapshot
-        either cleared the confidence bar automatically or has already
-        been decided.
+        Nothing to reconcile. Every request Linear calls live either
+        has a matching #devs-shipped release post or has already been
+        decided here.
       </div>
     );
   }
@@ -194,7 +194,7 @@ export function ExceptionsReview({ rows }: Props) {
                           type="button"
                           onClick={() => void decide(row, "dismissed")}
                           disabled={st?.saving}
-                          title="Not a customer-visible ship. Drops the Live badge off the customer profile."
+                          title="The code never went out — the ticket was closed without a ship. Drops the delivered badge off the customer profile."
                           className="px-2 py-1 border border-border-strong text-fg rounded-md text-xs font-medium hover:bg-canvas disabled:opacity-50"
                         >
                           Dismiss

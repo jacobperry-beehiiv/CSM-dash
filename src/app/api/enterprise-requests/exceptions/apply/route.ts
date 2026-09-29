@@ -15,13 +15,20 @@ export const dynamic = "force-dynamic";
  * decision is `"confirmed"` or `"dismissed"`.
  *
  *   • confirmed — we believe the ship is real and customer-visible.
- *     Flips `promotion_confidence`, which makes the row eligible for
- *     the next weekly digest. This endpoint deliberately does NOT
- *     send anything itself: the digest owns CSM notification, and
+ *     Records that a human vouched for the ship even though no
+ *     #devs-shipped post corroborates it, and takes the row out of the
+ *     reconciliation queue. This endpoint deliberately does NOT send
+ *     anything itself: the digest owns CSM notification, and
  *     duplicating that here would bypass its dedupe blob.
- *   • dismissed — not a customer-visible ship. Records the decision
- *     and drops `derived_state` back to the Linear-derived bucket so
- *     the customer profile stops showing a Live badge.
+ *   • dismissed — the code never went out; the ticket was closed
+ *     without a ship. Records the decision and drops `derived_state`
+ *     back to the Linear-derived bucket.
+ *
+ * NOTE: since Linear owns state, `dismissed` re-deriving from
+ * `linear_state_type` is a no-op in the common case (it lands right
+ * back on the same completed bucket). It stays because the recorded
+ * decision is what removes the row from the queue, and because a
+ * Linear state that has since changed should be picked up.
  *
  * Session-auth + `enterprise-requests` flag, same gate as the rest of
  * the loop's admin surfaces.

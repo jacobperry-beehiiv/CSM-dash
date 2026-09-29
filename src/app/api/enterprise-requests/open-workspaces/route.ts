@@ -3,6 +3,7 @@ import { auth } from "@/auth";
 import { loadCustomers } from "@/lib/data/load-customers";
 import { loadEnterpriseRequestsSnapshot } from "@/lib/data/enterprise-requests";
 import {
+  isLive,
   OPEN_STATE_TYPES,
   type EnterpriseRequestRow,
 } from "@/lib/data/enterprise-requests-types";
@@ -70,12 +71,30 @@ export async function GET(req: Request) {
   const cutoff = Date.now() - SEVEN_DAYS_MS;
   const open = new Set<string>();
   const notifiedGap = new Set<string>();
+  // Per-workspace tallies for the customer-table column. The Sets
+  // above stay as they are — the filter chip is keyed on membership,
+  // and changing its contract to feed a new column would be a
+  // gratuitous break.
+  const counts: Record<
+    string,
+    { open: number; shipped: number; total: number }
+  > = {};
   for (const workspaceId of scoped) {
     const bucket = snapshot.rows[workspaceId];
     if (!bucket) continue;
     for (const row of Object.values(bucket) as EnterpriseRequestRow[]) {
+      const t = (counts[workspaceId] ??= { open: 0, shipped: 0, total: 0 });
+      t.total += 1;
       if (OPEN_STATE_TYPES.has(row.linear_state_type)) {
         open.add(workspaceId);
+        t.open += 1;
+      }
+      // "shipped" = Linear says the request is live in the app. The
+      // #devs-shipped match is recorded per row but doesn't gate this
+      // count; a request can be delivered without its ticket appearing
+      // in a release post we parsed.
+      if (isLive(row)) {
+        t.shipped += 1;
       }
       if (row.promoted_at) {
         const promotedAt = Date.parse(row.promoted_at);
@@ -95,6 +114,7 @@ export async function GET(req: Request) {
   return NextResponse.json({
     csm: csmParam || viewerEmail.toLowerCase(),
     open_workspace_ids: [...open],
+    counts,
     live_this_week_workspace_ids: [...notifiedGap],
     last_synced_at: snapshot.fetched_at,
   });

@@ -4,9 +4,11 @@ import {
   loadEnterpriseRequestsSnapshot,
   loadNotifiedOverlay,
 } from "@/lib/data/enterprise-requests";
-import type {
-  EnterpriseRequestRow,
-  NotifiedEntry,
+import {
+  CLOSED_STATES,
+  isLive,
+  type EnterpriseRequestRow,
+  type NotifiedEntry,
 } from "@/lib/data/enterprise-requests-types";
 
 export const dynamic = "force-dynamic";
@@ -50,15 +52,17 @@ export async function GET(req: Request) {
     ...r,
     notified: notifiedBucket[r.linear_issue_id] ?? {},
   }));
-  // Outstanding = anything not in a shipped or dismissed state.
-  // Delivered = anything currently in a Live bucket. (Not planned
-  // counts as neither; it's just "off the table.")
+  // Delivered = Linear says it's live in the app.
+  // Outstanding = still somewhere in the pipeline. Canceled and
+  // Duplicate count as neither — they're off the table, and counting
+  // them as outstanding is what made dismissed requests read to a CSM
+  // as still-open asks.
   let outstanding = 0;
   let delivered = 0;
   for (const r of rows) {
-    if (r.derived_state === "Live" || r.derived_state === "Live, possibly in beta") {
+    if (isLive(r)) {
       delivered += 1;
-    } else if (r.derived_state === "Open" || r.derived_state === "In progress") {
+    } else if (!CLOSED_STATES.has(r.derived_state)) {
       outstanding += 1;
     }
   }

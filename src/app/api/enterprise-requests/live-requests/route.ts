@@ -5,7 +5,13 @@ import {
   loadEnterpriseRequestsSnapshot,
   loadNotifiedOverlay,
 } from "@/lib/data/enterprise-requests";
-import { resolveConfidence } from "@/lib/data/enterprise-requests-types";
+import {
+  hasDevsShippedMatch,
+  isLive,
+  lastEngagedAt,
+  liveAt,
+  resolveConfidence,
+} from "@/lib/data/enterprise-requests-types";
 import type {
   CustomerImpactLabel,
   EnterpriseRequestDerivedState,
@@ -80,9 +86,23 @@ interface TicketGroup {
   title: string;
   url: string;
   derived_state: EnterpriseRequestDerivedState;
+  /** Linear's own state, carried alongside the derived bucket.
+   *
+   *  `linearStateToDerived` maps Linear `completed` to "In progress"
+   *  on purpose — merged is not released, and only the shipped-sweep
+   *  may promote to Live. Correct, but it means a genuinely-Done
+   *  ticket renders as "In progress" until a Slack ship post is
+   *  matched. In an inventory view that reads as a bug, so the raw
+   *  state travels with the row and the UI shows both. */
+  linear_state_name: string;
+  linear_state_type: string;
   work_type: WorkTypeLabel | null;
   promotion_source: PromotionSource | null;
   promotion_confidence: PromotionConfidence;
+  /** Yes/no: did a #devs-shipped release post carry this ticket? */
+  devs_shipped_match: boolean;
+  devs_shipped_url: string | null;
+  devs_shipped_at: string | null;
   needs_review_reason: NeedsReviewReason | null;
   /** Set when a human cleared this row out of the exceptions queue.
    *  Lets the UI distinguish "confirmed by rule" from "a person
@@ -95,6 +115,11 @@ interface TicketGroup {
   /** Newest promoted_at across attached customers — the ship moment
    *  for the ticket as a whole. Drives sort + the window filter. */
   promoted_at: string | null;
+  /** Newest engagement across every customer attached to this ticket —
+   *  a need logged, a comment added, or the ship. What the list sorts
+   *  by, so a months-old request that someone touched yesterday
+   *  surfaces instead of sinking. */
+  last_engaged_at: string | null;
   customers: GroupCustomer[];
   customer_count: number;
   /** How many attached customers sit in the requested scope. Lets the
@@ -117,8 +142,25 @@ export async function GET(req: Request) {
   const includeNotified = url.searchParams.get("include_notified") === "1";
   const windowKey = url.searchParams.get("window") ?? "30d";
   const windowMs = windowKey in WINDOW_MS ? WINDOW_MS[windowKey] : WINDOW_MS["30d"];
-  const confidenceParam = url.searchParams.get("confidence") ?? "confirmed";
-  const confirmedOnly = confidenceParam !== "all";
+  // Default flipped from "confirmed" to "all" with the move to
+  // Linear-owned state. It used to mean "only rows Slack corroborated",
+  // which in practice hid nearly every delivered request and made this
+  // tab look empty. Narrowing to ship-matched rows is now opt-in.
+  const confidenceParam = url.searchParams.get("confidence") ?? "all";
+  const confirmedOnly = confidenceParam === "confirmed";
+  // mode=shipped (default) — the outreach queue: only rows the
+  // shipped-sweep promoted, inside a recency window.
+  // mode=all — the book's whole request inventory regardless of
+  // whether anything shipped, which is the question "what has my book
+  // asked for, and where does it stand?". Same grouping and customer
+  // attachment either way; only the row filter differs.
+  const mode = url.searchParams.get("mode") === "all" ? "all" : "shipped";
+  // Comma-separated derived_state values. Only meaningful in `all`
+  // mode — in shipped mode the promotion filter already implies it.
+  const stateParam = (url.searchParams.get("states") ?? "").trim();
+  const wantedStates = new Set(
+    stateParam ? stateParam.split(",").map((s) => s.trim()).filter(Boolean) : []
+  );
 
   const [customers, snapshot, notified] = await Promise.all([
     loadCustomers(),
@@ -173,11 +215,42 @@ export async function GET(req: Request) {
   >();
   for (const [workspaceId, bucket] of Object.entries(snapshot.rows)) {
     for (const row of Object.values(bucket) as EnterpriseRequestRow[]) {
-      if (!row.promoted_at) continue;
-      const promotedAt = Date.parse(row.promoted_at);
-      if (!Number.isFinite(promotedAt)) continue;
-      if (cutoff !== null && promotedAt < cutoff) continue;
-      if (confirmedOnly && resolveConfidence(row) !== "confirmed") continue;
+      if (mode === "shipped") {
+        // "Shipped" is now Linear's call, not Slack's: the row is in
+        // the state whose Linear name is "Done (live in app)". The
+        // window runs off when it entered that state.
+        if (!isLive(row)) continue;
+        const wentLive = liveAt(row);
+        if (!wentLive) continue;
+        const liveMs = Date.parse(wentLive);
+        if (!Number.isFinite(liveMs)) continue;
+        if (cutoff !== null && liveMs < cutoff) continue;
+        // `confirmed` now means "we also found a #devs-shipped post
+        // carrying this ticket". Opt-in filter, not a default gate —
+        // gating on it by default is what made this tab look empty.
+        if (confirmedOnly && !hasDevsShippedMatch(row)) continue;
+      } else {
+        // `all` mode ignores shipping entirely — an open request that
+        // will never ship is exactly what this view exists to show.
+        if (wantedStates.size > 0 && !wantedStates.has(row.derived_state)) {
+          continue;
+        }
+        // The window runs off ENGAGEMENT, not submission.
+        //
+        // Submission was the obvious choice and the wrong one: it
+        // answers "what was filed recently", when the question this
+        // view is for is "what has moved recently". REQ-2928 was filed
+        // in March and had a customer attached on 24 Sep — under a
+        // submission window it fell outside 7 days, which is the exact
+        // thing you'd open a 7-day view to find.
+        if (cutoff !== null) {
+          const engagedAt = row.last_engaged_at ?? lastEngagedAt(row);
+          const engagedMs = Date.parse(engagedAt ?? "");
+          // A row with no usable date at all stays rather than being
+          // dropped by a filter it can't be judged against.
+          if (Number.isFinite(engagedMs) && engagedMs < cutoff) continue;
+        }
+      }
       // A dismissed review means we decided this isn't a real
       // customer-visible ship — it shouldn't show up as one.
       if (row.review?.decision === "dismissed") continue;
@@ -195,6 +268,7 @@ export async function GET(req: Request) {
     let inScopeCount = 0;
     let totalArr = 0;
     let newestPromotedAt: string | null = null;
+    let newestEngagedAt: string | null = null;
     // Representative row for the ticket-level fields. Every row for
     // the same issue carries identical Linear metadata (the fan-out
     // only varies the customer side), so the first is as good as any
@@ -215,8 +289,13 @@ export async function GET(req: Request) {
         inScopeCount += 1;
       }
       totalArr += row.arr_snapshot ?? 0;
-      if (!newestPromotedAt || (row.promoted_at ?? "") > newestPromotedAt) {
-        newestPromotedAt = row.promoted_at;
+      const rowLiveAt = liveAt(row);
+      if (!newestPromotedAt || (rowLiveAt ?? "") > newestPromotedAt) {
+        newestPromotedAt = rowLiveAt;
+      }
+      const rowEngagedAt = row.last_engaged_at ?? lastEngagedAt(row);
+      if (rowEngagedAt && (!newestEngagedAt || rowEngagedAt > newestEngagedAt)) {
+        newestEngagedAt = rowEngagedAt;
       }
       groupCustomers.push({
         workspace_id: workspaceId,
@@ -247,9 +326,14 @@ export async function GET(req: Request) {
       title: head.title,
       url: head.url,
       derived_state: head.derived_state,
+      linear_state_name: head.linear_state_name,
+      linear_state_type: head.linear_state_type,
       work_type: head.work_type,
       promotion_source: head.promotion_source,
       promotion_confidence: resolveConfidence(head),
+      devs_shipped_match: hasDevsShippedMatch(head),
+      devs_shipped_url: head.devs_shipped_url ?? null,
+      devs_shipped_at: head.devs_shipped_at ?? null,
       needs_review_reason: head.needs_review_reason ?? null,
       reviewed_by:
         head.review?.decision === "confirmed"
@@ -260,6 +344,7 @@ export async function GET(req: Request) {
       ship_url: head.ship_url,
       ship_date: head.ship_date,
       promoted_at: newestPromotedAt,
+      last_engaged_at: newestEngagedAt,
       customers: groupCustomers,
       customer_count: groupCustomers.length,
       in_scope_count: inScopeCount,
@@ -267,13 +352,27 @@ export async function GET(req: Request) {
     });
   }
 
-  // Newest ship first.
-  groups.sort((a, b) =>
-    (b.promoted_at ?? "").localeCompare(a.promoted_at ?? "")
-  );
+  // Most recently engaged first.
+  //
+  // Was "newest ship, falling back to newest submission", which buried
+  // exactly the rows worth seeing: a request filed in March that a CSM
+  // attached a new customer to last week sorted by March. Engagement
+  // folds the ship date, the submission dates and any comment activity
+  // into one key, so recency means recency.
+  groups.sort((a, b) => {
+    const key = (g: TicketGroup) =>
+      g.last_engaged_at ??
+      g.promoted_at ??
+      g.customers.reduce<string>(
+        (max, c) => ((c.submitted_at ?? "") > max ? c.submitted_at ?? "" : max),
+        ""
+      );
+    return key(b).localeCompare(key(a));
+  });
 
   return NextResponse.json({
     csm: wantAll ? "all" : csmParam || viewerEmail.toLowerCase(),
+    mode,
     window: windowKey in WINDOW_MS ? windowKey : "30d",
     confidence: confirmedOnly ? "confirmed" : "all",
     groups,
