@@ -343,24 +343,25 @@ export function LiveBoard({ cards: initialCards, csms }: Props) {
         }
         showUrgencyColors
         onDraft={setOutreachFor}
-        renderCardMeta={(c) => (
-          <span className="text-xs text-subtle">
-            {c.customer.contract_renewal ? (
-              `Renews ${fmtDate(c.customer.contract_renewal)}`
-            ) : c.stage === MONTHLY_COLUMN ? (
-              // Monthly-billed accounts have no annual contract to
-              // renew — contract_renewal is null by design here (see
-              // its doc comment in types.ts), not missing data, so
-              // showing "Renews -" would misleadingly suggest a blank
-              // field rather than "this account is billed monthly."
-              "Monthly billing"
-            ) : (
-              // Rare: a non-monthly account with no contract date on
-              // file either (same null case, just outside Q4).
-              "No renewal date on file"
-            )}
-          </span>
-        )}
+        // Only the Renewal column shows a renewal-date line at all —
+        // Monthly/Q1/Q2/Q3 already communicate where an account sits
+        // in its cycle via which column it's in, so the date line was
+        // redundant there and just ate vertical space every card needs
+        // for its action-icon row now. A monthly account can never
+        // reach stage "Renewal" (computeLiveQuarter checks that first),
+        // so this never needs a "Monthly billing" fallback here either.
+        renderCardMeta={(c) =>
+          c.stage === "Renewal" ? (
+            <span className="text-xs text-subtle">
+              {c.customer.contract_renewal
+                ? `Renews ${fmtDate(c.customer.contract_renewal)}`
+                : // Rare: arrived via the tenure-fallback bucketing
+                  // (see computeLiveQuarter) with no real contract
+                  // date at all.
+                  "No renewal date on file"}
+            </span>
+          ) : null
+        }
       />
       {openCard ? (
         <LifecycleCardModal card={openCard} onClose={() => setOpenWorkspaceId(null)} />
