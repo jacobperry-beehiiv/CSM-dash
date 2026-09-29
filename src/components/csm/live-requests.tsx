@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import type { Customer } from "@/lib/types";
 import { fmtDate, fmtCurrency } from "../format";
+import { CsmSelector } from "../csm-selector";
 import { OutreachModal } from "../outreach-modal";
 import {
   ConfidenceExplainer,
@@ -102,8 +103,13 @@ interface Props {
    *  changes which rows the API returns and which controls make sense
    *  to show. */
   mode?: "shipped" | "all";
-  /** CSM handle (or email) to scope to. Empty = the viewer. */
+  /** CSM handle (or email) to scope to, already resolved server-side
+   *  by `resolveCsmFilter`. `null` means the page resolved to "all
+   *  CSMs" — either because `?csm=all` is set, or because the viewer
+   *  isn't in the book at all. */
   csmParam: string | null;
+  /** Every CSM handle in the book, for the scope dropdown. */
+  csms: string[];
   /** Book indexed by workspace_id so the Draft-outreach modal can
    *  open with the full Customer record without an extra fetch. */
   customersByWorkspace: Record<string, Customer>;
@@ -119,6 +125,7 @@ const WINDOW_OPTIONS: Array<{ value: string; label: string }> = [
 export function LiveRequests({
   mode = "shipped",
   csmParam,
+  csms,
   customersByWorkspace,
 }: Props) {
   const isAll = mode === "all";
@@ -127,7 +134,6 @@ export function LiveRequests({
   const [error, setError] = useState<string | null>(null);
   const [windowKey, setWindowKey] = useState(mode === "all" ? "all" : "30d");
   const [states, setStates] = useState<string[]>([]);
-  const [scopeAll, setScopeAll] = useState(false);
   const [showNotified, setShowNotified] = useState(false);
   // Opt-in narrowing: "show me only the ones a release post confirms".
   // Off by default — the tab shows everything Linear calls live.
@@ -142,7 +148,12 @@ export function LiveRequests({
     setLoading(true);
     setError(null);
     const qs = new URLSearchParams();
-    qs.set("csm", scopeAll ? "all" : (csmParam ?? ""));
+    // `csmParam` is null when the page resolved to "all CSMs". Send
+    // the explicit sentinel rather than an empty string: the API
+    // treats a blank `csm` as "fall back to the viewer", which would
+    // silently re-scope the view to your own book the moment someone
+    // picked All CSMs.
+    qs.set("csm", csmParam ?? "all");
     qs.set("window", windowKey);
     if (isAll) qs.set("mode", "all");
     if (isAll && states.length > 0) qs.set("states", states.join(","));
@@ -164,7 +175,7 @@ export function LiveRequests({
     return () => {
       cancelled = true;
     };
-  }, [csmParam, windowKey, scopeAll, showNotified, shipMatchedOnly, isAll, states]);
+  }, [csmParam, windowKey, showNotified, shipMatchedOnly, isAll, states]);
 
   /** Patch one customer's notified state inside the grouped shape. */
   function patchNotified(
@@ -264,14 +275,14 @@ export function LiveRequests({
           </select>
         </label>
 
-        <label className="inline-flex items-center gap-1.5 text-xs text-fg cursor-pointer select-none">
-          <input
-            type="checkbox"
-            checked={scopeAll}
-            onChange={(e) => setScopeAll(e.currentTarget.checked)}
-            className="h-3.5 w-3.5 rounded border-border-strong cursor-pointer"
-          />
-          All accounts (not just my book)
+        {/* Scope. Replaces an "All accounts" checkbox that could only
+            say me-or-everyone, and which silently overrode the page's
+            own ?csm= when ticked. The shared selector is what every
+            other tab uses, it writes the same URL param, and picking
+            "All CSMs" reproduces exactly what the checkbox did. */}
+        <label className="inline-flex items-center gap-1.5 text-xs text-fg">
+          <span className="text-muted">CSM</span>
+          <CsmSelector csms={csms} />
         </label>
 
         <label className="inline-flex items-center gap-1.5 text-xs text-fg cursor-pointer select-none">
@@ -345,8 +356,18 @@ export function LiveRequests({
         </div>
       ) : !data || data.groups.length === 0 ? (
         <p className="text-sm text-muted italic">
-          Nothing shipped in this window. Try widening the date range or
-          turning on &ldquo;All accounts&rdquo;.
+          {isAll ? (
+            <>
+              No requests match these filters. Try clearing the state
+              chips, widening the date range, or switching the CSM to
+              &ldquo;All CSMs&rdquo;.
+            </>
+          ) : (
+            <>
+              Nothing went live in this window. Try widening the date
+              range or switching the CSM to &ldquo;All CSMs&rdquo;.
+            </>
+          )}
         </p>
       ) : (
         <div className="space-y-3">

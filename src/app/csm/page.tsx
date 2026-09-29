@@ -384,6 +384,7 @@ export default async function CsmPage({
           <LiveRequests
             mode={tab === "all-requests" ? "all" : "shipped"}
             csmParam={csm}
+            csms={csms}
             customersByWorkspace={byWs}
           />
         );
