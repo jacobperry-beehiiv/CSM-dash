@@ -31,10 +31,12 @@ import { fmtDate } from "../format";
 // No "Unsorted" column here — unlike Onboarding, this board is fully
 // computed (computeLiveQuarter always returns one of these 5 labels,
 // never null), so an Unsorted catch-all would only ever sit empty.
-// "Q4" is the monthly-billed bucket — see live-quarter.ts's module
-// doc comment for why it's kept separate from the Q1→Renewal annual
-// countdown instead of folded in.
-const LIVE_QUARTER_COLUMNS = ["Q1", "Q2", "Q3", MONTHLY_COLUMN, "Renewal"];
+// MONTHLY_COLUMN ("Q4" internally, "Monthly" displayed — see
+// stage-labels.ts) is the monthly-billed bucket, kept separate from
+// the Q1→Renewal annual countdown (see live-quarter.ts's module doc
+// comment) and leads the row rather than sitting inside it, since it
+// isn't really a step in that countdown.
+const LIVE_QUARTER_COLUMNS = [MONTHLY_COLUMN, "Q1", "Q2", "Q3", "Renewal"];
 
 interface Props {
   cards: LifecycleCard[];
