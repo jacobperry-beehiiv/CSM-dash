@@ -125,6 +125,30 @@ export function compareByRenewalDate(a: LifecycleCard, b: LifecycleCard): number
   return da.localeCompare(db);
 }
 
+/** Live board only: same as compareByRenewalDate, except when NEITHER
+ *  card has a real `contract_renewal` — instead of leaving them tied
+ *  (and so stuck in whatever order they happened to load in), breaks
+ *  the tie using the same tenure-in-months approximation
+ *  computeLiveQuarter already used to decide these no-contract-date
+ *  accounts belonged in this quarter bucket in the first place: more
+ *  months into the assumed 12-month cycle sorts first. A large share
+ *  of the "Renewal" column in particular is populated this way (no
+ *  contract on file at all, not just a monthly account), so without
+ *  this they'd otherwise all tie and look unsorted. compareByRenewalDate
+ *  itself keeps its plain "no date sorts last" behavior unchanged —
+ *  other callers (Onboarding board) don't have this tenure concept. */
+function compareByRenewalSignal(a: LifecycleCard, b: LifecycleCard): number {
+  if (a.customer.contract_renewal || b.customer.contract_renewal) {
+    return compareByRenewalDate(a, b);
+  }
+  const ta = a.customer.mon_since_1st_ent;
+  const tb = b.customer.mon_since_1st_ent;
+  if (typeof ta !== "number" && typeof tb !== "number") return 0;
+  if (typeof ta !== "number") return 1;
+  if (typeof tb !== "number") return -1;
+  return (tb % 12) - (ta % 12);
+}
+
 /** Steps that can actually bubble a card up the column or color a
  *  checklist group's header — the ones a CSM would act on today, not
  *  ones already done or intentionally dormant (a future `surface_at`,
@@ -225,8 +249,8 @@ export function urgencyHeaderClass(
  *  due soon bubbles above one with a due-but-later or no-date to-do,
  *  which in turn bubbles above a card with no actionable to-dos at
  *  all — those (and ties within a tier) fall back to
- *  compareByRenewalDate, same ordering the board used before this
- *  existed. */
+ *  compareByRenewalSignal (renewal date, or tenure when there isn't
+ *  one). */
 export function compareByUrgency(
   a: LifecycleCard,
   b: LifecycleCard,
@@ -237,7 +261,7 @@ export function compareByUrgency(
   const ub = cardUrgency(b, today);
   if (ua.tier !== ub.tier) return ua.tier - ub.tier;
   if (ua.tier === 0 && ub.tier === 0) return ua.dueDate.localeCompare(ub.dueDate);
-  return compareByRenewalDate(a, b);
+  return compareByRenewalSignal(a, b);
 }
 
 export function isEditableBy(
