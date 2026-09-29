@@ -88,7 +88,12 @@ export interface LifecycleCard {
    *     item's `completed` is derived fresh from the one current value,
    *     not stored independently. */
   checklist_kind?: "playbook" | "renewal_stage";
-  atRisk: { flags: Pick<RiskFlag, "code" | "label">[]; priorityScore: number } | null;
+  /** Full flags (not just code/label) plus the engine's own
+   *  recommended_action — carries enough for the card-detail modal to
+   *  render the exact same "why this account is flagged" + "mark
+   *  resolved" UI the at-risk table's expanded row already shows (see
+   *  lifecycle-card-modal.tsx), not just a summary tooltip. */
+  atRisk: { flags: RiskFlag[]; priorityScore: number; recommendedAction: string } | null;
   steps: LifecycleStep[];
   /** "renewal_stage" cards only: the same "Live" ongoing-checklist
    *  todos a Q1/Q2/Q3/Q4 card would show, rendered as a second,
@@ -107,8 +112,9 @@ export function atRiskSummary(
 ): LifecycleCard["atRisk"] {
   if (!atRiskAccount) return null;
   return {
-    flags: atRiskAccount.flags.map((f) => ({ code: f.code, label: f.label })),
+    flags: atRiskAccount.flags,
     priorityScore: atRiskAccount.priority_score,
+    recommendedAction: atRiskAccount.recommended_action,
   };
 }
 

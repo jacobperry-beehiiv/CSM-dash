@@ -236,7 +236,7 @@ export function KanbanColumns({
                       <div className="font-medium text-sm text-fg truncate">
                         {c.customer.company_name ?? c.customer.workspace_name}
                       </div>
-                      <CardActions card={c} onDraft={onDraft} />
+                      <CardActions card={c} onCardClick={onCardClick} onDraft={onDraft} />
                     </div>
                     <div className="text-xs text-muted mt-1">
                       {fmtCurrency(c.customer.arr)}
@@ -371,84 +371,104 @@ export function KanbanColumns({
 }
 
 /**
- * Top-right icon cluster on each card: an at-risk flag (if any) beside
- * a small vertical stack of the same Masq/HubSpot/Draft actions the
- * customer table's RowActions offers, just icon-sized rather than
- * full-width labeled buttons — a card this small can't afford three
- * ~90px buttons. No icon library in this repo (see RowActions' own
- * comment), so these are plain glyphs/monograms rather than SVGs.
+ * Top-right icon cluster on each card: a small vertical stack of the
+ * same Masq/HubSpot/Draft actions the customer table's RowActions
+ * offers, each in its own pill so there's a real clickable/tappable
+ * target instead of a bare glyph, plus an at-risk flag pill at the
+ * bottom when the account has one. No icon library in this repo (see
+ * RowActions' own comment), so these are plain glyphs/monograms
+ * rather than SVGs — the pill just gives them a bounded, buttony hit
+ * area at the same glyph size.
  *
- * stopPropagation on both click and mousedown, same as
- * stage-todo-list.tsx's own checklist wrapper — without it, a click
- * here would also fire the card's onClick (opening the detail modal)
- * and, on the draggable Onboarding board, a real anchor/button inside
- * a draggable=true ancestor can still register the mousedown as the
- * start of a card drag rather than a plain click.
+ * Masq/HubSpot/Draft stopPropagation on click (and the whole cluster
+ * stops mousedown) so a click here never also fires the card's own
+ * onClick (opening the detail modal) — same reasoning
+ * stage-todo-list.tsx's checklist wrapper already documents, including
+ * why mousedown needs its own stop on the draggable Onboarding board
+ * (a real anchor/button inside a draggable=true ancestor can still
+ * register the mousedown as the start of a card drag). The at-risk
+ * pill is the one exception: clicking it explicitly calls
+ * `onCardClick` itself — same modal a plain click on the card already
+ * opens, which now shows the "why flagged" + resolve UI up top (see
+ * lifecycle-card-modal.tsx) — so there's no new UI to build here, just
+ * a second way to reach the existing one.
  */
 function CardActions({
   card,
+  onCardClick,
   onDraft,
 }: {
   card: LifecycleCard;
+  onCardClick: (workspaceId: string) => void;
   onDraft?: (customer: Customer) => void;
 }) {
   const masquerade = masqueradeUrl(card.customer.owner_email);
   const hubspot = hubspotCompanyUrl(card.customer.hubspot_company_id);
   if (!card.atRisk && !masquerade && !hubspot && !onDraft) return null;
 
+  const pill =
+    "w-6 h-6 flex-shrink-0 flex items-center justify-center rounded-full border border-border-strong bg-surface-2 hover:bg-canvas hover:border-border transition-colors";
+
   return (
     <div
-      className="flex items-start gap-1 flex-shrink-0"
-      onClick={(e) => e.stopPropagation()}
+      className="flex flex-col items-center gap-1 flex-shrink-0"
       onMouseDown={(e) => e.stopPropagation()}
       draggable={false}
     >
+      {masquerade ? (
+        <a
+          href={masquerade}
+          target="_blank"
+          rel="noopener noreferrer"
+          title="Masquerade into workspace"
+          aria-label="Masquerade"
+          onClick={(e) => e.stopPropagation()}
+          className={`${pill} text-xs leading-none`}
+        >
+          👻
+        </a>
+      ) : null}
+      {hubspot ? (
+        <a
+          href={hubspot}
+          target="_blank"
+          rel="noopener noreferrer"
+          title="Open company in HubSpot"
+          aria-label="HubSpot"
+          onClick={(e) => e.stopPropagation()}
+          className={`${pill} text-[9px] font-bold text-[#ff7a59]`}
+        >
+          HS
+        </a>
+      ) : null}
+      {onDraft ? (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onDraft(card.customer);
+          }}
+          title="Draft outreach (template picker)"
+          aria-label="Draft outreach"
+          className={`${pill} text-xs leading-none`}
+        >
+          ✉️
+        </button>
+      ) : null}
       {card.atRisk ? (
-        <span
-          title={`At risk: ${card.atRisk.flags.map((f) => f.label).join(", ")}`}
-          aria-label="At risk"
-          className="text-xs leading-none mt-0.5"
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onCardClick(card.customer.workspace_id);
+          }}
+          title={`At risk: ${card.atRisk.flags.map((f) => f.label).join(", ")} — click for details`}
+          aria-label="At risk — view details"
+          className={`${pill} text-xs leading-none`}
         >
           🚩
-        </span>
+        </button>
       ) : null}
-      <div className="flex flex-col items-center gap-1">
-        {masquerade ? (
-          <a
-            href={masquerade}
-            target="_blank"
-            rel="noopener noreferrer"
-            title="Masquerade into workspace"
-            aria-label="Masquerade"
-            className="text-xs leading-none hover:opacity-70"
-          >
-            👻
-          </a>
-        ) : null}
-        {hubspot ? (
-          <a
-            href={hubspot}
-            target="_blank"
-            rel="noopener noreferrer"
-            title="Open company in HubSpot"
-            aria-label="HubSpot"
-            className="text-[9px] font-bold leading-none text-[#ff7a59] hover:opacity-70"
-          >
-            HS
-          </a>
-        ) : null}
-        {onDraft ? (
-          <button
-            type="button"
-            onClick={() => onDraft(card.customer)}
-            title="Draft outreach (template picker)"
-            aria-label="Draft outreach"
-            className="text-xs leading-none hover:opacity-70"
-          >
-            ✉️
-          </button>
-        ) : null}
-      </div>
     </div>
   );
 }
