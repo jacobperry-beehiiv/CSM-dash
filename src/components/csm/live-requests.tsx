@@ -98,12 +98,6 @@ const ALL_STATES = [
 ] as const;
 
 interface Props {
-  /** "shipped" — the outreach queue: rows Linear marks live in the
-   *  app, inside a recency window. "all" — the book's whole request
-   *  inventory in every state. Same grouping either way; the mode
-   *  changes which rows the API returns and which controls make sense
-   *  to show. */
-  mode?: "shipped" | "all";
   /** CSM handle (or email) to scope to, already resolved server-side
    *  by `resolveCsmFilter`. `null` means the page resolved to "all
    *  CSMs" — either because `?csm=all` is set, or because the viewer
@@ -124,16 +118,14 @@ const WINDOW_OPTIONS: Array<{ value: string; label: string }> = [
 ];
 
 export function LiveRequests({
-  mode = "shipped",
   csmParam,
   csms,
   customersByWorkspace,
 }: Props) {
-  const isAll = mode === "all";
   const [data, setData] = useState<ApiResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [windowKey, setWindowKey] = useState(mode === "all" ? "all" : "30d");
+  const [windowKey, setWindowKey] = useState("all");
   const [states, setStates] = useState<string[]>([]);
   const [showNotified, setShowNotified] = useState(false);
   // Opt-in narrowing: "show me only the ones a release post confirms".
@@ -156,8 +148,10 @@ export function LiveRequests({
     // picked All CSMs.
     qs.set("csm", csmParam ?? "all");
     qs.set("window", windowKey);
-    if (isAll) qs.set("mode", "all");
-    if (isAll && states.length > 0) qs.set("states", states.join(","));
+    // Always the full inventory. The API still defaults to its old
+    // "shipped" behaviour when this is absent, so it is not optional.
+    qs.set("mode", "all");
+    if (states.length > 0) qs.set("states", states.join(","));
     if (showNotified) qs.set("include_notified", "1");
     if (shipMatchedOnly) qs.set("confidence", "confirmed");
     fetch(`/api/enterprise-requests/live-requests?${qs}`, {
@@ -176,7 +170,7 @@ export function LiveRequests({
     return () => {
       cancelled = true;
     };
-  }, [csmParam, windowKey, showNotified, shipMatchedOnly, isAll, states]);
+  }, [csmParam, windowKey, showNotified, shipMatchedOnly, states]);
 
   /** Patch one customer's notified state inside the grouped shape. */
   function patchNotified(
@@ -236,29 +230,16 @@ export function LiveRequests({
   return (
     <div className="space-y-4">
       <p className="text-sm text-muted max-w-prose">
-        {isAll ? (
-          <>
-            Every feature request logged against your book, grouped by
-            Linear ticket so you can see each customer who asked for it.
-            States mirror Linear&rsquo;s own —{" "}
-            <strong>Done (live in app)</strong> is the delivered bucket,
-            and each row there also says whether a{" "}
-            <code className="font-mono">#devs-shipped</code> release post
-            was matched to the ticket. Sorted and filtered by{" "}
-            <strong>last engaged</strong>, so an old request someone
-            attached a customer to this week surfaces rather than
-            sinking to the bottom.
-          </>
-        ) : (
-          <>
-            Requests Linear marks <strong>Done (live in app)</strong>,
-            grouped by ticket so you can see every customer who asked
-            for it. Draft a note to close the loop, then check Notified
-            so the row drops off the weekly digest. Rows badged{" "}
-            <strong>no ship post matched</strong> are worth verifying
-            first.
-          </>
-        )}
+        Every feature request logged against your book, grouped by
+        Linear ticket so you can see each customer who asked for it.
+        States mirror Linear&rsquo;s own —{" "}
+        <strong>Done (live in app)</strong> is the delivered bucket, and
+        each row there also says whether a{" "}
+        <code className="font-mono">#devs-shipped</code> release post was
+        matched to the ticket. Sorted and filtered by{" "}
+        <strong>last engaged</strong>, so an old request someone attached
+        a customer to this week surfaces rather than sinking to the
+        bottom.
       </p>
 
       <ConfidenceExplainer />
@@ -266,13 +247,9 @@ export function LiveRequests({
       <div className="flex flex-wrap items-center gap-3 rounded-lg border border-border bg-surface px-3 py-2">
         <label
           className="inline-flex items-center gap-1.5 text-xs text-fg"
-          title={
-            isAll
-              ? "Filters on the last time anything happened on the request — a customer attached, a comment added, or the ship. Not when it was filed."
-              : "Filters on when the request went live."
-          }
+          title="Filters on the last time anything happened on the request — a customer attached, a comment added, or the ship. Not when it was filed."
         >
-          <span className="text-muted">{isAll ? "Engaged" : "Shipped"}</span>
+          <span className="text-muted">Engaged</span>
           <select
             value={windowKey}
             onChange={(e) => setWindowKey(e.currentTarget.value)}
@@ -319,11 +296,10 @@ export function LiveRequests({
           Only ship-matched
         </label>
 
-        {isAll ? (
-          <div className="flex flex-wrap items-center gap-1.5 w-full">
-            <span className="text-[11px] uppercase tracking-wide text-subtle w-14 shrink-0">
-              State
-            </span>
+        <div className="flex flex-wrap items-center gap-1.5 w-full">
+          <span className="text-[11px] uppercase tracking-wide text-subtle w-14 shrink-0">
+            State
+          </span>
             {ALL_STATES.map((st) => {
               const on = states.includes(st);
               return (
@@ -347,8 +323,7 @@ export function LiveRequests({
                 </button>
               );
             })}
-          </div>
-        ) : null}
+        </div>
 
         {data ? (
           <span className="ml-auto text-[11px] text-muted">
@@ -367,18 +342,9 @@ export function LiveRequests({
         </div>
       ) : !data || data.groups.length === 0 ? (
         <p className="text-sm text-muted italic">
-          {isAll ? (
-            <>
-              No requests match these filters. Try clearing the state
-              chips, widening the date range, or switching the CSM to
-              &ldquo;All CSMs&rdquo;.
-            </>
-          ) : (
-            <>
-              Nothing went live in this window. Try widening the date
-              range or switching the CSM to &ldquo;All CSMs&rdquo;.
-            </>
-          )}
+          No requests match these filters. Try clearing the state chips,
+          widening the date range, or switching the CSM to &ldquo;All
+          CSMs&rdquo;.
         </p>
       ) : (
         <div className="space-y-3">

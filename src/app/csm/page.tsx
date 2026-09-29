@@ -110,14 +110,15 @@ export default async function CsmPage({
   // Legacy URLs may still link to ?tab=utilization. Feature/ad-network
   // filters now do that drill-down inside the consolidated book view.
   const rawTab = sp.tab ?? "book";
-  // Legacy tab aliases. `live-this-week` is still live in Slack DMs the
-  // weekly digest already sent, so it has to keep resolving after the
-  // rename to `live-requests`.
+  // Legacy tab aliases. Two generations of the requests tab have been
+  // deep-linked from weekly digest DMs that are already sent and can't
+  // be edited — `live-this-week`, then `live-requests` — so both have
+  // to keep resolving to the one that survived.
   const tab =
     rawTab === "utilization"
       ? "book"
-      : rawTab === "live-this-week"
-        ? "live-requests"
+      : rawTab === "live-this-week" || rawTab === "live-requests"
+        ? "all-requests"
         : rawTab;
   const segment: Segment = (sp.segment as Segment) ?? "enterprise";
   const source = getDataSource();
@@ -169,16 +170,17 @@ export default async function CsmPage({
     // lifecycle/wins entries above it are all appended to by different
     // branches, so a conflict resolution that takes one side wholesale
     // silently drops the other's tabs. That already happened once: this
-    // reverted to the old single "Live This Week" entry while the tab
-    // BODY below still dispatched on `all-requests` / `live-requests`,
-    // so All requests became unreachable from the UI and nothing failed
-    // to compile. If you resolve a conflict in this array, check it
-    // against the ids the body actually handles.
+    // reverted to a stale entry while the tab BODY below still
+    // dispatched on the current id, so the tab became unreachable from
+    // the UI and nothing failed to compile. If you resolve a conflict
+    // in this array, check it against the ids the body handles.
+    //
+    // The id stays `all-requests` while the label reads "Feature
+    // requests": the id is in URLs CSMs have bookmarked and in digest
+    // DMs already sent, and renaming it would only add a third alias
+    // to the list above.
     ...(requestsEnabled
-      ? [
-          { id: "all-requests" as const, label: "All requests" },
-          { id: "live-requests" as const, label: "Live requests" },
-        ]
+      ? [{ id: "all-requests" as const, label: "Feature requests" }]
       : []),
   ];
 
@@ -368,7 +370,7 @@ export default async function CsmPage({
         .filter((c) => c.workspace_id && flaggedIds.has(c.workspace_id))
         .map((c) => ({ customer: c, flag: flagMap[c.workspace_id as string] }));
       body = <JulietFlagList rows={rows} />;
-    } else if (tab === "all-requests" || tab === "live-requests") {
+    } else if (tab === "all-requests") {
       if (!requestsEnabled) {
         body = (
           <div className="text-sm text-muted italic">
@@ -391,7 +393,6 @@ export default async function CsmPage({
         }
         body = (
           <LiveRequests
-            mode={tab === "all-requests" ? "all" : "shipped"}
             csmParam={csm}
             csms={csms}
             customersByWorkspace={byWs}
