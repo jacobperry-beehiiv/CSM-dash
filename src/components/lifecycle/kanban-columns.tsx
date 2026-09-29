@@ -232,26 +232,38 @@ export function KanbanColumns({
                       draggable ? "cursor-grab active:cursor-grabbing" : "cursor-pointer"
                     }`}
                   >
-                    {/* CardActions is absolutely positioned (not a flex
-                        sibling of the name) so its 4-pill-tall stack
-                        can't grow this row's height and push the ARR
-                        line down with it — pr-8 on the name reserves
-                        room so its truncated text doesn't run under
-                        the pills. */}
-                    <div className="font-medium text-sm text-fg truncate pr-8">
+                    <div className="font-medium text-sm text-fg truncate">
                       {c.customer.company_name ?? c.customer.workspace_name}
                     </div>
-                    <CardActions card={c} onCardClick={onCardClick} onDraft={onDraft} />
                     <div className="text-xs text-muted mt-1">
                       {fmtCurrency(c.customer.arr)}
                     </div>
-                    <div className="flex items-center justify-between mt-2">
-                      {renderCardMeta ? (
+                    {(() => {
+                      const meta = renderCardMeta ? (
                         renderCardMeta(c)
                       ) : (
                         <StatusBadge value={c.customer.property_company_status} />
-                      )}
-                    </div>
+                      );
+                      // Skip the wrapper entirely when there's nothing
+                      // to show (e.g. Live board's Q1/Q2/Q3/Monthly
+                      // cards) rather than leaving an empty, still-
+                      // margined row between the ARR line and the
+                      // actions row below.
+                      return meta ? (
+                        <div className="flex items-center justify-between mt-2">
+                          {meta}
+                        </div>
+                      ) : null;
+                    })()}
+                    {/* A horizontal row, not a column — its height is
+                        constant regardless of how many icons it holds
+                        (3 vs. 4 with the at-risk pill), so unlike a
+                        vertical stack it can sit safely in normal flow
+                        without risking a fixed-height budget getting
+                        blown by one more icon. See CardActions' own
+                        comment for why it moved off absolute
+                        positioning entirely. */}
+                    <CardActions card={c} onCardClick={onCardClick} onDraft={onDraft} />
                     {onToggleStep ? (
                       c.steps.length === 0 && renderEmptyChecklist ? (
                         renderEmptyChecklist(c)
@@ -375,14 +387,21 @@ export function KanbanColumns({
 }
 
 /**
- * Top-right icon cluster on each card: a small vertical stack of the
- * same Masq/HubSpot/Draft actions the customer table's RowActions
- * offers, each in its own pill so there's a real clickable/tappable
- * target instead of a bare glyph, plus an at-risk flag pill at the
- * bottom when the account has one. No icon library in this repo (see
- * RowActions' own comment), so these are plain glyphs/monograms
- * rather than SVGs — the pill just gives them a bounded, buttony hit
- * area at the same glyph size.
+ * Icon action row on each card: the same Masq/HubSpot/Draft actions
+ * the customer table's RowActions offers, each in its own pill so
+ * there's a real clickable/tappable target instead of a bare glyph,
+ * plus an at-risk flag pill last when the account has one. No icon
+ * library in this repo (see RowActions' own comment), so these are
+ * plain glyphs/monograms rather than SVGs — the pill just gives them
+ * a bounded, buttony hit area at the same glyph size.
+ *
+ * A horizontal row, not a vertical stack, and rendered in normal flow
+ * rather than absolutely positioned — a row's height stays constant
+ * (~1 pill tall) no matter how many pills it holds, so adding the
+ * at-risk pill can't grow it the way a 4-tall column did. That column
+ * (absolutely positioned in the corner) used to overlap the checklist
+ * header below it on at-risk cards, since its height scaled with pill
+ * count but the space reserved for it didn't.
  *
  * Masq/HubSpot/Draft stopPropagation on click (and the whole cluster
  * stops mousedown) so a click here never also fires the card's own
@@ -415,7 +434,7 @@ function CardActions({
 
   return (
     <div
-      className="absolute top-2.5 right-2.5 flex flex-col items-center gap-1"
+      className="flex items-center justify-end gap-1 mt-2"
       onMouseDown={(e) => e.stopPropagation()}
       draggable={false}
     >
