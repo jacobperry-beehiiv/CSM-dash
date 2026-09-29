@@ -1,4 +1,5 @@
 import type { AtRiskAccount, Customer, RiskFlag } from "@/lib/types";
+import { isScheduledFor, todayYmdUtc } from "@/lib/personal-todos/types";
 
 /**
  * Shared card shape rendered by both of the Lifecycle tab's
@@ -122,6 +123,104 @@ export function compareByRenewalDate(a: LifecycleCard, b: LifecycleCard): number
   if (!da) return 1;
   if (!db) return -1;
   return da.localeCompare(db);
+}
+
+/** Steps that can actually bubble a card up the column or color a
+ *  checklist group's header — the ones a CSM would act on today, not
+ *  ones already done or intentionally dormant (a future `surface_at`,
+ *  same "Scheduled" treatment stage-todo-list.tsx already gives
+ *  these). */
+function actionableSteps(steps: LifecycleStep[], today: string): LifecycleStep[] {
+  return steps.filter((s) => !s.completed && !isScheduledFor(s, today));
+}
+
+/** A card's own to-dos, scoped to the array that's actually a "to-do
+ *  list" for this purpose. "renewal_stage" cards' own `steps` are the
+ *  fixed 5-item renewal checklist (no due dates at all) — their ad-hoc
+ *  to-dos live in `liveOngoingSteps` instead. */
+function cardTodoSteps(card: LifecycleCard): LifecycleStep[] {
+  return card.checklist_kind === "renewal_stage" ? card.liveOngoingSteps ?? [] : card.steps;
+}
+
+/** Soonest due date among a set of actionable steps, or undefined if
+ *  none of them carry one. */
+function earliestDueDate(steps: LifecycleStep[]): string | undefined {
+  const dated = steps.filter(
+    (s): s is LifecycleStep & { due_date: string } => Boolean(s.due_date)
+  );
+  if (dated.length === 0) return undefined;
+  return dated.reduce((min, s) => (s.due_date < min ? s.due_date : min), dated[0].due_date);
+}
+
+type CardUrgency =
+  | { tier: 0; dueDate: string }
+  | { tier: 1 }
+  | { tier: 2 };
+
+/** Sort tier for compareByUrgency: 0 = has an actionable to-do with a
+ *  due date (ranked by soonest), 1 = has one but no due date set, 2 =
+ *  no actionable to-dos at all. */
+function cardUrgency(card: LifecycleCard, today: string): CardUrgency {
+  const pending = actionableSteps(cardTodoSteps(card), today);
+  if (pending.length === 0) return { tier: 2 };
+  const dueDate = earliestDueDate(pending);
+  return dueDate ? { tier: 0, dueDate } : { tier: 1 };
+}
+
+function daysBetweenYmd(fromYmd: string, toYmd: string): number {
+  const [fy, fm, fd] = fromYmd.split("-").map(Number);
+  const [ty, tm, td] = toYmd.split("-").map(Number);
+  return Math.round((Date.UTC(ty, tm - 1, td) - Date.UTC(fy, fm - 1, fd)) / 86400000);
+}
+
+/** Pastel background/border classes for a checklist group's header on
+ *  the Live board, banded by how soon its earliest actionable due date
+ *  is (overdue / ≤7d / ≤14d / ≤30d) — undefined (unchanged header)
+ *  when nothing's actionable or nothing actionable has a due date.
+ *  Both light- and dark-mode colors are set explicitly (light bg +
+ *  dark:bg-{color}-500/10, not just a text-color swap) so the chip
+ *  stays legible with the app's dark mode on — see RiskLevelChip's
+ *  "light green" row for the same pattern done right, vs. its
+ *  red/yellow/green rows done wrong. */
+export function urgencyHeaderClass(
+  groupSteps: LifecycleStep[],
+  today: string
+): string | undefined {
+  const dueDate = earliestDueDate(actionableSteps(groupSteps, today));
+  if (!dueDate) return undefined;
+  const days = daysBetweenYmd(today, dueDate);
+  if (days < 0) {
+    return "bg-rose-50 dark:bg-rose-500/10 border-rose-200 dark:border-rose-500/30";
+  }
+  if (days <= 7) {
+    return "bg-orange-50 dark:bg-orange-500/10 border-orange-200 dark:border-orange-500/30";
+  }
+  if (days <= 14) {
+    return "bg-amber-50 dark:bg-amber-500/10 border-amber-200 dark:border-amber-500/30";
+  }
+  if (days <= 30) {
+    return "bg-emerald-50 dark:bg-emerald-500/10 border-emerald-200 dark:border-emerald-500/30";
+  }
+  return undefined;
+}
+
+/** Live board's per-column card order: a card with an actionable to-do
+ *  due soon bubbles above one with a due-but-later or no-date to-do,
+ *  which in turn bubbles above a card with no actionable to-dos at
+ *  all — those (and ties within a tier) fall back to
+ *  compareByRenewalDate, same ordering the board used before this
+ *  existed. */
+export function compareByUrgency(
+  a: LifecycleCard,
+  b: LifecycleCard,
+  now: Date = new Date()
+): number {
+  const today = todayYmdUtc(now);
+  const ua = cardUrgency(a, today);
+  const ub = cardUrgency(b, today);
+  if (ua.tier !== ub.tier) return ua.tier - ub.tier;
+  if (ua.tier === 0 && ub.tier === 0) return ua.dueDate.localeCompare(ub.dueDate);
+  return compareByRenewalDate(a, b);
 }
 
 export function isEditableBy(
