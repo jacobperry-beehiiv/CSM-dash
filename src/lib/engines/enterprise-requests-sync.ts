@@ -54,6 +54,11 @@ export interface SyncResult {
   pulled: number;
   matched: number;
   unmatched: number;
+  /** Rows carried over from the previous snapshot because this sync
+   *  doesn't own them — the slack-intake and linear-comment sweeps do.
+   *  Reported so a run that silently stopped preserving them would be
+   *  visible in the workflow log instead of just losing data. */
+  preserved: number;
   ok: boolean;
   fetched_at: string;
 }
@@ -219,7 +224,44 @@ export async function runEnterpriseRequestsSync(): Promise<SyncResult> {
   const manualMap = manualMapBlob.by_linear_customer_id;
 
   const issues = await fetchAllIssuesWithCustomerNeeds();
+
+  // Seed from the rows this sync does NOT own, then let the
+  // customer_needs pass below overwrite and extend.
+  //
+  // This used to start empty, which quietly deleted every row the
+  // other two sweeps had injected. Those sweeps exist precisely to
+  // cover requests that never got a formal customer_need attached —
+  // a CSM commenting a Publication ID on an old ticket
+  // (`linear_comment`), or posting in
+  // #enterprise-bugs-and-feature-requests (`slack_intake`). Rebuilding
+  // from customer_needs alone wipes exactly the rows that only those
+  // paths can produce.
+  //
+  // It was invisible because the nightly workflow runs sync BEFORE
+  // both sweeps, so a fresh injection reappeared within the same run.
+  // But the sweeps are cursor-based: on the next night they skip
+  // anything older than their cursor, so a row injected on Monday was
+  // deleted on Tuesday and never came back. Symptom was a request
+  // showing up right after a backfill and silently vanishing a day
+  // later.
+  //
+  // Rows tagged `customer_needs` are deliberately NOT carried over:
+  // this pass rebuilds them in full, so dropping them first is what
+  // makes a customer_need removed in Linear disappear here too.
   const rows: EnterpriseRequestsBlob["rows"] = {};
+  for (const [workspaceId, bucket] of Object.entries(prior.rows ?? {})) {
+    const kept: (typeof rows)[string] = {};
+    for (const [issueId, row] of Object.entries(bucket)) {
+      if (row.intake_source && row.intake_source !== "customer_needs") {
+        kept[issueId] = row;
+      }
+    }
+    if (Object.keys(kept).length > 0) rows[workspaceId] = kept;
+  }
+  const preserved = Object.values(rows).reduce(
+    (n, bucket) => n + Object.keys(bucket).length,
+    0
+  );
   const unmatchedBy: Map<string, UnmatchedNeed> = new Map();
   let matched = 0;
 
@@ -326,6 +368,7 @@ export async function runEnterpriseRequestsSync(): Promise<SyncResult> {
     pulled: issues.length,
     matched,
     unmatched: unmatched.length,
+    preserved,
     ok: true,
     fetched_at,
   };
