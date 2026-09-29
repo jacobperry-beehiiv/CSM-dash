@@ -46,10 +46,50 @@ const EMPTY_SNAPSHOT: EnterpriseRequestsBlob = {
   last_run: null,
 };
 
+/**
+ * Re-derive every row's `derived_state` from the Linear state type it
+ * already carries.
+ *
+ * `derived_state` used to accumulate signals from several places — the
+ * Linear state, plus promotions the shipped-sweep applied on top — so
+ * it had to be persisted. It doesn't any more: since Linear took
+ * ownership it is a pure function of `linear_state_type`, which is
+ * stored on the same row.
+ *
+ * Persisting a pure function of a stored field is a trap. When the
+ * mapping changed, every row in the blob kept the state the OLD
+ * mapping computed, and the dashboard went on showing `completed`
+ * tickets as "In progress" until a full nightly sync happened to
+ * rewrite them. Recomputing on load means a mapping change takes
+ * effect immediately, everywhere, with no resync — and writers that
+ * load-modify-save persist the corrected value as a side effect.
+ *
+ * Rows with no `linear_state_type` (very early slack-intake rows that
+ * never resolved to a Linear issue) keep whatever they were stored
+ * with — re-deriving from an empty string would move them all to
+ * Triage on the strength of nothing.
+ */
+function withFreshDerivedState(
+  blob: EnterpriseRequestsBlob
+): EnterpriseRequestsBlob {
+  const rows: EnterpriseRequestsBlob["rows"] = {};
+  for (const [workspaceId, bucket] of Object.entries(blob.rows ?? {})) {
+    const next: (typeof rows)[string] = {};
+    for (const [issueId, row] of Object.entries(bucket)) {
+      const stateType = row.linear_state_type?.trim();
+      next[issueId] = stateType
+        ? { ...row, derived_state: linearStateToDerived(stateType) }
+        : row;
+    }
+    rows[workspaceId] = next;
+  }
+  return { ...blob, rows };
+}
+
 export async function loadEnterpriseRequestsSnapshot(): Promise<EnterpriseRequestsBlob> {
-  return (
-    (await kvGet<EnterpriseRequestsBlob>(SNAPSHOT_KEY)) ?? EMPTY_SNAPSHOT
-  );
+  const blob = await kvGet<EnterpriseRequestsBlob>(SNAPSHOT_KEY);
+  if (!blob) return EMPTY_SNAPSHOT;
+  return withFreshDerivedState(blob);
 }
 
 export async function saveEnterpriseRequestsSnapshot(
