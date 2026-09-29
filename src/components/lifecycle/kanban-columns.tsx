@@ -228,16 +228,20 @@ export function KanbanColumns({
                         : undefined
                     }
                     onClick={() => onCardClick(c.customer.workspace_id)}
-                    className={`bg-surface border border-border rounded-md p-2.5 hover:border-border-strong transition-colors ${
+                    className={`relative bg-surface border border-border rounded-md p-2.5 hover:border-border-strong transition-colors ${
                       draggable ? "cursor-grab active:cursor-grabbing" : "cursor-pointer"
                     }`}
                   >
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="font-medium text-sm text-fg truncate">
-                        {c.customer.company_name ?? c.customer.workspace_name}
-                      </div>
-                      <CardActions card={c} onCardClick={onCardClick} onDraft={onDraft} />
+                    {/* CardActions is absolutely positioned (not a flex
+                        sibling of the name) so its 4-pill-tall stack
+                        can't grow this row's height and push the ARR
+                        line down with it — pr-8 on the name reserves
+                        room so its truncated text doesn't run under
+                        the pills. */}
+                    <div className="font-medium text-sm text-fg truncate pr-8">
+                      {c.customer.company_name ?? c.customer.workspace_name}
                     </div>
+                    <CardActions card={c} onCardClick={onCardClick} onDraft={onDraft} />
                     <div className="text-xs text-muted mt-1">
                       {fmtCurrency(c.customer.arr)}
                     </div>
@@ -411,7 +415,7 @@ function CardActions({
 
   return (
     <div
-      className="flex flex-col items-center gap-1 flex-shrink-0"
+      className="absolute top-2.5 right-2.5 flex flex-col items-center gap-1"
       onMouseDown={(e) => e.stopPropagation()}
       draggable={false}
     >
