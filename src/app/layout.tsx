@@ -63,6 +63,11 @@ const NAV: ReadonlyArray<{
   feature?: FeatureId;
 }> = [
   { href: "/csm", label: "CSM" },
+  {
+    href: "/csm/accounts",
+    label: "Accounts",
+    feature: "accounts-view",
+  },
   { href: "/am", label: "AM" },
   {
     href: "/feature-requests",

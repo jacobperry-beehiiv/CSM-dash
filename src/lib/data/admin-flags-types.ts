@@ -22,7 +22,8 @@ export type FeatureId =
   | "enterprise-requests"
   | "lifecycle-board"
   | "feature-request-board"
-  | "ad-campaigns";
+  | "ad-campaigns"
+  | "accounts-view";
 
 /** Per-feature gate state. Defaults to "unrestricted" — everyone who
  *  passes the feature's own eligibility check (e.g. CSM with Gmail
@@ -217,6 +218,14 @@ export const FEATURE_METADATA: ReadonlyArray<FeatureMetadata> = [
       "Reads the Swarm production replica through Metabase on every load. Restricting also keeps that query off the critical path for people who don't use the view.",
   },
   {
+    id: "accounts-view",
+    label: "Accounts view (three-pane)",
+    description:
+      "An alternative front door at /csm/accounts: saved views on the left, one account list in the middle, a live account preview on the right. The /csm tabs it would eventually replace (At-risk, Renewals, the book) become saved views on the same list rather than separate pages.",
+    eligibility_note:
+      "Ships alongside the existing tabs, not instead of them — the point is to find out which tabs stop getting opened before anything is deleted.",
+  },
+  {
     id: "lifecycle-board",
     label: "Lifecycle board (beta)",
     description:
@@ -299,6 +308,13 @@ export const DEFAULT_FLAGS: AdminFlags = {
     // has been sanity-checked against what the ad network team
     // expects to see.
     "ad-campaigns": {
+      restricted: true,
+      allowed_emails: ["jacob.perry@beehiiv.com"],
+    },
+    // Ships dark — a trial front door running beside the nine tabs,
+    // not replacing them. Widen once it's clear which tabs it makes
+    // redundant; deleting those is the actual goal.
+    "accounts-view": {
       restricted: true,
       allowed_emails: ["jacob.perry@beehiiv.com"],
     },
