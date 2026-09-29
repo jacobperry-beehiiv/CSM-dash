@@ -52,15 +52,7 @@ export type TodoSource =
    *  on-card grouping a CSM would use to add one manually.
    *  source_meta.live_quarter + workspace_id form the dedupe key so
    *  a daily re-run doesn't double-fire within the same cycle. */
-  | "live_quarter_checkin"
-  /** Created by the weekly Enterprise Request Loop digest when a
-   *  feature request from the CSM's book ships and clears the
-   *  confidence gate. One to-do per (customer, Linear issue) so the
-   *  outreach lands as a durable work item rather than only a Slack
-   *  DM the CSM can scroll past. source_meta carries workspace_id +
-   *  linear_issue_id, which together form the dedupe key — a re-run
-   *  of the digest finds the existing open to-do and skips. */
-  | "enterprise_request_shipped";
+  | "live_quarter_checkin";
 
 /** Slack-side provenance carried on rows created from Slack. Filled in
  *  by the inbound webhook so the UI can render a "↗ View in Slack"

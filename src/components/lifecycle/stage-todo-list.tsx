@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import type { LifecycleStep } from "@/lib/lifecycle/card";
+import { urgencyHeaderClass, type LifecycleStep } from "@/lib/lifecycle/card";
 import { CollapsibleSection } from "../collapsible-section";
 import { DoneCheckbox } from "../done-checkbox";
 import { NoteEditorModal } from "./note-editor-modal";
@@ -67,6 +67,12 @@ interface Props {
    *  so a Q1/Q2/Q3 card with no Live-tagged to-dos yet would otherwise
    *  show no "Live" section at all. Omitted everywhere else. */
   alwaysShowGroups?: string[];
+  /** Colors each group's header by how soon its earliest actionable
+   *  to-do is due (overdue / ≤7d / ≤14d / ≤30d, unchanged past that or
+   *  with no due date) — see urgencyHeaderClass in
+   *  @/lib/lifecycle/card. Only the Live board turns this on; omit
+   *  everywhere else for the plain header. */
+  showUrgencyColors?: boolean;
 }
 
 /** Above-the-fold cap on completed items per stage group — a
@@ -103,6 +109,7 @@ export function StageTodoList({
   onAddStep,
   companyName,
   alwaysShowGroups,
+  showUrgencyColors,
 }: Props) {
   const [editingDetailsId, setEditingDetailsId] = useState<string | null>(
     null
@@ -298,6 +305,9 @@ export function StageTodoList({
           <CollapsibleSection
             key={`${key}::${currentStage}`}
             title={key ? stageDisplayLabel(key) : flatGroupTitle || "To-dos"}
+            className={
+              showUrgencyColors ? urgencyHeaderClass(groupSteps, today) : undefined
+            }
             trailing={
               <span className="flex items-center gap-1.5">
                 {onAddStep && editable && isAssignableGroup ? (

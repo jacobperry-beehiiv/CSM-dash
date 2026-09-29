@@ -4,6 +4,7 @@ import { SearchInput } from "../filters";
 import { CsmSelector } from "../csm-selector";
 import { TabBar } from "../tab-bar";
 import { useZendeskOverlay } from "@/lib/data/use-zendesk-overlay";
+import { URGENCY_BANDS } from "@/lib/lifecycle/card";
 
 interface Props {
   search: string;
@@ -11,6 +12,11 @@ interface Props {
   csms: string[];
   zendeskOn: boolean;
   onToggleZendesk: () => void;
+  /** Renders the due-date urgency key (swatch + label per URGENCY_BAND)
+   *  right-aligned on this row. Only the Live board turns this on —
+   *  Onboarding's cards don't get the urgency coloring, so a legend
+   *  there would describe something the board never shows. */
+  showUrgencyLegend?: boolean;
 }
 
 /**
@@ -40,6 +46,7 @@ export function LifecycleFilterBar({
   csms,
   zendeskOn,
   onToggleZendesk,
+  showUrgencyLegend,
 }: Props) {
   const overlay = useZendeskOverlay();
   const zendeskCount = overlay
@@ -80,6 +87,22 @@ export function LifecycleFilterBar({
             )
           ) : null}
         </button>
+        {showUrgencyLegend ? (
+          <div className="flex items-center flex-wrap gap-2.5 ml-auto">
+            <span className="text-[11px] text-subtle">Due:</span>
+            {URGENCY_BANDS.map((band) => (
+              <span key={band.label} className="flex items-center gap-1">
+                <span
+                  aria-hidden
+                  className={`inline-block w-3 h-3 rounded-sm border ${band.className}`}
+                />
+                <span className="text-[11px] text-subtle whitespace-nowrap">
+                  {band.label}
+                </span>
+              </span>
+            ))}
+          </div>
+        ) : null}
       </div>
       <SearchInput
         value={search}

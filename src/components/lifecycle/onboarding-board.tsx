@@ -17,6 +17,8 @@ import { KanbanColumns, UNSORTED } from "./kanban-columns";
 import { LifecycleCardModal } from "./lifecycle-card-modal";
 import { LifecycleFilterBar } from "./lifecycle-filter-bar";
 import { BackfillOnboardingButton } from "./backfill-onboarding-button";
+import { OutreachModal } from "../outreach-modal";
+import type { Customer } from "@/lib/types";
 import { fmtDate } from "../format";
 
 interface Props {
@@ -63,6 +65,7 @@ async function patchOnboardingStage(workspaceId: string, stage: string | null) {
 export function OnboardingBoard({ cards: initialCards, stages, csms }: Props) {
   const [cards, setCards] = useState(initialCards);
   const [openWorkspaceId, setOpenWorkspaceId] = useState<string | null>(null);
+  const [outreachFor, setOutreachFor] = useState<Customer | null>(null);
   const [search, setSearch] = useState("");
   const [zendeskOn, setZendeskOn] = useState(false);
   const seeded = useRef(new Set<string>());
@@ -352,6 +355,7 @@ export function OnboardingBoard({ cards: initialCards, stages, csms }: Props) {
         onAddTodo={(workspaceId, group, fields) =>
           void handleAddTodo(workspaceId, group, fields)
         }
+        onDraft={setOutreachFor}
         renderEmptyChecklist={(c) =>
           c.editable ? (
             <BackfillOnboardingButton
@@ -382,6 +386,9 @@ export function OnboardingBoard({ cards: initialCards, stages, csms }: Props) {
       />
       {openCard ? (
         <LifecycleCardModal card={openCard} onClose={() => setOpenWorkspaceId(null)} />
+      ) : null}
+      {outreachFor ? (
+        <OutreachModal customer={outreachFor} onClose={() => setOutreachFor(null)} />
       ) : null}
     </>
   );

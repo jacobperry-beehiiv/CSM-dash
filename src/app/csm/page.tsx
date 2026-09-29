@@ -166,10 +166,7 @@ export default async function CsmPage({
       ? [{ id: "wins" as const, label: "Wins & Opportunities" }]
       : []),
     ...(requestsEnabled
-      ? [
-          { id: "all-requests" as const, label: "All requests" },
-          { id: "live-requests" as const, label: "Live requests" },
-        ]
+      ? [{ id: "live-this-week" as const, label: "Live This Week" }]
       : []),
   ];
 
