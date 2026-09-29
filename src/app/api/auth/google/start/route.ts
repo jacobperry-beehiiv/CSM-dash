@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { resolveGoogleRedirectUri } from "@/lib/auth/google-redirect";
 
 export const dynamic = "force-dynamic";
 
@@ -71,9 +72,7 @@ export async function GET(req: Request) {
     );
   }
   const url = new URL(req.url);
-  const redirect =
-    process.env.GOOGLE_OAUTH_REDIRECT_URI ??
-    `${url.origin}/api/auth/google/callback`;
+  const redirect = resolveGoogleRedirectUri(req);
   const next = url.searchParams.get("next") ?? "/settings/gmail";
   // `?minimal=1` drops the optional gmail.settings.basic scope.
   // Used as a fallback when the Google Cloud project's OAuth consent

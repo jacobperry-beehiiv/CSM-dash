@@ -198,6 +198,14 @@ export interface PostMetricsRow {
   workspace_name: string;
   sent_date: string;
   subject: string;
+  /** Post title (`posts.web_title`) — the internal name of the send.
+   *  Shown on the deliverability panel alongside the email subject
+   *  so CSMs can attribute a flagged send back to a post they know
+   *  by title even when the subject line doesn't match. Optional
+   *  because pre-2026-09-21 snapshots didn't have this column; old
+   *  cached rows read back as undefined and the panel omits the
+   *  title line. */
+  post_title?: string | null;
   sent: number;
   delivered: number;
   delivery_rate: number;

@@ -26,6 +26,11 @@ interface WorkspaceIndexRow {
    *  ("Jacob_Perry"). Used to scope the review queue to the
    *  viewer's own book by default. */
   customer_success_manager: string | null;
+  /** HubSpot company link, from the snapshot. When null the "Create
+   *  folder" button in the customers-without-folder section is
+   *  disabled — the create endpoint refuses without a company to
+   *  write `customer_folder` back to. */
+  hubspot_company_id: string | null;
 }
 
 interface Candidate {
@@ -132,6 +137,19 @@ export function CustomerFoldersReview({
   const [scopeToViewer, setScopeToViewer] = useState<boolean>(
     Boolean(viewerCsm)
   );
+  // Optimistic client-side tracking for the "Customers without a
+  // folder" section. `createdWorkspaces` hides rows we just linked
+  // (the customer book on the server won't reflect the write until
+  // the next twice-daily snapshot refresh); `creatingIds` disables
+  // in-flight buttons; `createErrors` shows per-row failure text
+  // without blocking retries.
+  const [createdWorkspaces, setCreatedWorkspaces] = useState<
+    Record<string, { folder_url: string; folder_name: string }>
+  >({});
+  const [creatingIds, setCreatingIds] = useState<Set<string>>(
+    () => new Set<string>()
+  );
+  const [createErrors, setCreateErrors] = useState<Record<string, string>>({});
 
   const workspaceLookup = useMemo(() => {
     return new Map(workspaces.map((w) => [w.workspace_id, w]));
@@ -253,8 +271,94 @@ export function CustomerFoldersReview({
     }
   }
 
+  /** Spin up a Drive folder for a customer whose HubSpot
+   *  `customer_folder` is empty, then link it back to HubSpot.
+   *  Optimistic on success — the customer book on the server won't
+   *  reflect the property write until the next twice-daily snapshot
+   *  refresh, so we track the newly-linked workspace client-side
+   *  and hide the row locally. */
+  async function createFolderFor(row: WorkspaceIndexRow): Promise<void> {
+    if (!row.hubspot_company_id) return;
+    setCreatingIds((prev) => {
+      const next = new Set(prev);
+      next.add(row.workspace_id);
+      return next;
+    });
+    setCreateErrors((prev) => {
+      const next = { ...prev };
+      delete next[row.workspace_id];
+      return next;
+    });
+    try {
+      const r = await fetch("/api/csm/customer-folders/create", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ workspace_id: row.workspace_id }),
+      });
+      const j = (await r.json().catch(() => ({}))) as {
+        ok?: boolean;
+        folder_id?: string;
+        folder_url?: string;
+        folder_name?: string;
+        created?: boolean;
+        hubspot_error?: string | null;
+        needs_reconsent?: boolean;
+        error?: string;
+      };
+      if (!r.ok || !j.ok || !j.folder_url) {
+        throw new Error(
+          (j.needs_reconsent
+            ? "drive.file scope not granted — reconnect Google at /settings/gmail. "
+            : "") +
+            (j.hubspot_error
+              ? `Folder created but HubSpot PATCH failed: ${j.hubspot_error}`
+              : (j.error ?? `HTTP ${r.status}`))
+        );
+      }
+      setCreatedWorkspaces((prev) => ({
+        ...prev,
+        [row.workspace_id]: {
+          folder_url: j.folder_url!,
+          folder_name: j.folder_name ?? "folder",
+        },
+      }));
+    } catch (e) {
+      setCreateErrors((prev) => ({
+        ...prev,
+        [row.workspace_id]: e instanceof Error ? e.message : "Unknown error",
+      }));
+    } finally {
+      setCreatingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(row.workspace_id);
+        return next;
+      });
+    }
+  }
+
   const fullQueue = state?.queue ?? [];
   const summary = state?.last_scan_summary ?? null;
+
+  // "Customers without a folder" — the inverse view of the folder
+  // queue. Everyone in the book with no `customer_folder` set
+  // (excluding the optimistic-locally-created ones). Scoped to the
+  // viewer's book when the toggle is on, mirroring the folder-queue
+  // scope so both sections respect the same filter.
+  const missingFolders = useMemo(() => {
+    return workspaces
+      .filter((w) => !w.has_folder)
+      .filter((w) => !createdWorkspaces[w.workspace_id])
+      .filter((w) =>
+        scopeToViewer && viewerWorkspaceIds.size > 0
+          ? viewerWorkspaceIds.has(w.workspace_id)
+          : true
+      )
+      .sort((a, b) => {
+        const an = (a.company_name ?? a.workspace_name ?? "").toLowerCase();
+        const bn = (b.company_name ?? b.workspace_name ?? "").toLowerCase();
+        return an.localeCompare(bn);
+      });
+  }, [workspaces, createdWorkspaces, scopeToViewer, viewerWorkspaceIds]);
   // Apply the scope toggle: a row belongs to the viewer's book if
   // ANY of its candidates is one of the viewer's workspaces. Rows
   // with zero candidates (truly ambiguous folders) are treated as
@@ -349,6 +453,15 @@ export function CustomerFoldersReview({
         ) : null}
       </div>
 
+      <CustomersWithoutFolderSection
+        rows={missingFolders}
+        creatingIds={creatingIds}
+        createErrors={createErrors}
+        createdWorkspaces={createdWorkspaces}
+        createFolderFor={createFolderFor}
+        disabled={scanning || applying}
+      />
+
       {queue.length === 0 ? (
         <p className="text-sm text-muted">
           {fullQueue.length === 0 ? (
@@ -409,6 +522,146 @@ function effectiveSelection(
   edits: Record<string, LocalSelection>
 ): LocalSelection {
   return edits[row.folder_id] ?? row.selection;
+}
+
+/**
+ * Companion section to the folder-queue table: lists customers in
+ * the book whose HubSpot `customer_folder` is empty, and lets you
+ * create a Drive folder + write the URL back in one click. The
+ * inverse of the folder sweep — sweep finds orphan folders looking
+ * for a customer; this finds customers looking for a folder.
+ *
+ * Optimistic: on a successful create we hide the row and swap in a
+ * ✓ Linked chip locally; the customer book on the server won't
+ * catch up until the next twice-daily snapshot refresh.
+ */
+function CustomersWithoutFolderSection({
+  rows,
+  creatingIds,
+  createErrors,
+  createdWorkspaces,
+  createFolderFor,
+  disabled,
+}: {
+  rows: WorkspaceIndexRow[];
+  creatingIds: Set<string>;
+  createErrors: Record<string, string>;
+  createdWorkspaces: Record<string, { folder_url: string; folder_name: string }>;
+  createFolderFor: (row: WorkspaceIndexRow) => void | Promise<void>;
+  disabled: boolean;
+}) {
+  const justCreated = Object.entries(createdWorkspaces);
+  if (rows.length === 0 && justCreated.length === 0) return null;
+
+  return (
+    <div className="bg-surface rounded-xl border border-border shadow-card overflow-x-auto">
+      <div className="px-4 py-3 border-b border-border flex items-baseline gap-3">
+        <h2 className="text-sm font-semibold text-fg">
+          Customers without a folder
+        </h2>
+        <span className="text-xs text-muted">
+          {rows.length} pending
+          {justCreated.length > 0 ? (
+            <> · {justCreated.length} just created</>
+          ) : null}
+        </span>
+      </div>
+      {rows.length > 0 ? (
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-left text-xs text-muted border-b border-border">
+              <th className="px-3 py-2 font-medium">Company</th>
+              <th className="px-3 py-2 font-medium">Workspace</th>
+              <th className="px-3 py-2 font-medium">Action</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-border/60">
+            {rows.map((row) => {
+              const inFlight = creatingIds.has(row.workspace_id);
+              const err = createErrors[row.workspace_id];
+              const missingHubspot = !row.hubspot_company_id;
+              return (
+                <tr key={row.workspace_id}>
+                  <td className="px-3 py-2 align-top">
+                    <div className="font-medium text-fg break-words">
+                      {row.company_name ??
+                        row.workspace_name ??
+                        row.workspace_id}
+                    </div>
+                    {row.customer_success_manager ? (
+                      <div className="text-[11px] text-muted">
+                        CSM: {row.customer_success_manager.replace(/_/g, " ")}
+                      </div>
+                    ) : null}
+                  </td>
+                  <td className="px-3 py-2 align-top text-xs text-muted break-all">
+                    {row.workspace_name ?? row.workspace_id}
+                  </td>
+                  <td className="px-3 py-2 align-top">
+                    <div className="flex flex-col gap-1">
+                      <button
+                        type="button"
+                        onClick={() => void createFolderFor(row)}
+                        disabled={disabled || inFlight || missingHubspot}
+                        title={
+                          missingHubspot
+                            ? "No HubSpot company link — fix the HubSpot link first (Resync from HubSpot on the customer detail panel)."
+                            : `Create a Drive folder named "${
+                                row.company_name ??
+                                row.workspace_name ??
+                                row.workspace_id
+                              }" under the shared parent and link it back to HubSpot's customer_folder.`
+                        }
+                        className="px-2 py-1 bg-accent text-accent-fg rounded-md text-xs font-medium hover:bg-accent-hover disabled:opacity-50 self-start"
+                      >
+                        {inFlight ? "Creating…" : "＋ Create folder"}
+                      </button>
+                      {missingHubspot ? (
+                        <span className="text-[10px] text-amber-700 dark:text-amber-300">
+                          No HubSpot link
+                        </span>
+                      ) : null}
+                      {err ? (
+                        <span className="text-[10px] text-red-700 dark:text-red-300 break-words">
+                          {err}
+                        </span>
+                      ) : null}
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      ) : null}
+      {justCreated.length > 0 ? (
+        <div className="border-t border-border px-4 py-3 text-xs space-y-1">
+          <div className="text-muted">Just created (this session):</div>
+          {justCreated.map(([workspaceId, info]) => (
+            <div key={workspaceId} className="flex items-baseline gap-2">
+              <span className="text-emerald-700 dark:text-emerald-300">✓</span>
+              <a
+                href={info.folder_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-blue-600 dark:text-blue-400 hover:underline break-all"
+              >
+                {info.folder_name}
+              </a>
+              <span className="text-[10px] text-subtle italic">
+                {workspaceId}
+              </span>
+            </div>
+          ))}
+          <div className="text-[10px] text-subtle italic pt-1">
+            The customer book will show the new folder URL after the
+            next twice-daily snapshot refresh — the write to HubSpot has
+            already landed.
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 function QueueRowView({

@@ -39,6 +39,12 @@ interface Q1Row {
   workspace_name: string;
   sent_date: string;
   subject: string;
+  /** posts.web_title — internal post title. Kept separate from
+   *  `subject` (which is the email_subject_line) so the panel can
+   *  show both, and a CSM can find a flagged send by the name they
+   *  gave it internally even when the subject line was polished
+   *  later. */
+  post_title: string | null;
 }
 
 interface Q2Row {
@@ -117,14 +123,18 @@ async function fetchPosts(
       toString(o.id) AS organization_id,
       o.name AS workspace_name,
       toString(toDate(p.scheduled_at)) AS sent_date,
-      coalesce(
-        CASE WHEN char_length(p.email_subject_line) > 80
-             THEN left(p.email_subject_line, 77) || '...'
-             ELSE p.email_subject_line END,
-        CASE WHEN char_length(p.web_title) > 80
-             THEN left(p.web_title, 77) || '...'
-             ELSE p.web_title END
-      ) AS subject
+      -- Split email_subject_line and web_title into separate
+      -- columns so the panel can show both. Prior version
+      -- coalesced them into one subject field; that hid the
+      -- internal post title on any send whose subject line was
+      -- distinct (which is most of them). Keep the 80-char cap on
+      -- each so the row layout stays predictable.
+      CASE WHEN char_length(p.email_subject_line) > 80
+           THEN left(p.email_subject_line, 77) || '...'
+           ELSE p.email_subject_line END AS subject,
+      CASE WHEN char_length(p.web_title) > 80
+           THEN left(p.web_title, 77) || '...'
+           ELSE p.web_title END AS post_title
     FROM swarm_clickpipes.organizations o
     JOIN swarm_clickpipes.publications pub ON o.id = pub.organization_id
     JOIN swarm_clickpipes.posts p ON pub.id = p.publication_id

@@ -14,12 +14,41 @@
  *  We map those + our derived shipped-detection layer into 5 buckets
  *  the CSM actually reasons about. See the promotion state machine
  *  in `enterprise-requests-shipped-sweep.ts` for the transitions. */
+/**
+ * The bucket the UI renders a request in.
+ *
+ * These deliberately MIRROR Linear's own state-type taxonomy rather
+ * than inventing a parallel vocabulary. The earlier model had its own
+ * words ("Open", "Live", "Live, possibly in beta") and tried to infer
+ * the shipped ones from Slack; in practice that inference almost never
+ * fired, so nearly every delivered request sat in the wrong bucket.
+ *
+ * Linear is now the single source of truth for WHERE a request is.
+ * Whether we also found it in #devs-shipped is recorded separately, as
+ * a yes/no on the row (`devs_shipped_match`) — a corroborating fact
+ * shown next to the state, not a gate in front of it.
+ *
+ * One-to-one with `linearStateToDerived` below; there are exactly as
+ * many buckets as Linear has state types.
+ */
 export type EnterpriseRequestDerivedState =
-  | "Open"
+  | "Triage"
+  | "Backlog"
+  | "Todo"
   | "In progress"
-  | "Live"
-  | "Live, possibly in beta"
-  | "Not planned";
+  | "Done (live in app)"
+  | "Canceled"
+  | "Duplicate";
+
+/** The one state that means the customer can use it. Everything that
+ *  asks "is this live?" reads this constant rather than a literal, so
+ *  the name can change in one place. */
+export const LIVE_STATE: EnterpriseRequestDerivedState = "Done (live in app)";
+
+/** States that mean the request will not be delivered as asked. Used
+ *  to keep dead requests out of "outstanding" counts. */
+export const CLOSED_STATES: ReadonlySet<EnterpriseRequestDerivedState> =
+  new Set<EnterpriseRequestDerivedState>(["Canceled", "Duplicate"]);
 
 /** One-of the fixed Customer Impact labels enforced by Juliet's
  *  `feature-request-creator` skill. `null` when a ticket predates the
@@ -45,6 +74,50 @@ export type PromotionSource =
   | "changelog_fuzzy" // Fuzzy match on name + description in the changelog
   | "linear_state" // Linear state → Dismissed/Canceled (→ Not planned)
   | "manual"; // CSM/admin manually stamped via the exception queue
+
+/**
+ * How much we'd stake a customer conversation on a promotion.
+ * Deliberately separate from `derived_state`: the state is what we
+ * BELIEVE shipped, the confidence is whether we're willing to tell a
+ * CSM to go tell their customer about it.
+ *
+ * Only `confirmed` rows reach the weekly digest DM. `needs_review`
+ * rows still render on the customer profile (the signal is real and
+ * useful context) but never get pushed at a CSM until a human
+ * confirms them from the exceptions queue.
+ *
+ * The asymmetry is intentional: a false negative costs a CSM a week
+ * of latency on good news. A false positive has them tell a customer
+ * "your request shipped" about something still behind a flag — which
+ * burns trust we can't cheaply rebuild.
+ *
+ * Confirmed requires an unambiguous signal:
+ *   • an exact linear.app link in a #topic-product-changelog post
+ *     (the changelog IS the customer-facing release note), or
+ *   • a #devs-shipped hit on a ticket Linear labels Bug or
+ *     UI/UX Improvement (those ship straight to production — there's
+ *     no beta-flag rollout stage for a bugfix).
+ *
+ * Everything else is needs_review — see `decidePromotion`.
+ */
+export type PromotionConfidence = "confirmed" | "needs_review";
+
+/** Why a promotion landed in `needs_review`. Rendered verbatim in the
+ *  exceptions queue so a reviewer knows what to go check, rather than
+ *  re-deriving it from source + work_type. */
+export type NeedsReviewReason =
+  /** Feature seen only in #devs-shipped. Merged ≠ released: features
+   *  routinely sit behind a flag until the changelog post goes out. */
+  | "feature_awaiting_changelog"
+  /** Neither Linear's work_type label nor the #devs-shipped ship
+   *  parens resolved to Bug / UI-UX / Feature. We don't know what
+   *  this is, so we don't know whether "merged" means "customer can
+   *  see it". */
+  | "unresolved_work_type"
+  /** Changelog matched on feature name + description similarity
+   *  rather than an exact Linear link. Good enough to surface, not
+   *  good enough to notify on. */
+  | "changelog_fuzzy_match";
 
 /** Where a row entered the snapshot. Rows from the nightly Linear
  *  sync are "customer_needs" — the canonical path. Rows we picked up
@@ -147,12 +220,77 @@ export interface EnterpriseRequestRow {
    *  and the ranking view stay stable across refreshes even if
    *  Metabase's MRR shifts mid-day. */
   arr_snapshot: number | null;
+  /**
+   * Did the shipped-sweep match this ticket to a release post in
+   * #devs-shipped? Plain yes/no.
+   *
+   * This does NOT decide the row's state — Linear does. It answers a
+   * different question: "has this ticket's code actually gone out in a
+   * deploy we can point at?" A request can be `Done (live in app)` in
+   * Linear with no match here (shipped as part of a project whose
+   * individual tickets weren't listed, or shipped before we started
+   * watching), and it can have a match here while Linear still says
+   * In progress (merged, not yet marked done).
+   *
+   * Optional because rows written before this field existed don't
+   * carry it — read every row through `hasDevsShippedMatch()`, which
+   * back-derives from `promotion_source` rather than assuming false.
+   */
+  devs_shipped_match?: boolean;
+  /** Permalink to the #devs-shipped release post that matched. Null
+   *  when the match predates permalink capture or Slack refused it. */
+  devs_shipped_url?: string | null;
+  /** When that release post went out (from the Slack `ts`, which is
+   *  always a reliable epoch — unlike the human "Deployed by …" line). */
+  devs_shipped_at?: string | null;
+  /**
+   * Newest comment seen on the Linear ISSUE, across every comment —
+   * not just the ones that resolved to a customer.
+   *
+   * Issue-level, so it's the same value on every workspace's row for
+   * that ticket. Written by the comment-scan, which already walks
+   * comments; a dev note, a PM question and a CSM adding a second
+   * customer all count. Only open issues are walked, so this stops
+   * moving once a ticket completes — `linear_completed_at` covers the
+   * tail.
+   */
+  last_comment_at?: string | null;
+  /**
+   * When anyone last did anything to this request — computed, never
+   * stored authoritatively. See `lastEngagedAt()`.
+   *
+   * The problem it solves: an old ticket that a CSM just attached a
+   * new customer to looked months stale, because the only date on
+   * screen was when the request was first logged. REQ-2928 was filed
+   * in March and picked up a new customer on 24 Sep; nothing in the
+   * view said so.
+   */
+  last_engaged_at?: string | null;
   /** Ship metadata — populated by the shipped-sweep engine. */
   promotion_source: PromotionSource | null;
   promoted_at: string | null;
   ship_url: string | null;
   ship_date: string | null;
   promotion_history: PromotionHistoryEntry[];
+  /** Whether this promotion is trustworthy enough to DM a CSM about.
+   *  Optional because rows promoted before the confidence model
+   *  existed don't carry it — read those through
+   *  `resolveConfidence()`, which back-derives the value from
+   *  promotion_source + work_type rather than defaulting blindly. */
+  promotion_confidence?: PromotionConfidence | null;
+  /** Why the row needs review. Only meaningful when
+   *  `promotion_confidence === "needs_review"`. */
+  needs_review_reason?: NeedsReviewReason | null;
+  /** Set when a human cleared the row out of the exceptions queue —
+   *  either confirming the ship (confidence flips to `confirmed`,
+   *  making it digest-eligible) or dismissing it as not customer-
+   *  facing. */
+  review?: {
+    decided_at: string;
+    decided_by: string;
+    decision: "confirmed" | "dismissed";
+    note?: string | null;
+  } | null;
   /** How this row entered the snapshot. Absent on rows that predate
    *  the slack-intake sweep — those default to "customer_needs" on
    *  read for backward compatibility. */
@@ -173,16 +311,20 @@ export interface EnterpriseRequestRow {
    *  updating `derived_state` so the CSM isn't told the customer
    *  received the feature before the project is actually released.
    *
-   *  Cleared by the sync's post-processing pass when the project's
-   *  status.type flips to `completed` — at that point the deferred
-   *  promotion is applied and the row jumps to Live (or
-   *  Live-possibly-in-beta if that's what the shipped-sweep would
-   *  have picked). See applyPendingShipPromotions in
-   *  enterprise-requests-sync.ts. */
+   *  @deprecated Nothing writes or reads this any more. It existed
+   *  because a Slack hit was being used to claim a row was Live, and
+   *  a single ticket shipping out of an unfinished project is a bad
+   *  reason to make that claim. Linear owns the state now, so there
+   *  is no promotion to defer. Kept on the interface only so blobs
+   *  written before the change still type-check on read; drop it once
+   *  a full sync has rewritten every row. */
   pending_ship?: PendingShip | null;
 }
 
-/** Deferred-promotion payload: what the shipped-sweep WOULD have
+/** @deprecated See `pending_ship` above — retired with the move to
+ *  Linear-owned state. Retained for read-compatibility only.
+ *
+ *  Deferred-promotion payload: what the shipped-sweep WOULD have
  *  promoted the row to if the parent project were already
  *  `completed`. Captured 1:1 with the shipped-sweep's decision so
  *  the deferred pass can apply it verbatim without re-computing
@@ -193,6 +335,12 @@ export interface PendingShip {
   ship_url: string | null;
   ship_date: string | null;
   detected_at: string;
+  /** Carried through from the shipped-sweep's decision so the
+   *  deferred pass applies the same confidence it would have at
+   *  detection time. Optional for blobs written before the
+   *  confidence model — those resolve via `resolveConfidence()`. */
+  confidence?: PromotionConfidence;
+  needs_review_reason?: NeedsReviewReason | null;
   /** Snapshot of the project state at detection time — surfaced in
    *  the UI badge so a CSM can see "shipped, waiting on project X"
    *  without a second Linear round-trip. */
@@ -207,12 +355,29 @@ export interface PendingShip {
 export interface LinearCommentMeta {
   issue_id: string;
   issue_identifier: string;
-  comment_id: string;
+  /** Where on the ticket the customer signal was found.
+   *
+   *  "comment" — the original path: a comment (typically from
+   *  Juliet's feature-request-creator skill) naming a Publication ID
+   *  or User Email.
+   *
+   *  "description" — the same structured block written into the
+   *  issue body instead of a comment. Added after BEE-24879 shipped
+   *  for Daily Drop without ever reaching the tracker: it carried a
+   *  perfectly parseable `Publication ID` / `User Email` block, just
+   *  in the description, which nothing read. Absent on rows written
+   *  before the description pass existed — treat undefined as
+   *  "comment". */
+  source?: "comment" | "description";
+  /** Null for description matches — there's no comment to anchor to. */
+  comment_id: string | null;
   /** Direct URL to the comment (issue URL + `#comment-<id>` fragment).
-   *  Linear renders this as a scroll-to-anchor. */
+   *  Linear renders this as a scroll-to-anchor. For a description
+   *  match this is the plain issue URL. */
   permalink: string;
   /** Comment author email (available on the Linear comment.user
-   *  relation). Kept for the profile display + admin audit. */
+   *  relation); for a description match, the issue creator. Kept for
+   *  the profile display + admin audit. */
   author_email: string | null;
   author_name: string | null;
   posted_at: string;
@@ -345,20 +510,31 @@ export function linearStateToDerived(
 ): EnterpriseRequestDerivedState {
   switch (stateType) {
     case "triage":
+      return "Triage";
     case "backlog":
+      return "Backlog";
     case "unstarted":
-      return "Open";
+      return "Todo";
     case "started":
       return "In progress";
-    case "canceled":
-      return "Not planned";
     case "completed":
-      // Deliberately NOT "Live" — Linear "completed" only means merged,
-      // not released. The shipped-sweep is the only path to Live per the
-      // PDF's Piece 3 rules ("never promote off Linear state alone").
-      return "In progress";
+      // Linear's REQ team names this state "Done (live in app)" — an
+      // explicit human assertion that the customer can see it. We take
+      // it at face value. The previous model refused to, held every
+      // completed ticket at "In progress", and waited on a Slack
+      // signal that essentially never arrived.
+      return "Done (live in app)";
+    case "canceled":
+      return "Canceled";
+    case "duplicate":
+      // Linear's 7th state type. It had no case here, so duplicates
+      // fell through `default` and rendered as open requests forever.
+      return "Duplicate";
     default:
-      return "Open";
+      // An unrecognized type is a Linear change we haven't seen. Land
+      // it in Triage so it shows up as needing a human look rather
+      // than silently claiming to be delivered.
+      return "Triage";
   }
 }
 
@@ -389,4 +565,124 @@ export function estimateToTShirt(estimate: number | null): string | null {
     default:
       return null;
   }
+}
+
+/**
+ * Read a row's promotion confidence, back-deriving it for rows that
+ * predate the confidence model.
+ *
+ * Legacy rows (promoted before `promotion_confidence` existed) carry
+ * the field as undefined. Defaulting those to `confirmed` would
+ * preserve exactly the false positives the model exists to stop;
+ * defaulting to `needs_review` would dump every already-notified row
+ * into the exceptions queue. So instead we re-derive what the current
+ * rules WOULD have decided from the fields the row already has:
+ *
+ *   • exact changelog match  → confirmed (unambiguous then and now)
+ *   • devs_shipped + Bug / UI-UX → confirmed
+ *   • anything else → needs_review
+ *
+ * `linear_state` promotions (→ Not planned) are confirmed: a canceled
+ * Linear ticket is a fact, not an inference, and the digest doesn't
+ * DM on them anyway.
+ */
+export function resolveConfidence(
+  row: Pick<
+    EnterpriseRequestRow,
+    | "promotion_confidence"
+    | "promotion_source"
+    | "work_type"
+    | "devs_shipped_match"
+    | "review"
+  >
+): PromotionConfidence {
+  // A human decision outranks everything.
+  if (row.review?.decision === "confirmed") return "confirmed";
+  if (row.promotion_confidence) return row.promotion_confidence;
+  return hasDevsShippedMatch(row) ? "confirmed" : "needs_review";
+}
+
+/**
+ * Did we match this ticket to a #devs-shipped release post?
+ *
+ * Reads the explicit flag when the row carries one. Rows written
+ * before the flag existed don't, so we back-derive: the only way a row
+ * got `promotion_source: "devs_shipped"` under the old engine was by
+ * matching that channel, which is exactly what this asks. Anything
+ * else (changelog, linear_state, manual, or never promoted) is a "no".
+ *
+ * Kept as a function rather than read as a raw boolean so that
+ * back-derivation lives in one place — a bare `row.devs_shipped_match`
+ * silently reports "no" for every pre-existing row.
+ */
+export function hasDevsShippedMatch(
+  row: Pick<EnterpriseRequestRow, "devs_shipped_match" | "promotion_source">
+): boolean {
+  if (typeof row.devs_shipped_match === "boolean") {
+    return row.devs_shipped_match;
+  }
+  return row.promotion_source === "devs_shipped";
+}
+
+/** Is the customer able to use this today, per Linear? */
+export function isLive(
+  row: Pick<EnterpriseRequestRow, "derived_state">
+): boolean {
+  return row.derived_state === LIVE_STATE;
+}
+
+/**
+ * When the request went live, for windowing ("shipped this week").
+ *
+ * `linear_completed_at` is the moment someone moved the ticket into a
+ * completed state, which under the new model IS the live moment. Falls
+ * back to the Slack-derived `promoted_at` for rows that were promoted
+ * by the old engine and never re-synced, so the Live requests tab
+ * doesn't lose its existing history the day this ships.
+ */
+/**
+ * Newest engagement timestamp for one row.
+ *
+ * "Engaged" is deliberately broad — the question a CSM is asking is
+ * "has anything happened on this lately?", and the answer shouldn't
+ * depend on which mechanism happened to carry it:
+ *
+ *   • `submitted_at`        — this customer's need / intake comment /
+ *                             Slack post. For a row created by the
+ *                             comment-scan this IS the comment date.
+ *   • `last_comment_at`     — newest comment anywhere on the issue,
+ *                             which catches re-engagement on a ticket
+ *                             the customer was ALREADY attached to
+ *                             (no new row, so `submitted_at` wouldn't
+ *                             move).
+ *   • `linear_completed_at` — shipping it is engagement too, and
+ *                             without this a just-delivered request
+ *                             would read as stale.
+ *
+ * Deliberately NOT the issue's `updatedAt`: that bumps on label,
+ * assignee and state edits, so one bulk relabel would light up the
+ * whole board as freshly engaged.
+ */
+export function lastEngagedAt(
+  row: Pick<
+    EnterpriseRequestRow,
+    "submitted_at" | "last_comment_at" | "linear_completed_at"
+  >
+): string | null {
+  let newest: string | null = null;
+  for (const candidate of [
+    row.submitted_at,
+    row.last_comment_at,
+    row.linear_completed_at,
+  ]) {
+    if (!candidate) continue;
+    if (!newest || candidate > newest) newest = candidate;
+  }
+  return newest;
+}
+
+export function liveAt(
+  row: Pick<EnterpriseRequestRow, "linear_completed_at" | "promoted_at">
+): string | null {
+  return row.linear_completed_at ?? row.promoted_at ?? null;
 }

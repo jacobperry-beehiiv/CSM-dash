@@ -12,6 +12,20 @@ import type {
   EnterpriseRequestRow,
   NotifiedEntry,
 } from "../data/enterprise-requests-types";
+import {
+  hasDevsShippedMatch,
+  isLive,
+  liveAt,
+  resolveConfidence,
+} from "../data/enterprise-requests-types";
+import { applyTodoOps, getTodosForUser } from "../personal-todos/store";
+import { userKeyFromEmail } from "../personal-todos/identity";
+import { newTodoId, type PersonalTodo } from "../personal-todos/types";
+import {
+  getConfigForSource,
+  applyTemplate,
+} from "../data/todo-source-configs";
+import { resolveTodoTiming } from "../data/todo-source-configs-types";
 
 /**
  * Enterprise Request Loop — weekly per-CSM DM digest.
@@ -24,7 +38,7 @@ import type {
  * Groups by the customer's assigned CSM, opens a DM to each CSM via
  * `csm_user_ids[csm_handle]` → `resolveSlackChannelId`, and posts one
  * message per CSM listing every shipped-this-week request from their
- * book with a deep-link into `/csm?tab=live-this-week&csm=<handle>`
+ * book with a deep-link into `/csm?tab=live-requests&csm=<handle>`
  * so they can draft the outreach.
  *
  * Dry-run mode returns the composed message + row set without
@@ -45,7 +59,10 @@ export interface DigestRowSummary {
   url: string;
   ship_url: string | null;
   promoted_at: string;
-  beta: boolean;
+  /** Did we match this ticket to a #devs-shipped release post? Shown
+   *  in the DM so a CSM knows whether "live" is corroborated by a
+   *  deploy we can point at, or is Linear's word alone. */
+  devs_shipped_match: boolean;
 }
 
 export interface DigestPerCsm {
@@ -63,6 +80,19 @@ export interface DigestResult {
   per_csm: DigestPerCsm[];
   csms_notified: number;
   rows_notified: number;
+  /** Rows inside the 7-day window that were withheld because their
+   *  promotion is `needs_review`. Surfaced so a dry run tells you how
+   *  much is waiting in the exceptions queue rather than silently
+   *  reporting a quiet week. */
+  rows_skipped_needs_review: number;
+  /** Total un-decided `needs_review` rows across the whole snapshot,
+   *  not just this week's. Drives the ops-channel nudge. */
+  review_queue_depth: number;
+  review_queue_posted: boolean;
+  /** Personal to-dos created across all CSMs this run. Lower than
+   *  rows_notified when a CSM already had an open to-do for the same
+   *  (customer, issue) from a previous run. */
+  todos_created: number;
   no_op: null | "disabled" | "cron_disabled" | "no_rows";
   dry_run: boolean;
 }
@@ -70,6 +100,15 @@ export interface DigestResult {
 const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
 const DASHBOARD_URL_BASE =
   process.env.DASHBOARD_URL ?? "https://csm-dash.vercel.app";
+
+/** Shift a YYYY-MM-DD string by whole days. Calendar-day math rather
+ *  than raw ms so a DST boundary can't slide a due date. */
+function shiftYmd(ymd: string, days: number): string {
+  const [y, m, d] = ymd.split("-").map((n) => Number.parseInt(n, 10));
+  const dt = new Date(Date.UTC(y, (m ?? 1) - 1, d ?? 1));
+  dt.setUTCDate(dt.getUTCDate() + days);
+  return dt.toISOString().slice(0, 10);
+}
 
 function humanCsm(csmHandle: string): string {
   return csmHandle.replace(/_/g, " ");
@@ -82,14 +121,16 @@ function composeMessage(
   const header = `:package: *Enterprise Request Loop — shipped this week*\nHi ${humanCsm(per.csm_handle).split(" ")[0]}, ${rows.length} feature request${rows.length === 1 ? "" : "s"} from your book shipped in the last 7 days. Draft outreach so we close the loop with the customer.`;
   const bullets = rows.slice(0, 10).map((r) => {
     const linkedTitle = `<${r.url}|${r.linear_identifier}: ${r.title}>`;
-    const beta = r.beta ? " _(possibly in beta)_" : "";
+    const beta = r.devs_shipped_match
+      ? ""
+      : " _(no ship post matched — confirm before sending)_";
     const shipLink = r.ship_url ? ` — <${r.ship_url}|ship link>` : "";
     const account = r.workspace_name ? `*${r.workspace_name}*` : "(unknown)";
     return `• ${account}: ${linkedTitle}${beta}${shipLink}`;
   });
-  const cta = `\n_→ <${DASHBOARD_URL_BASE}/csm?tab=live-this-week&csm=${encodeURIComponent(
+  const cta = `\n_→ <${DASHBOARD_URL_BASE}/csm?tab=live-requests&csm=${encodeURIComponent(
     per.csm_handle
-  )}|Open the Live This Week queue on the dashboard>_`;
+  )}|Open your Live requests queue on the dashboard>_`;
   const overflow =
     rows.length > 10 ? `\n_…and ${rows.length - 10} more._` : "";
   return `${header}\n\n${bullets.join("\n")}${overflow}${cta}`;
@@ -125,6 +166,10 @@ export async function runEnterpriseRequestsDigest(
       per_csm: [],
       csms_notified: 0,
       rows_notified: 0,
+      rows_skipped_needs_review: 0,
+      review_queue_depth: 0,
+      review_queue_posted: false,
+      todos_created: 0,
       no_op: "disabled",
       dry_run: dryRun,
     };
@@ -135,6 +180,10 @@ export async function runEnterpriseRequestsDigest(
       per_csm: [],
       csms_notified: 0,
       rows_notified: 0,
+      rows_skipped_needs_review: 0,
+      review_queue_depth: 0,
+      review_queue_posted: false,
+      todos_created: 0,
       no_op: "cron_disabled",
       dry_run: dryRun,
     };
@@ -159,6 +208,10 @@ export async function runEnterpriseRequestsDigest(
   }
 
   const cutoff = Date.now() - SEVEN_DAYS_MS;
+  // Rows in-window but withheld by the confidence gate. Reported on
+  // the result so a dry run distinguishes "quiet week" from "three
+  // things are sitting in the exceptions queue".
+  let skippedNeedsReview = 0;
   // Group by CSM handle.
   const byCsm = new Map<string, DigestRowSummary[]>();
   for (const [workspaceId, bucket] of Object.entries(snapshot.rows)) {
@@ -169,9 +222,23 @@ export async function runEnterpriseRequestsDigest(
     const sentBucket =
       sent.sent[(meta.csm_email ?? meta.csm_handle).toLowerCase()] ?? {};
     for (const row of Object.values(bucket) as EnterpriseRequestRow[]) {
-      if (!row.promoted_at) continue;
-      const promotedAt = Date.parse(row.promoted_at);
-      if (!Number.isFinite(promotedAt) || promotedAt < cutoff) continue;
+      // Linear decides what's live. Anything short of it isn't news.
+      if (!isLive(row)) continue;
+      const wentLive = liveAt(row);
+      if (!wentLive) continue;
+      const liveMs = Date.parse(wentLive);
+      if (!Number.isFinite(liveMs) || liveMs < cutoff) continue;
+      // No confidence gate on the way out any more.
+      //
+      // It used to sit here, and it was the reason CSMs heard almost
+      // nothing: a ship had to be an exact changelog link or a
+      // #devs-shipped hit on a Bug/UI-UX ticket, and in practice
+      // neither fired. Linear's "Done (live in app)" is a person
+      // asserting the customer can use it, which is a better signal
+      // than anything we were inferring. Rows with no matching ship
+      // post still go out — flagged as such in the message, so the
+      // CSM can check before they send rather than never hearing.
+      if (!hasDevsShippedMatch(row)) skippedNeedsReview += 1;
       const entry: NotifiedEntry = notifiedBucket[row.linear_issue_id] ?? {};
       if (entry.notified_at) continue;
       if (sentBucket[row.linear_issue_id]) continue; // Already DM'd.
@@ -183,12 +250,76 @@ export async function runEnterpriseRequestsDigest(
         title: row.title,
         url: row.url,
         ship_url: row.ship_url,
-        promoted_at: row.promoted_at,
-        beta: row.derived_state === "Live, possibly in beta",
+        promoted_at: wentLive,
+        devs_shipped_match: hasDevsShippedMatch(row),
       };
       const list = byCsm.get(meta.csm_handle) ?? [];
       list.push(arr);
       byCsm.set(meta.csm_handle, list);
+    }
+  }
+
+  // ── Review-queue nudge to one ops channel.
+  //
+  // The queue's meaning changed with the model. It used to hold ships
+  // we were withholding from CSMs pending review. Nothing is withheld
+  // now — the queue is a reconciliation list: requests Linear says are
+  // live in the app where we never found a matching #devs-shipped
+  // post. That's either a ship we failed to parse, or a ticket closed
+  // out without the code actually going out. Both are worth a look,
+  // neither should block the CSM hearing about it.
+  //
+  // Deliberately NOT per-CSM: it's one person's sweep, not N people's
+  // inbox. Counted across the whole snapshot rather than the 7-day
+  // window — the problem is rows accumulating unreconciled.
+  let reviewQueueDepth = 0;
+  let oldestPendingAt: string | null = null;
+  for (const bucket of Object.values(snapshot.rows)) {
+    for (const row of Object.values(bucket) as EnterpriseRequestRow[]) {
+      if (!isLive(row)) continue;
+      if (hasDevsShippedMatch(row)) continue;
+      if (row.review?.decision === "dismissed") continue;
+      const wentLive = liveAt(row);
+      reviewQueueDepth += 1;
+      if (wentLive && (!oldestPendingAt || wentLive < oldestPendingAt)) {
+        oldestPendingAt = wentLive;
+      }
+    }
+  }
+  const reviewPref = resolveSlackNotificationPref(
+    settings,
+    "enterprise_requests_review_queue"
+  );
+  let reviewQueuePosted = false;
+  if (
+    reviewQueueDepth > 0 &&
+    reviewPref.enabled &&
+    !(isCron && reviewPref.cron_enabled === false) &&
+    reviewPref.destination &&
+    !dryRun
+  ) {
+    const oldestAge = oldestPendingAt
+      ? Math.floor(
+          (Date.now() - Date.parse(oldestPendingAt)) / (24 * 60 * 60 * 1000)
+        )
+      : null;
+    const text =
+      `:mag: *Enterprise Request Loop — ${reviewQueueDepth} shipped signal${reviewQueueDepth === 1 ? "" : "s"} waiting on review*\n` +
+      `${reviewQueueDepth === 1 ? "This ship" : "These ships"} matched a customer request but couldn't be confidently called customer-visible, so no CSM has been notified.` +
+      (oldestAge !== null && oldestAge > 0
+        ? ` Oldest has been waiting ${oldestAge} day${oldestAge === 1 ? "" : "s"}.`
+        : "") +
+      `\n_→ <${DASHBOARD_URL_BASE}/settings/enterprise-requests/exceptions|Review the queue>_`;
+    try {
+      const channelId = await resolveSlackChannelId(reviewPref.destination);
+      if (channelId) {
+        await postSlackMessage({ channel: channelId, text });
+        reviewQueuePosted = true;
+      }
+    } catch (e) {
+      console.warn("[enterprise-requests-digest] review-queue ping failed", {
+        error: e instanceof Error ? e.message : e,
+      });
     }
   }
 
@@ -198,6 +329,10 @@ export async function runEnterpriseRequestsDigest(
       per_csm: [],
       csms_notified: 0,
       rows_notified: 0,
+      rows_skipped_needs_review: skippedNeedsReview,
+      review_queue_depth: reviewQueueDepth,
+      review_queue_posted: reviewQueuePosted,
+      todos_created: 0,
       no_op: "no_rows",
       dry_run: dryRun,
     };
@@ -209,6 +344,11 @@ export async function runEnterpriseRequestsDigest(
     [];
   let csmsNotified = 0;
   let rowsNotified = 0;
+  let todosCreated = 0;
+  // Hoisted once — every CSM's to-dos render off the same config, and
+  // getConfigForSource hits KV.
+  const todoCfg = await getConfigForSource("enterprise_request_shipped");
+  const todoTiming = resolveTodoTiming(todoCfg, null);
 
   for (const [csmHandle, rowsForCsm] of byCsm) {
     rowsForCsm.sort((a, b) => b.promoted_at.localeCompare(a.promoted_at));
@@ -228,6 +368,101 @@ export async function runEnterpriseRequestsDigest(
       posted: false,
     };
     per.message = composeMessage(per, rowsForCsm);
+
+    // ── Personal to-dos.
+    //
+    // Created BEFORE the DM and independently of whether it lands: the
+    // to-do is the durable artifact. A CSM with no Slack user ID
+    // mapped (or a transient Slack failure) still needs the work item,
+    // and a DM is easy to scroll past even when it does arrive.
+    //
+    // Dedupe is the to-do store's own, not the digest's dm-sent blob —
+    // an OPEN to-do for the same (workspace, issue) means the CSM
+    // already has this on their list, so re-running the digest is a
+    // no-op. Same posture as the @bot assign playbook's
+    // hubspot_company_id check. A COMPLETED to-do doesn't block: if
+    // they closed it and the request resurfaced, a fresh one is
+    // correct.
+    if (!dryRun && csmEmail) {
+      try {
+        const userKey = userKeyFromEmail(csmEmail);
+        const existing = await getTodosForUser(userKey);
+        const openKeys = new Set(
+          existing
+            .filter(
+              (t) =>
+                t.source === "enterprise_request_shipped" &&
+                t.completed_at === null
+            )
+            .map(
+              (t) =>
+                `${t.source_meta?.workspace_id ?? ""}:${t.source_meta?.linear_issue_id ?? ""}`
+            )
+        );
+        const nowIso = new Date().toISOString();
+        const newTodos: PersonalTodo[] = [];
+        for (const r of rowsForCsm) {
+          const key = `${r.workspace_id}:${r.linear_issue_id}`;
+          if (openKeys.has(key)) continue;
+          const title = applyTemplate(todoCfg.phrasing_template, {
+            company_name: r.workspace_name ?? r.workspace_id,
+            workspace_name: r.workspace_name,
+            csm_name: csmHandle.replace(/_/g, " "),
+            request_title: r.title,
+            request_identifier: r.linear_identifier,
+          }).trim();
+          newTodos.push({
+            id: newTodoId(),
+            title: title || `Close the loop on ${r.linear_identifier}`,
+            details:
+              `${r.linear_identifier}: ${r.title}\n` +
+              `Linear: ${r.url}\n` +
+              (r.ship_url ? `Ship post: ${r.ship_url}\n` : "") +
+              `\nShipped ${r.promoted_at.slice(0, 10)} — draft the ` +
+              `close-the-loop note from the Live requests tab, then tick ` +
+              `Notified there so it drops off next week's digest.`,
+            due_date: shiftYmd(
+              nowIso.slice(0, 10),
+              todoTiming.due_offset_days ?? 3
+            ),
+            surface_at:
+              todoTiming.surface_offset_days != null &&
+              todoTiming.surface_offset_days > 0
+                ? shiftYmd(
+                    nowIso.slice(0, 10),
+                    todoTiming.surface_offset_days
+                  )
+                : null,
+            priority: null,
+            source: "enterprise_request_shipped",
+            source_meta: {
+              workspace_id: r.workspace_id,
+              linear_issue_id: r.linear_issue_id,
+              linear_identifier: r.linear_identifier,
+            },
+            completed_at: null,
+            remind_via_slack: true,
+            created_at: nowIso,
+            updated_at: nowIso,
+          });
+        }
+        if (newTodos.length > 0) {
+          await applyTodoOps(
+            userKey,
+            newTodos.map((todo) => ({ type: "add" as const, todo }))
+          );
+          todosCreated += newTodos.length;
+        }
+      } catch (e) {
+        // Never let a to-do write failure block the DM — they're
+        // independent closes on the same loop.
+        console.warn("[enterprise-requests-digest] todo write failed", {
+          csmHandle,
+          error: e instanceof Error ? e.message : e,
+        });
+      }
+    }
+
     if (!dryRun) {
       if (!userId) {
         per.error = `No Slack user ID mapped for ${csmHandle} in settings.slack.csm_user_ids — cannot DM.`;
@@ -271,6 +506,10 @@ export async function runEnterpriseRequestsDigest(
     ),
     csms_notified: csmsNotified,
     rows_notified: rowsNotified,
+    rows_skipped_needs_review: skippedNeedsReview,
+    review_queue_depth: reviewQueueDepth,
+    review_queue_posted: reviewQueuePosted,
+    todos_created: todosCreated,
     no_op: null,
     dry_run: dryRun,
   };

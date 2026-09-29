@@ -7,11 +7,11 @@ import {
   upsertOrphan,
 } from "../data/enterprise-requests";
 import type {
-  EnterpriseRequestDerivedState,
   EnterpriseRequestRow,
   EnterpriseRequestsBlob,
   PromotionSource,
 } from "../data/enterprise-requests-types";
+import { hasDevsShippedMatch } from "../data/enterprise-requests-types";
 import {
   fetchChannelMessages,
   fetchPermalink,
@@ -28,10 +28,15 @@ import {
 } from "../integrations/shipped-changelog-parser";
 
 /**
- * Shipped-detection sweep — reads two Slack channels, promotes
- * matching snapshot rows to a shipped state, and files anything
+ * Shipped-detection sweep — reads two Slack channels, records which
+ * snapshot rows were carried by a release post, and files anything
  * that couldn't match (after a 14-day grace period) to the orphans
  * queue for admin review.
+ *
+ * It no longer decides any row's state. Linear does that, via
+ * `linearStateToDerived`. What this sweep produces is the yes/no
+ * `devs_shipped_match` flag (plus a link to the post) that sits beside
+ * the state and tells a CSM whether the code is provably out.
  *
  * Runs AFTER the Linear sync — the sync pulls fresh Linear state and
  * carries prior promotion metadata forward; this sweep then re-applies
@@ -89,42 +94,53 @@ function normalizeWorkType(raw: string | null): "bug" | "feature" | "ui_ux" | "o
   return "other";
 }
 
-/** Decide the target state for a row given the shipped signals it
- *  matched. Used inside the sweep — returns null when the signals
- *  don't warrant any change from the current state. */
-function decidePromotion(args: {
+/**
+ * Work out what a row's ship signals say, given what we matched.
+ *
+ * This used to be `decidePromotion`, and it chose the row's
+ * `derived_state`. It no longer does: Linear owns the state, and this
+ * function's whole output is evidence — did #devs-shipped carry this
+ * ticket, and where's the post.
+ *
+ * Returns null when nothing changes, so an idempotent re-run over the
+ * same Slack window doesn't rewrite the blob.
+ */
+function recordShipSignals(args: {
   row: EnterpriseRequestRow;
   devsShippedHit: DevsShippedHit | null;
   changelogHit: ChangelogHit | null;
   changelogFuzzyMatch: boolean;
 }): {
-  target_state: EnterpriseRequestDerivedState;
+  devs_shipped_match: boolean;
+  devs_shipped_url: string | null;
+  devs_shipped_at: string | null;
   source: PromotionSource;
   ship_url: string | null;
   ship_date: string | null;
 } | null {
   const { row, devsShippedHit, changelogHit, changelogFuzzyMatch } = args;
-  const currentState = row.derived_state;
 
-  // A changelog match (exact or fuzzy) always promotes to Live. When
-  // both channels hit, changelog wins as the source of truth for the
-  // ship_url since the changelog links to the customer-facing release.
+  // A changelog post is the strongest evidence we have — it's the
+  // customer-facing announcement — so it wins the ship_url even when
+  // #devs-shipped also carried the ticket.
   if (changelogHit) {
-    // Skip if we've already promoted from this exact source with
-    // the same permalink — idempotent re-runs.
-    if (
-      row.promotion_source === "changelog" &&
-      row.ship_url === changelogHit.ship_permalink &&
-      currentState === "Live"
-    ) {
-      return null;
-    }
+    const source: PromotionSource = changelogHit.linear_key
+      ? "changelog"
+      : changelogFuzzyMatch
+        ? "changelog_fuzzy"
+        : "changelog";
+    const shipUrl = changelogHit.ship_permalink;
+    const alreadyRecorded =
+      row.promotion_source === source &&
+      row.ship_url === shipUrl &&
+      hasDevsShippedMatch(row) === Boolean(devsShippedHit);
+    if (alreadyRecorded) return null;
     return {
-      target_state: "Live",
-      source: changelogHit.linear_key
-        ? "changelog"
-        : (changelogFuzzyMatch ? "changelog_fuzzy" : "changelog"),
-      ship_url: changelogHit.ship_permalink,
+      devs_shipped_match: Boolean(devsShippedHit),
+      devs_shipped_url: devsShippedHit?.ship_permalink ?? null,
+      devs_shipped_at: devsShippedHit?.deployed_at_iso ?? null,
+      source,
+      ship_url: shipUrl,
       ship_date: changelogHit.message_ts
         ? new Date(
             Number.parseFloat(changelogHit.message_ts) * 1000
@@ -133,50 +149,23 @@ function decidePromotion(args: {
     };
   }
 
-  // #devs-shipped only — the classification depends on the ROW's
-  // work_type label (from Linear), not what the ship parens say,
-  // because Linear is authoritative on what the ticket actually is.
   if (devsShippedHit) {
-    const rowType =
-      row.work_type === "Bug"
-        ? "bug"
-        : row.work_type === "UI/UX Improvement"
-          ? "ui_ux"
-          : row.work_type === "Feature"
-            ? "feature"
-            : normalizeWorkType(devsShippedHit.work_type_raw);
-    if (rowType === "bug" || rowType === "ui_ux" || rowType === "other") {
-      // Not a feature → straight to Live.
-      if (
-        currentState === "Live" &&
-        row.promotion_source === "devs_shipped" &&
-        row.ship_url === devsShippedHit.ship_permalink
-      ) {
-        return null;
-      }
-      return {
-        target_state: "Live",
-        source: "devs_shipped",
-        ship_url: devsShippedHit.ship_permalink,
-        ship_date: devsShippedHit.deployed_at_iso,
-      };
-    }
-    // Feature without a changelog match → beta caveat.
+    // Already flagged against this same post — nothing to write.
     if (
-      currentState === "Live, possibly in beta" &&
-      row.promotion_source === "devs_shipped" &&
-      row.ship_url === devsShippedHit.ship_permalink
+      hasDevsShippedMatch(row) &&
+      row.devs_shipped_url === devsShippedHit.ship_permalink
     ) {
       return null;
     }
-    // Never demote — if the row was already Live via a changelog
-    // hit and #devs-shipped mentions it later, keep it Live.
-    if (currentState === "Live") return null;
     return {
-      target_state: "Live, possibly in beta",
+      devs_shipped_match: true,
+      devs_shipped_url: devsShippedHit.ship_permalink,
+      devs_shipped_at: devsShippedHit.deployed_at_iso,
       source: "devs_shipped",
-      ship_url: devsShippedHit.ship_permalink,
-      ship_date: devsShippedHit.deployed_at_iso,
+      // Only claim the ship_url when nothing better (a changelog post)
+      // already set it.
+      ship_url: row.ship_url ?? devsShippedHit.ship_permalink,
+      ship_date: row.ship_date ?? devsShippedHit.deployed_at_iso,
     };
   }
 
@@ -306,65 +295,46 @@ export async function runEnterpriseRequestsShippedSweep(): Promise<ShippedSweepR
         }
       }
       const changelogHit = changelogExact ?? changelogFuzzy;
-      const decision = decidePromotion({
+      const signals = recordShipSignals({
         row,
         devsShippedHit: devsHit,
         changelogHit,
         changelogFuzzyMatch,
       });
       if (devsHit) matchedLinearKeys.add(devsHit.linear_key);
-      if (changelogExact?.linear_key) matchedLinearKeys.add(changelogExact.linear_key);
-      if (!decision) continue;
-      // Project-state gate: if the ticket is under a Linear project
-      // whose status.type isn't `completed`, defer the promotion.
-      // Rationale: shipping a single ticket doesn't mean the wider
-      // project is customer-facing yet (e.g. BEE-24713 under the
-      // still-in-progress "Workspace Library" project — telling a
-      // CSM their customer's request is Live before the surrounding
-      // feature is released would be misleading). We capture the
-      // decision in `pending_ship` and the sync's deferred-promotion
-      // pass applies it once the project flips to `completed`.
-      //
-      // Tickets with no project (null) fall through the gate — no
-      // project means no "wider release" to wait for.
-      const nextBucket = { ...(nextRows[workspaceId] ?? {}) };
-      const projectBlocks =
-        row.project_status_type &&
-        row.project_status_type !== "completed";
-      if (projectBlocks) {
-        nextBucket[issueId] = {
-          ...row,
-          pending_ship: {
-            target_state: decision.target_state,
-            source: decision.source,
-            ship_url: decision.ship_url,
-            ship_date: decision.ship_date,
-            detected_at: now,
-            project_name: row.project_name,
-            project_status_type: row.project_status_type ?? null,
-          },
-        };
-        nextRows[workspaceId] = nextBucket;
-        continue;
+      if (changelogExact?.linear_key) {
+        matchedLinearKeys.add(changelogExact.linear_key);
       }
+      if (!signals) continue;
+
+      // NOTE: no project-status gate any more. It existed to stop a
+      // single ticket shipping out of an unfinished project from
+      // claiming the whole request was Live. Nothing here claims a
+      // state now — Linear does — so there is nothing to hold back.
+      const nextBucket = { ...(nextRows[workspaceId] ?? {}) };
       nextBucket[issueId] = {
         ...row,
-        derived_state: decision.target_state,
-        promotion_source: decision.source,
-        promoted_at: now,
-        ship_url: decision.ship_url,
-        ship_date: decision.ship_date,
+        devs_shipped_match: signals.devs_shipped_match,
+        devs_shipped_url: signals.devs_shipped_url,
+        devs_shipped_at: signals.devs_shipped_at,
+        promotion_source: signals.source,
+        promoted_at: row.promoted_at ?? now,
+        ship_url: signals.ship_url,
+        ship_date: signals.ship_date,
         promotion_history: [
           ...row.promotion_history,
           {
+            // The row's state is unchanged by this sweep, so both ends
+            // of the audit entry are the Linear-derived state. What
+            // the entry records is that evidence arrived, and from
+            // where — which is the thing a skeptical CSM wants to see.
             from_state: row.derived_state,
-            to_state: decision.target_state,
-            source: decision.source,
+            to_state: row.derived_state,
+            source: signals.source,
             at: now,
-            permalink: decision.ship_url,
+            permalink: signals.ship_url,
           },
         ],
-        pending_ship: null,
       };
       nextRows[workspaceId] = nextBucket;
       promoted.push({ workspaceId, issueId });

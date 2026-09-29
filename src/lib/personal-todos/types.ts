@@ -86,6 +86,13 @@ export interface SlackSourceMeta {
   /** Sybill's deep link to the call recording / transcript, parsed
    *  out of the recap email when present. */
   sybill_call_url?: string;
+  /** For source === "enterprise_request_shipped": the Linear issue
+   *  this to-do closes the loop on. Paired with workspace_id it's the
+   *  dedupe key the digest checks before creating. */
+  linear_issue_id?: string;
+  /** Human-readable Linear key (e.g. "REQ-2207") so the panel can
+   *  render the ticket reference without a second lookup. */
+  linear_identifier?: string;
   /** For source === "renewal_milestone" | "renewal_confirmed": the
    *  workspace this todo pertains to. Lets the panel render a deep
    *  link back to the customer detail. */

@@ -13,6 +13,7 @@ import type {
 } from "../data/enterprise-requests-types";
 import { linearStateToDerived } from "../data/enterprise-requests-types";
 import {
+  completedTailActive,
   fetchOpenIssuesWithCommentsPage,
   type LinearComment,
   type LinearIssueWithComments,
@@ -54,10 +55,23 @@ const MAX_PAGES_BACKFILL = 100; // 100 × 50 = 5000 issues (belt-and-suspenders)
 export interface LinearCommentScanResult {
   processed_issues: number;
   processed_comments: number;
+  /** Issue descriptions that carried a parseable customer signal.
+   *  Reported separately from comments so a run makes it obvious
+   *  whether the description path is pulling its weight. */
+  processed_descriptions: number;
+  /** False when Linear's schema rejected the completed-tail filter and
+   *  the scan fell back to open issues only. Reported because a silent
+   *  downgrade is indistinguishable from "nothing shipped recently". */
+  completed_tail_active: boolean;
   annotated: number;
   injected: number;
   skipped_no_customer_signal: number;
   skipped_unresolvable: number;
+  /** Rows whose `last_comment_at` this run moved forward. Counts rows,
+   *  not issues — one comment on a ticket with four attached customers
+   *  stamps four. Reported so a run that resolved nothing still shows
+   *  it did engagement work. */
+  engagement_stamped: number;
   cursor_advanced_to: string | null;
   backfill: boolean;
   ok: boolean;
@@ -251,10 +265,13 @@ export async function runLinearCommentScan(
   const result: LinearCommentScanResult = {
     processed_issues: 0,
     processed_comments: 0,
+    processed_descriptions: 0,
+    completed_tail_active: false,
     annotated: 0,
     injected: 0,
     skipped_no_customer_signal: 0,
     skipped_unresolvable: 0,
+    engagement_stamped: 0,
     cursor_advanced_to: cursor.scan_after,
     backfill,
     ok: true,
@@ -267,11 +284,18 @@ export async function runLinearCommentScan(
   // trimmed issues fit in a few MB.
   interface CollectedComment {
     issue: LinearIssueWithComments;
-    comment: LinearComment;
+    /** Null when the signal came from the issue DESCRIPTION rather
+     *  than a comment — there's no comment to anchor the permalink
+     *  to, so the meta falls back to the issue URL + creator. */
+    comment: LinearComment | null;
     parsed: ReturnType<typeof parseIntakeMessage>;
   }
   const collected: CollectedComment[] = [];
   const allPubIds: string[] = [];
+  /** issue id → newest comment createdAt seen this run. Feeds
+   *  `last_comment_at`, which is issue-level: it gets stamped on every
+   *  workspace's row for the ticket, not just ones this run resolved. */
+  const newestCommentByIssue = new Map<string, string>();
 
   const maxPages = backfill ? MAX_PAGES_BACKFILL : MAX_PAGES_INCREMENTAL;
   let after: string | null = null;
@@ -282,6 +306,40 @@ export async function runLinearCommentScan(
     if (issues.length === 0) break;
     for (const issue of issues) {
       result.processed_issues += 1;
+
+      // Description pass. Juliet's skill writes the structured
+      // `Publication ID` / `User Email` block into either a comment
+      // or the issue body depending on how the ticket was filed;
+      // only the comment case was ever read. BEE-24879 shipped for
+      // Daily Drop carrying a perfectly parseable block in its
+      // description and never reached the tracker.
+      //
+      // Runs before comments so the description becomes the intake
+      // anchor when both carry a signal — the description is where
+      // the skill puts the canonical record, and a later comment
+      // shouldn't displace it.
+      if (issue.description) {
+        const descParsed = parseIntakeMessage(issue.description);
+        if (
+          descParsed.publication_ids.length > 0 ||
+          descParsed.owner_emails.length > 0
+        ) {
+          // Incremental runs skip issues untouched since the cursor.
+          // Unlike comments (which carry their own updatedAt) the
+          // description's freshness is the issue's updatedAt.
+          if (cutoff == null || Date.parse(issue.updatedAt) >= cutoff) {
+            collected.push({ issue, comment: null, parsed: descParsed });
+            allPubIds.push(...descParsed.publication_ids);
+            result.processed_descriptions += 1;
+          }
+        }
+      }
+      if (
+        issue.updatedAt &&
+        (!newestUpdatedAt || issue.updatedAt > newestUpdatedAt)
+      ) {
+        newestUpdatedAt = issue.updatedAt;
+      }
       // Advance the "newest seen" tracker off whichever comment has
       // the highest updatedAt on this issue (fallback to the issue's
       // own state — we can't read updatedAt at issue level from this
@@ -290,6 +348,23 @@ export async function runLinearCommentScan(
       for (const c of issue.comments?.nodes ?? []) {
         result.processed_comments += 1;
         if (!localMaxTs || c.updatedAt > localMaxTs) localMaxTs = c.updatedAt;
+        // Engagement tracking, separate from the intake parse below.
+        // EVERY comment counts here — a dev note, a PM question, a CSM
+        // attaching a second customer. The parse further down only
+        // cares about comments carrying a customer signal, but "when
+        // was this ticket last touched" shouldn't require one.
+        //
+        // createdAt, not updatedAt: editing a two-year-old comment
+        // shouldn't read as fresh engagement. Not gated on the
+        // incremental cutoff either — we want the true newest comment
+        // on the issue, and the 20 we're handed are cheap to fold.
+        if (
+          c.createdAt &&
+          (!newestCommentByIssue.has(issue.id) ||
+            c.createdAt > (newestCommentByIssue.get(issue.id) as string))
+        ) {
+          newestCommentByIssue.set(issue.id, c.createdAt);
+        }
         // Incremental cutoff — orderBy is by issue.updatedAt DESC
         // in Linear (Linear defaults to DESC on `updatedAt` orderBy),
         // so once every comment on a page is older than our cutoff
@@ -341,17 +416,31 @@ export async function runLinearCommentScan(
       continue;
     }
     const { workspaceId, matched_via } = resolved;
-    const meta: LinearCommentMeta = {
-      issue_id: issue.id,
-      issue_identifier: issue.identifier,
-      comment_id: comment.id,
-      permalink: comment.url,
-      author_email: comment.user?.email ?? null,
-      author_name: comment.user?.name ?? null,
-      posted_at: comment.createdAt,
-      body_preview: commentPreview(comment.body ?? ""),
-      matched_via,
-    };
+    const meta: LinearCommentMeta = comment
+      ? {
+          issue_id: issue.id,
+          issue_identifier: issue.identifier,
+          source: "comment",
+          comment_id: comment.id,
+          permalink: comment.url,
+          author_email: comment.user?.email ?? null,
+          author_name: comment.user?.name ?? null,
+          posted_at: comment.createdAt,
+          body_preview: commentPreview(comment.body ?? ""),
+          matched_via,
+        }
+      : {
+          issue_id: issue.id,
+          issue_identifier: issue.identifier,
+          source: "description",
+          comment_id: null,
+          permalink: issue.url,
+          author_email: issue.creator?.email ?? null,
+          author_name: issue.creator?.name ?? null,
+          posted_at: issue.createdAt,
+          body_preview: commentPreview(issue.description ?? ""),
+          matched_via,
+        };
     const bucket = rows[workspaceId] ?? {};
     const existing = bucket[issue.id];
     if (existing) {
@@ -369,6 +458,33 @@ export async function runLinearCommentScan(
     rows[workspaceId] = bucket;
     result.injected += 1;
   }
+
+  // ── Engagement stamp ────────────────────────────────────────────
+  // Separate pass, and deliberately AFTER the injection pass so rows
+  // created above get stamped too.
+  //
+  // This is the half that makes an old ticket read as recently
+  // engaged. The injection pass only touches workspaces a comment
+  // RESOLVED to; a comment on a ticket whose customers are already
+  // attached resolves to rows that already exist, and one that
+  // resolves to nobody is skipped entirely. In both cases the ticket
+  // was still worked on, and every row for it should say so.
+  let engagementStamped = 0;
+  for (const [issueId, commentAt] of newestCommentByIssue) {
+    for (const [workspaceId, bucket] of Object.entries(rows)) {
+      const row = bucket[issueId];
+      if (!row) continue;
+      if (row.last_comment_at && row.last_comment_at >= commentAt) continue;
+      rows[workspaceId] = {
+        ...bucket,
+        [issueId]: { ...row, last_comment_at: commentAt },
+      };
+      engagementStamped += 1;
+    }
+  }
+  result.engagement_stamped = engagementStamped;
+
+  result.completed_tail_active = completedTailActive();
 
   const nextBlob: EnterpriseRequestsBlob = {
     ...snapshot,

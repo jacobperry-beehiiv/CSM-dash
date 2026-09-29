@@ -1,4 +1,8 @@
 import { NextResponse } from "next/server";
+import {
+  resolveAppOrigin,
+  resolveGoogleRedirectUri,
+} from "@/lib/auth/google-redirect";
 import { saveToken } from "@/lib/data/gmail-token";
 import { setActiveEmail } from "@/lib/data/active-user";
 import { invalidateAliasCache } from "@/lib/integrations/gmail-aliases";
@@ -36,10 +40,14 @@ export async function GET(req: Request) {
   const state = url.searchParams.get("state");
   const errorParam = url.searchParams.get("error");
   const next = state ? decodeURIComponent(state) : "/settings/gmail";
+  // Bounce back to the origin the browser actually reached us on, not
+  // whatever `req.url` reconstructs to — otherwise a CSM who connected
+  // Gmail from a preview alias lands on prod afterwards.
+  const appOrigin = resolveAppOrigin(req) ?? url.origin;
 
   if (errorParam) {
     return NextResponse.redirect(
-      `${url.origin}${next}?gmail_error=${encodeURIComponent(errorParam)}`
+      `${appOrigin}${next}?gmail_error=${encodeURIComponent(errorParam)}`
     );
   }
   if (!code) {
@@ -57,9 +65,7 @@ export async function GET(req: Request) {
       { status: 500 }
     );
   }
-  const redirect =
-    process.env.GOOGLE_OAUTH_REDIRECT_URI ??
-    `${url.origin}/api/auth/google/callback`;
+  const redirect = resolveGoogleRedirectUri(req);
 
   const tokenRes = await fetch("https://oauth2.googleapis.com/token", {
     method: "POST",
@@ -75,7 +81,7 @@ export async function GET(req: Request) {
   if (!tokenRes.ok) {
     const txt = await tokenRes.text();
     return NextResponse.redirect(
-      `${url.origin}${next}?gmail_error=${encodeURIComponent(
+      `${appOrigin}${next}?gmail_error=${encodeURIComponent(
         `token_exchange_failed: ${txt.slice(0, 200)}`
       )}`
     );
@@ -84,7 +90,7 @@ export async function GET(req: Request) {
 
   if (!tok.refresh_token) {
     return NextResponse.redirect(
-      `${url.origin}${next}?gmail_error=${encodeURIComponent(
+      `${appOrigin}${next}?gmail_error=${encodeURIComponent(
         "no_refresh_token — try revoking the existing grant at myaccount.google.com/permissions and connecting again"
       )}`
     );
@@ -114,5 +120,5 @@ export async function GET(req: Request) {
   // 5-min TTL expired.
   invalidateAliasCache(email);
 
-  return NextResponse.redirect(`${url.origin}${next}?gmail_connected=1`);
+  return NextResponse.redirect(`${appOrigin}${next}?gmail_connected=1`);
 }

@@ -35,6 +35,7 @@ export const AUTOMATED_SOURCES = [
   "slack_reaction",
   "scheduled",
   "feature_request",
+  "enterprise_request_shipped",
 ] as const satisfies ReadonlyArray<TodoSource>;
 
 export type AutomatedSource = (typeof AUTOMATED_SOURCES)[number];
@@ -206,6 +207,15 @@ export const SOURCE_METADATA: Record<
     supports_prior_stage: true,
     supports_original_text: false,
     supports_renewal: true,
+  },
+  enterprise_request_shipped: {
+    label: "Enterprise request shipped",
+    description:
+      "Fired by the Monday Enterprise Request Loop digest for each feature request from the CSM's book that shipped and cleared the confidence gate. `{{request_title}}` and `{{request_identifier}}` interpolate to the Linear issue. Bind an outreach template here so the panel button drafts the close-the-loop note in one click.",
+    supports_milestone: false,
+    supports_prior_stage: false,
+    supports_original_text: false,
+    supports_renewal: false,
   },
   sybill_callrecap: {
     label: "Sybill call recap action item",
@@ -398,6 +408,19 @@ export const DEFAULT_TODO_SOURCE_CONFIGS: Record<
     // just echoes the original text.
     phrasing_template: "{{original_text}}",
     default_action: { kind: "none" },
+  },
+  enterprise_request_shipped: {
+    phrasing_template:
+      "Tell {{company_name}} their request shipped — {{request_identifier}}: {{request_title}}",
+    // No template bound out of the box. The outreach itself already
+    // has a home: the Live requests tab's Draft-outreach button opens
+    // OutreachModal with the feature-shipped scenario and the ship
+    // link pre-filled. An admin can bind an email template here if
+    // they'd rather drive it from the to-do panel.
+    default_action: { kind: "none" },
+    // Give the CSM a few days to actually send it before the to-do
+    // reads as overdue — the digest fires Monday morning.
+    due_offset_days: 3,
   },
   slack_assign: {
     // The 16-step playbook titles are step-specific; we echo the
