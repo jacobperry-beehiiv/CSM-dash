@@ -143,6 +143,15 @@ export default auth((req) => {
   // live-quarter-checkin-sweep is dual session/Bearer-CRON_SECRET.
   if (pathname.startsWith("/api/lifecycle")) return;
 
+  // Zendesk overlay — the 6-hourly refresh workflow POSTs here. Added
+  // with that workflow; before it, nothing scheduled hit this path, so
+  // the missing exemption was latent rather than breaking.
+  //
+  // Prefix for the same reason as the two above: both routes under it
+  // authenticate themselves — the GET reads the cached blob behind
+  // `auth()`, the refresh POST is dual session/Bearer-CRON_SECRET.
+  if (pathname.startsWith("/api/zendesk-tickets")) return;
+
   if (!req.auth) {
     const url = req.nextUrl.clone();
     url.pathname = "/login";

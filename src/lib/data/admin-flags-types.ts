@@ -20,7 +20,9 @@ export type FeatureId =
   | "upgrade-analysis"
   | "news-feed"
   | "enterprise-requests"
-  | "lifecycle-board";
+  | "lifecycle-board"
+  | "feature-request-board"
+  | "ad-campaigns";
 
 /** Per-feature gate state. Defaults to "unrestricted" — everyone who
  *  passes the feature's own eligibility check (e.g. CSM with Gmail
@@ -199,6 +201,22 @@ export const FEATURE_METADATA: ReadonlyArray<FeatureMetadata> = [
       "Requires LINEAR_API_KEY in the deployment env. The nightly sync + shipped sweep run regardless of who has the flag; this flag only controls surface visibility (Requests section, /csm tab, chip, admin pages).",
   },
   {
+    id: "feature-request-board",
+    label: "Mission Control feature-request board",
+    description:
+      "The internal /feature-requests board — submit ideas for Mission Control itself, vote, and drag-rank the queue. Nothing to do with customer feature requests (that's the Enterprise Request Loop).",
+    eligibility_note:
+      "Gates the page, the nav link and the /api/feature-requests endpoint together, so a direct link 404s rather than rendering for someone off the list.",
+  },
+  {
+    id: "ad-campaigns",
+    label: "Live ad network campaigns",
+    description:
+      "The /csm/ad-campaigns reference view: every ad network campaign currently running, with advertiser tier, payout terms, flight window and targeting. Not scoped to a CSM's book — it answers \u201cwhat could this publication run?\u201d.",
+    eligibility_note:
+      "Reads the Swarm production replica through Metabase on every load. Restricting also keeps that query off the critical path for people who don't use the view.",
+  },
+  {
     id: "lifecycle-board",
     label: "Lifecycle board (beta)",
     description:
@@ -269,6 +287,20 @@ export const DEFAULT_FLAGS: AdminFlags = {
     "lifecycle-board": {
       restricted: true,
       allowed_emails: ["chris.claiborne@beehiiv.com", "jacob.perry@beehiiv.com"],
+    },
+    // Ships dark — was always-on and visible to everyone in the nav.
+    // Gated on the way to main so the board isn't discoverable before
+    // we've decided it's a thing the team uses.
+    "feature-request-board": {
+      restricted: true,
+      allowed_emails: ["jacob.perry@beehiiv.com"],
+    },
+    // Ships dark — same story. Widen via /admin/flags once the view
+    // has been sanity-checked against what the ad network team
+    // expects to see.
+    "ad-campaigns": {
+      restricted: true,
+      allowed_emails: ["jacob.perry@beehiiv.com"],
     },
   },
 };

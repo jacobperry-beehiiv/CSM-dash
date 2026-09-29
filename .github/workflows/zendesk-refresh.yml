@@ -1,0 +1,80 @@
+name: zendesk-refresh
+
+# Refreshes the per-workspace Zendesk support-ticket overlay — the
+# 30-day counters behind the "🎫 12 · 3 high · 1 urgent" chip on the
+# customer panels.
+#
+# This workflow is new as of 2026-09-29, but the code it drives is
+# not. `zendesk-tickets.ts` has always described itself as "refreshed
+# on a 6-hour cron sweep" and the endpoint called itself
+# "workflow-gated" — neither was true. No workflow existed, and the
+# route was session-only, so nothing could have driven it on a
+# schedule. The overlay only ever held whatever a human had triggered
+# by hand, and a workspace missing from it renders as "—", which is
+# what a workspace with zero tickets renders as too. So it looked
+# fine.
+#
+# Every 6 hours because that's the cadence the module was written for
+# and support volume is steady (~2,100 tickets/30d across ~1,500
+# workspaces as of 2026-09-29). Offset to :20 past so it doesn't stack
+# on the top-of-hour jobs.
+#
+# The sweep is one Metabase Postgres query pair over the whole book,
+# not per-workspace fan-out, so a book-wide run is cheap. Empty POST
+# body = "every workspace in the book".
+#
+# Required repo secrets:
+#   • CRON_SECRET    — bearer; same value as the Vercel env var
+#   • DASHBOARD_URL  — root URL, no trailing slash
+#
+# Triggers:
+#   • every 6 hours at :20
+#   • manually via "Run workflow"
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "20 */6 * * *"
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify required secrets are set
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          DASHBOARD_URL: ${{ secrets.DASHBOARD_URL }}
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+        run: |
+          missing=()
+          for v in CRON_SECRET DASHBOARD_URL VERCEL_AUTOMATION_BYPASS_SECRET; do
+            if [ -z "${!v}" ]; then
+              missing+=("$v")
+            fi
+          done
+          if [ "${#missing[@]}" -ne 0 ]; then
+            echo "::error::Missing required repo secret(s): ${missing[*]}"
+            exit 1
+          fi
+          echo "All required secrets present."
+
+      - name: POST /api/zendesk-tickets/refresh
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          DASHBOARD_URL: ${{ secrets.DASHBOARD_URL }}
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+        run: |
+          set -e
+          response=$(curl -sS -w "\n%{http_code}" -X POST \
+            -H "Authorization: Bearer ${CRON_SECRET}" \
+            -H "x-vercel-protection-bypass: ${VERCEL_AUTOMATION_BYPASS_SECRET}" \
+            -H "Content-Type: application/json" \
+            "${DASHBOARD_URL}/api/zendesk-tickets/refresh")
+          body=$(echo "$response" | sed '$d')
+          code=$(echo "$response" | tail -n1)
+          echo "HTTP $code"
+          echo "$body"
+          if [ "$code" != "200" ]; then
+            echo "::error::Zendesk overlay refresh failed with HTTP $code"
+            exit 1
+          fi

@@ -1,5 +1,6 @@
 import { auth } from "@/auth";
-import { redirect } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
+import { isFeatureEnabledFor } from "@/lib/auth/feature-flags";
 import { runAdCampaigns } from "@/lib/engines/ad-campaigns";
 import { AdCampaignsView } from "@/components/ad-campaigns-view";
 
@@ -24,6 +25,12 @@ export const maxDuration = 60;
 export default async function AdCampaignsPage() {
   const session = await auth();
   if (!session?.user?.email) redirect("/api/auth/signin");
+  // Flag-gated behind `ad-campaigns`. Checked before runAdCampaigns()
+  // so a denied viewer doesn't trigger the Metabase query on the way
+  // to being turned away.
+  if (!(await isFeatureEnabledFor("ad-campaigns", session.user.email))) {
+    notFound();
+  }
 
   let report;
   try {

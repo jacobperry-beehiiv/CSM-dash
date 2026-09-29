@@ -1,3 +1,6 @@
+import { notFound } from "next/navigation";
+import { auth } from "@/auth";
+import { isFeatureEnabledFor } from "@/lib/auth/feature-flags";
 import { FeatureRequestsPanel } from "@/components/feature-requests-panel";
 
 export const dynamic = "force-dynamic";
@@ -10,12 +13,21 @@ export const metadata = {
  * Feature request board page.
  *
  * Lightweight server shell — the panel is the whole interactive
- * surface (composer + list + voting + reorder). Kept thin because
- * the page-level work is just authentication via the layout's
- * existing chrome; everything else is client-side state against the
- * /api/feature-requests atomic-ops endpoint.
+ * surface (composer + list + voting + reorder). Everything else is
+ * client-side state against the /api/feature-requests atomic-ops
+ * endpoint.
+ *
+ * Flag-gated behind `feature-request-board`. `notFound()` rather than
+ * a redirect so a direct link reads as "no such page" instead of
+ * advertising that something exists here — matching how the other
+ * dark-shipped surfaces behave. The API route carries the same gate,
+ * because hiding the page doesn't hide the endpoint.
  */
-export default function FeatureRequestsPage() {
+export default async function FeatureRequestsPage() {
+  const session = await auth();
+  if (!(await isFeatureEnabledFor("feature-request-board", session?.user?.email))) {
+    notFound();
+  }
   return (
     <div className="space-y-6">
       <div>
