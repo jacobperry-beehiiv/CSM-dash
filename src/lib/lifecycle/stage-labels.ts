@@ -25,6 +25,17 @@
 const STAGE_DISPLAY_LABELS: Record<string, string> = {
   "Migration & warm-up": "Migrating",
   Live: "To-do",
+  // Live board's computed quarter-countdown columns — "Q4" is actually
+  // MONTHLY_COLUMN (live-quarter.ts), a separate monthly-billed bucket
+  // outside the Q1→Renewal annual countdown, hence "Monthly" rather
+  // than "Annual - Q4". None of these four are ever stored anywhere
+  // (the Live board is fully computed, no field to orphan) — purely
+  // relabeling for the column headers.
+  Q1: "Annual - Q1",
+  Q2: "Annual - Q2",
+  Q3: "Annual - Q3",
+  Renewal: "Annual - Q4 Renewal",
+  Q4: "Monthly",
 };
 
 export function stageDisplayLabel(stage: string): string {

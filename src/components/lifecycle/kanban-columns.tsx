@@ -2,6 +2,8 @@
 
 import { useState } from "react";
 import type { LifecycleCard } from "@/lib/lifecycle/card";
+import type { Customer } from "@/lib/types";
+import { hubspotCompanyUrl, masqueradeUrl } from "@/lib/links";
 import { fmtCurrency } from "../format";
 import { StatusBadge } from "../status-badge";
 import { StageTodoList } from "./stage-todo-list";
@@ -80,6 +82,20 @@ interface Props {
    *  checklist doesn't have an equivalent recovery action. Omitted
    *  entirely on boards where an empty checklist is unremarkable. */
   renderEmptyChecklist?: (card: LifecycleCard) => React.ReactNode;
+  /** Colors each checklist group's header by how soon its earliest
+   *  actionable to-do is due (urgencyHeaderClass in
+   *  @/lib/lifecycle/card) — only the Live board passes this today.
+   *  Onboarding's cards are manually placed by stage already, so a
+   *  date-urgency signal is less useful there; left off rather than
+   *  risk two competing visual cues. */
+  showUrgencyColors?: boolean;
+  /** Opens the outreach template-picker modal for this card's customer
+   *  — the caller owns the modal itself (renders <OutreachModal> once
+   *  at the board level, same pattern as RowActions on the customer
+   *  table), this just supplies the click. Omitted entirely hides the
+   *  Draft icon; Masq/HubSpot render regardless since they're plain
+   *  links needing no board-level state. */
+  onDraft?: (customer: Customer) => void;
 }
 
 /**
@@ -112,6 +128,8 @@ export function KanbanColumns({
   alwaysShowGroups,
   renderCardMeta,
   renderEmptyChecklist,
+  showUrgencyColors,
+  onDraft,
 }: Props) {
   const [dragOverColumn, setDragOverColumn] = useState<string | null>(null);
 
@@ -210,33 +228,42 @@ export function KanbanColumns({
                         : undefined
                     }
                     onClick={() => onCardClick(c.customer.workspace_id)}
-                    className={`bg-surface border border-border rounded-md p-2.5 hover:border-border-strong transition-colors ${
+                    className={`relative bg-surface border border-border rounded-md p-2.5 hover:border-border-strong transition-colors ${
                       draggable ? "cursor-grab active:cursor-grabbing" : "cursor-pointer"
                     }`}
                   >
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="font-medium text-sm text-fg truncate">
-                        {c.customer.company_name ?? c.customer.workspace_name}
-                      </div>
-                      {c.atRisk ? (
-                        <span
-                          title={c.atRisk.flags.map((f) => f.label).join(", ")}
-                          className="flex-shrink-0 inline-block px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-red-100 text-red-800 dark:text-red-300 whitespace-nowrap"
-                        >
-                          at-risk
-                        </span>
-                      ) : null}
+                    <div className="font-medium text-sm text-fg truncate">
+                      {c.customer.company_name ?? c.customer.workspace_name}
                     </div>
                     <div className="text-xs text-muted mt-1">
-                      {fmtCurrency(c.customer.arr)}
+                      ARR: {fmtCurrency(c.customer.arr)}
                     </div>
-                    <div className="flex items-center justify-between mt-2">
-                      {renderCardMeta ? (
+                    {(() => {
+                      const meta = renderCardMeta ? (
                         renderCardMeta(c)
                       ) : (
                         <StatusBadge value={c.customer.property_company_status} />
-                      )}
-                    </div>
+                      );
+                      // Skip the wrapper entirely when there's nothing
+                      // to show (e.g. Live board's Q1/Q2/Q3/Monthly
+                      // cards) rather than leaving an empty, still-
+                      // margined row between the ARR line and the
+                      // actions row below.
+                      return meta ? (
+                        <div className="flex items-center justify-between mt-2">
+                          {meta}
+                        </div>
+                      ) : null;
+                    })()}
+                    {/* A horizontal row, not a column — its height is
+                        constant regardless of how many icons it holds
+                        (3 vs. 4 with the at-risk pill), so unlike a
+                        vertical stack it can sit safely in normal flow
+                        without risking a fixed-height budget getting
+                        blown by one more icon. See CardActions' own
+                        comment for why it moved off absolute
+                        positioning entirely. */}
+                    <CardActions card={c} onCardClick={onCardClick} onDraft={onDraft} />
                     {onToggleStep ? (
                       c.steps.length === 0 && renderEmptyChecklist ? (
                         renderEmptyChecklist(c)
@@ -296,6 +323,7 @@ export function KanbanColumns({
                               ? undefined
                               : alwaysShowGroups
                           }
+                          showUrgencyColors={showUrgencyColors}
                         />
                       )
                     ) : null}
@@ -344,6 +372,7 @@ export function KanbanColumns({
                                 onAddTodo(c.customer.workspace_id, group, fields)
                         }
                         alwaysShowGroups={alwaysShowGroups}
+                        showUrgencyColors={showUrgencyColors}
                       />
                     ) : null}
                   </div>
@@ -353,6 +382,116 @@ export function KanbanColumns({
           </div>
         );
       })}
+    </div>
+  );
+}
+
+/**
+ * Icon action row on each card: the same Masq/HubSpot/Draft actions
+ * the customer table's RowActions offers, each in its own pill so
+ * there's a real clickable/tappable target instead of a bare glyph,
+ * plus an at-risk flag pill last when the account has one. No icon
+ * library in this repo (see RowActions' own comment), so these are
+ * plain glyphs/monograms rather than SVGs — the pill just gives them
+ * a bounded, buttony hit area at the same glyph size.
+ *
+ * A horizontal row, not a vertical stack, and rendered in normal flow
+ * rather than absolutely positioned — a row's height stays constant
+ * (~1 pill tall) no matter how many pills it holds, so adding the
+ * at-risk pill can't grow it the way a 4-tall column did. That column
+ * (absolutely positioned in the corner) used to overlap the checklist
+ * header below it on at-risk cards, since its height scaled with pill
+ * count but the space reserved for it didn't.
+ *
+ * Masq/HubSpot/Draft stopPropagation on click (and the whole cluster
+ * stops mousedown) so a click here never also fires the card's own
+ * onClick (opening the detail modal) — same reasoning
+ * stage-todo-list.tsx's checklist wrapper already documents, including
+ * why mousedown needs its own stop on the draggable Onboarding board
+ * (a real anchor/button inside a draggable=true ancestor can still
+ * register the mousedown as the start of a card drag). The at-risk
+ * pill is the one exception: clicking it explicitly calls
+ * `onCardClick` itself — same modal a plain click on the card already
+ * opens, which now shows the "why flagged" + resolve UI up top (see
+ * lifecycle-card-modal.tsx) — so there's no new UI to build here, just
+ * a second way to reach the existing one.
+ */
+function CardActions({
+  card,
+  onCardClick,
+  onDraft,
+}: {
+  card: LifecycleCard;
+  onCardClick: (workspaceId: string) => void;
+  onDraft?: (customer: Customer) => void;
+}) {
+  const masquerade = masqueradeUrl(card.customer.owner_email);
+  const hubspot = hubspotCompanyUrl(card.customer.hubspot_company_id);
+  if (!card.atRisk && !masquerade && !hubspot && !onDraft) return null;
+
+  const pill =
+    "w-6 h-6 flex-shrink-0 flex items-center justify-center rounded-full border border-border-strong bg-surface-2 hover:bg-canvas hover:border-border transition-colors";
+
+  return (
+    <div
+      className="flex items-center justify-start gap-1 mt-2"
+      onMouseDown={(e) => e.stopPropagation()}
+      draggable={false}
+    >
+      {masquerade ? (
+        <a
+          href={masquerade}
+          target="_blank"
+          rel="noopener noreferrer"
+          title="Masquerade into workspace"
+          aria-label="Masquerade"
+          onClick={(e) => e.stopPropagation()}
+          className={`${pill} text-xs leading-none`}
+        >
+          👻
+        </a>
+      ) : null}
+      {hubspot ? (
+        <a
+          href={hubspot}
+          target="_blank"
+          rel="noopener noreferrer"
+          title="Open company in HubSpot"
+          aria-label="HubSpot"
+          onClick={(e) => e.stopPropagation()}
+          className={`${pill} text-[9px] font-bold text-[#ff7a59]`}
+        >
+          HS
+        </a>
+      ) : null}
+      {onDraft ? (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onDraft(card.customer);
+          }}
+          title="Draft outreach (template picker)"
+          aria-label="Draft outreach"
+          className={`${pill} text-xs leading-none`}
+        >
+          ✉️
+        </button>
+      ) : null}
+      {card.atRisk ? (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onCardClick(card.customer.workspace_id);
+          }}
+          title={`At risk: ${card.atRisk.flags.map((f) => f.label).join(", ")} — click for details`}
+          aria-label="At risk — view details"
+          className={`${pill} text-xs leading-none`}
+        >
+          🚩
+        </button>
+      ) : null}
     </div>
   );
 }

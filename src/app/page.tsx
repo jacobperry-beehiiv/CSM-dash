@@ -89,6 +89,15 @@ export default async function MissionControl({
     "news-feed",
     viewerEmail
   );
+  // Gates every Lifecycle-board-related affordance OUTSIDE the
+  // Lifecycle tab itself (the "Hide company to-dos" toggle + the
+  // "Lifecycle View" link below, and anything added later in this
+  // vein) — someone without the flag shouldn't see UI referencing a
+  // feature they can't open.
+  const lifecycleBoardEnabled = await isFeatureEnabledFor(
+    "lifecycle-board",
+    viewerEmail
+  );
   const headingMascot =
     mascots.length > 0
       ? mascots[Math.floor(Math.random() * mascots.length)]
@@ -127,6 +136,7 @@ export default async function MissionControl({
       <PersonalTodosPanel
         sybillIngestEnabled={sybillIngestEnabled}
         playbookCompanies={playbookCompanies}
+        lifecycleBoardEnabled={lifecycleBoardEnabled}
       />
       {newsFeedEnabled ? <BookNewsPanel viewerCsmHandle={csm} /> : null}
       <FeatureUpdatesPanel />

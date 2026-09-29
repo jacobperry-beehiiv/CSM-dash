@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { compareByRenewalDate, type LifecycleCard, type LifecycleStep } from "@/lib/lifecycle/card";
+import { compareByUrgency, type LifecycleCard, type LifecycleStep } from "@/lib/lifecycle/card";
 import {
   toggleLifecycleStep,
   patchLifecycleStepDueDate,
@@ -26,15 +26,19 @@ import type { AddTodoFields } from "./add-todo-modal";
 import { KanbanColumns } from "./kanban-columns";
 import { LifecycleCardModal } from "./lifecycle-card-modal";
 import { LifecycleFilterBar } from "./lifecycle-filter-bar";
+import { OutreachModal } from "../outreach-modal";
+import type { Customer } from "@/lib/types";
 import { fmtDate } from "../format";
 
 // No "Unsorted" column here — unlike Onboarding, this board is fully
 // computed (computeLiveQuarter always returns one of these 5 labels,
 // never null), so an Unsorted catch-all would only ever sit empty.
-// "Q4" is the monthly-billed bucket — see live-quarter.ts's module
-// doc comment for why it's kept separate from the Q1→Renewal annual
-// countdown instead of folded in.
-const LIVE_QUARTER_COLUMNS = ["Q1", "Q2", "Q3", MONTHLY_COLUMN, "Renewal"];
+// MONTHLY_COLUMN ("Q4" internally, "Monthly" displayed — see
+// stage-labels.ts) is the monthly-billed bucket, kept separate from
+// the Q1→Renewal annual countdown (see live-quarter.ts's module doc
+// comment) and leads the row rather than sitting inside it, since it
+// isn't really a step in that countdown.
+const LIVE_QUARTER_COLUMNS = [MONTHLY_COLUMN, "Q1", "Q2", "Q3", "Renewal"];
 
 interface Props {
   cards: LifecycleCard[];
@@ -66,6 +70,7 @@ interface Props {
 export function LiveBoard({ cards: initialCards, csms }: Props) {
   const [cards, setCards] = useState(initialCards);
   const [openWorkspaceId, setOpenWorkspaceId] = useState<string | null>(null);
+  const [outreachFor, setOutreachFor] = useState<Customer | null>(null);
   const [search, setSearch] = useState("");
   const [zendeskOn, setZendeskOn] = useState(false);
   const zendeskOverlay = useZendeskOverlay();
@@ -110,7 +115,7 @@ export function LiveBoard({ cards: initialCards, csms }: Props) {
       const list = m.get(col) ?? m.get("Q1")!;
       list.push(c);
     }
-    for (const list of m.values()) list.sort(compareByRenewalDate);
+    for (const list of m.values()) list.sort((x, y) => compareByUrgency(x, y));
     return m;
   }, [visibleCards, columns]);
 
@@ -314,6 +319,7 @@ export function LiveBoard({ cards: initialCards, csms }: Props) {
         csms={csms}
         zendeskOn={zendeskOn}
         onToggleZendesk={() => setZendeskOn((v) => !v)}
+        showUrgencyLegend
       />
       <KanbanColumns
         columns={columns}
@@ -335,18 +341,33 @@ export function LiveBoard({ cards: initialCards, csms }: Props) {
         onAddTodo={(workspaceId, group, fields) =>
           void handleAddTodo(workspaceId, group, fields)
         }
+        showUrgencyColors
+        onDraft={setOutreachFor}
+        // Only the Renewal column shows a renewal-date line at all —
+        // Monthly/Q1/Q2/Q3 already communicate where an account sits
+        // in its cycle via which column it's in, so the date line was
+        // redundant there and just ate vertical space every card needs
+        // for its action-icon row now. A monthly account can never
+        // reach stage "Renewal" (computeLiveQuarter checks that first),
+        // so this never needs a "Monthly billing" fallback here either.
         renderCardMeta={(c) =>
-          c.stage === MONTHLY_COLUMN ? (
-            <span className="text-xs text-subtle">Monthly billing</span>
-          ) : (
+          c.stage === "Renewal" ? (
             <span className="text-xs text-subtle">
-              Renews {fmtDate(c.customer.contract_renewal)}
+              {c.customer.contract_renewal
+                ? `Renews ${fmtDate(c.customer.contract_renewal)}`
+                : // Rare: arrived via the tenure-fallback bucketing
+                  // (see computeLiveQuarter) with no real contract
+                  // date at all.
+                  "No renewal date on file"}
             </span>
-          )
+          ) : null
         }
       />
       {openCard ? (
         <LifecycleCardModal card={openCard} onClose={() => setOpenWorkspaceId(null)} />
+      ) : null}
+      {outreachFor ? (
+        <OutreachModal customer={outreachFor} onClose={() => setOutreachFor(null)} />
       ) : null}
     </>
   );
