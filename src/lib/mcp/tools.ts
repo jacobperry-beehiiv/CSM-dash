@@ -7,6 +7,15 @@ import { getTeamTasks, saveTeamTasks } from "../team-tasks/store";
 import { newMemberId, type TeamTask, type TaskPriority } from "../team-tasks/types";
 import { setOverride } from "../data/customer-overrides";
 import { invalidateCustomerCache } from "../data/load-customers";
+import { applyTodoOps } from "../personal-todos/store";
+import { userKeyFromEmail } from "../personal-todos/identity";
+import {
+  newTodoId,
+  type PersonalTodo,
+  type TodoPriority,
+} from "../personal-todos/types";
+import { CHECKLIST_GROUP_OPTIONS } from "../lifecycle/checklist-groups";
+import { LIVE_ONGOING_GROUP } from "../lifecycle/live-quarter";
 import type { Customer, RiskFlagCode } from "../types";
 
 /**
@@ -547,6 +556,209 @@ const teamTasksAdd: Tool = {
   },
 };
 
+// ─── personal_todos.add ───────────────────────────────────────────
+
+const CHECKLIST_GROUP_VALUES = CHECKLIST_GROUP_OPTIONS.map((g) => g.value);
+const YMD = /^\d{4}-\d{2}-\d{2}$/;
+const TODO_PRIORITIES: TodoPriority[] = ["high", "medium", "low"];
+
+/** Resolves a free-text company reference to exactly one customer, or
+ *  an error listing the candidates so Claude can ask the CSM which
+ *  one they meant. Tries the unambiguous identifiers first (workspace
+ *  id, Stripe id), then exact name, then substring — and collapses
+ *  matches that share a hubspot_company_id, since several workspaces
+ *  under one company are the same thing for to-do purposes. */
+function resolveCompany(
+  query: string,
+  all: Customer[]
+): { customer: Customer } | { error: string } {
+  const q = query.trim().toLowerCase();
+  const byId = all.find(
+    (c) =>
+      c.workspace_id === query.trim() || c.stripe_customer_id === query.trim()
+  );
+  if (byId) return { customer: byId };
+
+  const names = (c: Customer) =>
+    [c.company_name, c.workspace_name].filter(Boolean).map((n) => n!.toLowerCase());
+  const exact = all.filter((c) => names(c).includes(q));
+  const pool = exact.length > 0 ? exact : all.filter((c) => names(c).some((n) => n.includes(q)));
+
+  const unique = new Map<string, Customer>();
+  for (const c of pool) {
+    const key = c.hubspot_company_id ?? c.workspace_id ?? c.workspace_name ?? "";
+    if (!unique.has(key)) unique.set(key, c);
+  }
+  if (unique.size === 1) return { customer: [...unique.values()][0] };
+  if (unique.size === 0) {
+    return {
+      error: `No company matches "${query}". Try customer.search to find the right name or workspace_id.`,
+    };
+  }
+  const shown = [...unique.values()].slice(0, 8).map(
+    (c) =>
+      `${c.company_name ?? c.workspace_name} (workspace_id ${c.workspace_id}, CSM ${c.customer_success_manager ?? "unassigned"})`
+  );
+  return {
+    error:
+      `"${query}" matches ${unique.size} companies — ask which one, then retry with its workspace_id: ` +
+      shown.join("; ") +
+      (unique.size > shown.length ? "; …" : ""),
+  };
+}
+
+const personalTodosAdd: Tool = {
+  name: "personal_todos.add",
+  description:
+    "Create a to-do on YOUR OWN to-do list in the dashboard (the 'Your " +
+    "to-dos' panel), optionally linked to a company so it also appears " +
+    "on that company's Lifecycle board card. Always lands on the list of " +
+    "whoever owns the API token — never someone else's. Distinct from " +
+    "team_tasks.add (a shared team-wide tracker) and signals.post (a " +
+    "read-only notes feed on the customer profile). When `company` is " +
+    "set the title is auto-prefixed with the company name, matching the " +
+    "dashboard's own composer.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      title: {
+        type: "string",
+        description: "What needs doing. Required.",
+      },
+      company: {
+        type: "string",
+        description:
+          "Company to link this to — workspace_id, Stripe cus_… id, or " +
+          "company/workspace name. Optional; omit for a plain to-do with no " +
+          "company. If a name is ambiguous the call fails with the " +
+          "candidates; retry with a workspace_id.",
+      },
+      checklist_group: {
+        type: "string",
+        enum: CHECKLIST_GROUP_VALUES,
+        description:
+          "Which Lifecycle-board checklist group the to-do sits under. " +
+          "Only valid with `company`. Defaults to 'Live' (shown as " +
+          "'To-do' in the dashboard) — correct for accounts already live. " +
+          "For an account still being onboarded use 'Pre-kickoff', " +
+          "'Post-kickoff', or 'Migration & warm-up' (shown as " +
+          "'Migrating'), otherwise it won't show on that account's " +
+          "Onboarding card.",
+      },
+      due_date: {
+        type: "string",
+        description: "YYYY-MM-DD. Optional. Drives Slack due-date reminders.",
+      },
+      surface_at: {
+        type: "string",
+        description:
+          "YYYY-MM-DD. Optional. If in the future the to-do stays hidden " +
+          "(under 'Scheduled') until that date.",
+      },
+      priority: {
+        type: "string",
+        enum: TODO_PRIORITIES,
+      },
+      details: {
+        type: "string",
+        description: "Free-text notes / links. Optional.",
+      },
+    },
+    required: ["title"],
+  },
+  async handler(args, ctx) {
+    const rawTitle = asString(args.title)?.trim();
+    if (!rawTitle) return fail("`title` is required");
+
+    const dueDate = asString(args.due_date);
+    const surfaceAt = asString(args.surface_at);
+    for (const [field, value] of [
+      ["due_date", dueDate],
+      ["surface_at", surfaceAt],
+    ] as const) {
+      if (value && !YMD.test(value)) {
+        return fail(`\`${field}\` must be YYYY-MM-DD, got "${value}"`);
+      }
+    }
+    const priority = asString(args.priority);
+    if (priority && !TODO_PRIORITIES.includes(priority as TodoPriority)) {
+      return fail(`\`priority\` must be one of: ${TODO_PRIORITIES.join(", ")}`);
+    }
+
+    const companyQuery = asString(args.company);
+    const groupArg = asString(args.checklist_group);
+    if (groupArg && !companyQuery) {
+      return fail(
+        "`checklist_group` only applies to a to-do linked to a company — pass `company` too, or drop `checklist_group`."
+      );
+    }
+    if (groupArg && !CHECKLIST_GROUP_VALUES.includes(groupArg)) {
+      return fail(
+        `\`checklist_group\` must be one of: ${CHECKLIST_GROUP_VALUES.join(", ")}`
+      );
+    }
+
+    let title = rawTitle;
+    let linked: Customer | null = null;
+    let group: string | null = null;
+    let warning: string | null = null;
+    if (companyQuery) {
+      const resolved = resolveCompany(companyQuery, await loadCustomers());
+      if ("error" in resolved) return fail(resolved.error);
+      linked = resolved.customer;
+      const name = linked.company_name ?? linked.workspace_name ?? "this company";
+      if (!linked.hubspot_company_id) {
+        return fail(
+          `${name} has no HubSpot company id on record, which is what links a to-do to a Lifecycle card. ` +
+            `Omit \`company\` to create a plain to-do instead.`
+        );
+      }
+      group = groupArg ?? LIVE_ONGOING_GROUP;
+      if (!title.toLowerCase().includes(name.toLowerCase())) {
+        title = `${name} — ${title}`;
+      }
+      const ownerEmail = linked.customer_success_manager_email?.trim().toLowerCase();
+      if (ownerEmail !== ctx.user_email.trim().toLowerCase()) {
+        warning =
+          `${name} isn't in your book (CSM: ${linked.customer_success_manager ?? "unassigned"}), ` +
+          `so this to-do is on your list but won't appear on a Lifecycle board card for you.`;
+      }
+    }
+
+    const now = new Date().toISOString();
+    const todo: PersonalTodo = {
+      id: newTodoId(),
+      title,
+      details: asString(args.details)?.trim() || null,
+      due_date: dueDate,
+      surface_at: surfaceAt,
+      priority: (priority as TodoPriority | null) ?? null,
+      // Same source/source_meta shape the dashboard's own composer and
+      // the on-card "+" write — "slack_assign" is what
+      // matchPlaybookTodos keys on to put this on the company's card.
+      source: linked ? "slack_assign" : surfaceAt ? "scheduled" : "manual",
+      source_meta: linked
+        ? { hubspot_company_id: linked.hubspot_company_id!, checklist_group: group! }
+        : null,
+      completed_at: null,
+      created_at: now,
+      updated_at: now,
+    };
+    await applyTodoOps(userKeyFromEmail(ctx.user_email), [{ type: "add", todo }]);
+    return ok({
+      todo,
+      linked_company: linked
+        ? {
+            workspace_id: linked.workspace_id,
+            company_name: linked.company_name ?? linked.workspace_name,
+            checklist_group: group,
+          }
+        : null,
+      ...(warning ? { warning } : {}),
+    });
+  },
+};
+
 const customerSetCadence: Tool = {
   name: "customer.set_cadence",
   description:
@@ -601,6 +813,7 @@ export const TOOLS: Tool[] = [
   teamTasksList,
   signalsPost,
   teamTasksAdd,
+  personalTodosAdd,
   customerSetCadence,
 ];
 

@@ -252,6 +252,7 @@ export function McpInstaller() {
           <code className="font-mono bg-surface-2 px-1 rounded">team_tasks.list</code>,{" "}
           <code className="font-mono bg-surface-2 px-1 rounded">signals.post</code>,{" "}
           <code className="font-mono bg-surface-2 px-1 rounded">team_tasks.add</code>,{" "}
+          <code className="font-mono bg-surface-2 px-1 rounded">personal_todos.add</code>,{" "}
           <code className="font-mono bg-surface-2 px-1 rounded">customer.set_cadence</code>
           .
         </p>
