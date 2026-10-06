@@ -129,6 +129,36 @@ export function hasGraduatedOnboarding(
   return false;
 }
 
+/** The ONE definition of "is this customer on the Onboarding board (vs.
+ *  the Live board)?" — shared by the Lifecycle tab's two boards (which
+ *  each show the complement of the other) and anything else that needs
+ *  to know where a customer's card lives, e.g. the home to-do panel's
+ *  "Hide company to-dos" filter. An explicit manual placement always
+ *  wins (anything but the terminal "Launch" column keeps the card on
+ *  Onboarding); otherwise it's the computed hasGraduatedOnboarding
+ *  signal. `csmTodos` is the todo list of the customer's OWN assigned
+ *  CSM, same as the Lifecycle tab keys it. */
+export function isOnOnboardingBoard(
+  customer: Customer,
+  csmTodos: PersonalTodo[],
+  override:
+    | {
+        onboarding_lifecycle_stage?: string | null;
+        lifecycle_stage?: string | null;
+      }
+    | undefined,
+  now: Date = new Date()
+): boolean {
+  const explicit = override?.onboarding_lifecycle_stage?.trim();
+  if (explicit) return explicit !== "Launch";
+  return !hasGraduatedOnboarding(
+    customer,
+    matchPlaybookTodos(customer, csmTodos),
+    override?.lifecycle_stage,
+    now
+  );
+}
+
 /** One-time best guess for a customer who has never been manually
  *  placed. Only ever returns a label from ONBOARDING_STAGES (or null)
  *  — the caller discards the result if it isn't a currently-valid
