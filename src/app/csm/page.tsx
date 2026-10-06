@@ -13,10 +13,9 @@ import type { Customer, CustomerWithMetrics, Segment } from "@/lib/types";
 import { loadAll } from "@/lib/personal-todos/store";
 import { userKeyFromEmail } from "@/lib/personal-todos/identity";
 import { loadOverrides } from "@/lib/data/customer-overrides";
-import { matchPlaybookTodos } from "@/lib/lifecycle/todos";
 import {
   buildOnboardingCard,
-  hasGraduatedOnboarding,
+  isOnOnboardingBoard,
   ONBOARDING_STAGES,
 } from "@/lib/lifecycle/onboarding";
 import { buildLiveCard } from "@/lib/lifecycle/live-quarter";
@@ -306,17 +305,9 @@ export default async function CsmPage({
         // terminal stage (default "Launch") is what hands the
         // customer to the Live board — no separate field write, just
         // absence from this list.
-        const onboardingCustomers = lifecycleBook.filter((c) => {
-          const explicit = overrides[c.workspace_id]?.onboarding_lifecycle_stage
-            ?.trim();
-          if (explicit) return explicit !== "Launch";
-          const matched = matchPlaybookTodos(c, todosFor(c));
-          return !hasGraduatedOnboarding(
-            c,
-            matched,
-            overrides[c.workspace_id]?.lifecycle_stage
-          );
-        });
+        const onboardingCustomers = lifecycleBook.filter((c) =>
+          isOnOnboardingBoard(c, todosFor(c), overrides[c.workspace_id])
+        );
         const cards = onboardingCustomers.map((c) =>
           buildOnboardingCard(
             c,
@@ -332,17 +323,9 @@ export default async function CsmPage({
           <OnboardingBoard cards={cards} stages={onboardingStages} csms={csms} />
         );
       } else {
-        const liveCustomers = lifecycleBook.filter((c) => {
-          const explicit = overrides[c.workspace_id]?.onboarding_lifecycle_stage
-            ?.trim();
-          if (explicit) return explicit === "Launch";
-          const matched = matchPlaybookTodos(c, todosFor(c));
-          return hasGraduatedOnboarding(
-            c,
-            matched,
-            overrides[c.workspace_id]?.lifecycle_stage
-          );
-        });
+        const liveCustomers = lifecycleBook.filter(
+          (c) => !isOnOnboardingBoard(c, todosFor(c), overrides[c.workspace_id])
+        );
         const cards = liveCustomers.map((c) =>
           buildLiveCard(
             c,

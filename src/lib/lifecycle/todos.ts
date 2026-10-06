@@ -21,14 +21,12 @@ export function matchPlaybookTodos(
 }
 
 /** Same source/hubspot_company_id check as matchPlaybookTodos, just
- *  without a specific customer to match against — "would this todo
- *  show up on SOME Lifecycle board card's checklist?" rather than "on
- *  THIS one's." Used by personal-todos-panel.tsx's "Hide company
- *  to-dos" toggle: a todo this returns true for already has a home on
- *  the Lifecycle board, so hiding it there is meant to make "Your
- *  to-dos" the CSM's place for everything that ISN'T tracked on a
- *  company's card (renewal-milestone pings, Slack DMs, plain manual
- *  todos with no company attached, etc. all stay visible either way). */
+ *  without a specific customer to match against — "is this a
+ *  company-linked todo at all?" This alone does NOT mean it shows on a
+ *  card (the company may have no card, or the card's board may not
+ *  render the todo's group) — see isShownOnLifecycleCard in
+ *  card-stages.ts for that, which is what the home panel's "Hide
+ *  company to-dos" toggle actually uses. */
 export function isCompanyGroupedTodo(todo: PersonalTodo): boolean {
   return (
     (todo.source === "slack_assign" || todo.source === "live_quarter_checkin") &&

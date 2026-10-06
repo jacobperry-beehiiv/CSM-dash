@@ -15,6 +15,15 @@ import { FeatureUpdatesPanel } from "@/components/feature-updates-panel";
 import { BookNewsPanel } from "@/components/home/book-news-panel";
 import { PortfolioHeading } from "@/components/portfolio-heading";
 import { loadActiveCsmDogs } from "@/lib/branding/csm-dogs";
+import { getTodosForUser } from "@/lib/personal-todos/store";
+import { userKeyFromEmail } from "@/lib/personal-todos/identity";
+import { loadOverrides } from "@/lib/data/customer-overrides";
+import { loadSettings } from "@/lib/data/settings";
+import { resolveLifecycleStepStages } from "@/lib/lifecycle/step-stage-config";
+import {
+  buildCardStagesByCompany,
+  type CardStagesByCompany,
+} from "@/lib/lifecycle/card-stages";
 import type { Customer, Segment } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -34,6 +43,7 @@ export default async function MissionControl({
   const source = getDataSource();
 
   let error: string | null = null;
+  let all: Customer[] = [];
   let book: Customer[] = [];
   let entCount = 0;
   let nonEntCount = 0;
@@ -47,7 +57,7 @@ export default async function MissionControl({
   const session = await auth();
   const viewerEmail = session?.user?.email ?? null;
   try {
-    const all = await loadCustomers();
+    all = await loadCustomers();
     csm = resolveCsmFilter(sp.csm, all, viewerEmail);
     book = filterCustomers(all, { csm, segment });
     entCount = book.filter(isEnterprise).length;
@@ -98,6 +108,38 @@ export default async function MissionControl({
     "lifecycle-board",
     viewerEmail
   );
+  // What the "Hide company to-dos" toggle needs to know which to-dos
+  // would actually show on a Lifecycle card (see card-stages.ts) —
+  // computed here, once, because it takes the same overrides/settings
+  // reads the Lifecycle tab does. Fails SAFE: on any error nothing
+  // counts as "on a card," so the toggle hides nothing and no to-do can
+  // go invisible because this lookup broke.
+  let cardStagesByCompany: CardStagesByCompany = {};
+  let lifecycleStepStages: Record<string, string | null> = {};
+  if (lifecycleBoardEnabled && viewerEmail) {
+    try {
+      const viewerKey = userKeyFromEmail(viewerEmail);
+      const [myTodos, overrides, settings] = await Promise.all([
+        getTodosForUser(viewerKey),
+        loadOverrides(),
+        loadSettings(),
+      ]);
+      lifecycleStepStages = resolveLifecycleStepStages(
+        settings.lifecycle_step_stages
+      );
+      // The viewer's own book — the customers whose card renders THEIR
+      // to-dos (the Lifecycle tab keys each card's to-dos by the
+      // customer's assigned CSM), regardless of the ?csm= filter above.
+      const mine = all.filter(
+        (c) =>
+          Boolean(c.workspace_id) &&
+          c.customer_success_manager_email?.trim().toLowerCase() === viewerKey
+      );
+      cardStagesByCompany = buildCardStagesByCompany(mine, myTodos, overrides);
+    } catch {
+      cardStagesByCompany = {};
+    }
+  }
   const headingMascot =
     mascots.length > 0
       ? mascots[Math.floor(Math.random() * mascots.length)]
@@ -137,6 +179,8 @@ export default async function MissionControl({
         sybillIngestEnabled={sybillIngestEnabled}
         playbookCompanies={playbookCompanies}
         lifecycleBoardEnabled={lifecycleBoardEnabled}
+        cardStagesByCompany={cardStagesByCompany}
+        stepStages={lifecycleStepStages}
       />
       {newsFeedEnabled ? <BookNewsPanel viewerCsmHandle={csm} /> : null}
       <FeatureUpdatesPanel />
