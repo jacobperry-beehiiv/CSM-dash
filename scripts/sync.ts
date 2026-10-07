@@ -94,6 +94,35 @@ async function main() {
   const elapsed = ((Date.now() - started) / 1000).toFixed(1);
   console.error(`[sync] fetched ${rows.length} rows in ${elapsed}s`);
 
+  // ─── Normalise the Stripe-ID column ─────────────────────────────────
+  // q10600 has two CTEs that each expose a `stripe_customer_id`, so its
+  // SELECT qualifies the one it means. ClickHouse returns that qualified
+  // name verbatim, so the result key is
+  // `hubspot_csm_companies.stripe_customer_id`, not `stripe_customer_id`.
+  //
+  // Everything downstream of here reads the bare name off these RAW rows
+  // — the HubSpot enrichment buckets on it, and the multi-month interval
+  // join indexes on it. Fixing the field on the Customer mapper (as the
+  // first pass at this did) doesn't help any of them, because they never
+  // see a mapped Customer. Hence normalising once, here, rather than at
+  // three call sites that would drift apart.
+  //
+  // Only fills the bare key when it's absent, so if the question is ever
+  // un-qualified again this becomes a no-op rather than a clobber.
+  let qualifiedStripeIds = 0;
+  for (const row of rows as Record<string, unknown>[]) {
+    const qualified = row["hubspot_csm_companies.stripe_customer_id"];
+    if (typeof qualified === "string" && qualified && !row.stripe_customer_id) {
+      row.stripe_customer_id = qualified;
+      qualifiedStripeIds += 1;
+    }
+  }
+  if (qualifiedStripeIds > 0) {
+    console.error(
+      `[sync] normalised ${qualifiedStripeIds} qualified stripe_customer_id values`
+    );
+  }
+
   // ─── HubSpot enrichment ─────────────────────────────────────────────
   // Resolve each row's HubSpot company link via the Stripe customer ID
   // custom property on the HubSpot company record. Stripe IDs are
