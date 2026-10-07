@@ -633,18 +633,30 @@ export function RenewalPanel({
                 {list.length} account{list.length === 1 ? "" : "s"} · {bucket.detail}
               </span>
             </div>
-            <table className="w-full text-sm bg-surface table-fixed">
+            {/* Horizontal scroll rather than squeezing every column.
+                table-fixed splits a percentage of whatever width it is
+                given, so on a narrow window each column shrank until
+                its content clipped — the Lifecycle select lost the back
+                half of "First Outreach Sent". A min-width means the
+                columns always get the room their content needs and the
+                table scrolls instead. */}
+            <div className="overflow-x-auto">
+            <table className="w-full min-w-[1200px] text-sm bg-surface table-fixed">
               <colgroup>
                 <col className="w-8" />
                 <col className="w-6" />
-                <col className="w-[16%]" />
-                <col className="w-[9%]" />
+                <col className="w-[15%]" />
+                <col className="w-[8%]" />
                 <col className="w-[8%]" />
                 <col className="w-[10%]" />
-                <col className="w-[10%]" />
-                <col className="w-[6%]" />
-                <col className="w-[10%]" />
-                <col className="w-[9%] hidden lg:table-cell" />
+                <col className="w-[9%]" />
+                <col className="w-[5%]" />
+                {/* Lifecycle — measured, not guessed: the widest stage
+                    renders at 104px in 12px Satoshi, and a native select
+                    wants that plus its padding and arrow, so ~140px of
+                    content. 15% of the 1200px floor leaves ~156px. */}
+                <col className="w-[15%]" />
+                <col className="w-[8%] hidden lg:table-cell" />
                 {/* Actions — stacked Stripe / HubSpot / Draft. */}
                 <col className="w-[12%]" />
               </colgroup>
@@ -722,7 +734,11 @@ export function RenewalPanel({
                             detail={c.property_risk_level_detail}
                           />
                         </td>
-                        <td className="px-3 py-2 text-muted">
+                        {/* whitespace-nowrap so a date never breaks
+                            across two lines mid-value ("Nov 10," then
+                            "2026"), which is what the squeezed columns
+                            were doing. */}
+                        <td className="px-3 py-2 text-muted whitespace-nowrap">
                           <div>{fmtDate(paymentDate ?? null)}</div>
                           {cadenceLabel ? (
                             <div className="text-xs text-muted">
@@ -730,7 +746,7 @@ export function RenewalPanel({
                             </div>
                           ) : null}
                         </td>
-                        <td className="px-3 py-2 text-muted">
+                        <td className="px-3 py-2 text-muted whitespace-nowrap">
                           {fmtDate(date ?? null)}
                         </td>
                         <td className="px-3 py-2 font-medium text-fg">
@@ -804,6 +820,7 @@ export function RenewalPanel({
                 })}
               </tbody>
             </table>
+            </div>
           </div>
         )
       )}
