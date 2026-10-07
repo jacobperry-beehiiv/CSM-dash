@@ -7,6 +7,11 @@ import { fmtCurrency, fmtDate, fmtNumber } from "@/components/format";
 import { useZendeskSummary } from "@/lib/data/use-zendesk-overlay";
 import { CustomerRequestsSection } from "@/components/am/customer-requests-section";
 import {
+  hubspotCompanyUrl,
+  masqueradeUrl,
+  stripeCustomerUrl,
+} from "@/lib/links";
+import {
   accountTone,
   decideBlocks,
   type BlockPlan,
@@ -251,14 +256,7 @@ function AccountView({
             {c.company_name ?? c.workspace_name}
           </h1>
           <span className="flex-1" />
-          {c.workspace_id ? (
-            <Link
-              href={`/account/${c.workspace_id}`}
-              className="shrink-0 text-xs text-muted hover:text-fg underline decoration-dotted underline-offset-4"
-            >
-              Full profile
-            </Link>
-          ) : null}
+          <JumpLinks customer={c} />
         </div>
         <div className="mt-2 flex items-center gap-x-4 gap-y-1 flex-wrap text-xs text-muted">
           <span className="tabular-nums text-fg font-medium">
@@ -301,6 +299,69 @@ function AccountView({
       ) : null}
 
       <AbsenceNote plan={plan} />
+    </div>
+  );
+}
+
+/**
+ * The jump-offs: Masquerade, Stripe, HubSpot, full profile.
+ *
+ * These were on every row of the customer table via RowActions, and
+ * Stripe was also on the detail panel. Replacing /csm with the
+ * Workspace moved both behind ?view=sweep, which quietly took a
+ * one-click jump to HubSpot or Stripe and made it four — a real daily
+ * cost that had nothing to do with the redesign's argument.
+ *
+ * A link only renders when the id behind it exists, so an account with
+ * no HubSpot match shows three, not a dead fourth.
+ */
+function JumpLinks({ customer: c }: { customer: Customer }) {
+  const masq = masqueradeUrl(c.owner_email);
+  const stripe = stripeCustomerUrl(c.stripe_customer_id);
+  const hubspot = hubspotCompanyUrl(c.hubspot_company_id);
+  const cls =
+    "shrink-0 text-xs text-muted hover:text-fg underline decoration-dotted underline-offset-4";
+
+  return (
+    <div className="flex items-center gap-3 shrink-0">
+      {masq ? (
+        <a
+          href={masq}
+          target="_blank"
+          rel="noopener noreferrer"
+          className={cls}
+          title="Masquerade into the workspace"
+        >
+          Masq
+        </a>
+      ) : null}
+      {stripe ? (
+        <a
+          href={stripe}
+          target="_blank"
+          rel="noopener noreferrer"
+          className={cls}
+          title="Open in the Stripe dashboard"
+        >
+          Stripe
+        </a>
+      ) : null}
+      {hubspot ? (
+        <a
+          href={hubspot}
+          target="_blank"
+          rel="noopener noreferrer"
+          className={cls}
+          title="Open the company in HubSpot"
+        >
+          HubSpot
+        </a>
+      ) : null}
+      {c.workspace_id ? (
+        <Link href={`/account/${c.workspace_id}`} className={cls}>
+          Full profile
+        </Link>
+      ) : null}
     </div>
   );
 }
