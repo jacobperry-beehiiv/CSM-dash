@@ -64,7 +64,24 @@ export function metabaseRowToCustomer(
     grew_via_boost: (row.grew_via_boost as boolean | null) ?? null,
     monetization_via_boost:
       (row.monetization_via_boost as boolean | null) ?? null,
-    stripe_customer_id: (row.stripe_customer_id as string | null) ?? null,
+    // q10600 qualifies this column as `hubspot_csm_companies.stripe_customer_id`
+    // — both its CTEs expose a `stripe_customer_id`, so the SELECT has to
+    // say which one it means, and ClickHouse returns the qualified name
+    // verbatim as the result key.
+    //
+    // That qualification landed on 2026-10-02 and silently emptied the
+    // field for every customer: the mapper was reading the bare name, got
+    // undefined, and wrote null. It took the HubSpot link with it, because
+    // sync.ts keys its HubSpot company lookup on stripe_customer_id, so a
+    // null id matched nothing and hubspot_company_id went null too. Masq,
+    // Stripe and HubSpot buttons disappeared from every row of the book.
+    //
+    // Accept both spellings, same as hubspot_company_id below does. A
+    // question that gets re-qualified again shouldn't be able to blank a
+    // column without anything failing.
+    stripe_customer_id:
+      asStringCell(row.stripe_customer_id) ??
+      asStringCell(row["hubspot_csm_companies.stripe_customer_id"]),
     property_timezone: (row.property_timezone as string | null) ?? null,
     property_risk_level:
       asStringCell(row.property_risk_level_csm_) ??
