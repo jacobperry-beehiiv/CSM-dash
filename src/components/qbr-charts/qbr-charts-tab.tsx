@@ -66,6 +66,30 @@ import type {
  * specs, and resets all tiles. A stale spec rendered after a
  * workspace switch would be a UX trap.
  */
+/**
+ * Export geometry.
+ *
+ * Exported PNGs are pasted into QBR decks, where a slide is a wide,
+ * short rectangle. The on-screen card is ~960×554, roughly 1.7:1 —
+ * paste that into a 16:9 slide and it either sits in the middle with
+ * dead space either side, or gets scaled down until the axis labels
+ * are unreadable.
+ *
+ * 1600 wide with a 400px plot lands the whole card near 2.8–3.0:1
+ * depending on whether the spec carries a subtitle, takeaway and
+ * source line. That's the band the reference chart sits in, and it
+ * fills a slide edge to edge.
+ *
+ * On-screen rendering is untouched: ChartCard defaults to 960 and
+ * ChartCanvas to 460, and only the offscreen export mount overrides
+ * them. The offscreen host is 80px wider than the card so the
+ * card's `mx-auto` has room and html-to-image doesn't clip a
+ * sub-pixel edge.
+ */
+const EXPORT_WIDTH = 1600;
+const EXPORT_CHART_HEIGHT = 400;
+const EXPORT_HOST_WIDTH = EXPORT_WIDTH + 80;
+
 export function QbrChartsTab({
   workspaces,
   csm,
@@ -398,7 +422,7 @@ export function QbrChartsTab({
       for (let i = 0; i < exportableSpecs.length; i++) {
         const { questionId, spec } = exportableSpecs[i];
         // Mount the card in the offscreen host, wait for Recharts to
-        // paint at 960px, snapshot, then unmount before the next
+        // paint at the export width, snapshot, then unmount before the next
         // tile. One-at-a-time keeps memory bounded and lets Recharts
         // reuse its sizing infrastructure without cross-tile
         // interference.
@@ -441,8 +465,8 @@ export function QbrChartsTab({
   }, [exportableSpecs, exporting, workspaceName]);
 
   // Offscreen host for the export flow. Lives outside every layout
-  // container (fixed, off-viewport, z:-1) so Recharts sees a proper
-  // 960px width and html-to-image can capture a clean chrome-free
+  // container (fixed, off-viewport, z:-1) so Recharts sees the full
+  // export width and html-to-image can capture a clean chrome-free
   // snapshot without any of the surrounding app UI bleeding in.
   useEffect(() => {
     const host = document.createElement("div");
@@ -450,7 +474,7 @@ export function QbrChartsTab({
     host.style.position = "fixed";
     host.style.left = "-99999px";
     host.style.top = "0";
-    host.style.width = "1000px";
+    host.style.width = `${EXPORT_HOST_WIDTH}px`;
     host.style.pointerEvents = "none";
     host.style.zIndex = "-1";
     document.body.appendChild(host);
@@ -687,6 +711,8 @@ export function QbrChartsTab({
               ref={capturedCardRef}
               spec={exporting.spec}
               disableAnimation
+              width={EXPORT_WIDTH}
+              chartHeight={EXPORT_CHART_HEIGHT}
             />,
             captureHostRef.current
           )
