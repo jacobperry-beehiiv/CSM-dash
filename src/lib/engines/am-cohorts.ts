@@ -94,12 +94,46 @@ const KV_FRESH_TTL_MS = 30 * 60 * 1000;
  *  Metabase refresh. Past this we'd rather make the user wait than
  *  trust the data. */
 const KV_STALE_LIMIT_MS = 6 * 60 * 60 * 1000;
+/**
+ * How old a cohort snapshot may be before we stop trusting it.
+ *
+ * sync.ts runs at 08:00 and 16:00 UTC, so the normal worst-case gap is
+ * ~16h. 36h clears that plus a missed run without tripping, while still
+ * catching a sustained outage long before anyone notices by eye.
+ *
+ * This exists because it didn't: q24620's source table was dropped on
+ * 2026-10-02 and the cohort loop in sync.ts soft-fails per cohort, so
+ * the stale file on disk kept being served — unflagged — for 17 days.
+ * The `generated_at` below was even being carried into the memo already,
+ * labelled "used for the stale check", and then never compared to
+ * anything.
+ */
+const SNAPSHOT_STALE_AFTER_MS = 36 * 60 * 60 * 1000;
 
 interface CachedCohort<T> {
   expires: number;
   /** Timestamp the data was generated — used for the stale check. */
   generated_at: number;
+  /** Whether `data` is known-stale (see CohortResult.stale). */
+  stale: boolean;
   data: T[];
+}
+
+/**
+ * Rows plus the provenance a caller needs to tell the truth about them.
+ *
+ * Returning bare `T[]` is what made the 2026-10 outage invisible: a
+ * caller had no way to distinguish "263 past-due accounts" from "263
+ * past-due accounts as of seventeen days ago".
+ */
+export interface CohortResult<T> {
+  data: T[];
+  /** Epoch ms the underlying rows were generated. */
+  generated_at: number;
+  /** True when we are knowingly serving data past
+   *  SNAPSHOT_STALE_AFTER_MS because a refresh was attempted and
+   *  failed. Callers should surface this, not hide it. */
+  stale: boolean;
 }
 
 let approachingMemo: CachedCohort<ApproachingEntRow> | null = null;
@@ -175,10 +209,17 @@ interface KvEntry<T> {
 }
 
 /**
- * Four-tier cache: snapshot file → in-process memo → Postgres KV →
+ * Four-tier cache: in-process memo → snapshot file → Postgres KV →
  * live Metabase. The snapshot is the happy path in production
  * (written by scripts/sync.ts twice daily); the rest exist so the
  * dashboard keeps working in environments without a sync run.
+ *
+ * Every tier is age-checked. A snapshot past SNAPSHOT_STALE_AFTER_MS
+ * is NOT served as if current: we fall through and try to refresh it.
+ * If that refresh also fails we still return the old rows rather than
+ * blanking the page — but flagged `stale`, so the UI can say so. The
+ * only unacceptable outcome is the one we had: silently confident
+ * wrong numbers.
  */
 async function loadCohort<T>(
   questionId: number,
@@ -187,26 +228,48 @@ async function loadCohort<T>(
   mapRow: (row: Record<string, unknown>) => T,
   memo: CachedCohort<T> | null,
   setMemo: (next: CachedCohort<T>) => void
-): Promise<T[]> {
+): Promise<CohortResult<T>> {
   const now = Date.now();
 
   // Tier 1: in-process memo.
-  if (memo && memo.expires > now) return memo.data;
+  if (memo && memo.expires > now) {
+    return {
+      data: memo.data,
+      generated_at: memo.generated_at,
+      stale: memo.stale,
+    };
+  }
 
   // Tier 2: snapshot file written by sync.ts. This is the production
   // happy path — `npm run sync` writes data/<basename>.enc.json twice
   // daily, the file ships in the repo, and the dashboard reads it in
   // a few ms with no network round-trip.
+  //
+  // Held as a fallback rather than returned outright when it's too old,
+  // so a failed refresh degrades to flagged-stale instead of an error.
+  let staleFallback: CohortResult<T> | null = null;
   try {
     const snap = await readCohortSnapshot(snapshotBasename);
     if (snap && Array.isArray(snap.rows)) {
       const data = snap.rows.map(mapRow);
-      setMemo({
-        expires: now + MEMO_TTL_MS,
-        generated_at: new Date(snap.generated_at).getTime() || now,
-        data,
-      });
-      return data;
+      const generated_at = new Date(snap.generated_at).getTime() || now;
+      const age = now - generated_at;
+      if (age <= SNAPSHOT_STALE_AFTER_MS) {
+        setMemo({
+          expires: now + MEMO_TTL_MS,
+          generated_at,
+          stale: false,
+          data,
+        });
+        return { data, generated_at, stale: false };
+      }
+      console.error(
+        `[am-cohorts] snapshot ${snapshotBasename} is ${Math.round(
+          age / 3_600_000
+        )}h old (limit ${SNAPSHOT_STALE_AFTER_MS / 3_600_000}h) — ` +
+          `falling through to refresh`
+      );
+      staleFallback = { data, generated_at, stale: true };
     }
   } catch (e) {
     console.error(
@@ -231,9 +294,10 @@ async function loadCohort<T>(
       setMemo({
         expires: now + MEMO_TTL_MS,
         generated_at: kvHit.generated_at,
+        stale: false,
         data: kvHit.data,
       });
-      return kvHit.data;
+      return { data: kvHit.data, generated_at: kvHit.generated_at, stale: false };
     }
     if (age <= KV_STALE_LIMIT_MS) {
       // Stale-but-not-ancient: serve immediately, refresh in background.
@@ -243,16 +307,41 @@ async function loadCohort<T>(
       setMemo({
         expires: now + MEMO_TTL_MS,
         generated_at: kvHit.generated_at,
+        stale: false,
         data: kvHit.data,
       });
-      return kvHit.data;
+      return { data: kvHit.data, generated_at: kvHit.generated_at, stale: false };
     }
   }
 
   // Tier 4: live Metabase fetch — last resort.
-  const data = await refreshAndStore(questionId, kvKey, mapRow);
-  setMemo({ expires: now + MEMO_TTL_MS, generated_at: now, data });
-  return data;
+  try {
+    const data = await refreshAndStore(questionId, kvKey, mapRow);
+    setMemo({ expires: now + MEMO_TTL_MS, generated_at: now, stale: false, data });
+    return { data, generated_at: now, stale: false };
+  } catch (e) {
+    if (staleFallback) {
+      // The question itself is broken (this is exactly the q24620 case).
+      // Serving the old rows beats an empty tab, but the caller gets
+      // `stale: true` and must say so. Memoised so a broken question
+      // isn't re-hit on every single request.
+      console.error(
+        `[am-cohorts] refresh of q${questionId} failed, serving stale ` +
+          `${snapshotBasename} from ${new Date(
+            staleFallback.generated_at
+          ).toISOString()}:`,
+        e instanceof Error ? e.message : e
+      );
+      setMemo({
+        expires: now + MEMO_TTL_MS,
+        generated_at: staleFallback.generated_at,
+        stale: true,
+        data: staleFallback.data,
+      });
+      return staleFallback;
+    }
+    throw e;
+  }
 }
 
 async function refreshAndStore<T>(
@@ -272,8 +361,26 @@ async function refreshAndStore<T>(
   return data;
 }
 
-export async function loadApproachingEnterprise(): Promise<ApproachingEntRow[]> {
-  if (isDemoMode()) return buildDemoApproachingEnt();
+/**
+ * Cohort loaders come in pairs.
+ *
+ * The bare `loadX()` returns rows and is what the engines, the MCP
+ * tools and the history sweep want — they aggregate, and provenance
+ * doesn't change what they compute. The `loadXWithMeta()` variant adds
+ * `generated_at` + `stale` and is what any SURFACE should call, because
+ * a screen that shows numbers to a human owes them the date those
+ * numbers are from. Both share the same memo, so pairing costs nothing.
+ */
+export async function loadApproachingEnterpriseWithMeta(): Promise<
+  CohortResult<ApproachingEntRow>
+> {
+  if (isDemoMode()) {
+    return {
+      data: buildDemoApproachingEnt(),
+      generated_at: Date.now(),
+      stale: false,
+    };
+  }
   return loadCohort<ApproachingEntRow>(
     APPROACHING_ENT_QUESTION_ID,
     APPROACHING_SNAPSHOT_BASENAME,
@@ -286,8 +393,14 @@ export async function loadApproachingEnterprise(): Promise<ApproachingEntRow[]> 
   );
 }
 
-export async function loadPastDue(): Promise<PastDueRow[]> {
-  if (isDemoMode()) return buildDemoPastDue();
+export async function loadApproachingEnterprise(): Promise<ApproachingEntRow[]> {
+  return (await loadApproachingEnterpriseWithMeta()).data;
+}
+
+export async function loadPastDueWithMeta(): Promise<CohortResult<PastDueRow>> {
+  if (isDemoMode()) {
+    return { data: buildDemoPastDue(), generated_at: Date.now(), stale: false };
+  }
   return loadCohort<PastDueRow>(
     PAST_DUE_QUESTION_ID,
     PAST_DUE_SNAPSHOT_BASENAME,
@@ -298,4 +411,8 @@ export async function loadPastDue(): Promise<PastDueRow[]> {
       pastDueMemo = next;
     }
   );
+}
+
+export async function loadPastDue(): Promise<PastDueRow[]> {
+  return (await loadPastDueWithMeta()).data;
 }

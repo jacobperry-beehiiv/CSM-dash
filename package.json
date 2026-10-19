@@ -8,6 +8,7 @@
     "start": "next start",
     "lint": "tsc --noEmit",
     "check:cron": "tsx scripts/check-cron-exemptions.ts",
+    "check:freshness": "tsx --env-file-if-exists=.env.local scripts/check-snapshot-freshness.ts",
     "typecheck": "tsc --noEmit",
     "sync": "tsx --env-file-if-exists=.env.local scripts/sync.ts",
     "run:deliverability": "tsx --env-file-if-exists=.env.local scripts/run-deliverability.ts",

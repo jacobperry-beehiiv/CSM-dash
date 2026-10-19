@@ -9,7 +9,7 @@ import {
 import { auth } from "@/auth";
 import {
   loadApproachingEnterprise,
-  loadPastDue,
+  loadPastDueWithMeta,
   type ApproachingEntRow,
 } from "@/lib/engines/am-cohorts";
 import type { Customer } from "@/lib/types";
@@ -107,7 +107,7 @@ async function PastDueTab({
   csm: string | null;
 }) {
   try {
-    const allRows = await loadPastDue();
+    const { data: allRows, generated_at, stale } = await loadPastDueWithMeta();
     // Server-side CSM filter so a URL change (?csm=Foo) forces a single
     // consistent re-render with the new rows prop. Doing this client-side
     // off useSearchParams left a window where the headline count
@@ -121,6 +121,8 @@ async function PastDueTab({
         rows={rows}
         csms={csms}
         totalSourceRows={allRows.length}
+        generatedAt={new Date(generated_at).toISOString()}
+        stale={stale}
       />
     );
   } catch (e) {

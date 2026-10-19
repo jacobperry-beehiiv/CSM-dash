@@ -58,6 +58,13 @@ interface Props {
   /** Total count from q24620 BEFORE the server applied the CSM filter,
    *  used for the "Showing X of Y" diagnostic line. */
   totalSourceRows: number;
+  /** ISO timestamp the underlying rows were generated. Rendered as an
+   *  "as of" line — a past-due figure with no date on it is how a
+   *  broken feed went unnoticed for 17 days in Oct 2026. */
+  generatedAt: string | null;
+  /** True when the feed could not be refreshed and these rows are
+   *  known to be past their freshness window. Rendered loudly. */
+  stale: boolean;
 }
 
 const BUCKET_STEP_USD = 50_000;
@@ -195,7 +202,13 @@ const SUBTAB_LABELS: Record<PastDueSubtab, string> = {
   followup: "Follow-Up",
 };
 
-export function PastDuePanel({ rows, csms, totalSourceRows }: Props) {
+export function PastDuePanel({
+  rows,
+  csms,
+  totalSourceRows,
+  generatedAt,
+  stale,
+}: Props) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   // Feature-usage chip filter — past-due rows are keyed by
   // customer_id (Stripe), so we resolve to workspace_id through the
@@ -681,6 +694,8 @@ export function PastDuePanel({ rows, csms, totalSourceRows }: Props) {
           {totalSourceRows} past-due accounts in this tier
         </p>
       ) : null}
+
+      <DataFreshness generatedAt={generatedAt} stale={stale} />
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
         <Stat label="In this tier" value={String(visibleRows.length)} />
@@ -1663,3 +1678,51 @@ function renderSlackTemplate(
 // SlackCompose was inlined here before — replaced by the shared
 // <SlackBulkCompose> in ./slack-bulk-compose.tsx, which supports
 // per-company sends as well as the original combined-digest mode.
+
+/**
+ * "As of" line for the past-due feed.
+ *
+ * Deliberately always rendered, not just when something is wrong. A
+ * warning that only appears on failure trains people to read its
+ * absence as "fine", which is precisely the inference that cost us
+ * seventeen days — the tab looked normal the entire time, because
+ * nothing on it had ever claimed to be current.
+ */
+function DataFreshness({
+  generatedAt,
+  stale,
+}: {
+  generatedAt: string | null;
+  stale: boolean;
+}) {
+  if (!generatedAt) return null;
+  const ms = Date.parse(generatedAt);
+  if (!Number.isFinite(ms)) return null;
+
+  const hours = Math.floor((Date.now() - ms) / 3_600_000);
+  const age =
+    hours < 1
+      ? "just now"
+      : hours < 24
+        ? `${hours}h ago`
+        : `${Math.floor(hours / 24)}d ago`;
+  const when = new Date(ms).toLocaleString(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  });
+
+  if (stale) {
+    return (
+      <p className="text-xs mb-3 px-2.5 py-1.5 rounded-md border border-amber-300 bg-amber-50 text-amber-900 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-200">
+        <strong>Out of date.</strong> These rows are from {when} ({age}) and
+        the feed could not be refreshed — q24620 is failing. Treat the list
+        as a starting point, not a current picture.
+      </p>
+    );
+  }
+  return (
+    <p className="text-xs text-muted mb-3">
+      Data as of <span className="text-fg">{when}</span> ({age})
+    </p>
+  );
+}
