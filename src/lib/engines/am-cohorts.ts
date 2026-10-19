@@ -1,4 +1,9 @@
-import { runSavedQuestion } from "../metabase";
+import {
+  APPROACHING_ENT_SOURCE,
+  PAST_DUE_SOURCE,
+  runCohortSource,
+  type CohortSource,
+} from "../data/cohort-sources";
 import { kvGet, kvSet } from "../storage/kv";
 import { readCohortSnapshot } from "../data/cohort-snapshots";
 import { isDemoMode } from "../demo/mode";
@@ -81,8 +86,6 @@ export interface PastDueRow {
   raw: Record<string, unknown>;
 }
 
-const APPROACHING_ENT_QUESTION_ID = 13268;
-const PAST_DUE_QUESTION_ID = 24620;
 const APPROACHING_SNAPSHOT_BASENAME = "approaching-enterprise";
 const PAST_DUE_SNAPSHOT_BASENAME = "past-due";
 /** In-process memo TTL — fast path for repeat hits from the same isolate. */
@@ -222,7 +225,7 @@ interface KvEntry<T> {
  * wrong numbers.
  */
 async function loadCohort<T>(
-  questionId: number,
+  source: CohortSource,
   snapshotBasename: string,
   kvKey: string,
   mapRow: (row: Record<string, unknown>) => T,
@@ -301,7 +304,7 @@ async function loadCohort<T>(
     }
     if (age <= KV_STALE_LIMIT_MS) {
       // Stale-but-not-ancient: serve immediately, refresh in background.
-      void refreshAndStore(questionId, kvKey, mapRow).catch((e) =>
+      void refreshAndStore(source, kvKey, mapRow).catch((e) =>
         console.error(`[am-cohorts] background refresh of ${kvKey} failed:`, e)
       );
       setMemo({
@@ -316,7 +319,7 @@ async function loadCohort<T>(
 
   // Tier 4: live Metabase fetch — last resort.
   try {
-    const data = await refreshAndStore(questionId, kvKey, mapRow);
+    const data = await refreshAndStore(source, kvKey, mapRow);
     setMemo({ expires: now + MEMO_TTL_MS, generated_at: now, stale: false, data });
     return { data, generated_at: now, stale: false };
   } catch (e) {
@@ -326,7 +329,7 @@ async function loadCohort<T>(
       // `stale: true` and must say so. Memoised so a broken question
       // isn't re-hit on every single request.
       console.error(
-        `[am-cohorts] refresh of q${questionId} failed, serving stale ` +
+        `[am-cohorts] refresh of ${source.label} failed, serving stale ` +
           `${snapshotBasename} from ${new Date(
             staleFallback.generated_at
           ).toISOString()}:`,
@@ -345,11 +348,11 @@ async function loadCohort<T>(
 }
 
 async function refreshAndStore<T>(
-  questionId: number,
+  source: CohortSource,
   kvKey: string,
   mapRow: (row: Record<string, unknown>) => T
 ): Promise<T[]> {
-  const rows = (await runSavedQuestion(questionId)) as Array<
+  const rows = (await runCohortSource(source)) as Array<
     Record<string, unknown>
   >;
   const data = rows.map(mapRow);
@@ -382,7 +385,7 @@ export async function loadApproachingEnterpriseWithMeta(): Promise<
     };
   }
   return loadCohort<ApproachingEntRow>(
-    APPROACHING_ENT_QUESTION_ID,
+    APPROACHING_ENT_SOURCE,
     APPROACHING_SNAPSHOT_BASENAME,
     "am-cohorts:approaching-ent:v1",
     mapApproaching,
@@ -402,7 +405,7 @@ export async function loadPastDueWithMeta(): Promise<CohortResult<PastDueRow>> {
     return { data: buildDemoPastDue(), generated_at: Date.now(), stale: false };
   }
   return loadCohort<PastDueRow>(
-    PAST_DUE_QUESTION_ID,
+    PAST_DUE_SOURCE,
     PAST_DUE_SNAPSHOT_BASENAME,
     "am-cohorts:past-due:v1",
     mapPastDue,

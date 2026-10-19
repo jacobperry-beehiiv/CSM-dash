@@ -52,7 +52,8 @@ async function main() {
       continue;
     }
     const hours = (Date.now() - ms) / 3_600_000;
-    const line = `${basename}: ${hours.toFixed(1)}h old, ${snap.row_count} rows (q${snap.question_id})`;
+    const origin = snap.source ?? (snap.question_id ? `q${snap.question_id}` : "unknown source");
+    const line = `${basename}: ${hours.toFixed(1)}h old, ${snap.row_count} rows (${origin})`;
     if (hours > STALE_AFTER_HOURS) problems.push(line);
     else ok.push(line);
   }
