@@ -18,6 +18,13 @@ import { writeFile, mkdir } from "node:fs/promises";
 import path from "node:path";
 
 import { runSavedQuestion } from "../src/lib/metabase";
+import {
+  APPROACHING_ENT_SOURCE,
+  PAST_DUE_SOURCE,
+  runCohortSource,
+  sourceQuestionId,
+  type CohortSource,
+} from "../src/lib/data/cohort-sources";
 import { encryptSnapshot } from "../src/lib/data/snapshot-crypto";
 import { readSnapshot } from "../src/lib/data/snapshot-loader";
 import { writeCohortSnapshot } from "../src/lib/data/cohort-snapshots";
@@ -51,14 +58,17 @@ const ENCRYPTED_PATH = path.join(process.cwd(), "data/snapshot.enc.json");
 const MULTI_MONTH_QUESTION_ID = 23101;
 
 /**
- * Additional Metabase saved questions pre-computed by sync so the /am
- * tabs can read from disk instead of waiting 30–90s on a live query.
- * Each entry pairs a saved-question ID with the basename used by the
- * cohort-snapshot reader.
+ * AM cohorts pre-computed by sync so the /am tabs read from disk
+ * instead of waiting 30–90s on a live query.
+ *
+ * The source of each (a saved question, or SQL held in this repo) is
+ * defined once in src/lib/data/cohort-sources.ts and shared with the
+ * live fallback in engines/am-cohorts.ts, so the two can't drift onto
+ * different definitions of the same cohort.
  */
-const COHORT_QUESTIONS: Array<{ id: number; basename: string; label: string }> = [
-  { id: 13268, basename: "approaching-enterprise", label: "approaching-enterprise" },
-  { id: 24620, basename: "past-due", label: "past-due" },
+const COHORT_SOURCES: Array<{ source: CohortSource; basename: string }> = [
+  { source: APPROACHING_ENT_SOURCE, basename: "approaching-enterprise" },
+  { source: PAST_DUE_SOURCE, basename: "past-due" },
 ];
 
 async function main() {
@@ -451,16 +461,18 @@ async function main() {
   // disk in <50ms instead of waiting on a live Metabase query. Each
   // cohort soft-fails independently — a failure here never blocks the
   // main book of business from shipping.
-  for (const cohort of COHORT_QUESTIONS) {
+  for (const cohort of COHORT_SOURCES) {
     const started = Date.now();
+    const { source } = cohort;
     try {
-      console.error(`[sync] pulling q${cohort.id} (${cohort.label})…`);
-      const cohortRows = await runSavedQuestion(cohort.id);
+      console.error(`[sync] pulling ${source.label}…`);
+      const cohortRows = await runCohortSource(source);
       const written = await writeCohortSnapshot(
         cohort.basename,
         {
           generated_at: new Date().toISOString(),
-          question_id: cohort.id,
+          question_id: sourceQuestionId(source),
+          source: source.label,
           row_count: cohortRows.length,
           rows: cohortRows,
         },
@@ -471,8 +483,11 @@ async function main() {
         `[sync] wrote ${written} (${cohortRows.length} rows, ${elapsed}s)`
       );
     } catch (e) {
+      // Still soft-fail per cohort so one bad source can't stop the
+      // book of business shipping. check-snapshot-freshness.ts runs
+      // after the commit and turns a SUSTAINED failure red.
       console.error(
-        `[sync] cohort q${cohort.id} (${cohort.label}) failed (continuing):`,
+        `[sync] cohort ${source.label} failed (continuing):`,
         e instanceof Error ? e.message : e
       );
     }

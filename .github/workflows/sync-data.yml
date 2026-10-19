@@ -139,3 +139,17 @@ jobs:
             # that's effectively a no-op for our use.
             git rebase --strategy-option=theirs origin/main
           done
+
+      # Runs AFTER the commit, deliberately. The cohort loop in sync.ts
+      # soft-fails so one bad question can't stop the book of business
+      # from shipping; gating before the push would reinstate exactly
+      # that failure mode. This step changes nothing — it only decides
+      # whether the run is allowed to report success.
+      #
+      # `if: always()` so a stale cohort is still reported when an
+      # earlier step failed for some unrelated reason.
+      - name: Fail if any snapshot has gone stale
+        if: always()
+        run: npm run check:freshness
+        env:
+          SNAPSHOT_ENCRYPTION_KEY: ${{ secrets.SNAPSHOT_ENCRYPTION_KEY }}

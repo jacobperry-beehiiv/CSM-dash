@@ -26,7 +26,13 @@ import {
 
 export interface CohortSnapshotPayload {
   generated_at: string;
-  question_id: number;
+  /** Saved-question id, or null when the rows came from SQL held in
+   *  this repo — see src/lib/data/cohort-sources.ts. */
+  question_id: number | null;
+  /** Human-readable origin, e.g. "past-due (repo SQL, replaces
+   *  q24620)". Optional so snapshots written before this field was
+   *  added still parse. */
+  source?: string;
   row_count: number;
   rows: Record<string, unknown>[];
 }
