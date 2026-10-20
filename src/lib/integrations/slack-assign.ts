@@ -1435,8 +1435,21 @@ async function postAssignmentSummary(args: {
             variantLabel ? `${variantLabel} ` : ""
           }template`,
         ];
+        // Say when we followed a shortcut. Before this the copy
+        // silently duplicated the pointer, so every customer folder
+        // ended up aimed at the same master deck — worth stating
+        // plainly in the thread rather than leaving it to be noticed.
+        if (seed.shortcuts_resolved > 0) {
+          partsParts.push(
+            `${seed.shortcuts_resolved} shortcut${
+              seed.shortcuts_resolved === 1 ? "" : "s"
+            } resolved to a real copy`
+          );
+        }
         const failed = seed.skipped.filter(
-          (s) => s.reason !== "subfolder (not recursed)"
+          (s) =>
+            s.reason !== "subfolder (not recursed)" &&
+            s.reason !== "shortcut to a subfolder (not recursed)"
         );
         if (failed.length > 0) {
           partsParts.push(
@@ -1447,7 +1460,9 @@ async function postAssignmentSummary(args: {
           );
         }
         const subfolders = seed.skipped.filter(
-          (s) => s.reason === "subfolder (not recursed)"
+          (s) =>
+            s.reason === "subfolder (not recursed)" ||
+            s.reason === "shortcut to a subfolder (not recursed)"
         );
         if (subfolders.length > 0) {
           partsParts.push(

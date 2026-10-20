@@ -131,6 +131,10 @@ export function folderUrl(folderId: string): string {
  *  how many didn't make it without dumping the raw API error. */
 export interface SeedResult {
   copied: number;
+  /** How many of `copied` were Drive shortcuts we followed to their
+   *  target before copying. Surfaced so the Slack summary can say it
+   *  out loud — a silent resolve is how the original bug hid. */
+  shortcuts_resolved: number;
   skipped: Array<{ name: string; reason: string }>;
 }
 
@@ -271,6 +275,18 @@ export async function createGoogleSheet(
  * `hasDriveAccess(email, { requireReadonly: true })` and surface a
  * "reconnect Google" hint when it returns false.
  */
+const DRIVE_FOLDER_MIME = "application/vnd.google-apps.folder";
+/** Drive models a shortcut as a normal file with this mimeType and a
+ *  `shortcutDetails` pointer. It is NOT a link field on the target. */
+const DRIVE_SHORTCUT_MIME = "application/vnd.google-apps.shortcut";
+
+interface DriveListedFile {
+  id: string;
+  name: string;
+  mimeType: string;
+  shortcutDetails?: { targetId?: string; targetMimeType?: string };
+}
+
 export async function copyDriveFolderContents(
   requesterEmail: string,
   sourceFolderId: string,
@@ -286,12 +302,20 @@ export async function copyDriveFolderContents(
   // template owner moved to trash.
   const safeSource = sourceFolderId.replace(/'/g, "\\'");
   const q = `'${safeSource}' in parents and trashed = false`;
-  const files: Array<{ id: string; name: string; mimeType: string }> = [];
+  const files: Array<DriveListedFile> = [];
   let pageToken: string | undefined;
   do {
     const url = new URL("https://www.googleapis.com/drive/v3/files");
     url.searchParams.set("q", q);
-    url.searchParams.set("fields", "nextPageToken,files(id,name,mimeType)");
+    // shortcutDetails is REQUIRED here, not optional detail. Drive
+    // returns shortcuts as ordinary files with a distinct mimeType;
+    // without this field we can't tell one from a real document, and
+    // the copy below silently duplicates the pointer instead of the
+    // thing it points at.
+    url.searchParams.set(
+      "fields",
+      "nextPageToken,files(id,name,mimeType,shortcutDetails(targetId,targetMimeType))"
+    );
     url.searchParams.set("pageSize", "100");
     url.searchParams.set("supportsAllDrives", "true");
     url.searchParams.set("includeItemsFromAllDrives", "true");
@@ -306,7 +330,7 @@ export async function copyDriveFolderContents(
       );
     }
     const json = (await res.json()) as {
-      files?: Array<{ id: string; name: string; mimeType: string }>;
+      files?: DriveListedFile[];
       nextPageToken?: string;
     };
     if (json.files) files.push(...json.files);
@@ -314,12 +338,45 @@ export async function copyDriveFolderContents(
   } while (pageToken);
 
   let copied = 0;
+  let shortcuts_resolved = 0;
   const skipped: SeedResult["skipped"] = [];
 
   for (const f of files) {
-    if (f.mimeType === "application/vnd.google-apps.folder") {
+    if (f.mimeType === DRIVE_FOLDER_MIME) {
       skipped.push({ name: f.name, reason: "subfolder (not recursed)" });
       continue;
+    }
+
+    // Resolve shortcuts to what they point at.
+    //
+    // Google removed multi-parenting in 2020, so "add this deck to
+    // the template folder too" now puts a SHORTCUT there rather than
+    // filing one document under two parents. Copying a shortcut
+    // copies the shortcut — the customer folder ends up with a
+    // pointer at the shared master deck, so every customer is
+    // looking at (and editing) the same file. That is the opposite
+    // of what seeding a template is for.
+    let sourceId = f.id;
+    let isShortcut = false;
+    if (f.mimeType === DRIVE_SHORTCUT_MIME) {
+      const target = f.shortcutDetails;
+      if (!target?.targetId) {
+        skipped.push({
+          name: f.name,
+          reason: "shortcut with no resolvable target",
+        });
+        continue;
+      }
+      if (target.targetMimeType === DRIVE_FOLDER_MIME) {
+        // Same rule as a real subfolder — we don't recurse.
+        skipped.push({
+          name: f.name,
+          reason: "shortcut to a subfolder (not recursed)",
+        });
+        continue;
+      }
+      sourceId = target.targetId;
+      isShortcut = true;
     }
     // Filename token substitution — only fires when the caller
     // supplied a non-empty companyName. Case-insensitive match so
@@ -330,7 +387,7 @@ export async function copyDriveFolderContents(
     try {
       const res = await fetch(
         `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(
-          f.id
+          sourceId
         )}/copy?fields=id,name&supportsAllDrives=true`,
         {
           method: "POST",
@@ -353,6 +410,7 @@ export async function copyDriveFolderContents(
         continue;
       }
       copied++;
+      if (isShortcut) shortcuts_resolved++;
     } catch (e) {
       skipped.push({
         name: f.name,
@@ -361,7 +419,7 @@ export async function copyDriveFolderContents(
     }
   }
 
-  return { copied, skipped };
+  return { copied, shortcuts_resolved, skipped };
 }
 
 async function findFolderByName(
