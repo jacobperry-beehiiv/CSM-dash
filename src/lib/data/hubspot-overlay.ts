@@ -48,6 +48,10 @@ export interface HubSpotOverlayRow {
   /** Risk level — HubSpot's `risk_level__csm_` enum (Green / Light
    *  Green / Yellow / Red). Same posture as company_engagement. */
   property_risk_level: string | null;
+  /** Main contact — HubSpot's `main_contact`. Editable on both sides
+   *  once the field mapping is push-enabled, so it belongs in the
+   *  contended set below rather than winning unconditionally. */
+  property_main_contact: string | null;
   fetched_at: string;
 }
 
@@ -99,6 +103,7 @@ const EDITABLE_OVERLAY_FIELDS = [
   "property_risk_level",
   "company_engagement",
   "property_customer_folder",
+  "property_main_contact",
 ] as const;
 
 /**
@@ -164,6 +169,9 @@ export function mergeOverlayInto(
       property_risk_level: overlayWins("property_risk_level")
         ? (row.property_risk_level ?? c.property_risk_level)
         : c.property_risk_level,
+      property_main_contact: overlayWins("property_main_contact")
+        ? (row.property_main_contact ?? c.property_main_contact)
+        : c.property_main_contact,
     };
   });
 }

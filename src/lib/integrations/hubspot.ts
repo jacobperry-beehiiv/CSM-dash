@@ -425,6 +425,11 @@ export interface HubspotOverlayActivity extends CompanyActivity {
    *  resync to reflect the change without waiting for the daily
    *  Metabase snapshot rebuild. Null when unset. */
   property_risk_level: string | null;
+  /** HubSpot `main_contact` — the primary point of contact. Same
+   *  posture as the two above: editable on both sides, so the resync
+   *  has to be able to carry a HubSpot-side change back. Null when
+   *  unset. */
+  property_main_contact: string | null;
 }
 
 /** Company-level properties we pull on the overlay batch. Each name
@@ -441,12 +446,18 @@ const OVERLAY_COMPANY_PROPERTIES = [
   // is `risk_level__csm_` (two underscores between "level" and
   // "csm"); verified against src/lib/integrations/slack-assign.ts.
   "risk_level__csm_",
+  // Main contact — editable from the detail panel once its field
+  // mapping is push-enabled, which makes it the same two-way field
+  // the other three are. Omitting it here would mean a HubSpot-side
+  // edit sat invisible until the twice-daily snapshot.
+  "main_contact",
 ] as const;
 
 interface OverlayCompanyProperties {
   customer_folder: string | null;
   company_engagement: string | null;
   property_risk_level: string | null;
+  property_main_contact: string | null;
 }
 
 export async function fetchHubspotOverlayBatch(
@@ -504,6 +515,7 @@ export async function fetchHubspotOverlayBatch(
         // dashboard's `property_risk_level` shape so downstream
         // code stays uniform with the Customer type.
         property_risk_level: strOrNull(raw.risk_level__csm_),
+        property_main_contact: strOrNull(raw.main_contact),
       });
     }
   }
@@ -523,6 +535,7 @@ export async function fetchHubspotOverlayBatch(
       customer_folder: props?.customer_folder ?? null,
       company_engagement: props?.company_engagement ?? null,
       property_risk_level: props?.property_risk_level ?? null,
+      property_main_contact: props?.property_main_contact ?? null,
     });
   }
   return merged;

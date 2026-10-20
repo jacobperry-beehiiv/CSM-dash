@@ -128,6 +128,7 @@ export async function POST(req: Request) {
       property_customer_folder: row.customer_folder ?? null,
       company_engagement: row.company_engagement ?? null,
       property_risk_level: row.property_risk_level ?? null,
+      property_main_contact: row.property_main_contact ?? null,
       fetched_at: new Date().toISOString(),
     };
     overlay.rows[workspaceId] = overlayRow;
