@@ -1,7 +1,11 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { isFeatureEnabledFor } from "@/lib/auth/feature-flags";
-import { loadCustomers } from "@/lib/data/load-customers";
+import {
+  invalidateCustomerCache,
+  loadCustomers,
+} from "@/lib/data/load-customers";
+import { setFieldOverridesBatch } from "@/lib/data/customer-overrides";
 import { patchHubspotCompanyProperties } from "@/lib/integrations/hubspot";
 import { appendActionLog } from "@/lib/data/customer-signals";
 import {
@@ -21,6 +25,17 @@ export const maxDuration = 240;
  * to HubSpot's `customer_folder` property. Skips any row whose
  * target workspace already has a value set — the sweep never
  * overwrites, matching the design decision.
+ *
+ * Each successful write ALSO lands a `property_customer_folder` entry
+ * in the customer-overrides field bag. Without that the sweep was
+ * write-only from the dashboard's point of view: HubSpot had the
+ * folder, but /account/<id> renders the snapshot (refreshed twice
+ * daily) with the HubSpot overlay on top, and neither knew anything
+ * had changed — so applying a batch appeared to do nothing until the
+ * next sync. The override is what `applyOverride` reads, so the
+ * profile reflects the link on the very next render, and its
+ * `updated_at` keeps `mergeOverlayInto` from reinstating the old
+ * empty value on the way back down.
  *
  * Body (optional):
  *   { selections?: Array<{ folder_id, selection: "approved"|"skipped", workspace_id? }> }
@@ -98,6 +113,10 @@ export async function POST(req: Request) {
   let failed = 0;
   const errors: Array<{ folder_id: string; workspace_id: string; error: string }> = [];
   const auditEvents: Array<Parameters<typeof appendActionLog>[0][number]> = [];
+  // Collected and written once after the loop — setOverride read-
+  // modify-writes the entire override map, so a per-row call would be
+  // dozens of round-trips racing each other.
+  const overrideWrites: Array<{ workspaceId: string; value: string }> = [];
 
   for (const row of Object.values(state.queue)) {
     if (row.selection.kind !== "approved") continue;
@@ -128,6 +147,7 @@ export async function POST(req: Request) {
       });
       markApplied(state, row.folder_id, workspace_id);
       applied++;
+      overrideWrites.push({ workspaceId: workspace_id, value: row.folder_url });
       auditEvents.push({
         workspace_id,
         text: `Customer Folder linked to Drive: ${row.folder_name}`,
@@ -149,6 +169,34 @@ export async function POST(req: Request) {
   }
 
   await saveSweepState(state);
+
+  // One KV write for every folder that actually landed in HubSpot, so
+  // the dashboard shows the link immediately instead of waiting for
+  // the twice-daily snapshot.
+  if (overrideWrites.length > 0) {
+    try {
+      await setFieldOverridesBatch({
+        entries: overrideWrites,
+        fieldId: "property_customer_folder",
+        updatedBy: email,
+      });
+      // The customer list is memoised for 60s; without this the next
+      // render can still serve the pre-write rows and the fix would
+      // look intermittent rather than broken.
+      invalidateCustomerCache();
+    } catch (e) {
+      // HubSpot already has the value, so this is recoverable on the
+      // next sync — but say so rather than reporting a clean apply.
+      console.error("[customer-folders/apply] override write failed", e);
+      errors.push({
+        folder_id: "(override-write)",
+        workspace_id: "(batch)",
+        error:
+          "Folders were written to HubSpot but the dashboard override " +
+          "failed to save — profiles will catch up on the next sync.",
+      });
+    }
+  }
   if (auditEvents.length > 0) {
     // Best-effort audit trail. Failure here doesn't roll back the
     // HubSpot write — the paper trail is nice-to-have.

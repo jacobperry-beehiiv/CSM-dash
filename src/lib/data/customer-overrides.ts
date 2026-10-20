@@ -220,6 +220,44 @@ export async function setOverride(
   return map;
 }
 
+/**
+ * Set ONE mapped field across many workspaces in a single KV write.
+ *
+ * `setOverride` read-modify-writes the whole override map, so calling
+ * it in a loop is both N round-trips and N chances for a concurrent
+ * writer to clobber the map between read and write. The folder sweep
+ * applies dozens of rows at a time, which is exactly the shape the
+ * house rule about batch helpers exists for.
+ *
+ * Merges into each workspace's existing `field_overrides` bag rather
+ * than replacing it, so writing `property_customer_folder` can't drop
+ * someone's Risk level edit.
+ */
+export async function setFieldOverridesBatch(args: {
+  entries: Array<{ workspaceId: string; value: string | null }>;
+  fieldId: string;
+  updatedBy?: string | null;
+}): Promise<OverrideMap> {
+  const map = { ...(await loadOverrides()) };
+  if (args.entries.length === 0) return map;
+  const updated_at = new Date().toISOString();
+  for (const { workspaceId, value } of args.entries) {
+    if (!workspaceId) continue;
+    const current: CustomerOverride = { ...(map[workspaceId] ?? {}) };
+    current.field_overrides = {
+      ...(current.field_overrides ?? {}),
+      [args.fieldId]: {
+        value,
+        updated_at,
+        updated_by: args.updatedBy ?? null,
+      },
+    };
+    map[workspaceId] = current;
+  }
+  await kvSet(KEY, map);
+  return map;
+}
+
 /** Apply overrides to a customer record. Returns a new object — does not mutate. */
 export function applyOverride(
   customer: Customer,

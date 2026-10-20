@@ -2,7 +2,11 @@ import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { isFeatureEnabledFor } from "@/lib/auth/feature-flags";
 import { getActiveEmail } from "@/lib/data/active-user";
-import { loadCustomers } from "@/lib/data/load-customers";
+import {
+  invalidateCustomerCache,
+  loadCustomers,
+} from "@/lib/data/load-customers";
+import { setFieldOverridesBatch } from "@/lib/data/customer-overrides";
 import { patchHubspotCompanyProperties } from "@/lib/integrations/hubspot";
 import {
   createDriveFolder,
@@ -175,6 +179,20 @@ export async function POST(req: Request): Promise<NextResponse> {
     await patchHubspotCompanyProperties(customer.hubspot_company_id, {
       customer_folder: webViewLink,
     });
+    // Mirror into the override bag for the same reason /apply does:
+    // the profile renders snapshot + overlay, so without this the
+    // folder exists and HubSpot knows about it while the dashboard
+    // keeps showing "no folder" until the next sync.
+    try {
+      await setFieldOverridesBatch({
+        entries: [{ workspaceId, value: webViewLink }],
+        fieldId: "property_customer_folder",
+        updatedBy: viewerEmail,
+      });
+      invalidateCustomerCache();
+    } catch (e) {
+      console.error("[customer-folders/create] override write failed", e);
+    }
   } catch (e) {
     hubspotError = e instanceof Error ? e.message : String(e);
   }
