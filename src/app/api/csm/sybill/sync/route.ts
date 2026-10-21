@@ -6,7 +6,11 @@ import {
   GmailReadScopeError,
   listMessageIds,
 } from "@/lib/integrations/gmail-read";
-import { parseSybillRecap } from "@/lib/integrations/sybill-parser";
+import {
+  classifyOwner,
+  parseSybillRecap,
+  viewerNameTokens,
+} from "@/lib/integrations/sybill-parser";
 import {
   appendRunRecord,
   getCsmState,
@@ -32,6 +36,15 @@ export const maxDuration = 60;
  *
  * Dedup: per-CSM KV row tracks every processed Gmail message id, so
  * clicking Sync twice doesn't re-create the same to-dos.
+ *
+ * Attribution: Sybill owner-tags each AI Task, and we only create a
+ * to-do for items that are the viewer's (or that carry no owner at
+ * all). Before this the sweep ignored the tag and landed every item
+ * on the mailbox owner — fine on a 1:1, ruinous on an all-hands,
+ * where one recap contributed fifteen tasks belonging to thirteen
+ * other people. Skipped items are counted and returned rather than
+ * silently dropped, so a mis-match is visible instead of looking
+ * like Sybill produced nothing.
  *
  * Auth: signed-in viewer + `sybill-ingest` feature flag.
  *
@@ -64,6 +77,10 @@ export async function POST() {
   let messages_skipped_already_processed = 0;
   let messages_no_action_items = 0;
   let todos_created = 0;
+  let items_skipped_other_owner = 0;
+  // Distinct owner labels we filtered out, for the run log. Capped so
+  // a huge all-hands can't bloat the KV row.
+  const skippedOwners = new Set<string>();
 
   let messageIds: string[];
   try {
@@ -90,6 +107,7 @@ export async function POST() {
   const blob = await loadIngestState();
   const csmState = getCsmState(blob, email);
   const userKey = userKeyFromEmail(email);
+  const viewerTokens = viewerNameTokens(email, session?.user?.name ?? null);
 
   for (const id of messageIds) {
     messages_scanned++;
@@ -133,7 +151,26 @@ export async function POST() {
     if (recap.call_url) contextParts.push(`View call: ${recap.call_url}`);
     const contextBlock = contextParts.join("\n");
 
-    const todos: PersonalTodo[] = recap.action_items.map((item) => {
+    // Keep only what's actually the viewer's. "unattributed" stays —
+    // the legacy Action Items format carries no owner and is almost
+    // always the reader's own list.
+    const mine = recap.action_items.filter((item) => {
+      const verdict = classifyOwner(item.owner, viewerTokens);
+      if (verdict === "someone-else") {
+        items_skipped_other_owner++;
+        if (item.owner && skippedOwners.size < 25) {
+          skippedOwners.add(item.owner.trim());
+        }
+        return false;
+      }
+      return true;
+    });
+    if (mine.length === 0) {
+      messages_no_action_items++;
+      continue;
+    }
+
+    const todos: PersonalTodo[] = mine.map((item) => {
       const titleRaw = item.title;
       const title =
         titleRaw.length > TITLE_MAX_LEN
@@ -188,6 +225,8 @@ export async function POST() {
     messages_skipped_already_processed,
     messages_no_action_items,
     todos_created,
+    items_skipped_other_owner,
+    skipped_owners: [...skippedOwners].sort(),
     errors,
   };
   appendRunRecord(csmState, record);
@@ -200,6 +239,8 @@ export async function POST() {
     todos_created,
     skipped_already_processed: messages_skipped_already_processed,
     skipped_no_action_items: messages_no_action_items,
+    items_skipped_other_owner,
+    skipped_owners: [...skippedOwners].sort(),
     errors,
     last_sync_at: csmState.last_sync_at,
     recent_runs: csmState.recent_runs.slice(0, 5),

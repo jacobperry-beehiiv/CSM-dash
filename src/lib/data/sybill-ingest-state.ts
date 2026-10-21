@@ -25,6 +25,14 @@ export interface SybillRunRecord {
   messages_skipped_already_processed: number;
   messages_no_action_items: number;
   todos_created: number;
+  /** Action items dropped because Sybill attributed them to someone
+   *  other than this CSM. Counted rather than silently discarded so
+   *  an over-eager name match is visible in the run log. Optional so
+   *  run records written before the filter existed still parse. */
+  items_skipped_other_owner?: number;
+  /** Distinct owner labels that were filtered out (capped at 25).
+   *  Makes a wrong match diagnosable without digging through Gmail. */
+  skipped_owners?: string[];
   /** Up to 5 short error strings — full errors live in Vercel logs. */
   errors: string[];
 }

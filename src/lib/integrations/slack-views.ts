@@ -1834,6 +1834,111 @@ async function postEphemeralFallback(
   });
 }
 
+// ─── /dopamine — Dopamine Dump ────────────────────────────────────
+
+/**
+ * The GIF the bot posts with a Dopamine Dump.
+ *
+ * Canonical Giphy media URL for asset `s2qXK8wAvkHTO`. The link this
+ * came from carried a `v1.<base64>` path segment that decodes to
+ * `cid=790b7611…&ep=v1_internal_gif_by_id&ct=g` — a per-session
+ * analytics client id, not part of addressing the asset. Verified all
+ * three forms return the same 458,295-byte image/gif, so we store the
+ * one with no session-scoped token in it to rot.
+ *
+ * Must stay a DIRECT image file. Slack's image block needs something
+ * it can render; a Giphy/Tenor landing page only works via unfurl,
+ * and .webp doesn't render reliably in blocks at all.
+ *
+ * Empty string stays a supported state — the command still posts its
+ * message, just without the GIF.
+ */
+const DOPAMINE_GIF_URL =
+  "https://media.giphy.com/media/s2qXK8wAvkHTO/giphy.gif";
+
+/**
+ * `/dopamine` — ask the channel for a pick-me-up.
+ *
+ * Posts IN CHANNEL rather than ephemerally, which is the whole point:
+ * the message is a request for other people to pile on with their own
+ * GIFs. An ephemeral reply only the caller can see would make the
+ * feature pointless.
+ *
+ * Slack's immediate slash-command response can't carry `thread_ts`,
+ * so when the command is invoked inside a thread we post through
+ * chat.postMessage instead and return null (the webhook then acks
+ * with a bare 200). Same shape `ephemeralReplyMaybeInThread` uses for
+ * the ephemeral case.
+ */
+export const dopamineSlashHandler: SlashHandler = async (ctx) => {
+  const text =
+    `<@${ctx.slackUserId}> has requested a Dopamine Dump, ` +
+    `please contribute to help cheer up a friend!`;
+
+  // An image block rather than letting Slack unfurl a link in the
+  // text. Unfurling is the weaker option: workspaces can turn it off,
+  // and it's best-effort even when on. A block renders the GIF
+  // deterministically. `text` stays populated as the notification /
+  // accessibility fallback, which Slack requires alongside blocks.
+  const blocks: Array<Record<string, unknown>> = [
+    { type: "section", text: { type: "mrkdwn", text } },
+  ];
+  if (DOPAMINE_GIF_URL) {
+    blocks.push({
+      type: "image",
+      image_url: DOPAMINE_GIF_URL,
+      alt_text: "Enthusiastic applause",
+    });
+  }
+
+  const payload = {
+    response_type: "in_channel" as const,
+    text,
+    blocks,
+    // The GIF is a block, not a link in the text, so there is nothing
+    // to unfurl — keep this off, matching the rest of the file.
+    unfurl_links: false,
+    unfurl_media: false,
+  };
+
+  if (!ctx.threadTs) return payload;
+
+  const token = process.env.SLACK_BOT_TOKEN;
+  if (!token) {
+    // No token to post in-thread with — fall back to the channel-root
+    // response rather than silently doing nothing.
+    return payload;
+  }
+  try {
+    const r = await fetch("https://slack.com/api/chat.postMessage", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json; charset=utf-8",
+      },
+      body: JSON.stringify({
+        channel: ctx.channelId,
+        thread_ts: ctx.threadTs,
+        ...payload,
+      }),
+    });
+    const j = (await r.json()) as { ok: boolean; error?: string };
+    if (!j.ok) {
+      console.warn("[slack-views] /dopamine in-thread post failed", {
+        error: j.error,
+        channel: ctx.channelId,
+      });
+      return payload;
+    }
+    return null;
+  } catch (e) {
+    console.warn("[slack-views] /dopamine in-thread post threw", {
+      error: e instanceof Error ? e.message : String(e),
+    });
+    return payload;
+  }
+};
+
 /** Slash command registry. Match is case-insensitive on the command
  *  name (with or without the leading `/`). */
 export const SLASH_HANDLERS: Record<string, SlashHandler> = {
@@ -1846,7 +1951,31 @@ export const SLASH_HANDLERS: Record<string, SlashHandler> = {
   "ent-search": findSlashHandler,
   "find-customer": findSlashHandler,
   "search-customer": findSlashHandler,
+  dopamine: dopamineSlashHandler,
+  // Alias — "dump" alone is ambiguous, but people will try it.
+  "dopamine-dump": dopamineSlashHandler,
 };
+
+/**
+ * Commands that work for anyone in the workspace, not just a CSM who
+ * appears in the CSM Slack IDs map.
+ *
+ * Everything else needs a resolved userKey because it reads or writes
+ * that person's book or to-do list. `/dopamine` doesn't touch either
+ * — it posts a message asking the channel for a pick-me-up — and
+ * gating it behind the CSM map would mean a teammate who most needs
+ * cheering up gets "Couldn't match your Slack ID. Ask Jacob." That is
+ * a notably bad punchline for this particular feature.
+ */
+const IDENTITY_FREE_COMMANDS = new Set(["dopamine", "dopamine-dump"]);
+
+/** Whether a command requires the invoker to resolve to a known CSM.
+ *  Unknown commands default to true — the webhook falls through to
+ *  the personal to-do flow, which does need an identity. */
+export function slashCommandNeedsIdentity(commandRaw: string): boolean {
+  const key = commandRaw.replace(/^\//, "").trim().toLowerCase();
+  return !IDENTITY_FREE_COMMANDS.has(key);
+}
 
 /** Look up a slash handler for a given command name. Returns null
  *  when no entry matches; the webhook falls back to the to-do flow. */
