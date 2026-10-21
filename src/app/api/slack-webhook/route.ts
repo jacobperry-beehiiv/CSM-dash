@@ -15,6 +15,7 @@ import {
   handleFindCustomerShortcut,
   handleFindShareAction,
   lookupSlashHandler,
+  slashCommandNeedsIdentity,
   openSlackView,
   RENEWAL_CONFIRM_ACTION_ID,
   SLASH_HANDLERS,
@@ -244,8 +245,12 @@ async function handleSlashCommand(
   // `/dash-todo`, etc. and they all create personal to-dos). The log
   // line above records the actual name so it's easy to spot if someone
   // ever points an unrelated slash command at this URL by mistake.
+  // Resolve the invoker, but only REQUIRE it for commands that act on
+  // someone's book or to-do list. A morale command shouldn't bounce a
+  // teammate who isn't in the CSM map.
+  const needsIdentity = slashCommandNeedsIdentity(slash.command);
   const resolved = await resolveUserKeyForSlackId(slash.user_id);
-  if (!resolved.userKey) {
+  if (!resolved.userKey && needsIdentity) {
     console.warn(
       "[slack-webhook] Slash invoker couldn't be resolved",
       {
@@ -261,7 +266,8 @@ async function handleSlashCommand(
       }. Ask Jacob to look at /settings/slack → CSM Slack IDs.`,
     });
   }
-  const userKey = resolved.userKey;
+  // Empty only for identity-free commands, which don't read it.
+  const userKey = resolved.userKey ?? "";
   console.log("[slack-webhook] Slash invoker resolved", {
     slack_user_id: slash.user_id,
     via: resolved.via,
