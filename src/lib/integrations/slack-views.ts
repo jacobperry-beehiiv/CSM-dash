@@ -1839,17 +1839,22 @@ async function postEphemeralFallback(
 /**
  * The GIF the bot posts with a Dopamine Dump.
  *
- * Slack unfurls a bare Tenor/Giphy link into an inline animation, so
- * this is a page URL rather than a direct image file — that's the
- * format that actually animates in a channel. A direct .gif URL works
- * too; a .webp generally does not, since Slack's image blocks don't
- * render it reliably.
+ * Canonical Giphy media URL for asset `s2qXK8wAvkHTO`. The link this
+ * came from carried a `v1.<base64>` path segment that decodes to
+ * `cid=790b7611…&ep=v1_internal_gif_by_id&ct=g` — a per-session
+ * analytics client id, not part of addressing the asset. Verified all
+ * three forms return the same 458,295-byte image/gif, so we store the
+ * one with no session-scoped token in it to rot.
  *
- * Empty string is a supported state: the command still posts its
- * message, just without the GIF. That beats shipping a guessed URL
- * that renders as a broken-image box in front of the whole channel.
+ * Must stay a DIRECT image file. Slack's image block needs something
+ * it can render; a Giphy/Tenor landing page only works via unfurl,
+ * and .webp doesn't render reliably in blocks at all.
+ *
+ * Empty string stays a supported state — the command still posts its
+ * message, just without the GIF.
  */
-const DOPAMINE_GIF_URL = "";
+const DOPAMINE_GIF_URL =
+  "https://media.giphy.com/media/s2qXK8wAvkHTO/giphy.gif";
 
 /**
  * `/dopamine` — ask the channel for a pick-me-up.
@@ -1866,21 +1871,34 @@ const DOPAMINE_GIF_URL = "";
  * the ephemeral case.
  */
 export const dopamineSlashHandler: SlashHandler = async (ctx) => {
-  const lines = [
+  const text =
     `<@${ctx.slackUserId}> has requested a Dopamine Dump, ` +
-      `please contribute to help cheer up a friend!`,
-  ];
-  if (DOPAMINE_GIF_URL) lines.push(DOPAMINE_GIF_URL);
-  const text = lines.join("\n");
+    `please contribute to help cheer up a friend!`;
 
-  // Unfurling is normally turned OFF across this file so customer
-  // links don't spam previews. Here it's the mechanism that makes the
-  // GIF animate, so it stays on.
+  // An image block rather than letting Slack unfurl a link in the
+  // text. Unfurling is the weaker option: workspaces can turn it off,
+  // and it's best-effort even when on. A block renders the GIF
+  // deterministically. `text` stays populated as the notification /
+  // accessibility fallback, which Slack requires alongside blocks.
+  const blocks: Array<Record<string, unknown>> = [
+    { type: "section", text: { type: "mrkdwn", text } },
+  ];
+  if (DOPAMINE_GIF_URL) {
+    blocks.push({
+      type: "image",
+      image_url: DOPAMINE_GIF_URL,
+      alt_text: "Enthusiastic applause",
+    });
+  }
+
   const payload = {
     response_type: "in_channel" as const,
     text,
-    unfurl_links: true,
-    unfurl_media: true,
+    blocks,
+    // The GIF is a block, not a link in the text, so there is nothing
+    // to unfurl — keep this off, matching the rest of the file.
+    unfurl_links: false,
+    unfurl_media: false,
   };
 
   if (!ctx.threadTs) return payload;
