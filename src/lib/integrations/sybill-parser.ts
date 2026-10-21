@@ -274,3 +274,82 @@ export function parseSybillRecap(args: {
 
   return { title, contact_hint, call_url, action_items, matched_source };
 }
+
+// ─── Owner attribution ────────────────────────────────────────────
+
+/**
+ * Does a Sybill "Owner:" label refer to the person whose mailbox we
+ * swept?
+ *
+ * ─── Why this exists ──────────────────────────────────────────────
+ * Sybill tags every AI Task with the participant it belongs to, and
+ * the sweep used to ignore that and drop all of them on the mailbox
+ * owner. On a 1:1 that is roughly right. On a company all-hands it is
+ * not: the Oct 12 "Team All Hands" recap carried fifteen tasks owned
+ * by thirteen different people and NONE of them were the reader's.
+ * Those fifteen became fifteen personal todos.
+ *
+ * Matching is by name because that is all Sybill gives us — the label
+ * is a display name ("Jacob Perry", "Tina Morse", "Po", "Guest"),
+ * never an email. So we compare against name tokens derived from the
+ * viewer's own address.
+ *
+ * Deliberately lenient in the viewer's favour: every owner token has
+ * to be one of theirs, but a bare first name, a bare surname, or an
+ * initial all count. A false positive costs one stray todo the CSM
+ * deletes; a false negative silently loses a real commitment made on
+ * a customer call, which is far worse.
+ */
+export function viewerNameTokens(
+  email: string,
+  displayName?: string | null
+): Set<string> {
+  const tokens = new Set<string>();
+  const add = (raw: string) => {
+    for (const t of normalizeNameForMatch(raw).split(" ")) {
+      if (t.length > 0) tokens.add(t);
+    }
+  };
+  const local = email.split("@")[0] ?? "";
+  // jacob.perry / jacob_perry / jacob-perry → "jacob perry"
+  add(local.replace(/[._-]+/g, " "));
+  if (displayName) add(displayName);
+  return tokens;
+}
+
+/** Lowercase, drop punctuation that shows up in names, collapse space. */
+function normalizeNameForMatch(raw: string): string {
+  return raw
+    .toLowerCase()
+    .replace(/['’.]/g, "")
+    .replace(/[^a-z\s-]/g, " ")
+    .replace(/[-\s]+/g, " ")
+    .trim();
+}
+
+export type OwnerVerdict = "mine" | "unattributed" | "someone-else";
+
+export function classifyOwner(
+  owner: string | null | undefined,
+  viewerTokens: Set<string>
+): OwnerVerdict {
+  // No owner prefix at all — the legacy "Action Items" format. We
+  // can't attribute it, and on a 1:1 it is almost certainly the
+  // reader's, so it stays.
+  if (!owner || !owner.trim()) return "unattributed";
+
+  const ownerTokens = normalizeNameForMatch(owner)
+    .split(" ")
+    .filter((t) => t.length > 0);
+  if (ownerTokens.length === 0) return "unattributed";
+
+  const everyTokenIsViewers = ownerTokens.every((t) => {
+    if (viewerTokens.has(t)) return true;
+    // Single letter — treat as an initial ("Jacob P").
+    if (t.length === 1) {
+      for (const v of viewerTokens) if (v.startsWith(t)) return true;
+    }
+    return false;
+  });
+  return everyTokenIsViewers ? "mine" : "someone-else";
+}
