@@ -59,6 +59,10 @@ interface Props {
    * their team-view. Off by default so per-CSM views stay lean.
    */
   showTeamRollup?: boolean;
+  /** workspace_id → Slack permalink for that customer's pricing
+   *  thread, resolved server-side from the renewal-threads KV row.
+   *  A missing key means no thread has been opened yet. */
+  renewalThreadUrls?: Record<string, string>;
 }
 
 interface Bucket {
@@ -127,9 +131,33 @@ export function RenewalPanel({
   customers,
   csms,
   showTeamRollup = false,
+  renewalThreadUrls = {},
 }: Props) {
+  // Seeded from the server map, then extended locally when a ping
+  // opens a thread. Without the local half, firing 📣 Slack would
+  // post the kickoff and the row would still show no thread link
+  // until a reload — which reads as "it didn't work".
+  const [threadUrls, setThreadUrls] =
+    useState<Record<string, string>>(renewalThreadUrls);
   const [outreachFor, setOutreachFor] = useState<Customer | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+
+  /** Absorb permalinks from a ping so the Thread link appears on the
+   *  row immediately. Results without one (failed post, Slack
+   *  returned no ts) are ignored rather than clearing an existing
+   *  link. */
+  const handlePingDone = useCallback(
+    (res: { results?: Array<{ workspace_id: string; permalink?: string | null }> }) => {
+      const fresh: Record<string, string> = {};
+      for (const r of res.results ?? []) {
+        if (r.workspace_id && r.permalink) fresh[r.workspace_id] = r.permalink;
+      }
+      if (Object.keys(fresh).length > 0) {
+        setThreadUrls((prev) => ({ ...prev, ...fresh }));
+      }
+    },
+    []
+  );
   // Feature-usage chip filter — matches the /csm and other AM
   // panels' shared pattern.
   const [featureMatcher, setFeatureMatcher] =
@@ -608,7 +636,10 @@ export function RenewalPanel({
             posts a kickoff (new thread) or a ping in the existing
             thread. Serialized on the server to stay under Slack's
             per-channel rate limit. */}
-        <RenewalSlackPingButton workspaceIds={selectedWorkspaceIds} />
+        <RenewalSlackPingButton
+          workspaceIds={selectedWorkspaceIds}
+          onDone={handlePingDone}
+        />
         <div className="flex-1" />
         <BulkEmailLauncher
           customers={selectedCustomers}
@@ -803,7 +834,25 @@ export function RenewalPanel({
                               <RenewalSlackPingButton
                                 workspaceIds={[c.workspace_id]}
                                 compact
+                                onDone={handlePingDone}
                               />
+                            ) : null}
+                            {/* Jump into the pricing thread. Only
+                                rendered once one exists — an always-on
+                                link that sometimes goes nowhere is
+                                worse than no link. */}
+                            {c.workspace_id && threadUrls[c.workspace_id] ? (
+                              <a
+                                href={threadUrls[c.workspace_id]}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                title="Open this customer's renewal pricing thread in Slack"
+                                className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-medium rounded-full border border-border-strong text-fg hover:bg-canvas"
+                              >
+                                <span aria-hidden>💬</span>
+                                Thread
+                                <span aria-hidden>↗</span>
+                              </a>
                             ) : null}
                           </div>
                         </td>

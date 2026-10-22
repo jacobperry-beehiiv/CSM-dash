@@ -11,6 +11,22 @@ import type { EnterpriseTier } from "./tiers/store";
 const DEFAULT_MASQUERADE_TEMPLATE =
   "https://app.beehiiv.com/system_admin/users/masquerade?email={email}";
 
+/**
+ * beehiiv system-admin page for a workspace.
+ *
+ * ─── Assumption worth checking ────────────────────────────────────
+ * The only system_admin route this repo has ever known is the
+ * masquerade one above, so the path here is INFERRED: system_admin is
+ * Rails-shaped, and a workspace is an "organization" in beehiiv's
+ * data model (every publication belongs to exactly one organization,
+ * which is the workspace — the same join the Zendesk sweep relies
+ * on). If the real route differs, override with
+ * NEXT_PUBLIC_SYSTEM_ADMIN_WORKSPACE_URL_TEMPLATE rather than editing
+ * this default, so it travels with the deployment.
+ */
+const DEFAULT_SYSTEM_ADMIN_WORKSPACE_TEMPLATE =
+  "https://app.beehiiv.com/system_admin/organizations/{workspace_id}";
+
 const DEFAULT_METABASE_PUB_TEMPLATE =
   "https://beehiiv.metabaseapp.com/question/3401-all-with-filters?company_%252F_workspace_search={workspace_name}";
 
@@ -23,6 +39,24 @@ export function masqueradeUrl(email: string | null | undefined): string | null {
     process.env.NEXT_PUBLIC_MASQUERADE_URL_TEMPLATE ??
     DEFAULT_MASQUERADE_TEMPLATE;
   return tpl.replace("{email}", encodeURIComponent(email));
+}
+
+/**
+ * System-admin URL for a workspace, keyed on workspace_id.
+ *
+ * Returns null without a workspace_id so callers render nothing
+ * rather than a link that 404s — same posture as every other helper
+ * in this file.
+ */
+export function systemAdminWorkspaceUrl(
+  workspaceId: string | null | undefined
+): string | null {
+  const id = (workspaceId ?? "").trim();
+  if (!id) return null;
+  const tpl =
+    process.env.NEXT_PUBLIC_SYSTEM_ADMIN_WORKSPACE_URL_TEMPLATE ??
+    DEFAULT_SYSTEM_ADMIN_WORKSPACE_TEMPLATE;
+  return tpl.replace("{workspace_id}", encodeURIComponent(id));
 }
 
 /**
@@ -130,6 +164,33 @@ export function slackChannelUrl(
   const workspace =
     process.env.NEXT_PUBLIC_SLACK_WORKSPACE ?? DEFAULT_SLACK_WORKSPACE;
   return `https://${workspace}.slack.com/archives/${trimmed}`;
+}
+
+/**
+ * Slack deep-link for one message / thread parent.
+ *
+ * Permalink shape is `/archives/<channel>/p<ts with the dot removed>`
+ * — Slack's own `chat.getPermalink` returns exactly this. We build it
+ * locally rather than calling the API because the renewals table
+ * renders a link per row and we already hold both halves in KV; an
+ * API round-trip per row would be absurd for a URL we can derive.
+ *
+ * `thread_ts` is Slack's message timestamp ("1792519270.123456"), not
+ * a date. Strip only the dot — zero-padding or reformatting breaks
+ * the link.
+ */
+export function slackThreadUrl(
+  channelId: string | null | undefined,
+  threadTs: string | null | undefined
+): string | null {
+  const channel = slackChannelUrl(channelId);
+  if (!channel) return null;
+  const ts = (threadTs ?? "").trim();
+  // Slack timestamps are "<seconds>.<microseconds>". Anything else
+  // isn't one, and a malformed permalink lands on a Slack error page
+  // rather than failing visibly, so refuse instead of guessing.
+  if (!/^\d{10}\.\d{4,6}$/.test(ts)) return null;
+  return `${channel}/p${ts.replace(".", "")}`;
 }
 
 /**

@@ -37,6 +37,8 @@ import { WinsList } from "@/components/wins-list";
 import { LiveRequests } from "@/components/csm/live-requests";
 import { JulietFlagList } from "@/components/juliet-flag-list";
 import { RenewalsWithCalendar } from "@/components/renewals-with-calendar";
+import { loadRenewalThreads } from "@/lib/data/renewal-threads";
+import { slackThreadUrl } from "@/lib/links";
 import { isAdmin } from "@/lib/auth/admin";
 import { isFeatureEnabledFor } from "@/lib/auth/feature-flags";
 import { loadWinsBlob } from "@/lib/data/wins-store";
@@ -245,12 +247,22 @@ export default async function CsmPage({
       // `?tab=renewal-calendar` deep-link still works and lands on
       // the calendar sub-view.
       const renewalsBook = filterCustomers(all, { csm });
+      // Pricing-thread permalinks, resolved here rather than in the
+      // panel: the record is server-only KV, and one map for the whole
+      // book is a single read instead of a fetch per row.
+      const threadRecords = await loadRenewalThreads();
+      const renewalThreadUrls: Record<string, string> = {};
+      for (const [workspaceId, rec] of Object.entries(threadRecords)) {
+        const url = slackThreadUrl(rec.channel_id, rec.thread_ts);
+        if (url) renewalThreadUrls[workspaceId] = url;
+      }
       body = (
         <RenewalsWithCalendar
           customers={renewalsBook}
           csms={csms}
           showTeamRollup={sp.csm === "all"}
           initialView={tab === "renewal-calendar" ? "calendar" : "list"}
+          renewalThreadUrls={renewalThreadUrls}
         />
       );
     } else if (tab === "lifecycle" && !lifecycleEnabled) {
