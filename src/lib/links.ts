@@ -133,6 +133,33 @@ export function slackChannelUrl(
 }
 
 /**
+ * Slack deep-link for one message / thread parent.
+ *
+ * Permalink shape is `/archives/<channel>/p<ts with the dot removed>`
+ * — Slack's own `chat.getPermalink` returns exactly this. We build it
+ * locally rather than calling the API because the renewals table
+ * renders a link per row and we already hold both halves in KV; an
+ * API round-trip per row would be absurd for a URL we can derive.
+ *
+ * `thread_ts` is Slack's message timestamp ("1792519270.123456"), not
+ * a date. Strip only the dot — zero-padding or reformatting breaks
+ * the link.
+ */
+export function slackThreadUrl(
+  channelId: string | null | undefined,
+  threadTs: string | null | undefined
+): string | null {
+  const channel = slackChannelUrl(channelId);
+  if (!channel) return null;
+  const ts = (threadTs ?? "").trim();
+  // Slack timestamps are "<seconds>.<microseconds>". Anything else
+  // isn't one, and a malformed permalink lands on a Slack error page
+  // rather than failing visibly, so refuse instead of guessing.
+  if (!/^\d{10}\.\d{4,6}$/.test(ts)) return null;
+  return `${channel}/p${ts.replace(".", "")}`;
+}
+
+/**
  * Returns a Metabase deep link for a specific publication / workspace.
  * Configurable via NEXT_PUBLIC_METABASE_PUB_URL_TEMPLATE — substitution
  * tokens supported: {workspace_id}, {workspace_name}, {publication_id}.

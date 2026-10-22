@@ -9,6 +9,7 @@ import {
   type RenewalThreadRecord,
 } from "@/lib/data/renewal-threads";
 import { appendActionLog } from "@/lib/data/customer-signals";
+import { slackThreadUrl } from "@/lib/links";
 import {
   buildRenewalKickoffMessage,
   buildRenewalManualPingReply,
@@ -52,6 +53,14 @@ interface OneResult {
   workspace_name: string | null;
   thread_created: boolean;
   thread_ts: string | null;
+  /** Permalink to the pricing thread. The renewals panel uses this to
+   *  show the "Thread" link on a row the moment a ping lands, instead
+   *  of waiting for a reload to pick the record up from KV. Null when
+   *  the post failed or Slack returned no ts.
+   *
+   *  The response docstring has advertised this field since the route
+   *  was written; nothing ever populated it. */
+  permalink?: string | null;
   error?: string;
 }
 
@@ -164,7 +173,16 @@ export async function POST(req: Request) {
 
       let threadCreated = false;
       let ts: string | null = null;
+      // Which channel the message actually went to — an existing
+      // thread may live in a different channel than the currently
+      // configured one if the setting changed after it was opened.
+      let usedChannelId = channelId;
+      // For a reply, the permalink should point at the PARENT so the
+      // link opens the thread rather than one message inside it.
+      let permalinkTs: string | null = null;
       if (existing && existing.thread_ts) {
+        usedChannelId = existing.channel_id;
+        permalinkTs = existing.thread_ts;
         const replyText = buildRenewalManualPingReply({
           customer: c,
           settings,
@@ -191,6 +209,7 @@ export async function POST(req: Request) {
         });
         const r = await postToSlack({ channelId, text: kickoffText });
         ts = r.ts;
+        permalinkTs = r.ts;
         if (r.ts) {
           const rec: RenewalThreadRecord = {
             channel_id: channelId,
@@ -238,6 +257,7 @@ export async function POST(req: Request) {
         workspace_name: c.workspace_name ?? null,
         thread_created: threadCreated,
         thread_ts: ts,
+        permalink: slackThreadUrl(usedChannelId, permalinkTs),
       });
       sent++;
     } catch (e) {

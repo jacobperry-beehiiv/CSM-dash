@@ -19,6 +19,9 @@ interface Props {
   csms: string[];
   showTeamRollup: boolean;
   initialView: "list" | "calendar";
+  /** workspace_id → Slack permalink for that customer's pricing
+   *  thread. Absent key = no thread opened yet. */
+  renewalThreadUrls: Record<string, string>;
 }
 
 export function RenewalsWithCalendar({
@@ -26,6 +29,7 @@ export function RenewalsWithCalendar({
   csms,
   showTeamRollup,
   initialView,
+  renewalThreadUrls,
 }: Props) {
   const [view, setView] = useState<"list" | "calendar">(initialView);
 
@@ -66,6 +70,7 @@ export function RenewalsWithCalendar({
           customers={customers}
           csms={csms}
           showTeamRollup={showTeamRollup}
+          renewalThreadUrls={renewalThreadUrls}
         />
       ) : (
         <RenewalCalendarPanel customers={customers} csms={csms} />

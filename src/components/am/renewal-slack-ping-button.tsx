@@ -20,6 +20,10 @@ interface PingResult {
   workspace_name: string | null;
   thread_created: boolean;
   thread_ts: string | null;
+  /** Permalink to the pricing thread, when the post succeeded. The
+   *  renewals panel reads this to light up the row's Thread link
+   *  without waiting for a reload. */
+  permalink?: string | null;
   error?: string;
 }
 
