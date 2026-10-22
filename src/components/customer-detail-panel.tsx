@@ -25,7 +25,7 @@ import { ProfileFieldsSection } from "./profile-fields-section";
 import { StatusBadge } from "./status-badge";
 import { UpgradeAnalysisPanelForWorkspace } from "./upgrade-analysis-panel";
 import { MAPPABLE_DASHBOARD_FIELDS } from "@/lib/data/field-mappings-types";
-import { stripeCustomerUrl } from "@/lib/links";
+import { stripeCustomerUrl, systemAdminWorkspaceUrl } from "@/lib/links";
 
 interface Props {
   customer: Customer;
@@ -128,7 +128,17 @@ export function CustomerDetailPanel({
             <>
               {c.owner_email ? <span className="text-subtle">·</span> : null}
               <span>Workspace ID:</span>
-              <CopyButton value={c.workspace_id} label="Copy workspace ID" />
+              {/* Copy stays the primary action — the ID is what people
+               *  paste into Metabase and Linear. The href rides along
+               *  as the secondary affordance, same shape the Stripe
+               *  row above uses, so the system-admin page is one click
+               *  from the card instead of a hand-built URL. */}
+              <CopyButton
+                value={c.workspace_id}
+                label="Copy workspace ID"
+                href={systemAdminWorkspaceUrl(c.workspace_id)}
+                hrefLabel="Open in beehiiv system admin"
+              />
             </>
           ) : null}
           {c.stripe_customer_id ? (
