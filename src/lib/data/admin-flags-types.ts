@@ -22,7 +22,8 @@ export type FeatureId =
   | "enterprise-requests"
   | "lifecycle-board"
   | "feature-request-board"
-  | "ad-campaigns";
+  | "ad-campaigns"
+  | "child-workspaces";
 
 /** Per-feature gate state. Defaults to "unrestricted" — everyone who
  *  passes the feature's own eligibility check (e.g. CSM with Gmail
@@ -209,6 +210,14 @@ export const FEATURE_METADATA: ReadonlyArray<FeatureMetadata> = [
       "Gates the page, the nav link and the /api/feature-requests endpoint together, so a direct link 404s rather than rendering for someone off the list.",
   },
   {
+    id: "child-workspaces",
+    label: "Parent / child workspaces",
+    description:
+      "Link a non-enterprise workspace to an enterprise account so its subscriber count, plan and send activity show on the parent's profile. Exists because the book is built from HubSpot companies that have a CSM — a workspace an enterprise customer runs on the side has no such company, so it is invisible no matter how much it matters to the account.",
+    eligibility_note:
+      "Child metrics are read live from ClickHouse by workspace_id, independent of the Metabase snapshot and of HubSpot, so a link takes effect on the next render. Nested display only: the child's numbers are NOT rolled into the parent's ARR, utilization or at-risk scoring.",
+  },
+  {
     id: "ad-campaigns",
     label: "Live ad network campaigns",
     description:
@@ -247,6 +256,13 @@ export const DEFAULT_FLAGS: AdminFlags = {
     },
     // Ships dark — manual button. Flip via /admin/flags once the
     // parser holds up on real Sybill mail across CSMs.
+    // Ships dark — nested display only, no rollup into parent
+    // figures. Flip via /admin/flags once a few real parent/child
+    // pairs have been linked and the numbers look right.
+    "child-workspaces": {
+      restricted: true,
+      allowed_emails: ["jacob.perry@beehiiv.com"],
+    },
     "sybill-ingest": {
       restricted: true,
       allowed_emails: ["jacob.perry@beehiiv.com"],
