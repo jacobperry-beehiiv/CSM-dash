@@ -13,6 +13,7 @@ import { CustomerSignalsSection } from "@/components/customer-signals-section";
 import { CustomerPublicationsList } from "@/components/customer-publications-list";
 import { ProfileFieldsSection } from "@/components/profile-fields-section";
 import { CustomerRequestsSection } from "@/components/am/customer-requests-section";
+import { ManagedWorkspacesSection } from "@/components/am/managed-workspaces-section";
 
 export const dynamic = "force-dynamic";
 
@@ -201,6 +202,16 @@ export default async function AccountPage({
       {requestsEnabled ? (
         <div className="mb-6">
           <CustomerRequestsSection customer={c} enabled={requestsEnabled} />
+        </div>
+      ) : null}
+
+      {/* Managed workspaces — same reasoning as the Requests section
+       *  above: this page is what gets opened before a renewal call,
+       *  so it shouldn't omit a workspace the account actually runs.
+       *  Self-gates on the flag, so no prop threading needed. */}
+      {c.workspace_id ? (
+        <div className="mb-6">
+          <ManagedWorkspacesSection workspaceId={c.workspace_id} />
         </div>
       ) : null}
 
