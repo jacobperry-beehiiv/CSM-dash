@@ -92,7 +92,12 @@ interface Q5Row {
  */
 async function fetchPosts(
   lookbackDays: number,
-  orgIds: string[]
+  orgIds: string[],
+  /** Workspaces exempt from the enterprise-plan filter below. Managed
+   *  workspaces are linked precisely BECAUSE they aren't enterprise,
+   *  so gating them on plan_id = 8 would drop every one of them after
+   *  we'd gone to the trouble of putting them in scope. */
+  planExemptOrgIds: string[] = []
 ): Promise<Q1Row[]> {
   if (orgIds.length === 0) {
     console.error(
@@ -100,9 +105,17 @@ async function fetchPosts(
     );
     return [];
   }
-  const orgInClause = orgIds
-    .map((id) => `'${id.replace(/'/g, "''")}'`)
-    .join(",");
+  const quote = (id: string) => `'${id.replace(/'/g, "''")}'`;
+  const orgInClause = orgIds.map(quote).join(",");
+  // Enterprise-only by default — the panel is an Enterprise surface
+  // and the plan filter is what keeps per-day row counts under the
+  // 2000 cap. Managed workspaces are the explicit exception.
+  const planClause =
+    planExemptOrgIds.length > 0
+      ? `AND (o.plan_id = 8 OR o.id IN (${planExemptOrgIds
+          .map(quote)
+          .join(",")}))`
+      : "AND o.plan_id = 8";
 
   // Per-day scoped query. Peak-day enterprise send volume runs
   // ~3,000 posts (see 2026-07-07: 3,011 rows) — right at the edge of
@@ -140,7 +153,7 @@ async function fetchPosts(
     JOIN swarm_clickpipes.publications pub ON o.id = pub.organization_id
     JOIN swarm_clickpipes.posts p ON pub.id = p.publication_id
     WHERE o.id IN (${orgInClause})
-      AND o.plan_id = 8
+      ${planClause}
       AND p.send_status = 2
       AND toDate(p.scheduled_at) = toDate(now()) - ${dayOffset}
       AND p.scheduled_at < toDate(now())
@@ -514,7 +527,12 @@ export async function fetchDeliverabilityPosts(
       dropped > 0 ? ` (dropped ${dropped} non-UUID workspace_ids)` : ""
     }`
   );
-  const posts = await fetchPosts(lookbackDays, orgIds);
+  // Managed workspaces also have to clear the enterprise-plan filter
+  // inside the query — being in `orgIds` isn't enough on its own.
+  const managedOrgIds = [...managedToParent.keys()].filter((id) =>
+    UUID_RE.test(id)
+  );
+  const posts = await fetchPosts(lookbackDays, orgIds, managedOrgIds);
   const postIds = posts.map((p) => p.post_id);
 
   const safe = async <T>(p: Promise<T[]>, label: string): Promise<T[]> => {
