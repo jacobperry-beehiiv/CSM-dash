@@ -173,38 +173,40 @@ export function ChildWorkspacesSection({ workspaceId }: Props) {
 
   if (forbidden) return null;
 
-  // Nothing linked and nothing loading — stay out of the way. The
-  // section only earns its space once there's a relationship to show
-  // or the CSM has gone looking for one.
-  if (rows !== null && rows.length === 0 && !adding && !error) {
-    return (
-      <div className="pt-1">
-        <button
-          type="button"
-          onClick={() => setAdding(true)}
-          className="text-[11px] text-muted hover:text-fg underline underline-offset-2"
-        >
-          + Link a child workspace
-        </button>
-      </div>
-    );
-  }
+  // The empty state renders as a full section like its neighbours,
+  // NOT as a bare text link. The first version did the latter on the
+  // theory that an empty section shouldn't take up space — but the
+  // detail panel is a stack of bordered section cards, so a lone
+  // faint line between them reads as whitespace and the feature
+  // became genuinely unfindable. Consistency with the surrounding
+  // chrome beats saving a few pixels.
 
   return (
     <CollapsibleSection
       title="Child workspaces"
-      defaultOpen
+      defaultOpen={Boolean(rows && rows.length > 0) || adding}
       trailing={
-        rows && rows.length > 0 ? (
-          <span className="text-[11px] text-muted">{rows.length}</span>
-        ) : undefined
+        <span className="text-[11px] text-muted">
+          {rows === null
+            ? "…"
+            : rows.length > 0
+              ? rows.length
+              : "none linked"}
+        </span>
       }
     >
       <p className="text-[11px] text-muted mb-2">
         Workspaces this account runs that aren&rsquo;t their own
-        enterprise record. Shown for context — these numbers are{" "}
-        <strong>not</strong> included in the account&rsquo;s ARR,
-        utilization or at-risk scoring.
+        enterprise record — a non-enterprise workspace has no HubSpot
+        company, so it can never appear in the book on its own.
+        {rows && rows.length > 0 ? (
+          <>
+            {" "}
+            Shown for context: these numbers are <strong>not</strong>{" "}
+            included in the account&rsquo;s ARR, utilization or at-risk
+            scoring.
+          </>
+        ) : null}
       </p>
 
       {error ? (
@@ -215,6 +217,10 @@ export function ChildWorkspacesSection({ workspaceId }: Props) {
 
       {rows === null ? (
         <p className="text-xs text-muted">Loading…</p>
+      ) : rows.length === 0 ? (
+        <p className="text-xs text-muted">
+          Nothing linked yet.
+        </p>
       ) : (
         <ul className="divide-y divide-border">
           {rows.map((row) => {
