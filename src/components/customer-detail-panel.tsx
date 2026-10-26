@@ -17,7 +17,7 @@ import { CompanyNotes } from "./am/company-notes";
 import { ReviewStatesSection } from "./am/review-states-section";
 import { CustomerNewsSection } from "./am/customer-news-section";
 import { CustomerRequestsSection } from "./am/customer-requests-section";
-import { ChildWorkspacesSection } from "./am/child-workspaces-section";
+import { ManagedWorkspacesSection } from "./am/managed-workspaces-section";
 import { CopyButton } from "./copy-button";
 import { CsmRefreshRow } from "./csm-refresh-row";
 import { HubSpotLinkBadge } from "./hubspot-link-badge";
@@ -497,14 +497,14 @@ export function CustomerDetailPanel({
         />
       ) : null}
 
-      {/* Child workspaces — non-enterprise workspaces this account
+      {/* Managed workspaces — non-enterprise workspaces this account
        *  also runs. They have no HubSpot company of their own, so the
        *  book can't contain them; linking surfaces their live numbers
-       *  here. Self-gates on the `child-workspaces` flag (renders null
+       *  here. Self-gates on the managed-workspaces flag (renders null
        *  on a 403) rather than taking an enabled prop, so it doesn't
        *  need threading through CustomerTable. */}
       {c.workspace_id ? (
-        <ChildWorkspacesSection workspaceId={c.workspace_id} />
+        <ManagedWorkspacesSection workspaceId={c.workspace_id} />
       ) : null}
 
       {/* Manual notes — same KV the CSM profile-page renders from, but

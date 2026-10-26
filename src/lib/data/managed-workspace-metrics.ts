@@ -1,12 +1,12 @@
 import { DB, runNativeQuery } from "../metabase";
 
 /**
- * Live metrics for a child workspace, read straight from ClickHouse
+ * Live metrics for a managed workspace, read straight from ClickHouse
  * by workspace_id.
  *
  * ─── Why not reuse the snapshot ───────────────────────────────────
  * The snapshot is the output of q10600, which starts
- * `from hubspot_csm_companies` — a child workspace has no CSM-assigned
+ * `from hubspot_csm_companies` — a managed workspace has no CSM-assigned
  * HubSpot company, so it is absent from that result set by
  * construction. Filtering the snapshot differently cannot help; the
  * row was never there. So we go to the same ClickHouse tables q10600
@@ -25,13 +25,25 @@ import { DB, runNativeQuery } from "../metabase";
  * of ids (the children of one account), not a book.
  */
 
-export interface ChildWorkspaceMetrics {
+export interface ManagedWorkspaceMetrics {
   workspace_id: string;
   workspace_name: string | null;
   owner_email: string | null;
+  /** Raw beehiiv plan slug ("scale", "max", "custom"). */
   plan_name: string | null;
+  /** Stripe's own plan label ("Scale", "Enterprise") — matches what
+   *  the book shows for a normal account, so the two read the same. */
+  stripe_plan: string | null;
+  /** Drives the Stripe deep link, same as a book row's. Present on
+   *  non-enterprise orgs too — they're still paying customers. */
+  stripe_customer_id: string | null;
   max_subscriptions: number | null;
   active_subs: number | null;
+  mrr: number | null;
+  /** mrr * 12, precomputed so callers don't each reinvent it. */
+  arr: number | null;
+  /** Next Stripe charge. ISO, or null when there's no live sub. */
+  next_charge: string | null;
   /** ISO timestamp, or null when they have never sent. */
   last_send: string | null;
 }
@@ -39,7 +51,7 @@ export interface ChildWorkspaceMetrics {
 /** ClickHouse returns a zero DateTime rather than null for "no rows"
  *  on a max() over an empty set. Rendering 1970 as a send date would
  *  be worse than showing nothing, and "never sent" is a real and
- *  interesting state for a child workspace. */
+ *  interesting state for a managed workspace. */
 function normalizeSend(raw: unknown): string | null {
   if (typeof raw !== "string" || raw.length === 0) return null;
   if (raw.startsWith("1970-01-01")) return null;
@@ -56,10 +68,10 @@ function asStr(v: unknown): string | null {
   return typeof v === "string" && v.length > 0 ? v : null;
 }
 
-export async function fetchChildWorkspaceMetrics(
+export async function fetchManagedWorkspaceMetrics(
   workspaceIds: string[]
-): Promise<Map<string, ChildWorkspaceMetrics>> {
-  const out = new Map<string, ChildWorkspaceMetrics>();
+): Promise<Map<string, ManagedWorkspaceMetrics>> {
+  const out = new Map<string, ManagedWorkspaceMetrics>();
   const unique = [...new Set(workspaceIds.filter(Boolean))];
   if (unique.length === 0) return out;
 
@@ -72,7 +84,8 @@ export async function fetchChildWorkspaceMetrics(
 
   const sql = `
 with targets as (
-  select o.id, o.name as org_name, o.plan_id, o.plan_price_id, o.owner_id
+  select o.id, o.name as org_name, o.plan_id, o.plan_price_id, o.owner_id,
+         o.stripe_customer_id as stripe_customer_id
   from (select * from swarm_clickpipes.organizations FINAL) o
   where o.id in (${inList})
 )
@@ -81,6 +94,10 @@ select
   t.org_name as workspace_name,
   max(u.email) as owner_email,
   any(pl.name) as plan_name,
+  any(t.stripe_customer_id) as stripe_customer_id,
+  any(fis.plan) as stripe_plan,
+  any(fis.mrr) as mrr,
+  any(fis.period_end) as next_charge,
   any(pp.max_subscriptions) as max_subscriptions,
   any(subs.active_subs) as active_subs,
   any(sends.last_send) as last_send
@@ -88,6 +105,12 @@ from targets t
 left join (select * from swarm_clickpipes.users FINAL) u on t.owner_id = u.id
 left join swarm_clickpipes.plans pl on t.plan_id = pl.id
 left join swarm_clickpipes.plan_prices pp on t.plan_price_id = pp.id
+-- Current-month Stripe facts: MRR, plan label and next charge date.
+-- Same source q10600 uses for a book row, so a managed workspace's
+-- numbers are computed the same way as the account above it.
+left join stripe.fact_internal_subscriptions_merge_v1 fis
+  on t.stripe_customer_id = fis.customer_id
+ and fis.report_month = date_trunc('month', current_date)
 left join (
   select p.organization_id as org_id, countDistinct(s.id) as active_subs
   from (select id, organization_id from swarm_clickpipes.publications FINAL) p
@@ -114,13 +137,19 @@ group by t.id, t.org_name
   for (const r of rows) {
     const id = asStr(r.workspace_id);
     if (!id) continue;
+    const mrr = asNum(r.mrr);
     out.set(id, {
       workspace_id: id,
       workspace_name: asStr(r.workspace_name),
       owner_email: asStr(r.owner_email),
       plan_name: asStr(r.plan_name),
+      stripe_plan: asStr(r.stripe_plan),
+      stripe_customer_id: asStr(r.stripe_customer_id),
       max_subscriptions: asNum(r.max_subscriptions),
       active_subs: asNum(r.active_subs),
+      mrr,
+      arr: mrr == null ? null : mrr * 12,
+      next_charge: normalizeSend(r.next_charge),
       last_send: normalizeSend(r.last_send),
     });
   }
@@ -128,7 +157,7 @@ group by t.id, t.org_name
 }
 
 /**
- * Typeahead for the "add child workspace" picker. Matches on name or
+ * Typeahead for the "link a managed workspace" picker. Matches on name or
  * on a pasted workspace id.
  *
  * Capped hard: `swarm_clickpipes.organizations` has ~667k rows and a

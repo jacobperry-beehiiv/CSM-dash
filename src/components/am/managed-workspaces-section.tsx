@@ -2,10 +2,15 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { CollapsibleSection } from "../collapsible-section";
-import { fmtDate, fmtNumber, fmtPct } from "../format";
+import { fmtCurrency, fmtDate, fmtNumber, fmtPct } from "../format";
+import {
+  masqueradeUrl,
+  stripeCustomerUrl,
+  systemAdminWorkspaceUrl,
+} from "@/lib/links";
 
 /**
- * Child workspaces nested under a parent account.
+ * Managed workspaces nested under a parent account.
  *
  * ─── Why this section exists ──────────────────────────────────────
  * The book is built from HubSpot companies that have a CSM. An
@@ -25,23 +30,28 @@ import { fmtDate, fmtNumber, fmtPct } from "../format";
  * critical path of a profile render.
  */
 
-interface ChildMetrics {
+interface ManagedMetrics {
   workspace_id: string;
   workspace_name: string | null;
   owner_email: string | null;
   plan_name: string | null;
+  stripe_plan: string | null;
+  stripe_customer_id: string | null;
   max_subscriptions: number | null;
   active_subs: number | null;
+  mrr: number | null;
+  arr: number | null;
+  next_charge: string | null;
   last_send: string | null;
 }
 
-interface ChildRow {
+interface ManagedRow {
   workspace_id: string;
   workspace_name: string | null;
   note?: string | null;
   linked_by: string;
   linked_at: string;
-  metrics: ChildMetrics | null;
+  metrics: ManagedMetrics | null;
 }
 
 interface SearchHit {
@@ -55,8 +65,8 @@ interface Props {
   workspaceId: string;
 }
 
-export function ChildWorkspacesSection({ workspaceId }: Props) {
-  const [rows, setRows] = useState<ChildRow[] | null>(null);
+export function ManagedWorkspacesSection({ workspaceId }: Props) {
+  const [rows, setRows] = useState<ManagedRow[] | null>(null);
   // Self-gating: the section mounts unconditionally and hides itself
   // when the API says the viewer doesn't have the flag. Saves
   // threading a third boolean down through CustomerTable for a
@@ -71,7 +81,7 @@ export function ChildWorkspacesSection({ workspaceId }: Props) {
 
   const load = useCallback(async () => {
     try {
-      const r = await fetch(`/api/customers/${workspaceId}/children`, {
+      const r = await fetch(`/api/customers/${workspaceId}/managed-workspaces`, {
         cache: "no-store",
       });
       if (!r.ok) {
@@ -85,8 +95,8 @@ export function ChildWorkspacesSection({ workspaceId }: Props) {
         const j = (await r.json().catch(() => ({}))) as { error?: string };
         throw new Error(j.error ?? `HTTP ${r.status}`);
       }
-      const j = (await r.json()) as { children?: ChildRow[] };
-      setRows(j.children ?? []);
+      const j = (await r.json()) as { managed?: ManagedRow[] };
+      setRows(j.managed ?? []);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load");
       setRows([]);
@@ -130,7 +140,7 @@ export function ChildWorkspacesSection({ workspaceId }: Props) {
     setBusyId(hit.workspace_id);
     setError(null);
     try {
-      const r = await fetch(`/api/customers/${workspaceId}/children`, {
+      const r = await fetch(`/api/customers/${workspaceId}/managed-workspaces`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -151,12 +161,12 @@ export function ChildWorkspacesSection({ workspaceId }: Props) {
     }
   }
 
-  async function unlink(childId: string) {
-    setBusyId(childId);
+  async function unlink(id: string) {
+    setBusyId(id);
     setError(null);
     try {
       const r = await fetch(
-        `/api/customers/${workspaceId}/children?child=${encodeURIComponent(childId)}`,
+        `/api/customers/${workspaceId}/managed-workspaces?workspace=${encodeURIComponent(id)}`,
         { method: "DELETE" }
       );
       if (!r.ok) {
@@ -183,8 +193,14 @@ export function ChildWorkspacesSection({ workspaceId }: Props) {
 
   return (
     <CollapsibleSection
-      title="Child workspaces"
-      defaultOpen={Boolean(rows && rows.length > 0) || adding}
+      title="Managed workspaces"
+      // Collapsed by default, like REQUESTS and NOTES either side of
+      // it. An earlier version tried to auto-open when links existed,
+      // which didn't work and shouldn't have: CollapsibleSection reads
+      // defaultOpen once at mount, and `rows` is still null then
+      // because the fetch hasn't landed. The trailing count is what
+      // tells you there's something inside.
+      defaultOpen={adding}
       trailing={
         <span className="text-[11px] text-muted">
           {rows === null
@@ -196,9 +212,9 @@ export function ChildWorkspacesSection({ workspaceId }: Props) {
       }
     >
       <p className="text-[11px] text-muted mb-2">
-        Workspaces this account runs that aren&rsquo;t their own
-        enterprise record — a non-enterprise workspace has no HubSpot
-        company, so it can never appear in the book on its own.
+        Other workspaces this account runs. A non-enterprise workspace
+        has no HubSpot company of its own, so it can never appear in
+        the book — linking it here is the only way to see it.
         {rows && rows.length > 0 ? (
           <>
             {" "}
@@ -239,35 +255,71 @@ export function ChildWorkspacesSection({ workspaceId }: Props) {
                     {m?.workspace_name ??
                       row.workspace_name ??
                       row.workspace_id}
-                    {m?.plan_name ? (
+                    {m?.stripe_plan ?? m?.plan_name ? (
                       <span className="ml-2 px-1.5 py-0.5 text-[10px] rounded-full border border-border-strong text-muted">
-                        {m.plan_name}
+                        {m?.stripe_plan ?? m?.plan_name}
                       </span>
                     ) : null}
                   </div>
-                  <div className="text-[11px] text-muted">
-                    {m ? (
-                      <>
+                  {m ? (
+                    <>
+                      {/* Same headline figures the book row shows, in
+                          the same order, so a managed workspace reads
+                          like the account above it rather than like a
+                          different kind of object. */}
+                      <div className="text-[11px] text-muted">
+                        {/* fmtCurrency is the one helper in format.ts
+                            that doesn't take null, unlike fmtNumber /
+                            fmtDate / fmtPct — so guard here rather
+                            than widen a shared signature mid-task. */}
+                        {m.arr != null ? `${fmtCurrency(m.arr)} ARR` : "ARR —"}
+                        {m.mrr != null ? ` · ${fmtCurrency(m.mrr)} MRR` : ""}
+                        {" · "}
                         {fmtNumber(m.active_subs)} subs
                         {util != null ? ` · ${fmtPct(util)} of plan` : ""}
-                        {" · "}
+                      </div>
+                      <div className="text-[11px] text-muted">
                         {m.last_send
                           ? `sent ${fmtDate(m.last_send)}`
                           : "never sent"}
-                      </>
-                    ) : (
-                      // Link exists but ClickHouse didn't answer.
-                      // Say so rather than rendering zeros.
-                      <span className="italic">
-                        metrics unavailable right now
-                      </span>
-                    )}
-                  </div>
+                        {m.next_charge
+                          ? ` · next charge ${fmtDate(m.next_charge)}`
+                          : ""}
+                      </div>
+                    </>
+                  ) : (
+                    // Link exists but ClickHouse didn't answer. Say so
+                    // rather than rendering zeros.
+                    <div className="text-[11px] text-muted italic">
+                      metrics unavailable right now
+                    </div>
+                  )}
                   {m?.owner_email ? (
                     <div className="text-[11px] text-subtle truncate">
                       {m.owner_email}
                     </div>
                   ) : null}
+                  {/* The same quick-links a book row carries. HubSpot
+                      is deliberately absent: a managed workspace has
+                      no HubSpot company — that's the whole reason it
+                      can't appear in the book. */}
+                  <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                    <QuickLink
+                      href={masqueradeUrl(m?.owner_email)}
+                      label="Masq"
+                      title="Masquerade into this workspace"
+                    />
+                    <QuickLink
+                      href={stripeCustomerUrl(m?.stripe_customer_id)}
+                      label="Stripe"
+                      title="Open this workspace's Stripe customer"
+                    />
+                    <QuickLink
+                      href={systemAdminWorkspaceUrl(row.workspace_id)}
+                      label="Sys admin"
+                      title="Open this workspace in beehiiv system admin"
+                    />
+                  </div>
                 </div>
                 <button
                   type="button"
@@ -346,9 +398,37 @@ export function ChildWorkspacesSection({ workspaceId }: Props) {
           onClick={() => setAdding(true)}
           className="mt-2 text-[11px] text-muted hover:text-fg underline underline-offset-2"
         >
-          + Link a child workspace
+          + Link a managed workspace
         </button>
       )}
     </CollapsibleSection>
+  );
+}
+
+/** One external link, rendered only when we can build a valid URL.
+ *  Every links.ts helper returns null on missing input, so an absent
+ *  Stripe id simply drops that pill rather than producing a dead
+ *  link — the same posture the rest of the panel takes. */
+function QuickLink({
+  href,
+  label,
+  title,
+}: {
+  href: string | null;
+  label: string;
+  title: string;
+}) {
+  if (!href) return null;
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      title={title}
+      className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-medium rounded-full border border-border-strong text-fg hover:bg-canvas"
+    >
+      {label}
+      <span aria-hidden>↗</span>
+    </a>
   );
 }

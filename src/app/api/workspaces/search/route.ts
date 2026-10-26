@@ -1,18 +1,18 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { isFeatureEnabledFor } from "@/lib/auth/feature-flags";
-import { searchWorkspaces } from "@/lib/data/child-workspace-metrics";
+import { searchWorkspaces } from "@/lib/data/managed-workspace-metrics";
 
 export const dynamic = "force-dynamic";
 
 /**
  * GET /api/workspaces/search?q=<text or workspace_id>
  *
- * Typeahead for the "add child workspace" picker. Searches ALL beehiiv
+ * Typeahead for the "link a managed workspace" picker. Searches ALL beehiiv
  * organizations, not the customer book — the whole point is to find a
  * workspace the book doesn't contain.
  *
- * Gated on `child-workspaces` because it is a lookup across every
+ * Gated on the `child-workspaces` flag (id retained after the rename) because it is a lookup across every
  * organization on the platform (~667k), which is a wider read than
  * anything else the dashboard exposes and shouldn't be open to any
  * signed-in viewer just because this endpoint happens to exist.

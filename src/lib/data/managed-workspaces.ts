@@ -1,7 +1,7 @@
 import { kvGet, kvSet } from "../storage/kv";
 
 /**
- * Parent → child workspace links.
+ * Parent → managed workspace links.
  *
  * ─── Why this exists ──────────────────────────────────────────────
  * The customer book is assembled HubSpot-first: q10600 selects
@@ -31,15 +31,19 @@ import { kvGet, kvSet } from "../storage/kv";
  *
  * ─── Storage ──────────────────────────────────────────────────────
  * Single KV row keyed `csm:child-workspaces:v1`, value
- * Record<parent_workspace_id, ChildWorkspaceLink[]>. Read-modify-write
+ * Record<parent_workspace_id, ManagedWorkspaceLink[]>. Read-modify-write
  * with no locking, like every other blob here — the list is small and
  * edits are rare and human-paced, so the clobber window is academic.
  */
 
+// Storage key keeps the original name on purpose. The feature was
+// renamed to "Managed workspaces" after shipping; renaming the key
+// would orphan any links already written under the old one for no
+// user-visible benefit.
 const KEY = "csm:child-workspaces:v1";
 
-export interface ChildWorkspaceLink {
-  /** beehiiv organization id of the child workspace. */
+export interface ManagedWorkspaceLink {
+  /** beehiiv organization id of the managed workspace. */
   workspace_id: string;
   /** Name captured at link time, so the UI has something to show
    *  before live metrics land (and if the child is later deleted in
@@ -52,17 +56,17 @@ export interface ChildWorkspaceLink {
   note?: string | null;
 }
 
-export type ChildWorkspaceMap = Record<string, ChildWorkspaceLink[]>;
+export type ManagedWorkspaceMap = Record<string, ManagedWorkspaceLink[]>;
 
-export async function loadChildWorkspaces(): Promise<ChildWorkspaceMap> {
-  return (await kvGet<ChildWorkspaceMap>(KEY)) ?? {};
+export async function loadManagedWorkspaces(): Promise<ManagedWorkspaceMap> {
+  return (await kvGet<ManagedWorkspaceMap>(KEY)) ?? {};
 }
 
-export async function getChildWorkspaces(
+export async function getManagedWorkspaces(
   parentWorkspaceId: string | null | undefined
-): Promise<ChildWorkspaceLink[]> {
+): Promise<ManagedWorkspaceLink[]> {
   if (!parentWorkspaceId) return [];
-  const map = await loadChildWorkspaces();
+  const map = await loadManagedWorkspaces();
   return map[parentWorkspaceId] ?? [];
 }
 
@@ -74,17 +78,17 @@ export async function getChildWorkspaces(
  * Refuses to link a workspace to itself, which is the one input
  * mistake that would render an infinite-looking nest.
  */
-export async function addChildWorkspace(
+export async function addManagedWorkspace(
   parentWorkspaceId: string,
-  link: ChildWorkspaceLink
-): Promise<ChildWorkspaceLink[]> {
+  link: ManagedWorkspaceLink
+): Promise<ManagedWorkspaceLink[]> {
   if (!parentWorkspaceId || !link.workspace_id) {
-    throw new Error("parent and child workspace ids are both required");
+    throw new Error("parent and managed workspace ids are both required");
   }
   if (parentWorkspaceId === link.workspace_id) {
     throw new Error("a workspace can't be its own child");
   }
-  const map = { ...(await loadChildWorkspaces()) };
+  const map = { ...(await loadManagedWorkspaces()) };
   const current = [...(map[parentWorkspaceId] ?? [])];
   const existing = current.findIndex(
     (c) => c.workspace_id === link.workspace_id
@@ -96,11 +100,11 @@ export async function addChildWorkspace(
   return current;
 }
 
-export async function removeChildWorkspace(
+export async function removeManagedWorkspace(
   parentWorkspaceId: string,
   childWorkspaceId: string
-): Promise<ChildWorkspaceLink[]> {
-  const map = { ...(await loadChildWorkspaces()) };
+): Promise<ManagedWorkspaceLink[]> {
+  const map = { ...(await loadManagedWorkspaces()) };
   const next = (map[parentWorkspaceId] ?? []).filter(
     (c) => c.workspace_id !== childWorkspaceId
   );
@@ -120,7 +124,7 @@ export async function removeChildWorkspace(
 export async function findExistingParent(
   childWorkspaceId: string
 ): Promise<string | null> {
-  const map = await loadChildWorkspaces();
+  const map = await loadManagedWorkspaces();
   for (const [parentId, links] of Object.entries(map)) {
     if (links.some((l) => l.workspace_id === childWorkspaceId)) return parentId;
   }
