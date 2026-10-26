@@ -250,6 +250,15 @@ export interface DeliverabilityAlert {
   post: PostMetricsRow;
   flags: RedFlag[];
   csm: string | null;
+  /** Set when the sending workspace isn't a book account in its own
+   *  right but a managed workspace linked to one. The alert is scoped
+   *  to the PARENT's CSM — they run the sends, so the problem is
+   *  theirs — but the row still names the workspace that actually
+   *  sent, because that's what has to be fixed. */
+  managed_by?: {
+    parent_workspace_id: string;
+    parent_name: string | null;
+  } | null;
   /** Set when a CSM has explicitly "cleared" this send (acknowledged
    *  or triaged). Hidden from the active alerts list by default; the
    *  panel offers a "Show cleared" toggle to bring them back. */

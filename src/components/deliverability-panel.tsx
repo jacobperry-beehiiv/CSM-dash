@@ -1015,6 +1015,21 @@ export function DeliverabilityPanel({
                             {customer.workspace_name}
                           </div>
                         ) : null}
+                        {/* A managed workspace is NOT in the customer
+                         *  book, so `customer` above is undefined and
+                         *  the name falls back to the raw workspace
+                         *  name. Without this badge it reads as an
+                         *  unfamiliar publication that has somehow
+                         *  appeared in your list — say whose it is. */}
+                        {group.managedBy ? (
+                          <div className="text-[11px] text-muted break-words">
+                            managed by{" "}
+                            <span className="text-fg">
+                              {group.managedBy.parent_name ??
+                                group.managedBy.parent_workspace_id}
+                            </span>
+                          </div>
+                        ) : null}
                         {customer?.owner_email ? (
                           <a
                             href={`mailto:${customer.owner_email}`}
@@ -1348,6 +1363,9 @@ interface WorkspaceGroup {
   workspaceName: string;
   alerts: DeliverabilityAlert[];
   csm: string | null;
+  /** Non-null when this workspace isn't a book account but one
+   *  managed by a book account. Drives the "managed by …" badge. */
+  managedBy: DeliverabilityAlert["managed_by"];
 }
 
 function workspaceKey(alert: DeliverabilityAlert): string {
@@ -1375,6 +1393,7 @@ function groupAlertsByWorkspace(alerts: DeliverabilityAlert[]): WorkspaceGroup[]
       workspaceName: groupAlerts[0].post.workspace_name,
       alerts: groupAlerts,
       csm: groupAlerts[0].csm,
+      managedBy: groupAlerts[0].managed_by ?? null,
     };
   });
 }

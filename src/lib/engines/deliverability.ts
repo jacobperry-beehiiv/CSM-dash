@@ -1,5 +1,6 @@
 import { DB, runNativeQuery } from "../metabase";
 import { loadCustomers } from "../data/load-customers";
+import { loadManagedToParent } from "../data/managed-workspaces";
 import { readDeliverabilitySnapshot } from "../data/deliverability-snapshot";
 import { loadClearedPosts } from "../data/deliverability-clears";
 import { analyzePost } from "../thresholds";
@@ -420,12 +421,25 @@ function joinRows(
  * as the /accounts view so CSM assignment stays in sync everywhere.
  */
 async function fetchCsmOwnership(): Promise<Map<string, string>> {
-  const rows = await loadCustomers();
+  const [rows, managedToParent] = await Promise.all([
+    loadCustomers(),
+    loadManagedToParent(),
+  ]);
   const map = new Map<string, string>();
   for (const row of rows) {
     if (row.workspace_id && row.customer_success_manager) {
       map.set(String(row.workspace_id), String(row.customer_success_manager));
     }
+  }
+  // A managed workspace has no CSM of its own — it isn't in the book,
+  // which is the whole reason it needs linking. Inherit the parent's,
+  // so a bounce spike on a workspace an enterprise account runs lands
+  // in that account's CSM's scope rather than nobody's. Without this
+  // the posts would be fetched and then filtered straight back out by
+  // the per-CSM scope check.
+  for (const [managedId, parentId] of managedToParent) {
+    const parentCsm = map.get(parentId);
+    if (parentCsm && !map.has(managedId)) map.set(managedId, parentCsm);
   }
   return map;
 }
@@ -474,16 +488,29 @@ export async function fetchDeliverabilityPosts(
   // any value can't parse, so a single bad ID kills the entire Q1
   // query and the snapshot ships empty.
   const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-  const customers = await loadCustomers();
-  const allWorkspaceIds = customers
-    .map((c) => c.workspace_id)
-    .filter((id): id is string => typeof id === "string" && id.length > 0);
+  const [customers, managedToParent] = await Promise.all([
+    loadCustomers(),
+    loadManagedToParent(),
+  ]);
+  // Book accounts PLUS any workspace linked as managed. The latter
+  // are absent from loadCustomers() by construction, so without this
+  // their sends are never pulled into the snapshot and no amount of
+  // downstream filtering can surface them. Scope grows by exactly the
+  // number of linked workspaces — a handful, not a second book — so
+  // the row-count ceiling this filter exists to protect still holds.
+  const allWorkspaceIds = [
+    ...customers
+      .map((c) => c.workspace_id)
+      .filter((id): id is string => typeof id === "string" && id.length > 0),
+    ...managedToParent.keys(),
+  ];
   const orgIds = Array.from(
     new Set(allWorkspaceIds.filter((id) => UUID_RE.test(id)))
   );
   const dropped = allWorkspaceIds.length - orgIds.length;
   console.error(
-    `[deliverability] scoping Q1 to ${orgIds.length} customer-book workspaces${
+    `[deliverability] scoping Q1 to ${orgIds.length} workspaces ` +
+      `(${managedToParent.size} managed)${
       dropped > 0 ? ` (dropped ${dropped} non-UUID workspace_ids)` : ""
     }`
   );
@@ -949,6 +976,32 @@ export async function runDeliverabilityCheck(
   // Cleared resolutions are attached so the panel can hide acknowledged
   // sends behind a "Show cleared" toggle.
   const clearedByPost = await loadClearedPosts();
+  // Parent attribution for managed workspaces. The alert is scoped to
+  // the parent's CSM (see fetchCsmOwnership) but the row still names
+  // the workspace that actually sent — "fix the parent" isn't an
+  // actionable instruction when the send came from somewhere else.
+  const managedToParent = await loadManagedToParent();
+  const parentNameById = new Map<string, string | null>();
+  if (managedToParent.size > 0) {
+    for (const c of await loadCustomers()) {
+      if (c.workspace_id) {
+        parentNameById.set(
+          String(c.workspace_id),
+          c.company_name ?? c.workspace_name ?? null
+        );
+      }
+    }
+  }
+  const managedBy = (
+    organizationId: string
+  ): DeliverabilityAlert["managed_by"] => {
+    const parentId = managedToParent.get(organizationId);
+    if (!parentId) return null;
+    return {
+      parent_workspace_id: parentId,
+      parent_name: parentNameById.get(parentId) ?? null,
+    };
+  };
   const alerts: DeliverabilityAlert[] = [];
   const seenPostIds = new Set<string>();
   for (const post of targetPosts) {
@@ -956,7 +1009,13 @@ export async function runDeliverabilityCheck(
     if (csmName && ownerCsm !== csmName) continue;
     const flags = analyzePost(post);
     const cleared = clearedByPost[post.post_id] ?? null;
-    alerts.push({ post, flags, csm: ownerCsm, cleared });
+    alerts.push({
+      post,
+      flags,
+      csm: ownerCsm,
+      cleared,
+      managed_by: managedBy(post.organization_id),
+    });
     seenPostIds.add(post.post_id);
   }
 
@@ -982,7 +1041,13 @@ export async function runDeliverabilityCheck(
     if (cleared) continue; // cleared sends don't follow forward
     const flags = analyzePost(post);
     if (flags.length === 0) continue; // clean send — refreshes with target_date
-    alerts.push({ post, flags, csm: ownerCsm, cleared: null });
+    alerts.push({
+      post,
+      flags,
+      csm: ownerCsm,
+      cleared: null,
+      managed_by: managedBy(post.organization_id),
+    });
     seenPostIds.add(post.post_id);
   }
 

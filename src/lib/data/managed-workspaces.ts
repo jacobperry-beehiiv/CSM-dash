@@ -130,3 +130,22 @@ export async function findExistingParent(
   }
   return null;
 }
+
+/**
+ * Flat managed-workspace → parent map, for engines that work off
+ * organization_id and need to know who owns a send.
+ *
+ * Deliberately returns the parent's workspace_id rather than a CSM
+ * name: the caller already holds the book and can resolve the CSM
+ * itself, and keeping this store ignorant of CSM assignment avoids a
+ * second place that could disagree with the snapshot about who owns
+ * an account.
+ */
+export async function loadManagedToParent(): Promise<Map<string, string>> {
+  const map = await loadManagedWorkspaces();
+  const out = new Map<string, string>();
+  for (const [parentId, links] of Object.entries(map)) {
+    for (const l of links) out.set(l.workspace_id, parentId);
+  }
+  return out;
+}
