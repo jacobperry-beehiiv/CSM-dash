@@ -1672,6 +1672,70 @@ export async function fetchHubspotCompany(
   };
 }
 
+/**
+ * PATCH properties on a HubSpot CONTACT.
+ *
+ * Sibling of patchHubspotCompanyProperties below — same demo-mode
+ * guard, same error shape. Separate function rather than a shared one
+ * parameterised by object type, because the endpoints differ only in
+ * a path segment and inlining that would read worse than two obvious
+ * functions.
+ */
+export async function patchHubspotContactProperties(
+  contactId: string,
+  properties: Record<string, string | number | boolean | null>
+): Promise<void> {
+  if (isDemoMode()) {
+    console.log(
+      `[demo-mode] suppressed HubSpot PATCH on contact ${contactId}:`,
+      properties
+    );
+    return;
+  }
+  const token = await getAccessToken();
+  const res = await fetch(
+    `https://api.hubapi.com/crm/v3/objects/contacts/${encodeURIComponent(contactId)}`,
+    {
+      method: "PATCH",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ properties }),
+    }
+  );
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(
+      `HubSpot contact ${contactId} PATCH failed (${res.status}): ${body.slice(0, 200)}`
+    );
+  }
+}
+
+/**
+ * Split a single display name into HubSpot's firstname / lastname.
+ *
+ * The dashboard shows one name field because that's what a CSM thinks
+ * they're editing; HubSpot stores two. First token is the first name,
+ * everything after it is the surname — which handles "Colton Fralick"
+ * and "Maria del Carmen Ruiz" correctly, and a mononym ("Cher") by
+ * leaving lastname empty rather than inventing one.
+ *
+ * Exported so the route and its tests agree on the rule.
+ */
+export function splitContactName(raw: string): {
+  firstname: string;
+  lastname: string;
+} {
+  const parts = raw.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return { firstname: "", lastname: "" };
+  if (parts.length === 1) return { firstname: parts[0], lastname: "" };
+  return {
+    firstname: parts[0],
+    lastname: parts.slice(1).join(" "),
+  };
+}
+
 export async function patchHubspotCompanyProperties(
   companyId: string,
   properties: Record<string, string | number | boolean | null>

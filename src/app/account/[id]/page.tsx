@@ -215,8 +215,13 @@ export default async function AccountPage({
         </div>
       ) : null}
 
+      {/* workspaceId is what switches this from the read-only list to
+       *  the editable one — without it, contact labels and renames are
+       *  silently unavailable here even though they work in the /csm
+       *  detail panel, which passes it. */}
       <HubSpotContactsSection
         contacts={c.hubspot_contacts}
+        workspaceId={c.workspace_id ?? null}
         ownerEmail={c.owner_email}
         ownerName={c.property_main_contact}
       />
