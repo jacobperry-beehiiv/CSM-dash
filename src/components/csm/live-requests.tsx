@@ -125,6 +125,11 @@ export function LiveRequests({
   const [data, setData] = useState<ApiResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Ticket currently being confirmed, plus a token to re-run the
+  // fetch effect once it lands.
+  const [confirmingId, setConfirmingId] = useState<string | null>(null);
+  const [confirmError, setConfirmError] = useState<string | null>(null);
+  const [reloadToken, setReloadToken] = useState(0);
   const [windowKey, setWindowKey] = useState("all");
   const [states, setStates] = useState<string[]>([]);
   const [showNotified, setShowNotified] = useState(false);
@@ -170,7 +175,61 @@ export function LiveRequests({
     return () => {
       cancelled = true;
     };
-  }, [csmParam, windowKey, showNotified, shipMatchedOnly, states]);
+  }, [csmParam, windowKey, showNotified, shipMatchedOnly, states, reloadToken]);
+
+  /**
+   * Vouch for a ship no #devs-shipped post corroborates.
+   *
+   * This view groups by TICKET, and whether the code went out is a
+   * fact about the ticket rather than about any one customer — so
+   * confirming applies to every workspace in the group. The store is
+   * keyed per (workspace, issue), so that's one POST each; they run
+   * together and a single failure surfaces rather than being
+   * swallowed, because a half-confirmed ticket would reach the digest
+   * for some customers and not others.
+   *
+   * Deliberately does NOT create to-dos here — the weekly digest owns
+   * that, including its dedupe blob.
+   */
+  async function confirmShipped(group: TicketGroup) {
+    setConfirmingId(group.linear_issue_id);
+    setConfirmError(null);
+    try {
+      // SEQUENTIAL, not Promise.all. Every one of these writes the
+      // same KV row (csm:enterprise-requests:v1) read-modify-write
+      // with no locking, so firing them concurrently means each
+      // request reads the blob before the others have written and the
+      // last one wins — silently confirming one customer and dropping
+      // the rest. Caught exactly that way in testing: a two-customer
+      // ticket came back with one decision recorded and no error.
+      let failed = 0;
+      for (const c of group.customers) {
+        const r = await fetch("/api/enterprise-requests/exceptions/apply", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            workspace_id: c.workspace_id,
+            linear_issue_id: group.linear_issue_id,
+            decision: "confirmed",
+            note: "Confirmed from the Feature requests tab — no #devs-shipped match.",
+          }),
+        });
+        if (!r.ok) failed++;
+      }
+      if (failed > 0) {
+        throw new Error(
+          `${failed} of ${group.customers.length} customers couldn't be confirmed — reopen and retry.`
+        );
+      }
+      setReloadToken((n) => n + 1);
+    } catch (e) {
+      setConfirmError(
+        e instanceof Error ? e.message : "Couldn't confirm this ship"
+      );
+    } finally {
+      setConfirmingId(null);
+    }
+  }
 
   /** Patch one customer's notified state inside the grouped shape. */
   function patchNotified(
@@ -334,6 +393,15 @@ export function LiveRequests({
         ) : null}
       </div>
 
+      {/* Confirm failures sit above the list: a ticket confirm spans
+          every customer on it, so a partial failure isn't about any
+          one card. */}
+      {confirmError ? (
+        <div className="text-xs bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/30 rounded-lg p-2 text-red-800 dark:text-red-300">
+          {confirmError}
+        </div>
+      ) : null}
+
       {loading ? (
         <p className="text-sm text-muted italic">Loading shipped requests…</p>
       ) : error ? (
@@ -353,6 +421,8 @@ export function LiveRequests({
               key={group.linear_issue_id}
               group={group}
               customersByWorkspace={customersByWorkspace}
+              onConfirmShipped={confirmShipped}
+              confirming={confirmingId === group.linear_issue_id}
               onDraft={(customer) => {
                 setDrafting({ group, customer });
                 void fetch("/api/enterprise-requests/notify", {
@@ -441,11 +511,17 @@ function GroupCard({
   customersByWorkspace,
   onDraft,
   onToggleNotified,
+  onConfirmShipped,
+  confirming,
 }: {
   group: TicketGroup;
   customersByWorkspace: Record<string, Customer>;
   onDraft: (customer: GroupCustomer) => void;
   onToggleNotified: (customer: GroupCustomer, next: boolean) => void;
+  /** Vouch for a ship with no #devs-shipped match. Applies to every
+   *  customer on the ticket — see the handler in the parent. */
+  onConfirmShipped: (group: TicketGroup) => void;
+  confirming: boolean;
 }) {
   return (
     <div className="rounded-lg border border-border bg-surface p-3">
@@ -510,13 +586,35 @@ function GroupCard({
                 >
                   SHIP MATCHED ✓
                 </span>
-              ) : (
+              ) : group.promotion_confidence === "confirmed" ? (
                 <span
-                  className="rounded border border-slate-400 bg-slate-50 dark:bg-slate-500/10 px-1 py-0.5 text-[9px] font-semibold text-slate-700 dark:text-slate-200"
-                  title="Linear says this is live in the app, but no #devs-shipped post carrying the ticket was found. Either the release wasn't parsed or the ticket was closed without the code going out — verify before telling a customer."
+                  className="rounded border border-emerald-400 bg-emerald-50 dark:bg-emerald-500/10 px-1 py-0.5 text-[9px] font-semibold text-emerald-800 dark:text-emerald-200"
+                  title={`No #devs-shipped post matched, but ${group.reviewed_by ?? "someone"} confirmed the ship${group.reviewed_at ? ` on ${fmtDate(group.reviewed_at)}` : ""}.`}
                 >
-                  NO SHIP POST MATCHED
+                  SHIP CONFIRMED ✓
                 </span>
+              ) : (
+                <>
+                  <span
+                    className="rounded border border-slate-400 bg-slate-50 dark:bg-slate-500/10 px-1 py-0.5 text-[9px] font-semibold text-slate-700 dark:text-slate-200"
+                    title="Linear says this is live in the app, but no #devs-shipped post carrying the ticket was found. Either the release wasn't parsed or the ticket was closed without the code going out — verify before telling a customer."
+                  >
+                    NO SHIP POST MATCHED
+                  </span>
+                  {/* The badge was a dead end — it told you the ship
+                      was unconfirmed and gave you nowhere to say
+                      otherwise, so the ticket never reached the digest
+                      and never produced a follow-up to-do. */}
+                  <button
+                    type="button"
+                    onClick={() => onConfirmShipped(group)}
+                    disabled={confirming}
+                    className="rounded border border-emerald-400 px-1 py-0.5 text-[9px] font-semibold text-emerald-800 dark:text-emerald-200 hover:bg-emerald-50 dark:hover:bg-emerald-500/10 disabled:opacity-50"
+                    title={`Mark this as genuinely shipped for all ${group.customer_count} customer${group.customer_count === 1 ? "" : "s"} on the ticket. Feeds the weekly digest, which is what creates the follow-up to-do.`}
+                  >
+                    {confirming ? "CONFIRMING…" : "CONFIRM SHIPPED"}
+                  </button>
+                </>
               )
             ) : null}
             {group.ship_url ? (
