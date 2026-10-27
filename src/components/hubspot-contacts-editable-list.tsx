@@ -53,6 +53,41 @@ export function HubSpotContactsEditableList({
     null | "clear" | "detach"
   >(null);
   const [message, setMessage] = useState<string | null>(null);
+  // Renames applied this session. The route refreshes the HubSpot
+  // overlay, but the parent holds `contacts` from the render that
+  // loaded the page — without this the row would snap back to the old
+  // name until a navigation.
+  const [renamed, setRenamed] = useState<Record<string, string>>({});
+  const [editingName, setEditingName] = useState<string | null>(null);
+  const [nameDraft, setNameDraft] = useState("");
+  const [savingName, setSavingName] = useState(false);
+
+  async function saveName(contactId: string) {
+    const next = nameDraft.trim();
+    if (!next) return;
+    setSavingName(true);
+    setMessage(null);
+    try {
+      const r = await fetch(
+        `/api/customers/${encodeURIComponent(workspaceId)}/contacts/${encodeURIComponent(contactId)}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: next }),
+        }
+      );
+      const j = (await r.json().catch(() => ({}))) as { error?: string };
+      if (!r.ok) throw new Error(j.error ?? `HTTP ${r.status}`);
+      setRenamed((prev) => ({ ...prev, [contactId]: next }));
+      setEditingName(null);
+    } catch (e) {
+      setMessage(
+        e instanceof Error ? e.message : "Couldn't rename that contact"
+      );
+    } finally {
+      setSavingName(false);
+    }
+  }
 
   // Every contact is selectable — even ones with only the system
   // Primary chip, since the CSM might want to bulk-detach them from
@@ -272,9 +307,50 @@ export function HubSpotContactsEditableList({
               />
               <div className="flex-1 min-w-0">
                 <div className="flex items-baseline gap-2 flex-wrap">
-                  <span className="font-medium text-fg break-words">
-                    {c.name ?? c.email ?? "(no name)"}
-                  </span>
+                  {editingName === c.id ? (
+                    <span className="inline-flex items-center gap-1">
+                      <input
+                        autoFocus
+                        value={nameDraft}
+                        onChange={(e) => setNameDraft(e.currentTarget.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") void saveName(c.id);
+                          if (e.key === "Escape") setEditingName(null);
+                        }}
+                        disabled={savingName}
+                        className="px-1.5 py-0.5 text-sm bg-surface border border-border-strong rounded text-fg focus:outline-none focus:ring-2 focus:ring-accent disabled:opacity-50"
+                        placeholder="Full name"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => void saveName(c.id)}
+                        disabled={savingName || !nameDraft.trim()}
+                        className="text-[11px] text-emerald-700 dark:text-emerald-300 hover:underline disabled:opacity-50"
+                      >
+                        {savingName ? "Saving…" : "Save"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setEditingName(null)}
+                        disabled={savingName}
+                        className="text-[11px] text-muted hover:text-fg disabled:opacity-50"
+                      >
+                        Cancel
+                      </button>
+                    </span>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEditingName(c.id);
+                        setNameDraft(renamed[c.id] ?? c.name ?? "");
+                      }}
+                      className="font-medium text-fg break-words text-left rounded-sm hover:ring-1 hover:ring-accent/50 focus:outline-none focus:ring-2 focus:ring-accent"
+                      title="Click to rename — writes firstname / lastname back to HubSpot"
+                    >
+                      {renamed[c.id] ?? c.name ?? c.email ?? "(no name)"}
+                    </button>
+                  )}
                   {c.job_title ? (
                     <span className="text-[11px] text-subtle">
                       {c.job_title}

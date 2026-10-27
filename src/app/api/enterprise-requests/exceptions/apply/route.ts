@@ -3,6 +3,8 @@ import { auth } from "@/auth";
 import { isFeatureEnabledFor } from "@/lib/auth/feature-flags";
 import { applyRequestReview } from "@/lib/data/enterprise-requests";
 import { appendActionLog } from "@/lib/data/customer-signals";
+import { ensureShippedRequestTodo } from "@/lib/data/shipped-request-todos";
+import { loadCustomers } from "@/lib/data/load-customers";
 
 export const dynamic = "force-dynamic";
 
@@ -121,6 +123,43 @@ export async function POST(req: Request): Promise<NextResponse> {
     });
   }
 
+  // Confirming a ship is what makes the follow-up real, so create the
+  // to-do now instead of leaving it until the weekly digest. Dedupe
+  // lives in the helper, keyed the same way the digest keys it.
+  let todo_created = false;
+  if (decision === "confirmed") {
+    try {
+      const customers = await loadCustomers();
+      const customer = customers.find((c) => c.workspace_id === workspaceId);
+      const csmEmail = customer?.customer_success_manager_email ?? null;
+      if (csmEmail) {
+        const res = await ensureShippedRequestTodo({
+          csmEmail,
+          csmHandle: customer?.customer_success_manager ?? null,
+          row: {
+            workspace_id: workspaceId,
+            workspace_name:
+              customer?.company_name ?? customer?.workspace_name ?? null,
+            linear_issue_id: linearIssueId,
+            linear_identifier: row.linear_identifier,
+            title: row.title,
+            url: row.url,
+            ship_url: row.ship_url,
+            promoted_at: row.promoted_at,
+          },
+        });
+        todo_created = res.created;
+      }
+    } catch (e) {
+      // The review decision already landed, and the digest will still
+      // pick this up on its next run — so a to-do failure is a
+      // degraded outcome, not a reason to fail the confirm.
+      console.warn("[enterprise-requests/exceptions] to-do create failed", {
+        error: e instanceof Error ? e.message : e,
+      });
+    }
+  }
+
   return NextResponse.json({
     ok: true,
     workspace_id: workspaceId,
@@ -128,5 +167,6 @@ export async function POST(req: Request): Promise<NextResponse> {
     decision,
     derived_state: row.derived_state,
     promotion_confidence: row.promotion_confidence ?? null,
+    todo_created,
   });
 }

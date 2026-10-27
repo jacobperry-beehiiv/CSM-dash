@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { Customer } from "@/lib/types";
 import {
   suggestTemplates,
@@ -19,6 +19,7 @@ import type { EnterpriseTier } from "@/lib/tiers/store";
 import type { AdGapReport } from "@/lib/types";
 import type { MergeContext } from "@/lib/templates/merge-tags";
 import { useCustomMergeTags } from "@/lib/data/use-custom-merge-tags";
+import { RichTextEditor } from "./rich-text-editor";
 
 interface Props {
   customer: Customer;
@@ -262,9 +263,51 @@ export function OutreachModal({
   const subject = template
     ? applyMergeTags(template.subject, customer, ctx)
     : "";
-  const body_html = template
+  /** The template with merge tags resolved — what the body starts as. */
+  const renderedBody = template
     ? applyMergeTags(template.body_html, customer, ctx)
     : "";
+
+  /**
+   * The body is EDITABLE, not a preview.
+   *
+   * It used to render read-only and go straight to Gmail, so whatever
+   * the template produced was what the customer got. For the
+   * shipped-feature flow that includes {{feature.title}} — a Linear
+   * ticket title, written for engineers, often the last thing you want
+   * in front of a customer. The only remedy was editing the draft
+   * afterwards in Gmail, which rather defeats drafting from here.
+   *
+   * `draftBody` holds the CSM's version. It re-seeds from the template
+   * whenever the rendered output changes (different template, or
+   * different recipients moving a merge tag) UNLESS they have already
+   * typed — silently discarding someone's edit because a checkbox
+   * moved would be far worse than a stale body they can see and fix.
+   */
+  const [draftBody, setDraftBody] = useState("");
+  const [bodyEdited, setBodyEdited] = useState(false);
+  const lastSeeded = useRef<string | null>(null);
+  const lastTemplateId = useRef<string | null>(null);
+  useEffect(() => {
+    // Picking a different template is an explicit "give me that
+    // template" — so it re-seeds even over edits. Blocking it made
+    // the template dropdown look broken: you'd choose a new one and
+    // the body wouldn't move. Any OTHER change to the rendered output
+    // (a recipient toggle shifting a merge tag, tags loading in) is
+    // incidental and must not discard someone's writing.
+    const templateChanged = lastTemplateId.current !== chosenId;
+    lastTemplateId.current = chosenId;
+    if (bodyEdited && !templateChanged) return;
+    if (!templateChanged && lastSeeded.current === renderedBody) return;
+    lastSeeded.current = renderedBody;
+    setDraftBody(renderedBody);
+    if (templateChanged) setBodyEdited(false);
+  }, [renderedBody, bodyEdited, chosenId]);
+
+  // What actually gets drafted / copied. Falls back to the rendered
+  // template so a first paint before the seeding effect can't produce
+  // an empty body.
+  const body_html = draftBody || renderedBody;
   const body_text = body_html ? htmlToText(body_html) : "";
 
   async function copy() {
@@ -496,10 +539,33 @@ export function OutreachModal({
               </div>
             </div>
             <div>
-              <div className="text-xs text-muted mb-1">Body preview</div>
-              <div
-                className="px-3 py-2 bg-canvas rounded-md text-sm prose prose-sm max-w-none"
-                dangerouslySetInnerHTML={{ __html: body_html }}
+              <div className="flex items-center justify-between mb-1">
+                <div className="text-xs text-muted">
+                  Body{" "}
+                  <span className="text-subtle">— edit before drafting</span>
+                </div>
+                {bodyEdited ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setBodyEdited(false);
+                      lastSeeded.current = renderedBody;
+                      setDraftBody(renderedBody);
+                    }}
+                    className="text-[11px] text-muted hover:text-fg underline underline-offset-2"
+                    title="Discard your edits and go back to the template"
+                  >
+                    Reset to template
+                  </button>
+                ) : null}
+              </div>
+              <RichTextEditor
+                value={draftBody}
+                onChange={(html) => {
+                  setBodyEdited(true);
+                  setDraftBody(html);
+                }}
+                placeholder="Write the email body…"
               />
             </div>
           </div>
