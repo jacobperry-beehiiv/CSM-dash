@@ -102,6 +102,14 @@ export function CustomerRequestsSection({
   // the way up to the customer-table client component. The Draft
   // outreach button opens the modal; onClose clears it.
   const [draftingRow, setDraftingRow] = useState<Row | null>(null);
+  // Row currently being confirmed, so the button can show progress
+  // and we can refuse double-submits on a slow network.
+  const [confirmingId, setConfirmingId] = useState<string | null>(null);
+  const [confirmError, setConfirmError] = useState<string | null>(null);
+  // Bumped after a confirm to re-run the fetch effect below. Simpler
+  // than hoisting the loader into a useCallback and keeps the
+  // cancelled-flag handling in one place.
+  const [reloadToken, setReloadToken] = useState(0);
 
   useEffect(() => {
     if (!enabled || !workspaceId) return;
@@ -128,7 +136,53 @@ export function CustomerRequestsSection({
     return () => {
       cancelled = true;
     };
-  }, [workspaceId, enabled]);
+  }, [workspaceId, enabled, reloadToken]);
+
+  /**
+   * Vouch for a ship that no #devs-shipped post corroborates.
+   *
+   * Reuses the exceptions endpoint the admin queue already posts to —
+   * same decision, same audit trail, same effect on
+   * promotionConfidence. The only new thing here is WHERE it can be
+   * done: a CSM looking at the customer's own request list is the
+   * person most likely to know whether the thing actually shipped,
+   * and sending them to a separate admin queue to say so is why these
+   * rows sat unconfirmed.
+   *
+   * Confirming flips the row to `confirmed`, which is what lets the
+   * weekly digest pick it up — and the digest is what creates the
+   * `enterprise_request_shipped` to-do. We deliberately don't create
+   * the to-do here: the digest owns that, including its dedupe blob,
+   * and duplicating it would double-notify.
+   */
+  async function confirmShipped(row: Row) {
+    if (!workspaceId) return;
+    setConfirmingId(row.linear_issue_id);
+    setConfirmError(null);
+    try {
+      const r = await fetch("/api/enterprise-requests/exceptions/apply", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          workspace_id: workspaceId,
+          linear_issue_id: row.linear_issue_id,
+          decision: "confirmed",
+          note: "Confirmed from the customer profile — no #devs-shipped match.",
+        }),
+      });
+      if (!r.ok) {
+        const j = (await r.json().catch(() => ({}))) as { error?: string };
+        throw new Error(j.error ?? `HTTP ${r.status}`);
+      }
+      setReloadToken((n) => n + 1);
+    } catch (e) {
+      setConfirmError(
+        e instanceof Error ? e.message : "Couldn't confirm this ship"
+      );
+    } finally {
+      setConfirmingId(null);
+    }
+  }
 
   const grouped = useMemo(() => {
     if (!data) return null;
@@ -303,13 +357,41 @@ export function CustomerRequestsSection({
                                 >
                                   Ship matched ✓
                                 </span>
-                              ) : (
+                              ) : row.review?.decision === "confirmed" ? (
                                 <span
-                                  className="px-1 py-0.5 rounded border border-slate-400 text-slate-700 dark:text-slate-200"
-                                  title={`Linear state: ${row.linear_state_name}. No #devs-shipped post carrying this ticket was found — either the release wasn't parsed, or the ticket was closed without the code going out. Worth a check before telling the customer.`}
+                                  className="px-1 py-0.5 rounded border border-emerald-400 text-emerald-700 dark:text-emerald-300"
+                                  title={`Confirmed by ${row.review.decided_by} on ${fmtDate(row.review.decided_at)} — no #devs-shipped post matched, a human vouched for the ship.`}
                                 >
-                                  No ship post matched
+                                  Ship confirmed ✓
                                 </span>
+                              ) : (
+                                <>
+                                  <span
+                                    className="px-1 py-0.5 rounded border border-slate-400 text-slate-700 dark:text-slate-200"
+                                    title={`Linear state: ${row.linear_state_name}. No #devs-shipped post carrying this ticket was found — either the release wasn't parsed, or the ticket was closed without the code going out. Worth a check before telling the customer.`}
+                                  >
+                                    No ship post matched
+                                  </span>
+                                  {/* The badge used to be a dead end:
+                                      it told a CSM the ship was
+                                      unconfirmed and gave them nowhere
+                                      to say otherwise, so the row sat
+                                      out of the digest — and out of
+                                      the to-do flow — indefinitely. */}
+                                  <button
+                                    type="button"
+                                    onClick={() => confirmShipped(row)}
+                                    disabled={
+                                      confirmingId === row.linear_issue_id
+                                    }
+                                    className="px-1 py-0.5 rounded border border-emerald-400 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-50 dark:hover:bg-emerald-500/10 disabled:opacity-50"
+                                    title="Mark this as genuinely shipped. Feeds the weekly digest, which is what creates the follow-up to-do."
+                                  >
+                                    {confirmingId === row.linear_issue_id
+                                      ? "Confirming…"
+                                      : "Confirm shipped"}
+                                  </button>
+                                </>
                               )
                             ) : null}
                             {row.project_name ? (
@@ -498,6 +580,14 @@ export function CustomerRequestsSection({
           })}
         </div>
       )}
+      {/* Confirm failures get their own line: the action is per-row
+          but the row is deep in a nested list, and a message tucked in
+          there is easy to miss. */}
+      {confirmError ? (
+        <p className="text-[11px] text-red-600 dark:text-red-300 mt-1">
+          {confirmError}
+        </p>
+      ) : null}
       {draftingRow ? (
         <OutreachModal
           customer={customer}
