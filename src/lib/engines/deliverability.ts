@@ -1,4 +1,4 @@
-import { DB, runNativeQuery } from "../metabase";
+import { DB, runNativeQueryUnlimited } from "../metabase";
 import { loadCustomers } from "../data/load-customers";
 import { loadManagedToParent } from "../data/managed-workspaces";
 import { readDeliverabilitySnapshot } from "../data/deliverability-snapshot";
@@ -107,9 +107,11 @@ async function fetchPosts(
   }
   const quote = (id: string) => `'${id.replace(/'/g, "''")}'`;
   const orgInClause = orgIds.map(quote).join(",");
-  // Enterprise-only by default — the panel is an Enterprise surface
-  // and the plan filter is what keeps per-day row counts under the
-  // 2000 cap. Managed workspaces are the explicit exception.
+  // Enterprise-only by default — the panel is an Enterprise surface.
+  // (This filter used to be justified as row-count control for the
+  // 2000 cap too; that was never what kept us under it, because we
+  // were never under it. It stays purely as a scope decision.)
+  // Managed workspaces are the explicit exception.
   const planClause =
     planExemptOrgIds.length > 0
       ? `AND (o.plan_id = 8 OR o.id IN (${planExemptOrgIds
@@ -117,18 +119,27 @@ async function fetchPosts(
           .join(",")}))`
       : "AND o.plan_id = 8";
 
-  // Per-day scoped query. Peak-day enterprise send volume runs
-  // ~3,000 posts (see 2026-07-07: 3,011 rows) — right at the edge of
-  // any 2000-row cap even with the middleware bypass supposedly on.
-  // Historical evidence (Branded Hospitality Media's 2026-07-04
-  // "Skin in the Game" send at 79% delivery invisible in the
-  // dashboard for a week) shows the middleware flag alone doesn't
-  // reliably bypass the truncation. Firing one query per calendar
-  // day inside the lookback window guarantees each response is
-  // below the cap, and the concatenation covers the full window.
+  // Per-day scoped query, run through runNativeQueryUnlimited.
   //
-  // Same architectural pattern the publications-index endpoint
-  // already uses successfully at similar volume.
+  // History worth keeping, because two previous fixes here were
+  // built on a wrong number: the per-day split was introduced on the
+  // estimate that peak enterprise volume was ~3,000 posts/day, so
+  // one query per calendar day would land under the 2000-row cap.
+  // Measured 2026-10-28, the real figure is 5,700-8,200 posts/day.
+  // Every single day was therefore still truncating to exactly 2000,
+  // and because the rows come back `ORDER BY scheduled_at DESC`, what
+  // survived was each day's LATEST 2000 sends. On 2026-10-24 that cut
+  // line sat at 19:00 UTC — so any customer who sends in the morning
+  // was invisible every single day, which is why Branded Hospitality
+  // Media kept reappearing in these comments as a mystery.
+  //
+  // The cap itself was never actually bypassed; see
+  // runNativeQueryUnlimited for the measurements and the fix.
+  //
+  // The per-day split is KEPT, for two reasons that still hold now
+  // that row counts aren't the issue: it bounds each response to a
+  // few thousand rows instead of ~93k in one payload, and it isolates
+  // failures so one bad day can't blackhole the whole window.
   const buildDayQuery = (dayOffset: number): string => `
     SELECT DISTINCT
       toString(p.id) AS post_id,
@@ -163,16 +174,19 @@ async function fetchPosts(
   const out: Q1Row[] = [];
   for (let dayOffset = 1; dayOffset <= lookbackDays; dayOffset++) {
     try {
-      const rows = (await runNativeQuery(
+      const rows = (await runNativeQueryUnlimited(
         DB.CLICKHOUSE_ADHOC,
         buildDayQuery(dayOffset)
       )) as unknown as Q1Row[];
-      if (rows.length >= 2000) {
-        // We've hit exactly the historical truncation ceiling — flag
-        // it loudly so a future spike day (>2000 sends) doesn't fail
-        // silently the way the 15-day-window version used to.
+      // EXACTLY 2000 is the signature of the userland row cap being
+      // back in force — real daily volume is a ragged 5-8k and would
+      // not land on a round number, let alone the same round number
+      // twice. That is precisely how this bug hid for months, so
+      // check for it rather than trusting the endpoint to stay
+      // uncapped across Metabase upgrades.
+      if (rows.length === 2000) {
         console.warn(
-          `[deliverability] fetchPosts day -${dayOffset} returned ${rows.length} rows — at/above 2000 cap; may need further per-day chunking (by post_id) if this reproduces.`
+          `[deliverability] fetchPosts day -${dayOffset} returned exactly 2000 rows — the 2000-row cap has almost certainly been re-applied, and this day is truncated. See runNativeQueryUnlimited.`
         );
       }
       for (const r of rows) out.push(r);
@@ -211,7 +225,7 @@ async function runChunked<T>(
   const out: T[] = [];
   for (let i = 0; i < ids.length; i += POST_ID_CHUNK_SIZE) {
     const slice = ids.slice(i, i + POST_ID_CHUNK_SIZE);
-    const rows = (await runNativeQuery(
+    const rows = (await runNativeQueryUnlimited(
       DB.CLICKHOUSE_ADHOC,
       buildSql(slice)
     )) as unknown as T[];
@@ -629,7 +643,8 @@ export async function fetchDeliverabilityPosts(
 export interface DeliverabilityRunOptions {
   /** Limit to one CSM's book (uses CSM_NAME env by default). Pass null for all. */
   csmName?: string | null;
-  /** How far back to fetch posts. Default 15 to stay safely under 2000-row cap. */
+  /** How far back to fetch posts. Default 15 — a product choice about
+   *  how far the panel lets a CSM look back, not a row-count limit. */
   lookbackDays?: number;
   /** Filter to a specific sent date (YYYY-MM-DD) — defaults to yesterday UTC. */
   targetDate?: string;
