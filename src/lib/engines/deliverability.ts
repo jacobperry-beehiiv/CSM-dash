@@ -223,13 +223,38 @@ async function runChunked<T>(
 ): Promise<T[]> {
   if (ids.length === 0) return [];
   const out: T[] = [];
+  let failedChunks = 0;
   for (let i = 0; i < ids.length; i += POST_ID_CHUNK_SIZE) {
     const slice = ids.slice(i, i + POST_ID_CHUNK_SIZE);
-    const rows = (await runNativeQueryUnlimited(
-      DB.CLICKHOUSE_ADHOC,
-      buildSql(slice)
-    )) as unknown as T[];
-    for (const r of rows) out.push(r);
+    // Per-chunk isolation with one retry. Without this a single bad
+    // response threw straight out to the caller's `safe()` wrapper,
+    // which returns [] for the WHOLE metric — so one flaky chunk in
+    // ~460 silently zeroed every unsub count in the snapshot. That
+    // got much more likely once the row cap was lifted and the post
+    // set tripled, so it needs handling here rather than upstream.
+    let rows: T[] | null = null;
+    for (let attempt = 0; attempt < 2 && rows === null; attempt++) {
+      try {
+        rows = (await runNativeQueryUnlimited(
+          DB.CLICKHOUSE_ADHOC,
+          buildSql(slice)
+        )) as unknown as T[];
+      } catch (e) {
+        if (attempt === 1) {
+          failedChunks++;
+          console.error(
+            `[deliverability] chunk ${i / POST_ID_CHUNK_SIZE} failed twice (${slice.length} ids) — continuing without it:`,
+            e instanceof Error ? e.message : e
+          );
+        }
+      }
+    }
+    if (rows) for (const r of rows) out.push(r);
+  }
+  if (failedChunks > 0) {
+    console.warn(
+      `[deliverability] ${failedChunks} of ${Math.ceil(ids.length / POST_ID_CHUNK_SIZE)} chunks failed — these posts carry 0 for this metric rather than their real value.`
+    );
   }
   return out;
 }

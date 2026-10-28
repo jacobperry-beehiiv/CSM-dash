@@ -246,7 +246,19 @@ export async function runNativeQueryUnlimited(
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: body.toString(),
   });
-  const data = await res.json();
+  // Read as text first. A truncated or empty body from the export
+  // endpoint otherwise surfaces as a bare "Unexpected end of JSON
+  // input", which says nothing about which query or how much came
+  // back — observed in the wild on a chunked unsubs fetch.
+  const raw = await res.text();
+  let data: unknown;
+  try {
+    data = JSON.parse(raw);
+  } catch {
+    throw new Error(
+      `Metabase export returned a body that isn't JSON (${raw.length} bytes, status ${res.status}): ${raw.slice(0, 200)}`
+    );
+  }
   // The export endpoint reports a failed query as an object carrying
   // `error` rather than the array of rows we expect.
   if (!Array.isArray(data)) {
