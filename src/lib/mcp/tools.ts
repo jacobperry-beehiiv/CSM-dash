@@ -7,6 +7,7 @@ import { getTeamTasks, saveTeamTasks } from "../team-tasks/store";
 import { newMemberId, type TeamTask, type TaskPriority } from "../team-tasks/types";
 import { setOverride } from "../data/customer-overrides";
 import { invalidateCustomerCache } from "../data/load-customers";
+import { isFeatureEnabledFor } from "../auth/feature-flags";
 import { applyTodoOps } from "../personal-todos/store";
 import { userKeyFromEmail } from "../personal-todos/identity";
 import {
@@ -51,6 +52,11 @@ export interface Tool {
    *  use this to build the tool's input UI. */
   inputSchema: Record<string, unknown>;
   handler: (args: Record<string, unknown>, ctx: ToolContext) => Promise<ToolResult>;
+  /** Optional per-caller gate. When it resolves false the tool is left
+   *  out of tools/list and tools/call treats it as nonexistent — so
+   *  someone without access can't even learn it's there. Omitted =
+   *  available to every token holder. */
+  enabled?: (ctx: ToolContext) => Promise<boolean>;
 }
 
 // ─── Small helpers ────────────────────────────────────────────────
@@ -609,6 +615,10 @@ function resolveCompany(
 
 const personalTodosAdd: Tool = {
   name: "personal_todos.add",
+  // Company-linked to-dos exist to land on a Lifecycle board card, so
+  // the tool follows the same flag as the board itself — nobody should
+  // be offered a feature whose other half they can't open.
+  enabled: (ctx) => isFeatureEnabledFor("lifecycle-board", ctx.user_email),
   description:
     "Create a to-do on YOUR OWN to-do list in the dashboard (the 'Your " +
     "to-dos' panel), optionally linked to a company so it also appears " +
