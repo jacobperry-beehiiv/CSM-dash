@@ -70,8 +70,8 @@ interface Props {
   /** Colors each group's header by how soon its earliest actionable
    *  to-do is due (overdue / ≤7d / ≤14d / ≤30d, unchanged past that or
    *  with no due date) — see urgencyHeaderClass in
-   *  @/lib/lifecycle/card. Only the Live board turns this on; omit
-   *  everywhere else for the plain header. */
+   *  @/lib/lifecycle/card. Both boards turn this on; omit for the
+   *  plain header. */
   showUrgencyColors?: boolean;
 }
 
