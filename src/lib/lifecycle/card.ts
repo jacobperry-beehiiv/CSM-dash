@@ -118,11 +118,12 @@ export function atRiskSummary(
   };
 }
 
-/** Card sort order for every Lifecycle board column: soonest
- *  `contract_renewal` first. Cards with no contract date (monthly /
- *  never populated in HubSpot) sort last rather than being treated as
- *  "soonest" — an unknown renewal date isn't an urgent one. */
-export function compareByRenewalDate(a: LifecycleCard, b: LifecycleCard): number {
+/** Soonest `contract_renewal` first. Cards with no contract date
+ *  (monthly / never populated in HubSpot) sort last rather than being
+ *  treated as "soonest" — an unknown renewal date isn't an urgent one.
+ *  The date half of compareByRenewalSignal, which is what the boards
+ *  actually use. */
+function compareByRenewalDate(a: LifecycleCard, b: LifecycleCard): number {
   const da = a.customer.contract_renewal;
   const db = b.customer.contract_renewal;
   if (!da && !db) return 0;
@@ -251,12 +252,33 @@ export function urgencyHeaderClass(
   return URGENCY_BANDS.find((b) => b.maxDays > 0 && days <= b.maxDays)?.className;
 }
 
-/** Live board's per-column card order: a card with an actionable to-do
- *  due soon bubbles above one with a due-but-later or no-date to-do,
- *  which in turn bubbles above a card with no actionable to-dos at
- *  all — those (and ties within a tier) fall back to
- *  compareByRenewalSignal (renewal date, or tenure when there isn't
- *  one). */
+/** More severe at-risk flags first, unflagged cards last. Severity is
+ *  the at-risk engine's own priority score (flag-type weights plus a
+ *  small ARR nudge — see priorityScore in engines/at-risk.ts), so a
+ *  column's order agrees with how the At-risk tab ranks the same
+ *  accounts. A resolved flag is already gone from `atRisk` (the engine
+ *  filters those out), so resolving one drops the card back down. */
+function compareByRiskSeverity(a: LifecycleCard, b: LifecycleCard): number {
+  const sa = a.atRisk?.priorityScore;
+  const sb = b.atRisk?.priorityScore;
+  if (sa == null && sb == null) return 0;
+  if (sa == null) return 1;
+  if (sb == null) return -1;
+  return sb - sa;
+}
+
+/** Per-column card order for both Lifecycle boards, in the order a CSM
+ *  actually works:
+ *   1. Explicit to-dos — a card with an actionable, dated to-do leads
+ *      (soonest due date first), then one whose open to-dos have no
+ *      due date, then everything with no actionable to-dos at all.
+ *   2. The dashboard's automated risk signal — a flagged card above an
+ *      unflagged one, more severe flags first (compareByRiskSeverity).
+ *   3. How far along the billing cycle the customer is
+ *      (compareByRenewalSignal: renewal date, or tenure when there
+ *      isn't one).
+ *  Each step only breaks ties left by the one before it, so a flag
+ *  never outranks an open to-do. */
 export function compareByUrgency(
   a: LifecycleCard,
   b: LifecycleCard,
@@ -266,8 +288,11 @@ export function compareByUrgency(
   const ua = cardUrgency(a, today);
   const ub = cardUrgency(b, today);
   if (ua.tier !== ub.tier) return ua.tier - ub.tier;
-  if (ua.tier === 0 && ub.tier === 0) return ua.dueDate.localeCompare(ub.dueDate);
-  return compareByRenewalSignal(a, b);
+  if (ua.tier === 0 && ub.tier === 0) {
+    const byDue = ua.dueDate.localeCompare(ub.dueDate);
+    if (byDue !== 0) return byDue;
+  }
+  return compareByRiskSeverity(a, b) || compareByRenewalSignal(a, b);
 }
 
 export function isEditableBy(

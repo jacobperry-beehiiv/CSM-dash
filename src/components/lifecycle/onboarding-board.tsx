@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { compareByRenewalDate, type LifecycleCard, type LifecycleStep } from "@/lib/lifecycle/card";
+import { compareByUrgency, type LifecycleCard, type LifecycleStep } from "@/lib/lifecycle/card";
 import {
   toggleLifecycleStep,
   patchLifecycleStepDueDate,
@@ -132,7 +132,7 @@ export function OnboardingBoard({ cards: initialCards, stages, csms }: Props) {
       const list = m.get(col) ?? m.get(UNSORTED)!;
       list.push(c);
     }
-    for (const list of m.values()) list.sort(compareByRenewalDate);
+    for (const list of m.values()) list.sort((x, y) => compareByUrgency(x, y));
     return m;
   }, [visibleCards, columns]);
 
@@ -332,12 +332,14 @@ export function OnboardingBoard({ cards: initialCards, stages, csms }: Props) {
         csms={csms}
         zendeskOn={zendeskOn}
         onToggleZendesk={() => setZendeskOn((v) => !v)}
+        showUrgencyLegend
       />
       <KanbanColumns
         columns={columns}
         cardsByColumn={cardsByColumn}
         stageOrder={stages}
         draggable
+        showUrgencyColors
         onDrop={(workspaceId, col) => void moveCard(workspaceId, col)}
         onCardClick={setOpenWorkspaceId}
         onToggleStep={(workspaceId, stepId) =>
