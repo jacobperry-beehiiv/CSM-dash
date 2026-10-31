@@ -13,9 +13,8 @@ interface Props {
   zendeskOn: boolean;
   onToggleZendesk: () => void;
   /** Renders the due-date urgency key (swatch + label per URGENCY_BAND)
-   *  right-aligned on this row. Only the Live board turns this on —
-   *  Onboarding's cards don't get the urgency coloring, so a legend
-   *  there would describe something the board never shows. */
+   *  right-aligned on this row. Pass it on any board whose cards use
+   *  showUrgencyColors, so the colors always have a key. */
   showUrgencyLegend?: boolean;
 }
 

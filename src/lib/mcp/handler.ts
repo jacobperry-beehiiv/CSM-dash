@@ -117,11 +117,16 @@ export async function handleJsonRpc(
       }
 
       case "tools/list": {
+        const visible = (
+          await Promise.all(
+            TOOLS.map(async (t) => ((await t.enabled?.(ctx)) ?? true ? t : null))
+          )
+        ).filter((t): t is NonNullable<typeof t> => t !== null);
         return {
           jsonrpc: "2.0",
           id: req.id ?? null,
           result: {
-            tools: TOOLS.map((t) => ({
+            tools: visible.map((t) => ({
               name: t.name,
               description: t.description,
               inputSchema: t.inputSchema,
@@ -141,7 +146,9 @@ export async function handleJsonRpc(
             "`name` is required"
           );
         }
-        const tool = TOOLS_BY_NAME.get(name);
+        const found = TOOLS_BY_NAME.get(name);
+        // A gated-off tool answers exactly like one that doesn't exist.
+        const tool = found && ((await found.enabled?.(ctx)) ?? true) ? found : undefined;
         if (!tool) {
           return makeError(
             req.id ?? null,
