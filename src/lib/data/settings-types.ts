@@ -204,7 +204,7 @@ export const SLACK_NOTIFICATION_DEFINITIONS: SlackNotificationDefinition[] = [
     kind: "enterprise_requests_review_queue",
     label: "Enterprise Request Loop — review queue",
     description:
-      "Weekly rollup to one ops channel listing every request Linear calls live that no #devs-shipped release post corroborates, each with Shipped / Didn't ship buttons that write straight to the exceptions queue. Reconciliation only — CSMs already hear about these, flagged as unmatched. Rides the same Monday cron as the digest.",
+      "Weekly prompt to one ops channel when requests Linear calls live aren't corroborated by a #devs-shipped post. Posts a count and a Review button — the queue itself opens in a modal with a Shipped / Didn't ship choice per ticket, saved in one submit, so the channel stays quiet however deep the queue gets. Reconciliation only — CSMs already hear about these, flagged as unmatched. Rides the same Monday cron as the digest.",
     schedule: "Mondays ~9:30am CT (cron only)",
     has_destination: true,
     has_tag_users: true,

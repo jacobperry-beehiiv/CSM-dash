@@ -1,12 +1,25 @@
+import { loadCustomers } from "../data/load-customers";
 import {
-  applyRequestReview,
+  applyRequestReviewsBatch,
+  loadEnterpriseRequestsSnapshot,
 } from "../data/enterprise-requests";
-import type { NeedsReviewReason } from "../data/enterprise-requests-types";
+import {
+  liveAt,
+  needsReconciling,
+} from "../data/enterprise-requests-types";
+import type {
+  EnterpriseRequestRow,
+  NeedsReviewReason,
+} from "../data/enterprise-requests-types";
 import { updateSlackMessage } from "./slack";
+import {
+  openSlackView,
+  updateSlackView,
+  type ViewSubmitHandler,
+} from "./slack-views";
 
 /**
- * Enterprise Request Loop — the weekly review rollup posted to an ops
- * channel, and the button handler behind it.
+ * Enterprise Request Loop — the weekly review prompt and its modal.
  *
  * WHAT THE QUEUE MEANS. Linear says these requests are live in the
  * app, but we never found a #devs-shipped release post carrying them.
@@ -14,72 +27,81 @@ import { updateSlackMessage } from "./slack";
  * without the code going out. It is NOT a gate: since the confidence
  * check came off the digest's way out (see enterprise-requests-
  * digest.ts), every Linear-live request already reaches its CSM
- * flagged as unmatched. Confirming here records that a human vouched
- * for the ship; dismissing records that it never went out. Both
- * remove the row from the queue. Neither sends anything to a CSM.
+ * flagged as unmatched. Confirming records that a human vouched for
+ * the ship; dismissing records that it never went out. Both remove
+ * the row from the queue. Neither sends anything to a CSM.
  *
  * Get that wrong in the copy and the reviewer thinks they're holding
  * up customer comms — they aren't, and they'll rush the decision.
  *
- * WHY ONE MESSAGE. The alternative shape — a message per pending row
- * so each can carry its own buttons — means N pings and N @-mentions
- * a week at one person. This posts ONE message with a block pair per
- * row, and each click rewrites that same message in place via
- * chat.update. The reviewer is tagged once, in the header.
+ * SHAPE: TWO BLOCKS IN THE CHANNEL, THE QUEUE IN A MODAL.
  *
- * WHY chat.update AND NOT response_url. Slack expires a block_actions
- * `response_url` 30 minutes after the click and caps it at 5 uses.
- * This message is meant to be worked through over days, a row at a
- * time, so the response_url path would break on exactly the usage
- * pattern we're building for. The block_actions payload hands us
- * `channel.id` + `message.ts`, which is all chat.update needs and
- * never goes stale.
+ * The channel gets a count, one @-mention and a button — that's it,
+ * however deep the queue is. Everything else lives in a modal the
+ * reviewer opens. Two shapes were rejected on the way here:
  *
- * WHY WE REWRITE THE PAYLOAD'S BLOCKS RATHER THAN RE-DERIVE THEM.
- * Rebuilding the whole message would mean reloading the snapshot AND
- * the customer book on every click, inside Slack's 3-second ACK
- * budget, and would silently re-shuffle the list as rows go live
- * mid-week. Instead we take the blocks Slack just handed back, swap
- * the one row that was decided, and leave every other row's rendering
- * byte-identical. Cheap, and the message stays the snapshot of the
- * week it was posted for.
+ *   - One message per pending row, each with its own buttons. N
+ *     pings and N mentions a week at one person.
+ *   - One message listing every row with per-row buttons. One ping,
+ *     but a 40-block wall in a shared channel that everyone else
+ *     scrolls past every Monday.
+ *
+ * THE MODAL IS RESUMABLE, NOT ALL-OR-NOTHING. Every row defaults to
+ * no selection, and submit writes only the rows actually touched.
+ * Close it half-done and nothing is lost: the rows still pending are
+ * the rows the next open will show. That matters at 27 rows — a
+ * modal that discards partial work on close is a modal nobody
+ * finishes.
+ *
+ * WHY views.open IS A SKELETON FIRST. Slack gives a trigger_id three
+ * seconds to live. Building the real modal needs the request
+ * snapshot AND the customer book, and on a cold isolate decrypting
+ * the 2.9MB book alone can eat most of that budget. So we open an
+ * empty "Loading…" view immediately — well inside the window, and
+ * it tells the reviewer the click registered — then fill it with
+ * views.update, which takes a view_id and has no such deadline.
  */
 
 // ─── Constants ────────────────────────────────────────────────────────
 
-/** Single action_id for both buttons — the decision rides in the
- *  value so the webhook needs only one registration. */
-export const REQUEST_REVIEW_ACTION_ID = "enterprise_request_review_decide";
+/** Button on the weekly channel prompt. */
+export const REVIEW_OPEN_ACTION_ID = "enterprise_request_review_open";
 
-/** block_id prefixes. The resolve path matches on these rather than
- *  parsing button values out of every block, so a row's two blocks
- *  can be found in one pass. */
-const SECTION_PREFIX = "errv_s:";
-const ACTIONS_PREFIX = "errv_a:";
-const HEADER_BLOCK_ID = "errv_header";
+/** callback_id on the modal. Registered in dispatchViewSubmission. */
+export const REVIEW_MODAL_CALLBACK_ID = "enterprise_request_review_modal";
+
+/** action_id on every row's radio group. The block_id carries which
+ *  row it is; the action_id is the same throughout. */
+const ROW_ACTION_ID = "verdict";
+
+/** block_id prefix for a row's radio input. */
+const ROW_BLOCK_PREFIX = "rv:";
+
+/** action_id on the plain link button next to Review. Slack still
+ *  POSTs a block_actions event for url buttons, so the webhook needs
+ *  to know this one exists and is a no-op. */
+export const REVIEW_DASHBOARD_ACTION_ID = "errv_open_dashboard";
+
+/** Where the full queue lives. One definition so the prompt, the
+ *  modal and the post-submit refresh can't point at different URLs. */
+export function reviewQueueUrl(): string {
+  const base =
+    process.env.NEXT_PUBLIC_DASHBOARD_URL?.replace(/\/$/, "") ??
+    "https://csm-dash.vercel.app";
+  return `${base}/settings/enterprise-requests/exceptions`;
+}
 
 /**
- * Slack hard-caps a message at 50 blocks. Each pending row costs 2
- * (section + actions) and the header costs 2, so 20 rows lands at 42
- * with headroom. Anything past that gets a count and a link — a
- * truncated list the reviewer can still act on beats a message Slack
- * rejects outright.
+ * Slack caps a modal at 100 blocks. A row costs 2 (section + radio
+ * input) and the header costs 2, so 49 is the ceiling; 40 leaves
+ * headroom and is already a long scroll. The overflow is reachable
+ * next week, or in the dashboard — the modal says so.
  */
-export const MAX_ROLLUP_ROWS = 20;
+export const MAX_MODAL_ROWS = 40;
 
 // ─── Types ────────────────────────────────────────────────────────────
 
-/** JSON-encoded into each button's `value`. Short keys because Slack
- *  caps `value` at 2000 characters and Linear ids are not short. */
-export interface RequestReviewActionValue {
-  w: string;
-  i: string;
-  d: "confirmed" | "dismissed";
-}
-
-/** One row as the rollup renders it. Mirrors the exceptions page's
- *  ExceptionRow — same predicate, same facts, different surface. */
-export interface ReviewRollupRow {
+export interface ReviewRow {
   workspace_id: string;
   linear_issue_id: string;
   linear_identifier: string;
@@ -88,17 +110,21 @@ export interface ReviewRollupRow {
   /** Company name when we have one, else the workspace name. */
   display_name: string | null;
   csm_handle: string | null;
-  /** When Linear says it went live — drives the "waiting Nd" age. */
   live_at: string | null;
   reason: NeedsReviewReason | null;
+}
+
+/** Round-tripped through the modal's private_metadata so the submit
+ *  handler can refresh the message the reviewer opened it from. */
+interface ReviewModalMeta {
+  c: string | null;
+  t: string | null;
 }
 
 type SlackBlock = Record<string, unknown>;
 
 // ─── Copy helpers ─────────────────────────────────────────────────────
 
-/** Why the row needs a human. Phrased as what to go check, not as the
- *  enum name — the reviewer shouldn't have to decode our taxonomy. */
 const REASON_LABEL: Record<NeedsReviewReason, string> = {
   feature_awaiting_changelog: "feature with no changelog post",
   unresolved_work_type: "work type never resolved",
@@ -110,7 +136,6 @@ function reasonLabel(reason: NeedsReviewReason | null): string {
   return REASON_LABEL[reason] ?? "no release post found";
 }
 
-/** Whole days since `iso`, or null when we can't tell. */
 function daysSince(iso: string | null): number | null {
   if (!iso) return null;
   const ms = Date.parse(iso);
@@ -118,323 +143,443 @@ function daysSince(iso: string | null): number | null {
   return Math.max(0, Math.floor((Date.now() - ms) / 86_400_000));
 }
 
-/** Slack mrkdwn escaping. Request titles are free text written by
- *  CSMs and PMs — an unescaped `<` or `&` breaks the whole block. */
+/** Request titles are free text written by CSMs and PMs — an
+ *  unescaped `<` or `&` breaks the whole block. */
 function esc(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
+// ─── Row collection ───────────────────────────────────────────────────
+
 /**
- * Render whoever made the call. Dashboard reviews stamp an email;
- * Slack reviews stamp `slack:U…` so we can turn it back into a real
- * mention here instead of printing a raw id at the reviewer.
+ * Every row still needing reconciliation, oldest first.
+ *
+ * Oldest first because that's the order that survives truncation:
+ * the rows that have been sitting longest are the ones most likely
+ * to have gone stale, and the ones a reviewer most needs to see.
  */
-function renderDecider(by: string): string {
-  const trimmed = by.trim();
-  if (trimmed.toLowerCase().startsWith("slack:")) {
-    return `<@${trimmed.slice(6).toUpperCase()}>`;
+export async function loadPendingReviewRows(): Promise<ReviewRow[]> {
+  const [snapshot, customers] = await Promise.all([
+    loadEnterpriseRequestsSnapshot(),
+    loadCustomers(),
+  ]);
+  const meta = new Map<
+    string,
+    { display_name: string | null; csm_handle: string | null }
+  >();
+  for (const c of customers) {
+    if (!c.workspace_id) continue;
+    meta.set(c.workspace_id, {
+      display_name: c.company_name ?? c.workspace_name ?? null,
+      csm_handle: c.customer_success_manager ?? null,
+    });
   }
-  return esc(trimmed);
+  const rows: ReviewRow[] = [];
+  for (const [workspaceId, bucket] of Object.entries(snapshot.rows)) {
+    for (const row of Object.values(bucket) as EnterpriseRequestRow[]) {
+      if (!needsReconciling(row)) continue;
+      const m = meta.get(workspaceId);
+      rows.push({
+        workspace_id: workspaceId,
+        linear_issue_id: row.linear_issue_id,
+        linear_identifier: row.linear_identifier,
+        title: row.title,
+        url: row.url,
+        display_name: m?.display_name ?? null,
+        csm_handle: m?.csm_handle ?? null,
+        live_at: liveAt(row),
+        reason: row.needs_review_reason ?? null,
+      });
+    }
+  }
+  rows.sort((a, b) => (a.live_at ?? "").localeCompare(b.live_at ?? ""));
+  return rows;
 }
 
-// ─── Block builders ───────────────────────────────────────────────────
+// ─── The channel prompt ───────────────────────────────────────────────
 
-/** The identity line for a row. Kept as the section's FIRST line so
- *  the resolve path can lift it back out without re-deriving it. */
-function identityLine(row: ReviewRollupRow): string {
-  return `*<${row.url}|${esc(row.linear_identifier)}>* — ${esc(row.title)}`;
+/**
+ * The weekly message. Two blocks regardless of queue depth — the
+ * whole point of the modal is that the channel stays quiet.
+ *
+ * `footer` carries the "last cleared by…" line after a submit, so
+ * the channel shows the queue moving without a second message.
+ */
+export function buildReviewPromptBlocks(args: {
+  total: number;
+  tagUserIds: string[];
+  oldestDays: number | null;
+  queueUrl: string;
+  footer?: string | null;
+}): SlackBlock[] {
+  const { total, tagUserIds, oldestDays, queueUrl, footer } = args;
+  const mentions = tagUserIds
+    .map((id) => `<@${id.trim().toUpperCase()}>`)
+    .join(" ");
+  const lines = [
+    `:mag: *${total} shipped signal${total === 1 ? "" : "s"} waiting on review*`,
+  ];
+  lines.push(
+    (mentions ? `${mentions} — ` : "") +
+      "Linear says these are live in the app, but no #devs-shipped post " +
+      "backs that up. Reconciliation only — CSMs have already been told, " +
+      "flagged as unmatched."
+  );
+  if (oldestDays !== null && oldestDays > 0) {
+    lines.push(`_Oldest has been waiting ${oldestDays} days._`);
+  }
+  if (footer) lines.push(`_${footer}_`);
+
+  const blocks: SlackBlock[] = [
+    {
+      type: "section",
+      block_id: "errv_prompt",
+      text: { type: "mrkdwn", text: lines.join("\n") },
+    },
+  ];
+  // No rows left — drop the button rather than open an empty modal.
+  if (total > 0) {
+    blocks.push({
+      type: "actions",
+      block_id: "errv_prompt_actions",
+      elements: [
+        {
+          type: "button",
+          action_id: REVIEW_OPEN_ACTION_ID,
+          text: {
+            type: "plain_text",
+            text: `Review ${total} ticket${total === 1 ? "" : "s"}`,
+            emoji: true,
+          },
+          style: "primary",
+          value: "open",
+        },
+        {
+          type: "button",
+          action_id: REVIEW_DASHBOARD_ACTION_ID,
+          text: { type: "plain_text", text: "Open dashboard", emoji: true },
+          url: queueUrl,
+        },
+      ],
+    });
+  }
+  return blocks;
 }
 
-function detailLine(row: ReviewRollupRow): string {
+export function reviewPromptFallbackText(total: number): string {
+  return `${total} shipped signal${total === 1 ? "" : "s"} waiting on review`;
+}
+
+// ─── The modal ────────────────────────────────────────────────────────
+
+function rowBlocks(row: ReviewRow): SlackBlock[] {
   const bits: string[] = [];
   if (row.display_name) bits.push(esc(row.display_name));
   if (row.csm_handle) bits.push(`CSM ${esc(row.csm_handle.replace(/_/g, " "))}`);
   const age = daysSince(row.live_at);
   if (age !== null) bits.push(`live ${age}d`);
   bits.push(reasonLabel(row.reason));
-  return `_${bits.join(" · ")}_`;
-}
 
-function rowBlocks(row: ReviewRollupRow): SlackBlock[] {
-  const key = `${row.workspace_id}|${row.linear_issue_id}`;
-  const val = (d: "confirmed" | "dismissed"): string =>
-    JSON.stringify({
-      w: row.workspace_id,
-      i: row.linear_issue_id,
-      d,
-    } satisfies RequestReviewActionValue);
   return [
     {
       type: "section",
-      block_id: SECTION_PREFIX + key,
       text: {
         type: "mrkdwn",
-        text: `${identityLine(row)}\n${detailLine(row)}`,
+        text:
+          `*<${row.url}|${esc(row.linear_identifier)}>* — ${esc(row.title)}\n` +
+          `_${bits.join(" · ")}_`,
       },
     },
     {
-      type: "actions",
-      block_id: ACTIONS_PREFIX + key,
-      elements: [
-        {
-          type: "button",
-          action_id: REQUEST_REVIEW_ACTION_ID,
-          text: { type: "plain_text", text: "Shipped", emoji: true },
-          style: "primary",
-          value: val("confirmed"),
-        },
-        {
-          type: "button",
-          action_id: REQUEST_REVIEW_ACTION_ID,
-          text: { type: "plain_text", text: "Didn't ship", emoji: true },
-          value: val("dismissed"),
-        },
-      ],
+      type: "input",
+      // Unselected is a real answer here: "not deciding this one
+      // today". Without optional:true Slack refuses the submit until
+      // every row is answered, which is what makes a 40-row modal
+      // something you abandon rather than chip away at.
+      optional: true,
+      block_id: `${ROW_BLOCK_PREFIX}${row.workspace_id}|${row.linear_issue_id}`,
+      // The ticket key, not a blank. Slack requires a label on an
+      // input block and rejects the whole view with `invalid_blocks`
+      // if it doesn't like what it gets — a whitespace-only label is
+      // the kind of thing that works until it doesn't, and it would
+      // take the entire modal down with it. Repeating the key here
+      // also keeps the radios anchored to a ticket once the modal is
+      // long enough to scroll.
+      label: {
+        type: "plain_text",
+        text: row.linear_identifier || "Verdict",
+        emoji: false,
+      },
+      element: {
+        type: "radio_buttons",
+        action_id: ROW_ACTION_ID,
+        options: [
+          {
+            text: { type: "plain_text", text: "Shipped", emoji: true },
+            value: "confirmed",
+          },
+          {
+            text: { type: "plain_text", text: "Didn't ship", emoji: true },
+            value: "dismissed",
+          },
+        ],
+      },
     },
   ];
 }
 
-function headerBlocks(args: {
-  pending: number;
+/** The real modal, once the data is loaded. */
+export function buildReviewModalView(args: {
+  rows: ReviewRow[];
   total: number;
-  tagUserIds: string[];
+  meta: ReviewModalMeta;
   queueUrl: string;
-  oldestDays: number | null;
-}): SlackBlock[] {
-  const { pending, total, tagUserIds, queueUrl, oldestDays } = args;
-  const mentions = tagUserIds
-    .map((id) => `<@${id.trim().toUpperCase()}>`)
-    .join(" ");
-  const truncated = total > pending ? total - pending : 0;
-  const lines = [
-    `:mag: *Shipped signals waiting on review — ${total}*`,
-    mentions
-      ? `${mentions} — ${pending} to clear below.`
-      : `${pending} to clear below.`,
+}): Record<string, unknown> {
+  const { rows, total, meta, queueUrl } = args;
+  const truncated = total > rows.length ? total - rows.length : 0;
+  const intro = [
+    "Pick a verdict for the ones you're sure about and leave the rest blank — " +
+      "only what you select gets saved, so you can close this and pick up where " +
+      "you left off.",
     "",
-    "Linear says these are live in the app, but no #devs-shipped release post backs that up. " +
-      "That's either a ship we failed to parse or a ticket closed without the code going out.",
-    "",
-    "_This isn't holding up customer comms — every Linear-live request already reaches its CSM, " +
-      "flagged as unmatched. This is reconciliation: *Shipped* records that a human vouched for it, " +
-      "*Didn't ship* records that it never went out. Either way the row leaves the queue._",
+    "*Shipped* — it really went out, we just couldn't find the release post." +
+      "\n*Didn't ship* — the ticket closed without the code going out.",
   ];
-  if (oldestDays !== null && oldestDays > 0) {
-    lines.push("", `_Oldest has been waiting ${oldestDays} days._`);
-  }
   if (truncated > 0) {
-    lines.push(
+    intro.push(
       "",
-      `_${truncated} more not shown (Slack caps a message at 50 blocks) — <${queueUrl}|work the full queue in the dashboard>._`
+      `_Showing the ${rows.length} oldest of ${total}. The rest are in ` +
+        `<${queueUrl}|the dashboard>, or here again next week._`
     );
   }
-  return [
-    {
-      type: "section",
-      block_id: HEADER_BLOCK_ID,
-      text: { type: "mrkdwn", text: lines.join("\n") },
-    },
-    { type: "divider" },
-  ];
-}
-
-/**
- * Compose the whole rollup. `rows` is already trimmed to
- * MAX_ROLLUP_ROWS by the caller; `total` is the untrimmed depth so
- * the header can own up to what it left out.
- */
-export function buildReviewRollupBlocks(args: {
-  rows: ReviewRollupRow[];
-  total: number;
-  tagUserIds: string[];
-  queueUrl: string;
-  oldestDays: number | null;
-}): SlackBlock[] {
-  return [
-    ...headerBlocks({
-      pending: args.rows.length,
-      total: args.total,
-      tagUserIds: args.tagUserIds,
-      queueUrl: args.queueUrl,
-      oldestDays: args.oldestDays,
-    }),
-    ...args.rows.flatMap(rowBlocks),
-  ];
-}
-
-/** Plain-text fallback — what lands in the notification and in
- *  clients that don't render blocks. */
-export function reviewRollupFallbackText(total: number): string {
-  return `${total} shipped signal${total === 1 ? "" : "s"} waiting on review`;
-}
-
-// ─── Resolve-in-place ─────────────────────────────────────────────────
-
-function blockId(b: SlackBlock): string {
-  return typeof b.block_id === "string" ? b.block_id : "";
-}
-
-/** First line of a section's mrkdwn text, minus any status emoji a
- *  previous resolve prepended, so re-resolving can't stack them. */
-function identityFromSection(b: SlackBlock): string {
-  const text = (b.text as { text?: string } | undefined)?.text ?? "";
-  const first = text.split("\n")[0] ?? "";
-  return first.replace(/^(?::white_check_mark:|:x:)\s*/, "");
-}
-
-/**
- * Swap one row from "pending + buttons" to a decided line, and
- * refresh the header's remaining count. Every other block is passed
- * through untouched.
- *
- * Returns null when the row's blocks aren't in the message — which
- * means someone already cleared it (from here or from the dashboard)
- * and the message Slack sent us is stale. The caller treats that as a
- * no-op rather than rewriting the message from a stale base.
- */
-export function resolveRowInBlocks(args: {
-  blocks: SlackBlock[];
-  workspaceId: string;
-  linearIssueId: string;
-  decision: "confirmed" | "dismissed";
-  byUserId: string;
-}): SlackBlock[] | null {
-  const key = `${args.workspaceId}|${args.linearIssueId}`;
-  const sectionId = SECTION_PREFIX + key;
-  const actionsId = ACTIONS_PREFIX + key;
-  const section = args.blocks.find((b) => blockId(b) === sectionId);
-  if (!section) return null;
-
-  const emoji =
-    args.decision === "confirmed" ? ":white_check_mark:" : ":x:";
-  const verdict =
-    args.decision === "confirmed" ? "Confirmed shipped" : "Didn't ship";
-  const decided: SlackBlock = {
-    type: "section",
-    block_id: sectionId,
-    text: {
-      type: "mrkdwn",
-      text: `${emoji} ${identityFromSection(section)}`,
-    },
+  return {
+    type: "modal",
+    callback_id: REVIEW_MODAL_CALLBACK_ID,
+    private_metadata: JSON.stringify(meta),
+    title: { type: "plain_text", text: "Shipped signals", emoji: false },
+    submit: { type: "plain_text", text: "Save verdicts", emoji: false },
+    close: { type: "plain_text", text: "Cancel", emoji: false },
+    blocks: [
+      { type: "section", text: { type: "mrkdwn", text: intro.join("\n") } },
+      { type: "divider" },
+      ...rows.flatMap(rowBlocks),
+    ],
   };
-  const note: SlackBlock = {
-    type: "context",
-    block_id: actionsId,
-    elements: [
+}
+
+/** Shown for the few hundred ms between the click and the data. */
+function loadingView(meta: ReviewModalMeta): Record<string, unknown> {
+  return {
+    type: "modal",
+    callback_id: REVIEW_MODAL_CALLBACK_ID,
+    private_metadata: JSON.stringify(meta),
+    title: { type: "plain_text", text: "Shipped signals", emoji: false },
+    close: { type: "plain_text", text: "Cancel", emoji: false },
+    blocks: [
       {
-        type: "mrkdwn",
-        text: `${verdict} by <@${args.byUserId}>`,
+        type: "section",
+        text: { type: "mrkdwn", text: ":hourglass_flowing_sand: Loading the queue…" },
       },
     ],
   };
+}
 
-  const next = args.blocks.map((b) => {
-    const id = blockId(b);
-    if (id === sectionId) return decided;
-    if (id === actionsId) return note;
-    return b;
-  });
-
-  // Progress goes on the mentions line, NOT the headline count.
-  //
-  // The headline is the whole queue's depth; this message may only be
-  // showing the oldest MAX_ROLLUP_ROWS of it. Rewriting the headline
-  // to "1 left" after a click would read as "one left in the queue"
-  // when 25 unshown rows are still pending. So the headline stays
-  // frozen at what it was posted with, and the line below it tracks
-  // progress through THIS message explicitly.
-  const remaining = next.filter(
-    (b) => blockId(b).startsWith(ACTIONS_PREFIX) && b.type === "actions"
-  ).length;
-  const shown = next.filter((b) =>
-    blockId(b).startsWith(SECTION_PREFIX)
-  ).length;
-  return next.map((b) => {
-    if (blockId(b) !== HEADER_BLOCK_ID) return b;
-    const text = (b.text as { text?: string } | undefined)?.text ?? "";
-    const lines = text.split("\n");
-    // Keep whatever mention prefix the post was built with — it's the
-    // only place the tagged user IDs survive, and re-deriving them
-    // would mean reloading settings on every click.
-    const prefix = (lines[1] ?? "").split(" — ")[0];
-    const progress =
-      remaining === 0
-        ? `all ${shown} cleared :tada:`
-        : `${remaining} of ${shown} left below.`;
-    lines[1] = prefix.includes("<@")
-      ? `${prefix} — ${progress}`
-      : progress;
-    return { ...b, text: { type: "mrkdwn", text: lines.join("\n") } };
-  });
+function emptyView(meta: ReviewModalMeta): Record<string, unknown> {
+  return {
+    type: "modal",
+    callback_id: REVIEW_MODAL_CALLBACK_ID,
+    private_metadata: JSON.stringify(meta),
+    title: { type: "plain_text", text: "Shipped signals", emoji: false },
+    close: { type: "plain_text", text: "Done", emoji: false },
+    blocks: [
+      {
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text:
+            ":white_check_mark: *Nothing left to reconcile.*\nEvery Linear-live " +
+            "request either matches a release post or has a verdict on it.",
+        },
+      },
+    ],
+  };
 }
 
 /**
- * Button click: write the decision through the SAME path the
- * dashboard's exceptions queue uses, then rewrite the message.
- *
- * The write is deliberately first. If chat.update then fails (rate
- * limit, message deleted, token scope), the decision is still
- * recorded and the dashboard reflects it — the cost is one stale
- * Slack message, not a lost review.
+ * Button click → modal. Skeleton first (see the file header on the
+ * trigger_id deadline), then the real content via views.update.
  */
-export async function handleRequestReviewAction(args: {
-  value: RequestReviewActionValue;
+export async function openReviewModal(args: {
+  triggerId: string;
   channel: string | null;
   messageTs: string | null;
-  blocks: SlackBlock[];
-  userId: string;
 }): Promise<{ ok: boolean; error?: string }> {
-  const { value, channel, messageTs, blocks, userId } = args;
+  const queueUrl = reviewQueueUrl();
+  const meta: ReviewModalMeta = { c: args.channel, t: args.messageTs };
+  const opened = await openSlackView(args.triggerId, loadingView(meta));
+  if (!opened.ok) return { ok: false, error: opened.error };
+  const viewId = opened.view?.id;
+  if (!viewId) {
+    return { ok: false, error: "views.open returned no view id" };
+  }
   try {
-    const applied = await applyRequestReview({
-      workspaceId: value.w,
-      linearIssueId: value.i,
-      decision: value.d,
-      by: `slack:${userId}`,
-    });
-    if (!applied) {
-      console.warn("[request-review] row not in snapshot", {
-        workspace_id: value.w,
-        linear_issue_id: value.i,
-      });
-      return { ok: false, error: "row_not_found" };
-    }
-    if (!channel || !messageTs) {
-      return { ok: true };
-    }
-    const next = resolveRowInBlocks({
-      blocks,
-      workspaceId: value.w,
-      linearIssueId: value.i,
-      decision: value.d,
-      byUserId: userId,
-    });
-    if (!next) {
-      // Already cleared by someone else. The write above is still
-      // correct (applyRequestReview is last-writer-wins on a row that
-      // is being set to the same shape), we just have nothing sound
-      // to rewrite.
-      return { ok: true };
-    }
-    await updateSlackMessage({
-      channel,
-      ts: messageTs,
-      text: reviewRollupFallbackText(
-        next.filter(
-          (b) => blockId(b).startsWith(ACTIONS_PREFIX) && b.type === "actions"
-        ).length
-      ),
-      blocks: next,
-    });
-    return { ok: true };
+    const rows = await loadPendingReviewRows();
+    const view =
+      rows.length === 0
+        ? emptyView(meta)
+        : buildReviewModalView({
+            rows: rows.slice(0, MAX_MODAL_ROWS),
+            total: rows.length,
+            meta,
+            queueUrl,
+          });
+    return await updateSlackView(viewId, view);
   } catch (e) {
     const error = e instanceof Error ? e.message : String(e);
-    console.warn("[request-review] decision failed", {
-      workspace_id: value.w,
-      linear_issue_id: value.i,
-      decision: value.d,
-      error,
+    console.warn("[request-review] couldn't fill the modal", { error });
+    await updateSlackView(viewId, {
+      type: "modal",
+      callback_id: REVIEW_MODAL_CALLBACK_ID,
+      title: { type: "plain_text", text: "Shipped signals", emoji: false },
+      close: { type: "plain_text", text: "Close", emoji: false },
+      blocks: [
+        {
+          type: "section",
+          text: {
+            type: "mrkdwn",
+            text:
+              ":warning: Couldn't load the queue. Try again, or work it in " +
+              `<${queueUrl}|the dashboard>.`,
+          },
+        },
+      ],
     });
     return { ok: false, error };
+  }
+}
+
+// ─── Submit ───────────────────────────────────────────────────────────
+
+/**
+ * Save the verdicts, then refresh the channel prompt so the count
+ * reflects the work without posting a second message.
+ *
+ * Rows left blank are skipped, not defaulted — see the modal's
+ * `optional: true`.
+ */
+export const reviewModalHandler: ViewSubmitHandler = async ({
+  payload,
+  userKey,
+}) => {
+  const decisions: Array<{
+    workspaceId: string;
+    linearIssueId: string;
+    decision: "confirmed" | "dismissed";
+  }> = [];
+  for (const [blockId, actions] of Object.entries(
+    payload.view.state?.values ?? {}
+  )) {
+    if (!blockId.startsWith(ROW_BLOCK_PREFIX)) continue;
+    const picked = actions?.[ROW_ACTION_ID];
+    if (!picked || picked.type !== "radio_buttons") continue;
+    const value = picked.selected_option?.value;
+    if (value !== "confirmed" && value !== "dismissed") continue;
+    const [workspaceId, linearIssueId] = blockId
+      .slice(ROW_BLOCK_PREFIX.length)
+      .split("|");
+    if (!workspaceId || !linearIssueId) continue;
+    decisions.push({ workspaceId, linearIssueId, decision: value });
+  }
+
+  const slackUser = payload.user.id;
+  if (decisions.length === 0) {
+    // Nothing picked. Closing silently is right — the reviewer
+    // opened it, decided nothing, and the queue is unchanged.
+    return {};
+  }
+
+  let meta: ReviewModalMeta = { c: null, t: null };
+  try {
+    meta = JSON.parse(payload.view.private_metadata ?? "{}") as ReviewModalMeta;
+  } catch {
+    /* refresh is best-effort; the writes below are what matter */
+  }
+
+  try {
+    const { applied, missing } = await applyRequestReviewsBatch({
+      decisions,
+      by: userKey || `slack:${slackUser}`,
+    });
+    const confirmed = applied.filter(
+      (r) => r.review?.decision === "confirmed"
+    ).length;
+    const dismissed = applied.length - confirmed;
+    if (missing.length > 0) {
+      console.warn("[request-review] rows vanished before submit", { missing });
+    }
+    await refreshPromptMessage({
+      channel: meta.c,
+      messageTs: meta.t,
+      footer:
+        `Last cleared by <@${slackUser}>: ${confirmed} shipped, ` +
+        `${dismissed} didn't.`,
+    });
+  } catch (e) {
+    console.error("[request-review] batch submit failed", e);
+    // Surfacing the failure on the first row's block keeps the modal
+    // open with the reviewer's selections intact, so a transient KV
+    // error doesn't cost them the whole screen of work.
+    const firstBlock = `${ROW_BLOCK_PREFIX}${decisions[0].workspaceId}|${decisions[0].linearIssueId}`;
+    return {
+      response_action: "errors",
+      errors: {
+        [firstBlock]: "Couldn't save — nothing was recorded. Try again.",
+      } as Record<string, string>,
+    };
+  }
+  return {};
+};
+
+/**
+ * Recount the queue and rewrite the weekly prompt in place.
+ *
+ * Best-effort: a failure here means a stale count in Slack, never a
+ * lost verdict — the writes already landed.
+ */
+async function refreshPromptMessage(args: {
+  channel: string | null;
+  messageTs: string | null;
+  footer: string;
+}): Promise<void> {
+  if (!args.channel || !args.messageTs) return;
+  try {
+    const [{ loadSettings }, { resolveSlackNotificationPref }] =
+      await Promise.all([
+        import("../data/settings"),
+        import("../data/settings-types"),
+      ]);
+    const settings = await loadSettings();
+    const pref = resolveSlackNotificationPref(
+      settings,
+      "enterprise_requests_review_queue"
+    );
+    const rows = await loadPendingReviewRows();
+    const oldest = rows[0]?.live_at ?? null;
+    await updateSlackMessage({
+      channel: args.channel,
+      ts: args.messageTs,
+      text: reviewPromptFallbackText(rows.length),
+      blocks: buildReviewPromptBlocks({
+        total: rows.length,
+        tagUserIds: pref.tag_user_ids ?? [],
+        oldestDays: daysSince(oldest),
+        queueUrl: reviewQueueUrl(),
+        footer: args.footer,
+      }),
+    });
+  } catch (e) {
+    console.warn("[request-review] prompt refresh failed", {
+      error: e instanceof Error ? e.message : e,
+    });
   }
 }

@@ -40,6 +40,10 @@ import {
   RENEWAL_CYCLE_MODAL_CALLBACK_ID,
   renewalCycleModalHandler,
 } from "./slack-renewal-cycle";
+import {
+  REVIEW_MODAL_CALLBACK_ID,
+  reviewModalHandler,
+} from "./slack-request-review";
 
 // ─── Generic view-submission contract ─────────────────────────────────
 
@@ -66,6 +70,10 @@ export type ViewStateValue =
   | { type: "datepicker"; selected_date: string | null }
   | {
       type: "static_select";
+      selected_option: { value: string; text: { text: string } } | null;
+    }
+  | {
+      type: "radio_buttons";
       selected_option: { value: string; text: { text: string } } | null;
     };
 
@@ -382,6 +390,7 @@ export async function dispatchViewSubmission(
     [FIND_CUSTOMER_VIEW_CALLBACK_ID]: findCustomerSubmitHandler,
     [ASSIGN_MODAL_CALLBACK_ID]: assignModalHandler,
     [RENEWAL_CYCLE_MODAL_CALLBACK_ID]: renewalCycleModalHandler,
+    [REVIEW_MODAL_CALLBACK_ID]: reviewModalHandler,
   };
   const handler = handlers[payload.view.callback_id];
   if (!handler) {
@@ -2042,7 +2051,7 @@ async function fetchPublicationsForWorkspaces(
 export async function openSlackView(
   triggerId: string,
   view: Record<string, unknown>
-): Promise<{ ok: boolean; error?: string }> {
+): Promise<{ ok: boolean; error?: string; view?: { id?: string } }> {
   const token = process.env.SLACK_BOT_TOKEN;
   if (!token) return { ok: false, error: "SLACK_BOT_TOKEN not set" };
   try {
@@ -2054,9 +2063,51 @@ export async function openSlackView(
       },
       body: JSON.stringify({ trigger_id: triggerId, view }),
     });
-    const j = (await r.json()) as { ok: boolean; error?: string };
+    // The view id comes back here and nowhere else. Callers that open
+    // a skeleton and fill it afterwards (the request-review modal
+    // can't build its content inside trigger_id's 3-second window)
+    // have no other handle on the view they just opened.
+    const j = (await r.json()) as {
+      ok: boolean;
+      error?: string;
+      view?: { id?: string };
+    };
     if (!j.ok) {
       console.warn("[slack-views] views.open failed", { error: j.error });
+    }
+    return j;
+  } catch (e) {
+    return {
+      ok: false,
+      error: e instanceof Error ? e.message : String(e),
+    };
+  }
+}
+
+/**
+ * Replace the contents of an already-open modal, by view_id.
+ *
+ * Unlike views.open this carries no trigger_id and no deadline, so
+ * it's where any work too slow for the 3-second window belongs.
+ */
+export async function updateSlackView(
+  viewId: string,
+  view: Record<string, unknown>
+): Promise<{ ok: boolean; error?: string }> {
+  const token = process.env.SLACK_BOT_TOKEN;
+  if (!token) return { ok: false, error: "SLACK_BOT_TOKEN not set" };
+  try {
+    const r = await fetch("https://slack.com/api/views.update", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json; charset=utf-8",
+      },
+      body: JSON.stringify({ view_id: viewId, view }),
+    });
+    const j = (await r.json()) as { ok: boolean; error?: string };
+    if (!j.ok) {
+      console.warn("[slack-views] views.update failed", { error: j.error });
     }
     return j;
   } catch (e) {

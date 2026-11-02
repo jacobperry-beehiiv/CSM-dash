@@ -4,9 +4,8 @@ import { isFeatureEnabledFor } from "@/lib/auth/feature-flags";
 import { loadCustomers } from "@/lib/data/load-customers";
 import { loadEnterpriseRequestsSnapshot } from "@/lib/data/enterprise-requests";
 import {
-  hasDevsShippedMatch,
-  isLive,
   liveAt,
+  needsReconciling,
 } from "@/lib/data/enterprise-requests-types";
 import type { EnterpriseRequestRow } from "@/lib/data/enterprise-requests-types";
 import {
@@ -64,13 +63,10 @@ export default async function ExceptionsPage() {
   const rows: ExceptionRow[] = [];
   for (const [workspaceId, bucket] of Object.entries(snapshot.rows)) {
     for (const row of Object.values(bucket) as EnterpriseRequestRow[]) {
-      // Linear says it's delivered...
-      if (!isLive(row)) continue;
-      // ...but no release post backs that up. Rows with a match need
-      // no reconciling.
-      if (hasDevsShippedMatch(row)) continue;
-      // Already decided by a human — neither decision should reappear.
-      if (row.review?.decision) continue;
+      // Linear says it's delivered, no release post backs that up,
+      // nobody has ruled on it yet. Shared with the weekly Slack
+      // prompt and the review modal so the three can't drift.
+      if (!needsReconciling(row)) continue;
       const meta = wsMeta.get(workspaceId);
       rows.push({
         workspace_id: workspaceId,

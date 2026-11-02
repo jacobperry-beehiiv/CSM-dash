@@ -3,10 +3,8 @@ import { loadSettings } from "../data/settings";
 import { resolveSlackNotificationPref } from "../data/settings-types";
 import { postSlackMessage, resolveSlackChannelId } from "../integrations/slack";
 import {
-  buildReviewRollupBlocks,
-  MAX_ROLLUP_ROWS,
-  reviewRollupFallbackText,
-  type ReviewRollupRow,
+  buildReviewPromptBlocks,
+  reviewPromptFallbackText,
 } from "../integrations/slack-request-review";
 import {
   loadDigestSent,
@@ -22,6 +20,7 @@ import {
   hasDevsShippedMatch,
   isLive,
   liveAt,
+  needsReconciling,
   resolveConfidence,
 } from "../data/enterprise-requests-types";
 import { applyTodoOps, getTodosForUser } from "../personal-todos/store";
@@ -279,60 +278,27 @@ export async function runEnterpriseRequestsDigest(
   // inbox. Counted across the whole snapshot rather than the 7-day
   // window — the problem is rows accumulating unreconciled.
   //
-  // The predicate MUST match the exceptions page's
-  // (settings/enterprise-requests/exceptions/page.tsx) or the count
-  // in Slack disagrees with the list the link opens. It used to:
-  // this loop excluded only `dismissed`, so every row a human
-  // CONFIRMED kept being counted forever and the number never fully
-  // drained. `review?.decision` covers both verdicts, which is what
-  // the page has always done.
+  // Count only. The rows are loaded when the reviewer opens the
+  // modal, not when the prompt is posted — a Monday message listing
+  // a queue someone works on Thursday is stale by the time anyone
+  // acts on it.
   //
-  // Rows carry the workspace's display name and CSM so the message
-  // can name the customer. That needs every customer, not the
-  // CSM-assigned subset `wsMeta` holds — an unassigned workspace's
-  // ship still needs reconciling.
-  const rollupMeta = new Map<
-    string,
-    { display_name: string | null; csm_handle: string | null }
-  >();
-  for (const c of customers) {
-    if (!c.workspace_id) continue;
-    rollupMeta.set(c.workspace_id, {
-      display_name: c.company_name ?? c.workspace_name ?? null,
-      csm_handle: c.customer_success_manager ?? null,
-    });
-  }
-
-  const pendingReview: ReviewRollupRow[] = [];
+  // `needsReconciling` is the one shared predicate. It used to be
+  // open-coded here and excluded only `dismissed`, so every row a
+  // human CONFIRMED kept being counted and the number never drained
+  // while the page it linked to showed something else.
+  let reviewQueueDepth = 0;
   let oldestPendingAt: string | null = null;
-  for (const [workspaceId, bucket] of Object.entries(snapshot.rows)) {
+  for (const bucket of Object.values(snapshot.rows)) {
     for (const row of Object.values(bucket) as EnterpriseRequestRow[]) {
-      if (!isLive(row)) continue;
-      if (hasDevsShippedMatch(row)) continue;
-      if (row.review?.decision) continue;
+      if (!needsReconciling(row)) continue;
+      reviewQueueDepth += 1;
       const wentLive = liveAt(row);
-      const meta = rollupMeta.get(workspaceId);
-      pendingReview.push({
-        workspace_id: workspaceId,
-        linear_issue_id: row.linear_issue_id,
-        linear_identifier: row.linear_identifier,
-        title: row.title,
-        url: row.url,
-        display_name: meta?.display_name ?? null,
-        csm_handle: meta?.csm_handle ?? null,
-        live_at: wentLive,
-        reason: row.needs_review_reason ?? null,
-      });
       if (wentLive && (!oldestPendingAt || wentLive < oldestPendingAt)) {
         oldestPendingAt = wentLive;
       }
     }
   }
-  // Oldest first — the rows most likely to have gone stale are the
-  // ones worth a human's attention, and they're the ones that survive
-  // the MAX_ROLLUP_ROWS cut.
-  pendingReview.sort((a, b) => (a.live_at ?? "").localeCompare(b.live_at ?? ""));
-  const reviewQueueDepth = pendingReview.length;
   const reviewPref = resolveSlackNotificationPref(
     settings,
     "enterprise_requests_review_queue"
@@ -350,22 +316,21 @@ export async function runEnterpriseRequestsDigest(
           (Date.now() - Date.parse(oldestPendingAt)) / (24 * 60 * 60 * 1000)
         )
       : null;
-    // One message, one block pair per row, one @-mention in the
-    // header. The per-row alternative would be N pings and N mentions
-    // a week at the same person — see slack-request-review.ts.
-    const blocks = buildReviewRollupBlocks({
-      rows: pendingReview.slice(0, MAX_ROLLUP_ROWS),
+    // Two blocks in the channel however deep the queue is: a count,
+    // one @-mention and a button. The queue opens in a modal — see
+    // slack-request-review.ts for why it isn't listed here.
+    const blocks = buildReviewPromptBlocks({
       total: reviewQueueDepth,
       tagUserIds: reviewPref.tag_user_ids ?? [],
-      queueUrl: `${DASHBOARD_URL_BASE}/settings/enterprise-requests/exceptions`,
       oldestDays: oldestAge,
+      queueUrl: `${DASHBOARD_URL_BASE}/settings/enterprise-requests/exceptions`,
     });
     try {
       const channelId = await resolveSlackChannelId(reviewPref.destination);
       if (channelId) {
         await postSlackMessage({
           channel: channelId,
-          text: reviewRollupFallbackText(reviewQueueDepth),
+          text: reviewPromptFallbackText(reviewQueueDepth),
           blocks,
         });
         reviewQueuePosted = true;
