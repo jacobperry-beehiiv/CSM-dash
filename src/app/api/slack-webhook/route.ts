@@ -45,6 +45,11 @@ import {
 } from "@/lib/integrations/slack-renewal-cycle";
 import { acquireDedupLock } from "@/lib/integrations/slack-dedup";
 import {
+  handleRequestReviewAction,
+  REQUEST_REVIEW_ACTION_ID,
+  type RequestReviewActionValue,
+} from "@/lib/integrations/slack-request-review";
+import {
   newTodoId,
   type PersonalTodo,
   type TodoSource,
@@ -500,6 +505,12 @@ interface BlockActionsPayload {
     action_id?: string;
     value?: string;
   }>;
+  /** Present when the interaction came from a button on a posted
+   *  message (rather than a modal). The review rollup rewrites
+   *  itself in place on every click, which needs both of these plus
+   *  the message's current blocks. */
+  channel?: { id?: string };
+  message?: { ts?: string; blocks?: Array<Record<string, unknown>> };
 }
 
 /**
@@ -642,6 +653,61 @@ async function handleBlockActions(
     await handleRenewalConfirmAction({
       value: parsed,
       responseUrl: typed.response_url ?? null,
+    });
+    return NextResponse.json({ ok: true });
+  }
+
+  if (action.action_id === REQUEST_REVIEW_ACTION_ID) {
+    let parsed: RequestReviewActionValue | null = null;
+    try {
+      parsed = JSON.parse(action.value ?? "{}") as RequestReviewActionValue;
+    } catch {
+      console.warn(
+        "[slack-webhook] request_review: couldn't parse button value",
+        { raw: action.value }
+      );
+    }
+    if (!parsed?.w || !parsed?.i || !parsed?.d) {
+      return NextResponse.json({ ok: true });
+    }
+    const userId = typed.user?.id ?? "";
+    if (!userId) {
+      // We stamp the clicker on the review record, so a payload with
+      // no user is one we can't attribute. Better to drop it than to
+      // write an anonymous decision into the audit trail.
+      console.warn("[slack-webhook] request_review click with no user id");
+      return NextResponse.json({ ok: true });
+    }
+    // Dedup on the row + decision, not the click: Slack retries a
+    // payload when our ACK misses its 3-second budget, and the retry
+    // would re-run the write and rewrite the message a second time.
+    const lock = await acquireDedupLock(
+      `req-review:${parsed.w}:${parsed.i}:${parsed.d}`,
+      { user_id: userId }
+    );
+    if (!lock.acquired) {
+      console.log("[slack-webhook] request_review dedup hit", {
+        linear_issue_id: parsed.i,
+        age_ms: lock.age_ms,
+      });
+      return NextResponse.json({ ok: true });
+    }
+    // Awaited, not fire-and-forget: Vercel kills the function the
+    // moment the response returns. Same reasoning as find_share
+    // above — one KV read-modify-write plus one chat.update sits
+    // well inside the ACK budget.
+    const result = await handleRequestReviewAction({
+      value: parsed,
+      channel: typed.channel?.id ?? null,
+      messageTs: typed.message?.ts ?? null,
+      blocks: typed.message?.blocks ?? [],
+      userId,
+    });
+    console.log("[slack-webhook] request_review completed", {
+      linear_issue_id: parsed.i,
+      decision: parsed.d,
+      ok: result.ok,
+      error: result.error,
     });
     return NextResponse.json({ ok: true });
   }

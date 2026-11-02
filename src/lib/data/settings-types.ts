@@ -121,6 +121,12 @@ export interface SlackNotificationPref {
   /** When false, the daily cron skips even if `enabled` is true.
    *  Manual "sweep now" actions still fire. Default: true. */
   cron_enabled?: boolean;
+  /** Slack user IDs (`U…`) to @-mention in the message body. Only
+   *  meaningful for notifications whose definition sets
+   *  `has_tag_users` — a channel post nobody owns gets ignored, and
+   *  a per-row mention would ping the owner once per row. One
+   *  mention, in the header, addressed to whoever owns the queue. */
+  tag_user_ids?: string[];
 }
 
 /** Metadata for the /settings/slack notifications panel — safe to
@@ -133,6 +139,9 @@ export interface SlackNotificationDefinition {
   schedule?: string;
   /** When false, hide the destination field (DMs are resolved per-user). */
   has_destination?: boolean;
+  /** When true, show the "Tag in message" field — the Slack user IDs
+   *  mentioned in the message header. */
+  has_tag_users?: boolean;
 }
 
 export const SLACK_NOTIFICATION_DEFINITIONS: SlackNotificationDefinition[] = [
@@ -193,11 +202,12 @@ export const SLACK_NOTIFICATION_DEFINITIONS: SlackNotificationDefinition[] = [
   },
   {
     kind: "enterprise_requests_review_queue",
-    label: "Enterprise Request Loop — review queue depth",
+    label: "Enterprise Request Loop — review queue",
     description:
-      "Weekly nudge to one ops channel when shipped signals are waiting on a human. These are ships we matched to a customer but couldn't confidently call customer-visible (feature with no changelog post, unknown work type, fuzzy changelog match), so no CSM has been told. Rides the same Monday cron as the digest.",
+      "Weekly rollup to one ops channel listing every request Linear calls live that no #devs-shipped release post corroborates, each with Shipped / Didn't ship buttons that write straight to the exceptions queue. Reconciliation only — CSMs already hear about these, flagged as unmatched. Rides the same Monday cron as the digest.",
     schedule: "Mondays ~9:30am CT (cron only)",
     has_destination: true,
+    has_tag_users: true,
   },
 ];
 
@@ -565,12 +575,25 @@ export function findSlackChannel(
 }
 
 /** Resolve the effective notification preference, bridging legacy
- *  settings fields where the notification predates `notifications[]`. */
+ *  settings fields where the notification predates `notifications[]`.
+ *
+ *  Pass-through fields are added AFTER the switch, not inside it. Each
+ *  branch below builds a fresh object field-by-field — so a field
+ *  added to SlackNotificationPref but not to all seven branches is
+ *  written to storage and silently dropped on the way back out. That
+ *  is exactly how `tag_user_ids` first shipped: the settings input
+ *  accepted text, saved it, and rendered empty on reload. Anything
+ *  with no legacy bridge and no per-kind default belongs in
+ *  `passThrough` at the bottom. */
 export function resolveSlackNotificationPref(
   settings: SettingsShape,
   kind: SlackNotificationKind
 ): SlackNotificationPref {
   const stored = settings.slack.notifications?.[kind];
+  const passThrough: Partial<SlackNotificationPref> = stored?.tag_user_ids
+    ?.length
+    ? { tag_user_ids: stored.tag_user_ids }
+    : {};
   switch (kind) {
     case "review_digest": {
       const destination = (
@@ -582,6 +605,7 @@ export function resolveSlackNotificationPref(
         enabled: stored?.enabled ?? destination.length > 0,
         destination,
         cron_enabled: stored?.cron_enabled ?? true,
+        ...passThrough,
       };
     }
     // Per-workflow digest kinds. Each falls back to the legacy
@@ -605,6 +629,7 @@ export function resolveSlackNotificationPref(
         // Per-workflow cron toggle defaults to the legacy unified
         // setting (or true if even that was unset).
         cron_enabled: stored?.cron_enabled ?? legacy?.cron_enabled ?? true,
+        ...passThrough,
       };
     }
     case "proactive_outreach": {
@@ -623,6 +648,7 @@ export function resolveSlackNotificationPref(
         cron_enabled:
           stored?.cron_enabled ??
           settings.am?.proactive_outreach_sweep_enabled !== false,
+        ...passThrough,
       };
     }
     case "feature_request_comment":
@@ -630,6 +656,7 @@ export function resolveSlackNotificationPref(
         enabled: stored?.enabled ?? true,
         destination: "",
         cron_enabled: stored?.cron_enabled ?? true,
+        ...passThrough,
       };
     case "enterprise_requests_digest":
       // Destination is unused (per-CSM DM resolved from csm_user_ids
@@ -640,6 +667,7 @@ export function resolveSlackNotificationPref(
         enabled: stored?.enabled ?? true,
         destination: "",
         cron_enabled: stored?.cron_enabled ?? true,
+        ...passThrough,
       };
     case "deliverability_critical":
     default:
@@ -647,6 +675,7 @@ export function resolveSlackNotificationPref(
         enabled: stored?.enabled ?? false,
         destination: stored?.destination?.trim() ?? "",
         cron_enabled: stored?.cron_enabled ?? true,
+        ...passThrough,
       };
   }
 }

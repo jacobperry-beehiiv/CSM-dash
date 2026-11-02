@@ -70,6 +70,13 @@ export default function SlackSettingsPage() {
   // Inline-form state for adding a new CSM. Both fields collected up
   // front so we don't end up with an empty Slack ID column waiting to
   // be filled (the old prompt() flow's failure mode).
+  // Raw text for the "Tag in message" inputs, keyed by notification
+  // kind. The stored value is a string[], but round-tripping through
+  // split/join on every keystroke eats the separator the moment you
+  // type it — "U1," normalises straight back to "U1", so a second ID
+  // can never be typed (only pasted). Keep what the user actually
+  // typed here and parse alongside it.
+  const [tagDrafts, setTagDrafts] = useState<Record<string, string>>({});
   const [draftCsmHandle, setDraftCsmHandle] = useState("");
   const [draftCsmSlackId, setDraftCsmSlackId] = useState("");
   // Inline form for adding a new Slack channel destination.
@@ -327,6 +334,43 @@ export default function SlackSettingsPage() {
                         className="w-full px-3 py-2 border border-border-strong rounded-md text-sm font-mono"
                       />
                       <ChannelIdHint value={pref.destination} />
+                    </div>
+                  </label>
+                ) : null}
+                {def.has_tag_users ? (
+                  <label className="flex items-center gap-2 text-sm">
+                    <span className="text-xs text-muted whitespace-nowrap min-w-[140px]">
+                      Tag in message
+                    </span>
+                    <div className="flex-1 min-w-0">
+                      <input
+                        type="text"
+                        value={
+                          tagDrafts[def.kind] ??
+                          (pref.tag_user_ids ?? []).join(", ")
+                        }
+                        onChange={(e) => {
+                          const raw = e.target.value;
+                          setTagDrafts((d) => ({ ...d, [def.kind]: raw }));
+                          // Split on comma/whitespace so pasting a row
+                          // of IDs from Slack works as-is. Empty
+                          // segments are dropped rather than becoming a
+                          // `<@>` in the posted message.
+                          patchNotification(def.kind, {
+                            tag_user_ids: raw
+                              .split(/[\s,]+/)
+                              .map((v) => v.trim())
+                              .filter(Boolean),
+                          });
+                        }}
+                        placeholder="U047A59BMA5"
+                        className="w-full px-3 py-2 border border-border-strong rounded-md text-sm font-mono"
+                      />
+                      <p className="text-[11px] text-subtle mt-1">
+                        Slack user IDs, @-mentioned once in the message
+                        header. Find one via the member&rsquo;s profile &rarr;
+                        More &rarr; Copy member ID.
+                      </p>
                     </div>
                   </label>
                 ) : null}

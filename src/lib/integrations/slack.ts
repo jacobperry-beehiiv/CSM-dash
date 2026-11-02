@@ -13,7 +13,11 @@ import { isDemoMode } from "../demo/mode";
 const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN;
 const CHANNEL = process.env.SLACK_DELIVERABILITY_CHANNEL;
 
-async function slackPost(channel: string, text: string, blocks?: unknown[]) {
+async function slackPost(
+  channel: string,
+  text: string,
+  blocks?: unknown[]
+): Promise<{ ts: string | null }> {
   // Demo-mode write guard. Same intent as kvSet's guard — even if a
   // route fires a Slack notification, suppress it in DEMO_MODE so a
   // screenshot session can't blast real channels with fake content.
@@ -21,7 +25,7 @@ async function slackPost(channel: string, text: string, blocks?: unknown[]) {
     console.log(
       `[demo-mode] suppressed Slack post → ${channel}: ${text.slice(0, 120)}`
     );
-    return;
+    return { ts: null };
   }
   if (!SLACK_BOT_TOKEN) {
     throw new Error(
@@ -40,17 +44,72 @@ async function slackPost(channel: string, text: string, blocks?: unknown[]) {
   if (!data.ok) {
     throw new Error(`Slack post failed: ${data.error}`);
   }
+  // `ts` is the message id. Callers that need to edit the message
+  // later — the Enterprise Request review rollup rewrites itself on
+  // every button click — have no other way to address it.
+  return { ts: typeof data.ts === "string" ? data.ts : null };
 }
 
-/** Generic message sender used by the Past-Due Slack alert flow. */
+/** Generic message sender used by the Past-Due Slack alert flow.
+ *
+ *  `blocks` is optional — when present, `text` becomes the
+ *  notification/fallback string rather than the body, which is what
+ *  Slack expects and what keeps the push notification readable. */
 export async function postSlackMessage(args: {
   channel: string;
   text: string;
-}): Promise<{ ok: true }> {
+  blocks?: unknown[];
+}): Promise<{ ok: true; ts: string | null }> {
   if (!args.channel) {
     throw new Error("Slack channel is required.");
   }
-  await slackPost(args.channel, args.text);
+  const { ts } = await slackPost(args.channel, args.text, args.blocks);
+  return { ok: true, ts };
+}
+
+/**
+ * Edit a message we already posted, addressed by channel + ts.
+ *
+ * Used by interactive messages that rewrite themselves in place
+ * instead of posting a follow-up per click. Deliberately NOT
+ * response_url: Slack expires that 30 minutes after the click and
+ * caps it at 5 uses, which breaks any message meant to be worked
+ * through over days.
+ */
+export async function updateSlackMessage(args: {
+  channel: string;
+  ts: string;
+  text: string;
+  blocks?: unknown[];
+}): Promise<{ ok: true }> {
+  if (isDemoMode()) {
+    console.log(
+      `[demo-mode] suppressed Slack update → ${args.channel}@${args.ts}`
+    );
+    return { ok: true };
+  }
+  if (!SLACK_BOT_TOKEN) {
+    throw new Error(
+      "SLACK_BOT_TOKEN is not configured — set it in .env.local."
+    );
+  }
+  const res = await fetch("https://slack.com/api/chat.update", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${SLACK_BOT_TOKEN}`,
+      "Content-Type": "application/json; charset=utf-8",
+    },
+    body: JSON.stringify({
+      channel: args.channel,
+      ts: args.ts,
+      text: args.text,
+      blocks: args.blocks,
+    }),
+  });
+  const data = await res.json();
+  if (!data.ok) {
+    throw new Error(`Slack update failed: ${data.error}`);
+  }
   return { ok: true };
 }
 
