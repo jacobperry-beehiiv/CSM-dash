@@ -123,7 +123,13 @@ interface TransposeResult {
   skipped: number;
   /** Per-field failures with a short reason (HubSpot 400 body). */
   failures: Array<{ label: string; reason: string }>;
-  /** The raw `onboarding_package` value off the deal (Yes / No / null).
+  /** The raw `onboarding_package` value off the deal: the string
+   *  "true" / "false" / null, NOT "Yes" / "No" — the Yes/No you see
+   *  in HubSpot are the bool option LABELS, and the API hands back
+   *  the values. Documenting it as Yes/No here is what led to the
+   *  comparison bug isHubspotYes() now guards; read it through that
+   *  helper, never by comparing this string yourself.
+   *
    *  Surfaced separately so the seed-template branch + Ashley-to-do
    *  branch can read it without re-fetching. */
   dealOnboardingPackage: string | null;
@@ -131,6 +137,30 @@ interface TransposeResult {
 
 function isEmptyHubspotValue(v: string | null | undefined): boolean {
   return v == null || v.trim() === "";
+}
+
+/** True when a HubSpot yes/no property reads affirmative.
+ *
+ *  `onboarding_package` and `is_solutions_involved` are HubSpot
+ *  **bool** properties: the API returns the string "true"/"false",
+ *  while the UI renders the options with the labels "Yes"/"No".
+ *  Reading the label off the HubSpot screen and comparing to "yes"
+ *  is exactly how this check silently never matched — every
+ *  with-package deal fell through to the no-package branch, so the
+ *  no-OP Drive template got seeded and the Ashley check-in to-do
+ *  was never added. No error: "false" and "true" both compare
+ *  unequal to "yes", so the flow looked healthy.
+ *
+ *  Only those two. The "(With-package) Internal sync" playbook item
+ *  is unconditional — the prefix is a label telling the CSM when it
+ *  applies, not a gate — so it was always present and is NOT part
+ *  of this bug's blast radius.
+ *
+ *  Accept the bool value AND the legacy label, so this survives
+ *  either representation if the property type is ever changed. */
+function isHubspotYes(v: string | null | undefined): boolean {
+  const s = (v ?? "").trim().toLowerCase();
+  return s === "true" || s === "yes";
 }
 
 /** Pull the configured deal fields, read the same fields on the
@@ -912,15 +942,15 @@ export async function runAssignSideEffects(
           flow: v.status,
           slackUserId: payload.user.id,
         });
-        // When the deal carries Onboarding Package = Yes, prepend an
+        // When the deal carries Onboarding Package (bool true),
+        // prepend an
         // immediate-surface "Schedule check-in with Ashley" item so
         // the CSM books the pre-kickoff sync the day they're
         // assigned. Kept separate from the existing day-1
         // "(With-package) Internal sync" 3-person playbook item —
         // that one's the sync itself; this is the CSM's own
         // calendar-booking nudge.
-        const opYes =
-          (dealOnboardingPackage ?? "").trim().toLowerCase() === "yes";
+        const opYes = isHubspotYes(dealOnboardingPackage);
         if (opYes) {
           todos.unshift(
             buildAshleyCheckinTodo({
@@ -1003,7 +1033,8 @@ export async function runAssignSideEffects(
         // configured for the selected variant, (2) this is a brand-
         // new folder (not an idempotent reuse), and (3) the
         // requester has granted drive.readonly. Variant pick:
-        // dealOnboardingPackage === "Yes" → with-OP template;
+        // onboarding_package is true (HubSpot bool, UI label
+        // "Yes") → with-OP template;
         // anything else (No / missing / company-triggered no-deal
         // flow) → no-OP template, falling back to with-OP if no-OP
         // isn't configured.
@@ -1014,8 +1045,7 @@ export async function runAssignSideEffects(
         const noOpTemplate = (
           driveSettings.am?.onboarding_drive_template_folder_id_no_op ?? ""
         ).trim();
-        const opYes =
-          (dealOnboardingPackage ?? "").trim().toLowerCase() === "yes";
+        const opYes = isHubspotYes(dealOnboardingPackage);
         const templateVariant: TemplateVariant = opYes ? "with_op" : "no_op";
         const templateId = opYes
           ? opTemplate
@@ -1248,7 +1278,7 @@ function addDays(d: Date, days: number): Date {
 }
 
 /** One-off "Schedule check-in with Ashley" to-do appended when the
- *  deal's onboarding_package reads "Yes". Surfaces immediately
+ *  deal's onboarding_package bool is true. Surfaces immediately
  *  (offset 0, no surface_at) and is due 2 days out so the CSM
  *  doesn't lose a week before booking the pre-kickoff sync.
  *  Shares the same source_meta hubspot_company_id key as the rest
