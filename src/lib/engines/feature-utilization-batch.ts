@@ -76,17 +76,40 @@ function buildSql(orgIds: string[]): string {
        AND pe.deleted_at IS NULL
       GROUP BY op.organization_id
     ),
-    ad_combined AS (
+    ad_network AS (
+      -- Programmatic ad-network activity. There is deliberately no
+      -- direct-sponsorship carve-out here: direct sponsorships are a
+      -- separate product living in the sponsor_network_* tables, not
+      -- a provision_type on this one. See the next CTE.
+      --
+      -- 'canceled' has ONE l -- that is how the column spells it, and
+      -- ad-gap.ts has always had it right. The two-l spelling matched
+      -- nothing, so ~209k canceled opportunities counted as live ads.
       SELECT op.organization_id,
-        BOOL_OR(
-          (opp.provision_type IS NULL OR opp.provision_type <> 'direct')
-            AND opp.status NOT IN ('rejected','cancelled')
-        ) AS ad_network_used,
-        BOOL_OR(opp.provision_type = 'direct') AS direct_used
+        BOOL_OR(opp.status NOT IN ('rejected','canceled')) AS used
       FROM org_pubs op
       JOIN public.ad_network_opportunities opp
         ON opp.publication_id = op.publication_id
        AND opp.deleted_at IS NULL
+      GROUP BY op.organization_id
+    ),
+    direct_sponsorships AS (
+      -- "Using direct sponsorships" = the publication has switched on
+      -- its sponsorship storefront. This is the same definition q10600
+      -- uses to populate the snapshot's 'direct_sponsorships_enabled',
+      -- so the filter chip and the account page cannot disagree.
+      --
+      -- This CTE used to read provision_type = 'direct' on
+      -- ad_network_opportunities -- a value that has never existed in
+      -- that column (14 distinct values, none of them 'direct'). The
+      -- chip was therefore false for every customer in the book,
+      -- forever: "Using" matched nobody and "Not using" matched all.
+      -- The two feature queries only LOOKED like one table split by a
+      -- flag; they are two different products.
+      SELECT op.organization_id, BOOL_OR(sc.enabled_at IS NOT NULL) AS used
+      FROM org_pubs op
+      JOIN public.sponsor_network_storefront_configurations sc
+        ON sc.publication_id = op.publication_id
       GROUP BY op.organization_id
     ),
     automations AS (
@@ -157,8 +180,8 @@ function buildSql(orgIds: string[]): string {
       COALESCE(send_api.used, false)            AS send_api,
       COALESCE(mcp.mcp_used, false)             AS mcp,
       COALESCE(podcasts.used, false)            AS podcasts,
-      COALESCE(ad_combined.ad_network_used, false) AS ad_network,
-      COALESCE(ad_combined.direct_used, false)  AS direct_sponsorships,
+      COALESCE(ad_network.used, false)          AS ad_network,
+      COALESCE(direct_sponsorships.used, false) AS direct_sponsorships,
       COALESCE(automations.used, false)         AS automations,
       COALESCE(segments.used, false)            AS segments,
       COALESCE(boost_monetize.used, false)      AS boost_monetize,
@@ -170,7 +193,9 @@ function buildSql(orgIds: string[]): string {
     LEFT JOIN send_api       ON send_api.organization_id = orgs.organization_id
     LEFT JOIN mcp            ON mcp.organization_id = orgs.organization_id
     LEFT JOIN podcasts       ON podcasts.organization_id = orgs.organization_id
-    LEFT JOIN ad_combined    ON ad_combined.organization_id = orgs.organization_id
+    LEFT JOIN ad_network     ON ad_network.organization_id = orgs.organization_id
+    LEFT JOIN direct_sponsorships
+      ON direct_sponsorships.organization_id = orgs.organization_id
     LEFT JOIN automations    ON automations.organization_id = orgs.organization_id
     LEFT JOIN segments       ON segments.organization_id = orgs.organization_id
     LEFT JOIN boost_monetize ON boost_monetize.organization_id = orgs.organization_id

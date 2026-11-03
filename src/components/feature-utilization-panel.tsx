@@ -117,9 +117,19 @@ export function FeatureUtilizationPanel({ workspaceId }: Props) {
         />
         <Feature
           name="Direct Sponsorships"
-          used={data.direct_sponsorship_count > 0}
+          // Storefront switched on = using it, booked or not. Same
+          // signal as the snapshot's direct_sponsorships_enabled and
+          // the book-level filter chip, so the three agree.
+          used={
+            data.direct_sponsorship_storefront_enabled_at != null ||
+            data.direct_sponsorship_count > 0
+          }
           rows={[
-            ["Total", fmtNumber(data.direct_sponsorship_count)],
+            [
+              "Storefront on",
+              fmtDate(data.direct_sponsorship_storefront_enabled_at),
+            ],
+            ["Booked", fmtNumber(data.direct_sponsorship_count)],
             ["Last run", fmtDate(data.direct_sponsorship_last_run)],
             ["Revenue", fmtCurrency(data.direct_sponsorship_revenue_usd)],
           ]}
