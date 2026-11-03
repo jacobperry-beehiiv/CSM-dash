@@ -38,18 +38,25 @@ import {
  * ─── Why it's sharded by publication hash ───
  *
  * One week of Enterprise sends touches ~3,300 publications, which is
- * over Metabase's default 2,000-row userland cap. `runNativeQuery`
- * does ask for that cap to be lifted (middleware flag + constraints:
- * null), but this repo has production evidence of the bypass being
- * ignored and responses silently clipping to exactly 2,000 rows — the
- * bug that hid a 79%-delivery send for a week.
+ * over Metabase's 2,000-row userland cap. `runNativeQuery` asks for
+ * that cap to be lifted (middleware flag + `constraints: null`) and
+ * PR #275 measured that it DOESN'T WORK: both documented escape
+ * hatches set, `SELECT number FROM numbers(2500)` still returns 2,000
+ * rows, with no error — the response simply stops.
  *
- * Silent truncation here would not throw; it would just quietly drop a
+ * Silent truncation here would not throw; it would quietly drop a
  * third of the book out of the report, which is the worst possible
- * failure for a tool whose job is noticing things. Sharding on
+ * failure for a tool whose only job is noticing things. Sharding on
  * `cityHash64(publication_id) % 3` puts every response around 1,100
- * rows — comfortably under the cap even if the bypass fails — for 13
- * weeks x 3 shards = 39 queries on a scheduled sweep.
+ * rows, for 13 weeks x 3 shards = 39 queries on a weekly sweep.
+ *
+ * `runNativeQueryUnlimited` (also from #275) is the other way out —
+ * it goes through the export endpoint, which the cap doesn't apply
+ * to, and would cut this to 13 queries. Not used here because the
+ * sharded version is verified end-to-end against production and the
+ * export path serializes some column types differently; a ~2 minute
+ * weekly job is not worth re-validating for. Worth revisiting if the
+ * window ever grows enough to make 39 queries uncomfortable.
  */
 
 // ─── Windows ──────────────────────────────────────────────────────
