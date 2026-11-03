@@ -12,7 +12,8 @@
     "typecheck": "tsc --noEmit",
     "sync": "tsx --env-file-if-exists=.env.local scripts/sync.ts",
     "run:deliverability": "tsx --env-file-if-exists=.env.local scripts/run-deliverability.ts",
-    "run:at-risk": "tsx --env-file-if-exists=.env.local scripts/run-at-risk.ts"
+    "run:at-risk": "tsx --env-file-if-exists=.env.local scripts/run-at-risk.ts",
+    "run:trends": "tsx --env-file-if-exists=.env.local scripts/run-trends.ts"
   },
   "dependencies": {
     "@vercel/blob": "^2.4.1",

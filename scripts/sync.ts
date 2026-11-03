@@ -35,6 +35,8 @@ import {
   fetchLastActivityByEmail,
   searchCompaniesByStripeIds,
 } from "../src/lib/integrations/hubspot";
+import { runEngagementTrends } from "../src/lib/engines/engagement-trends";
+import { writeEngagementTrendsSnapshot } from "../src/lib/data/engagement-trends-snapshot";
 
 const DELIVERABILITY_LOOKBACK_DAYS = 15;
 
@@ -78,6 +80,11 @@ async function main() {
   // can get a fresh snapshot in ~60s instead of waiting for the next
   // 08/16 UTC tick of the full sync.
   const onlyDeliverability = process.argv.includes("--only=deliverability");
+  // `--only=trends` runs just the engagement-trend sweep. Separate
+  // from the full sync because it is the slowest single block we have
+  // (39 ClickHouse queries, minutes) and only needs to run weekly,
+  // whereas the book data refreshes twice a day.
+  const onlyTrends = process.argv.includes("--only=trends");
 
   const usePlaintext = process.env.SYNC_PLAINTEXT === "1";
   if (!usePlaintext && !process.env.SNAPSHOT_ENCRYPTION_KEY) {
@@ -88,6 +95,11 @@ async function main() {
 
   if (onlyDeliverability) {
     await syncDeliverability(usePlaintext);
+    return;
+  }
+
+  if (onlyTrends) {
+    await syncEngagementTrends(usePlaintext);
     return;
   }
 
@@ -531,6 +543,38 @@ async function syncDeliverability(usePlaintext: boolean) {
   } catch (e) {
     console.error(
       "[sync] deliverability snapshot failed (continuing):",
+      e instanceof Error ? e.message : e
+    );
+  }
+}
+
+/**
+ * Pre-compute the engagement-trend report.
+ *
+ * Deliberately NOT part of the twice-daily full sync: the sweep is 39
+ * ClickHouse queries and a trend measured over 90 days does not move
+ * meaningfully between a morning and an evening run. It gets its own
+ * weekly workflow; `--only=trends` is what that workflow calls.
+ */
+async function syncEngagementTrends(usePlaintext: boolean) {
+  const started = Date.now();
+  try {
+    console.error("[sync] running engagement-trend sweep (39 ClickHouse queries, ~2-4 min)…");
+    const report = await runEngagementTrends();
+    // Guard the empty case the same way deliverability-data-sync.yml
+    // greps for "(0 posts, ": every per-slice query failing (expired
+    // Metabase creds, say) is swallowed by the per-slice try/catch and
+    // would otherwise commit an empty report over a good one.
+    const written = await writeEngagementTrendsSnapshot(report, {
+      plaintext: usePlaintext,
+    });
+    const elapsed = ((Date.now() - started) / 1000).toFixed(1);
+    console.error(
+      `[sync] wrote ${written} (${report.workspaces.length} workspaces, ${report.publications_examined} publications examined, ${elapsed}s)`
+    );
+  } catch (e) {
+    console.error(
+      "[sync] engagement-trend snapshot failed (continuing):",
       e instanceof Error ? e.message : e
     );
   }
