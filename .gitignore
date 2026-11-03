@@ -17,6 +17,11 @@ tsconfig.tsbuildinfo
 # customer data). The ENCRYPTED snapshot IS committed; see snapshot-crypto.
 data/*.csv
 data/*.json
+# Nested dev-KV namespaces (data/customer-signals/<workspace>.json and
+# friends). `data/*.json` matches direct children only, so without this
+# a local run that writes a namespaced key leaves real customer data
+# untracked-but-visible, one `git add -A` away from being committed.
+data/**/*.json
 !data/.gitkeep
 !data/snapshot.enc.json
 # AM cohort snapshots — pre-computed q13268 + q24620 results.
@@ -24,3 +29,6 @@ data/*.json
 !data/past-due.enc.json
 # Deliverability snapshot — last 15d of joined ClickHouse post metrics.
 !data/deliverability.enc.json
+# Engagement-trend report — 90d of weekly per-publication rates, swept
+# weekly. The plaintext sibling (SYNC_PLAINTEXT=1) stays ignored.
+!data/engagement-trends.enc.json

@@ -94,6 +94,7 @@ npm run sync                         # refresh the snapshot from Metabase
 npm run run:at-risk -- --all         # at-risk engine, whole company (JSON on stdout)
 CSM_NAME=Jacob_Perry npm run run:at-risk    # one CSM's book
 npm run run:deliverability -- --date=2026-08-01
+npm run run:trends                   # engagement-trend sweep (slow: ~2.5 min)
 ```
 
 Inventory (one line each):
@@ -102,6 +103,7 @@ Inventory (one line each):
 |---|---|
 | `at-risk.ts` | Flags A–H over a CSM book → scored `AtRiskAccount[]` |
 | `deliverability.ts` | Enterprise deliverability alerts (ClickHouse) |
+| `engagement-trends.ts` | Publications degrading while still *inside* the deliverability thresholds |
 | `ad-gap.ts` / `ad-network-batch.ts` | Ad-network fill-rate & revenue-vs-potential |
 | `am-cohorts.ts` | AM dashboard cohorts (4-layer cache → live Metabase) |
 | `feature-utilization*.ts` | Per-org feature signals (send API, MCP, …) |
@@ -162,6 +164,12 @@ email, wrap in try/catch returning `{ error }` + 500, and append an
   `settings.ts` or they're dropped on every read.
 - **The ARR $0 sync guard** will `exit(1)` and refuse to overwrite the
   snapshot on the 1st of the month (Profitwell lag). That's intended.
+- **Don't join `fact_sendables_by_type_v1`** — it's a View over a huge
+  table and a join gives ClickHouse no index to seek with, so it times
+  out at 60s. Filter it by `publication_id` plus `sendable_id IN
+  (subquery)` instead; that's the only shape that returns in seconds.
+  `swarm_clickpipes` dimension tables also need `FINAL`, or one row
+  comes back once per ingested version under stale names.
 - **CSM assignment is snapshot-only** — `applyOverride` intentionally
   ignores CSM overrides; don't "fix" it.
 - **KV blobs are read-modify-write with no locking** — two concurrent

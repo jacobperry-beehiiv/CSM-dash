@@ -20,6 +20,11 @@ import {
 import { fmtCurrency, fmtDate, fmtNumber, daysUntil } from "./format";
 import { featureCounts } from "@/lib/features";
 import {
+  TrendWarningPanel,
+  trendRowClass,
+  type TrendReport,
+} from "./trend-warning";
+import {
   cadenceBadgeClass,
   cadenceRowLabel,
   intervalBucket,
@@ -321,6 +326,54 @@ export function CustomerTable({
   );
   const [featureMatcher, setFeatureMatcher] =
     useState<WorkspaceFeatureMatcher | null>(null);
+
+  // Engagement-trend warnings, fetched ONCE for the whole table.
+  // Every row needs an O(1) lookup by workspace_id and there can be
+  // ~600 of them, so this is deliberately a single request feeding a
+  // map rather than per-row fetches.
+  //
+  // Reads a pre-computed snapshot server-side — the engine itself is
+  // 39 ClickHouse queries and minutes of wall time, nowhere near a
+  // request budget. A missing snapshot comes back as empty rows and
+  // the table simply renders untinted.
+  const [trends, setTrends] = useState<TrendReport | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/engagement-trends")
+      .then((r) => (r.ok ? (r.json() as Promise<TrendReport>) : null))
+      .then((d) => {
+        if (!cancelled && d) setTrends(d);
+      })
+      .catch(() => {
+        /* Non-fatal: the table is useful without the tint. */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  /** Flip a row's cleared state in place after the panel writes it,
+   *  so the tint updates without re-fetching the whole report. */
+  const onTrendChange = useCallback((workspaceId: string, cleared: boolean) => {
+    setTrends((prev) => {
+      if (!prev) return prev;
+      const row = prev.rows[workspaceId];
+      if (!row) return prev;
+      return {
+        ...prev,
+        rows: { ...prev.rows, [workspaceId]: { ...row, cleared } },
+      };
+    });
+  }, []);
+
+  /** The active (uncleared) warning for a row, or null. */
+  const trendFor = useCallback(
+    (workspaceId: string | null | undefined) => {
+      if (!workspaceId || !trends) return null;
+      return trends.rows[workspaceId] ?? null;
+    },
+    [trends]
+  );
   // Enterprise Request Loop — "Has open Linear FR" chip. When null,
   // the chip is off (matches every row). When populated, the chip is
   // on and the set holds the workspace_ids of accounts with at least
@@ -1354,6 +1407,11 @@ export function CustomerTable({
             {filtered.map((c, i) => {
               const k = rowKey(c, i);
               const isOpen = expanded.has(k);
+              const trend = trendFor(c.workspace_id);
+              // Tint only while collapsed. An open row keeps the blue
+              // "expanded" treatment, because losing that affordance
+              // to the warning colour makes it unclear what is open.
+              const warn = trend && !trend.cleared && !isOpen;
               return (
                 <Fragment key={k}>
                   <tr
@@ -1361,8 +1419,15 @@ export function CustomerTable({
                     // data-workspace-id hook lets the ?workspace_id=…
                     // deep-link effect scroll this row into view.
                     data-workspace-id={c.workspace_id ?? undefined}
+                    // Summary on the row itself so the reason for
+                    // the tint is one hover away, not one click.
+                    title={warn ? trend.summary : undefined}
                     className={`border-b border-border cursor-pointer transition-colors align-top ${
-                      isOpen ? "bg-blue-50 dark:bg-blue-500/40" : "hover:bg-blue-50 dark:bg-blue-500/30"
+                      isOpen
+                        ? "bg-blue-50 dark:bg-blue-500/40"
+                        : warn
+                          ? trendRowClass(trend.severity)
+                          : "hover:bg-blue-50 dark:bg-blue-500/30"
                     }`}
                   >
                     <td
@@ -1422,6 +1487,12 @@ export function CustomerTable({
                         }
                         className="px-6 py-4"
                       >
+                        {trend ? (
+                          <TrendWarningPanel
+                            row={trend}
+                            onChange={onTrendChange}
+                          />
+                        ) : null}
                         <CustomerDetailPanel
                           customer={c}
                           showPaidSubs

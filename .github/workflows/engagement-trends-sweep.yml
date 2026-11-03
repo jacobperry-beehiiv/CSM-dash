@@ -1,0 +1,124 @@
+name: engagement-trends-sweep
+
+# Re-computes the engagement-trend report — publications whose
+# deliverability/engagement is degrading while still INSIDE the
+# thresholds in src/lib/thresholds.ts, which the per-post alert
+# structurally cannot see. Commits data/engagement-trends.enc.json
+# back to the repo; Vercel's GitHub integration redeploys.
+#
+# Weekly, not twice-daily like sync-data.yml. Two reasons:
+#   • The sweep is the slowest block in the repo — 39 ClickHouse
+#     queries, ~2.5 min — because the fact table has to be hit once
+#     per (week x publication-shard) to stay under Metabase's 2000-row
+#     response cap.
+#   • A trend measured over 90 days does not move meaningfully between
+#     a Monday and a Tuesday. Running it daily would burn the query
+#     budget to re-render the same answer.
+#
+# Monday 13:00 UTC lands it before the US morning, so the week starts
+# with a fresh set of red rows on /csm?tab=book.
+
+on:
+  schedule:
+    - cron: "0 13 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  # Same group as the other snapshot writers so two jobs never push at
+  # once and race the commit.
+  group: sync-data
+  cancel-in-progress: false
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - name: Verify required secrets are set
+        env:
+          SNAPSHOT_ENCRYPTION_KEY: ${{ secrets.SNAPSHOT_ENCRYPTION_KEY }}
+          METABASE_API_KEY: ${{ secrets.METABASE_API_KEY }}
+        run: |
+          missing=()
+          for v in SNAPSHOT_ENCRYPTION_KEY METABASE_API_KEY; do
+            if [ -z "${!v}" ]; then
+              missing+=("$v")
+            fi
+          done
+          if [ "${#missing[@]}" -ne 0 ]; then
+            echo "::error::Missing required repo secret(s): ${missing[*]}"
+            exit 1
+          fi
+          echo "All required secrets present."
+
+      - name: Run the sweep
+        # Guard the empty case the way deliverability-data-sync.yml
+        # does. Every per-slice query is wrapped in its own try/catch
+        # so one bad shard can't blackhole the run — which also means
+        # that if ALL of them fail (expired Metabase creds, say) the
+        # job still "succeeds" and would happily commit an empty
+        # report over a good one. Grep the summary line instead.
+        run: |
+          npm run sync -- --only=trends 2>&1 | tee /tmp/trends-out.log
+          if grep -qF "(0 workspaces, 0 publications examined" /tmp/trends-out.log; then
+            echo "::error::Trend sweep examined 0 publications. Check the Metabase credentials and the per-slice logs above — the engine swallows per-slice errors, so the run succeeds even when every query failed."
+            exit 1
+          fi
+        env:
+          SNAPSHOT_ENCRYPTION_KEY: ${{ secrets.SNAPSHOT_ENCRYPTION_KEY }}
+          METABASE_URL: https://beehiiv.metabaseapp.com
+          METABASE_API_KEY: ${{ secrets.METABASE_API_KEY }}
+
+      - name: Commit + push the report
+        run: |
+          git config user.name  "csm-dash-bot"
+          git config user.email "csm-dash-bot@users.noreply.github.com"
+          if [ ! -f data/engagement-trends.enc.json ]; then
+            echo "::warning::Trend snapshot missing — the sweep soft-failed. Skipping commit."
+            exit 0
+          fi
+          git add data/engagement-trends.enc.json
+          if git diff --staged --quiet; then
+            echo "Report unchanged — nothing to commit"
+            exit 0
+          fi
+          git commit -m "chore(data): refresh engagement-trend report ($(date -u +%FT%TZ))"
+
+          # Retry-on-non-fast-forward, same as the sibling snapshot
+          # workflows: a concurrent push during the ~3 min run would
+          # otherwise reject ours.
+          #
+          # Rebases onto the branch this run was dispatched against,
+          # NOT a hardcoded main. The sibling workflows can assume main
+          # because they only ever run there; this one is dispatchable
+          # against a feature branch so the snapshot can land in a PR
+          # before merge, and rebasing that branch onto main on a push
+          # conflict would silently rewrite someone's open PR.
+          BRANCH="${{ github.ref_name }}"
+          echo "Pushing to $BRANCH"
+          push_attempt=0
+          max_attempts=5
+          until git push origin "HEAD:$BRANCH"; do
+            push_attempt=$((push_attempt + 1))
+            if [ "$push_attempt" -ge "$max_attempts" ]; then
+              echo "::error::Push rejected after $max_attempts retries — giving up."
+              exit 1
+            fi
+            echo "Push rejected (attempt $push_attempt/$max_attempts) — rebasing and retrying…"
+            sleep $((RANDOM % 5 + 2))
+            git fetch origin "$BRANCH"
+            git rebase --strategy-option=theirs "origin/$BRANCH"
+          done
