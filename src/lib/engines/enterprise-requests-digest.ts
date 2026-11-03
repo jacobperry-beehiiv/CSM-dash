@@ -3,6 +3,10 @@ import { loadSettings } from "../data/settings";
 import { resolveSlackNotificationPref } from "../data/settings-types";
 import { postSlackMessage, resolveSlackChannelId } from "../integrations/slack";
 import {
+  buildReviewPromptBlocks,
+  reviewPromptFallbackText,
+} from "../integrations/slack-request-review";
+import {
   loadDigestSent,
   loadEnterpriseRequestsSnapshot,
   loadNotifiedOverlay,
@@ -16,6 +20,7 @@ import {
   hasDevsShippedMatch,
   isLive,
   liveAt,
+  needsReconciling,
   resolveConfidence,
 } from "../data/enterprise-requests-types";
 import { applyTodoOps, getTodosForUser } from "../personal-todos/store";
@@ -272,15 +277,23 @@ export async function runEnterpriseRequestsDigest(
   // Deliberately NOT per-CSM: it's one person's sweep, not N people's
   // inbox. Counted across the whole snapshot rather than the 7-day
   // window — the problem is rows accumulating unreconciled.
+  //
+  // Count only. The rows are loaded when the reviewer opens the
+  // modal, not when the prompt is posted — a Monday message listing
+  // a queue someone works on Thursday is stale by the time anyone
+  // acts on it.
+  //
+  // `needsReconciling` is the one shared predicate. It used to be
+  // open-coded here and excluded only `dismissed`, so every row a
+  // human CONFIRMED kept being counted and the number never drained
+  // while the page it linked to showed something else.
   let reviewQueueDepth = 0;
   let oldestPendingAt: string | null = null;
   for (const bucket of Object.values(snapshot.rows)) {
     for (const row of Object.values(bucket) as EnterpriseRequestRow[]) {
-      if (!isLive(row)) continue;
-      if (hasDevsShippedMatch(row)) continue;
-      if (row.review?.decision === "dismissed") continue;
-      const wentLive = liveAt(row);
+      if (!needsReconciling(row)) continue;
       reviewQueueDepth += 1;
+      const wentLive = liveAt(row);
       if (wentLive && (!oldestPendingAt || wentLive < oldestPendingAt)) {
         oldestPendingAt = wentLive;
       }
@@ -303,17 +316,23 @@ export async function runEnterpriseRequestsDigest(
           (Date.now() - Date.parse(oldestPendingAt)) / (24 * 60 * 60 * 1000)
         )
       : null;
-    const text =
-      `:mag: *Enterprise Request Loop — ${reviewQueueDepth} shipped signal${reviewQueueDepth === 1 ? "" : "s"} waiting on review*\n` +
-      `${reviewQueueDepth === 1 ? "This ship" : "These ships"} matched a customer request but couldn't be confidently called customer-visible, so no CSM has been notified.` +
-      (oldestAge !== null && oldestAge > 0
-        ? ` Oldest has been waiting ${oldestAge} day${oldestAge === 1 ? "" : "s"}.`
-        : "") +
-      `\n_→ <${DASHBOARD_URL_BASE}/settings/enterprise-requests/exceptions|Review the queue>_`;
+    // Two blocks in the channel however deep the queue is: a count,
+    // one @-mention and a button. The queue opens in a modal — see
+    // slack-request-review.ts for why it isn't listed here.
+    const blocks = buildReviewPromptBlocks({
+      total: reviewQueueDepth,
+      tagUserIds: reviewPref.tag_user_ids ?? [],
+      oldestDays: oldestAge,
+      queueUrl: `${DASHBOARD_URL_BASE}/settings/enterprise-requests/exceptions`,
+    });
     try {
       const channelId = await resolveSlackChannelId(reviewPref.destination);
       if (channelId) {
-        await postSlackMessage({ channel: channelId, text });
+        await postSlackMessage({
+          channel: channelId,
+          text: reviewPromptFallbackText(reviewQueueDepth),
+          blocks,
+        });
         reviewQueuePosted = true;
       }
     } catch (e) {

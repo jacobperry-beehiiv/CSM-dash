@@ -45,6 +45,11 @@ import {
 } from "@/lib/integrations/slack-renewal-cycle";
 import { acquireDedupLock } from "@/lib/integrations/slack-dedup";
 import {
+  openReviewModal,
+  REVIEW_DASHBOARD_ACTION_ID,
+  REVIEW_OPEN_ACTION_ID,
+} from "@/lib/integrations/slack-request-review";
+import {
   newTodoId,
   type PersonalTodo,
   type TodoSource,
@@ -500,6 +505,12 @@ interface BlockActionsPayload {
     action_id?: string;
     value?: string;
   }>;
+  /** Present when the interaction came from a button on a posted
+   *  message (rather than a modal). The review rollup rewrites
+   *  itself in place on every click, which needs both of these plus
+   *  the message's current blocks. */
+  channel?: { id?: string };
+  message?: { ts?: string; blocks?: Array<Record<string, unknown>> };
 }
 
 /**
@@ -643,6 +654,33 @@ async function handleBlockActions(
       value: parsed,
       responseUrl: typed.response_url ?? null,
     });
+    return NextResponse.json({ ok: true });
+  }
+
+  if (action.action_id === REVIEW_OPEN_ACTION_ID) {
+    if (!typed.trigger_id) {
+      console.warn("[slack-webhook] review_open click missing trigger_id");
+      return NextResponse.json({ ok: true });
+    }
+    // Awaited, not fire-and-forget: Vercel kills the function the
+    // moment the response returns. openReviewModal opens a skeleton
+    // view first precisely so the trigger_id is spent inside its
+    // 3-second life, and only then loads the queue.
+    const result = await openReviewModal({
+      triggerId: typed.trigger_id,
+      channel: typed.channel?.id ?? null,
+      messageTs: typed.message?.ts ?? null,
+    });
+    console.log("[slack-webhook] review_open completed", {
+      ok: result.ok,
+      error: result.error,
+    });
+    return NextResponse.json({ ok: true });
+  }
+
+  if (action.action_id === REVIEW_DASHBOARD_ACTION_ID) {
+    // A url button. Slack opens the link itself and still POSTs the
+    // click; acknowledging is the whole job.
     return NextResponse.json({ ok: true });
   }
 

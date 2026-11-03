@@ -23,6 +23,7 @@ function buildEmptyFeatureUtilization(
     ad_network_count: 0,
     ad_network_last_run: null,
     ad_network_revenue_usd: 0,
+    direct_sponsorship_storefront_enabled_at: null,
     direct_sponsorship_count: 0,
     direct_sponsorship_last_run: null,
     direct_sponsorship_revenue_usd: 0,
@@ -59,8 +60,13 @@ function buildEmptyFeatureUtilization(
  * `Enterprise Feature Utilization Queries.txt` into a single Postgres query.
  *
  * Reductions vs the original:
- *   • Queries #3 (programmatic ad network) and #4 (direct sponsorships) had
- *     identical join shape; merged via FILTER (WHERE provision_type …).
+ *   • Queries #3 (programmatic ad network) and #4 (direct sponsorships)
+ *     were once merged into one CTE via FILTER (WHERE provision_type …),
+ *     on the theory that they had identical join shape. They do not --
+ *     #4 reads the `sponsor_network_*` tables, a different product --
+ *     and the merge quietly zeroed every direct-sponsorship number from
+ *     this engine's first commit until 2026-11-03. They are separate
+ *     CTEs again; don't re-merge them.
  *   • All queries used `WHERE pub.organization_id = X` to scope publications;
  *     hoisted once into a shared `org_pubs` CTE.
  *   • Each feature is its own CTE returning a single row; they cross-join in
@@ -105,6 +111,10 @@ export interface FeatureUtilization {
   ad_network_revenue_usd: number;
 
   // 4. Direct sponsorships
+  /** When this org switched its sponsorship storefront on -- the
+   *  canonical "is using direct sponsorships" signal, shared with
+   *  q10600 and the book-level feature filter. */
+  direct_sponsorship_storefront_enabled_at: string | null;
   direct_sponsorship_count: number;
   direct_sponsorship_last_run: string | null;
   direct_sponsorship_revenue_usd: number;
@@ -225,37 +235,78 @@ function buildSql(orgId: string): string {
       WHERE ps.deleted_at IS NULL
         AND ps.publication_id IN (SELECT id FROM org_pubs)
     ),
-    ad_combined AS (
+    ad_network AS (
+      -- Programmatic (#3) only. The old shape also tried to carve out
+      -- direct sponsorships here with provision_type = 'direct', on
+      -- the assumption that #3 and #4 were one table split by a flag.
+      -- They are not: 'direct' has never been a value in that column,
+      -- so the carve-out excluded nothing and the #4 columns below
+      -- were hardwired to zero for every org. Direct sponsorships are
+      -- a separate product; see the direct_* CTEs below.
+      --
+      -- 'canceled' has ONE l -- that is how the column spells it, and
+      -- ad-gap.ts has always had it right. The two-l spelling matched
+      -- nothing, so canceled opportunities counted as ads run.
       SELECT
-        -- Programmatic (#3): non-direct, not rejected/cancelled
         COUNT(DISTINCT opp.id) FILTER (
-          WHERE (opp.provision_type IS NULL OR opp.provision_type <> 'direct')
-            AND opp.status NOT IN ('rejected','cancelled')
+          WHERE opp.status NOT IN ('rejected','canceled')
         )::int AS ad_network_count,
         MAX(opp.selected_date) FILTER (
-          WHERE (opp.provision_type IS NULL OR opp.provision_type <> 'direct')
-            AND opp.status NOT IN ('rejected','cancelled')
+          WHERE opp.status NOT IN ('rejected','canceled')
         ) AS ad_network_last_run,
-        COALESCE(SUM(d.approved_amount_cents) FILTER (
-          WHERE (opp.provision_type IS NULL OR opp.provision_type <> 'direct')
-        ), 0) / 100.0 AS ad_network_revenue_usd,
-
-        -- Direct sponsorships (#4)
-        COUNT(DISTINCT opp.id) FILTER (
-          WHERE opp.provision_type = 'direct'
-        )::int AS direct_sponsorship_count,
-        MAX(opp.selected_date) FILTER (
-          WHERE opp.provision_type = 'direct'
-        ) AS direct_sponsorship_last_run,
-        COALESCE(SUM(d.approved_amount_cents) FILTER (
-          WHERE opp.provision_type = 'direct'
-        ), 0) / 100.0 AS direct_sponsorship_revenue_usd
+        COALESCE(SUM(d.approved_amount_cents), 0) / 100.0
+          AS ad_network_revenue_usd
       FROM public.ad_network_opportunities opp
       LEFT JOIN public.ad_network_disbursements d
         ON d.opportunity_id = opp.id
         AND d.deleted_at IS NULL
       WHERE opp.publication_id IN (SELECT id FROM org_pubs)
         AND opp.deleted_at IS NULL
+    ),
+    direct_agreements AS (
+      -- Direct sponsorships (#4) live in sponsor_network_*: the
+      -- publisher lists products on a storefront, advertisers book
+      -- them, and each booking is an agreement carrying its own price.
+      SELECT a.id, a.status, a.price_cents
+      FROM public.sponsor_network_agreements a
+      WHERE a.publication_id IN (SELECT id FROM org_pubs)
+        AND a.deleted_at IS NULL
+    ),
+    direct_runs AS (
+      -- When the booked slot actually ran. The date lives on the
+      -- calendar event an agreement ITEM points at, so this has to go
+      -- out one more join rather than reading a column off the
+      -- agreement. Split into its own CTE because items are many-per-
+      -- agreement and joining them inline would multiply price_cents.
+      SELECT MAX(ce.date) AS last_run
+      FROM direct_agreements da
+      JOIN public.sponsor_network_agreement_items ai
+        ON ai.agreement_id = da.id
+      JOIN public.sponsor_network_calendar_events ce
+        ON ce.id = ai.calendar_event_id
+       AND ce.deleted_at IS NULL
+      WHERE da.status NOT IN ('draft','canceled','expired')
+    ),
+    direct_sponsorships AS (
+      -- storefront_enabled_at is the usage signal, and deliberately
+      -- the same one q10600 uses for the snapshot's
+      -- direct_sponsorships_enabled and the book-level filter chip --
+      -- a publisher who has switched the storefront on is using the
+      -- feature whether or not anyone has booked yet. Count and
+      -- revenue describe how far it has gone.
+      SELECT
+        (SELECT MAX(sc.enabled_at)
+           FROM public.sponsor_network_storefront_configurations sc
+          WHERE sc.publication_id IN (SELECT id FROM org_pubs)
+        ) AS direct_sponsorship_storefront_enabled_at,
+        COUNT(*) FILTER (
+          WHERE status NOT IN ('draft','canceled','expired')
+        )::int AS direct_sponsorship_count,
+        (SELECT last_run FROM direct_runs) AS direct_sponsorship_last_run,
+        COALESCE(SUM(price_cents) FILTER (
+          WHERE status IN ('completed','running')
+        ), 0) / 100.0 AS direct_sponsorship_revenue_usd
+      FROM direct_agreements
     ),
     automations AS (
       SELECT
@@ -342,7 +393,8 @@ function buildSql(orgId: string): string {
       send_api.*,
       mcp.*,
       podcasts.*,
-      ad_combined.*,
+      ad_network.*,
+      direct_sponsorships.*,
       automations.*,
       segments.*,
       boost_monetize.*,
@@ -350,7 +402,8 @@ function buildSql(orgId: string): string {
       referrals.*,
       polls.*,
       t4.*
-    FROM send_api, mcp, podcasts, ad_combined, automations, segments,
+    FROM send_api, mcp, podcasts, ad_network, direct_sponsorships,
+         automations, segments,
          boost_monetize, boost_grow, referrals, polls, t4
   `;
 }
@@ -420,6 +473,9 @@ export async function runFeatureUtilization(
     ad_network_last_run: str("ad_network_last_run"),
     ad_network_revenue_usd: num("ad_network_revenue_usd"),
 
+    direct_sponsorship_storefront_enabled_at: str(
+      "direct_sponsorship_storefront_enabled_at"
+    ),
     direct_sponsorship_count: num("direct_sponsorship_count"),
     direct_sponsorship_last_run: str("direct_sponsorship_last_run"),
     direct_sponsorship_revenue_usd: num("direct_sponsorship_revenue_usd"),

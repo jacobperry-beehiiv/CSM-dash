@@ -162,28 +162,7 @@ export async function applyRequestReview(args: {
   const row = bucket?.[args.linearIssueId];
   if (!row) return null;
 
-  const now = new Date().toISOString();
-  const next: EnterpriseRequestRow = {
-    ...row,
-    promotion_confidence:
-      args.decision === "confirmed" ? "confirmed" : row.promotion_confidence,
-    // Dismissing means "this isn't a customer-visible ship". Drop it
-    // back to the Linear-derived state so the profile stops showing a
-    // Live badge we've just decided we don't believe.
-    derived_state:
-      args.decision === "dismissed"
-        ? linearStateToDerived(row.linear_state_type)
-        : row.derived_state,
-    needs_review_reason:
-      args.decision === "confirmed" ? null : row.needs_review_reason,
-    review: {
-      decided_at: now,
-      decided_by: args.by.toLowerCase(),
-      decision: args.decision,
-      note: args.note ?? null,
-    },
-  };
-
+  const next = reviewedRow(row, args.decision, args.by, args.note);
   await saveEnterpriseRequestsSnapshot({
     ...blob,
     rows: {
@@ -192,6 +171,81 @@ export async function applyRequestReview(args: {
     },
   });
   return next;
+}
+
+/** The row mutation itself, shared so the single-row and batch paths
+ *  can't drift on what a verdict means. */
+function reviewedRow(
+  row: EnterpriseRequestRow,
+  decision: "confirmed" | "dismissed",
+  by: string,
+  note?: string | null
+): EnterpriseRequestRow {
+  return {
+    ...row,
+    promotion_confidence:
+      decision === "confirmed" ? "confirmed" : row.promotion_confidence,
+    // Dismissing means "this isn't a customer-visible ship". Drop it
+    // back to the Linear-derived state so the profile stops showing a
+    // Live badge we've just decided we don't believe.
+    derived_state:
+      decision === "dismissed"
+        ? linearStateToDerived(row.linear_state_type)
+        : row.derived_state,
+    needs_review_reason:
+      decision === "confirmed" ? null : row.needs_review_reason,
+    review: {
+      decided_at: new Date().toISOString(),
+      decided_by: by.toLowerCase(),
+      decision,
+      note: note ?? null,
+    },
+  };
+}
+
+/**
+ * Apply many review decisions in ONE read-modify-write.
+ *
+ * The Slack review modal submits a whole screen of verdicts at once.
+ * Looping `applyRequestReview` would reload and resave the entire
+ * snapshot blob per row — N× the IO, and N chances for two writers to
+ * clobber each other, which this store has no locking against
+ * (ADR-0004's caveat). One load, N mutations, one save.
+ *
+ * Returns the rows it actually wrote plus the keys it couldn't find,
+ * so the caller can tell the reviewer "8 saved, 1 had already been
+ * cleared" instead of silently dropping it.
+ */
+export async function applyRequestReviewsBatch(args: {
+  decisions: Array<{
+    workspaceId: string;
+    linearIssueId: string;
+    decision: "confirmed" | "dismissed";
+  }>;
+  by: string;
+  note?: string | null;
+}): Promise<{ applied: EnterpriseRequestRow[]; missing: string[] }> {
+  const applied: EnterpriseRequestRow[] = [];
+  const missing: string[] = [];
+  if (args.decisions.length === 0) return { applied, missing };
+
+  const blob = await loadEnterpriseRequestsSnapshot();
+  const rows = { ...blob.rows };
+  for (const d of args.decisions) {
+    const bucket = rows[d.workspaceId];
+    const row = bucket?.[d.linearIssueId];
+    if (!row) {
+      missing.push(`${d.workspaceId}/${d.linearIssueId}`);
+      continue;
+    }
+    const next = reviewedRow(row, d.decision, args.by, args.note);
+    rows[d.workspaceId] = { ...bucket, [d.linearIssueId]: next };
+    applied.push(next);
+  }
+  if (applied.length > 0) {
+    await saveEnterpriseRequestsSnapshot({ ...blob, rows });
+  }
+  return { applied, missing };
 }
 
 // ─── Notified overrides (CSM-editable per-row state) ────────────────

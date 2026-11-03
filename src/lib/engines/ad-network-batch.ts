@@ -9,11 +9,12 @@ import { isDemoMode } from "../demo/mode";
  *
  * Returns one row per org with:
  *   - ads_run: count of accepted+scheduled programmatic ads (excluding
- *     direct sponsorships and rejected/cancelled opportunities)
+ *     rejected/canceled opportunities)
  *   - last_ad_run: most-recent selected_date for those ads
  *   - revenue_usd: sum of approved disbursements
  *
- * Same provision_type logic as engines/ad-gap.ts (programmatic only).
+ * Everything in ad_network_opportunities is programmatic, same as
+ * engines/ad-gap.ts reads it.
  */
 
 export interface AdNetworkRollup {
@@ -62,17 +63,20 @@ export async function rollupAdNetwork(
     const sql = `
       SELECT
         pub.organization_id::text AS organization_id,
+        -- 'canceled' has ONE l -- that is how the column spells it.
+        -- The two-l spelling matched nothing, so canceled
+        -- opportunities were counted as ads run.
+        --
+        -- No provision_type carve-out: direct sponsorships are a
+        -- separate product in the sponsor_network_* tables and have
+        -- never had a row here, so excluding them excluded nothing.
         COUNT(DISTINCT opp.id) FILTER (
-          WHERE (opp.provision_type IS NULL OR opp.provision_type <> 'direct')
-            AND opp.status NOT IN ('rejected','cancelled')
+          WHERE opp.status NOT IN ('rejected','canceled')
         )::int AS ads_run,
         MAX(opp.selected_date) FILTER (
-          WHERE (opp.provision_type IS NULL OR opp.provision_type <> 'direct')
-            AND opp.status NOT IN ('rejected','cancelled')
+          WHERE opp.status NOT IN ('rejected','canceled')
         ) AS last_ad_run,
-        COALESCE(SUM(d.approved_amount_cents) FILTER (
-          WHERE (opp.provision_type IS NULL OR opp.provision_type <> 'direct')
-        ), 0) / 100.0 AS revenue_usd
+        COALESCE(SUM(d.approved_amount_cents), 0) / 100.0 AS revenue_usd
       FROM public.publications pub
       LEFT JOIN public.ad_network_opportunities opp
         ON opp.publication_id = pub.id

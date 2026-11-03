@@ -624,6 +624,30 @@ export function hasDevsShippedMatch(
   return row.promotion_source === "devs_shipped";
 }
 
+/**
+ * Does this row need a human to reconcile it?
+ *
+ * Linear says it's delivered, but no #devs-shipped release post
+ * carries it — either a ship we failed to parse, or a ticket closed
+ * without the code going out. Once anyone records a verdict (either
+ * verdict), it's reconciled and leaves the queue.
+ *
+ * THE ONE DEFINITION. The exceptions page, the weekly Slack prompt
+ * and the Slack review modal must agree on this or the count in one
+ * place contradicts the list in another — which is exactly what
+ * happened when the Slack nudge kept its own copy that excluded only
+ * `dismissed`: every row a human CONFIRMED was counted forever and
+ * the number never drained. Call this; don't re-derive it.
+ */
+export function needsReconciling(
+  row: Pick<
+    EnterpriseRequestRow,
+    "derived_state" | "devs_shipped_match" | "promotion_source" | "review"
+  >
+): boolean {
+  return isLive(row) && !hasDevsShippedMatch(row) && !row.review?.decision;
+}
+
 /** Is the customer able to use this today, per Linear? */
 export function isLive(
   row: Pick<EnterpriseRequestRow, "derived_state">
