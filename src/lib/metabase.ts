@@ -66,9 +66,15 @@ async function metabaseFetch(path: string, options: RequestInit = {}) {
     return fetch(`${baseUrl()}${path}`, {
       ...options,
       headers: {
+        // Content-Type FIRST so it acts as a default a caller can
+        // override — the export endpoint used by
+        // runNativeQueryUnlimited needs form encoding, and when this
+        // sat last it silently clobbered that back to JSON and the
+        // request failed. Auth stays last so a caller can never
+        // accidentally override it.
+        "Content-Type": "application/json",
         ...options.headers,
         ...auth,
-        "Content-Type": "application/json",
       },
     });
   };
@@ -129,31 +135,26 @@ export async function runNativeQuery(
       database: databaseId,
       type: "native",
       native: { query },
-      // Bypass Metabase's userland row cap (default 2000) — silently
-      // truncating a server-side sync query gives us wrong data with
-      // no error. This flag disables the
-      // `add-default-userland-constraints?` middleware; the whole
-      // reason we call runNativeQuery from server code is that we
-      // want the full result set, not a paginated preview.
+      // ⚠ THESE DO NOT WORK. Measured against this Metabase on
+      // 2026-10-28: `SELECT number FROM numbers(2500)` through this
+      // function returns 2000 rows, with both of the options below
+      // set. So does numbers(20000). There is no error — the
+      // response simply stops at 2000.
       //
-      // Real-world impact of NOT setting this: the deliverability
-      // sync's Q1 (ORDER BY scheduled_at DESC over a 15-day window,
-      // ~10k rows/day across 317 orgs) got clipped to the first 2000
-      // rows of the freshest day, hiding every prior day's sends
-      // (including a Saturday incident on Hospitality Headline that
-      // was invisible to the dashboard for weeks).
+      // They are left in place because they are harmless and are the
+      // documented escape hatch, so a Metabase upgrade may start
+      // honouring them. Do NOT read their presence as a guarantee
+      // that a result is complete. Two separate fixes to the
+      // deliverability engine were built on believing this comment,
+      // and both shipped still-truncated data.
+      //
+      // If your query can return more than 2000 rows, call
+      // runNativeQueryUnlimited instead (see its header for the
+      // shape caveats — it is deliberately not a drop-in).
       middleware: {
         "add-default-userland-constraints?": false,
         "userland-query?": false,
       },
-      // Belt-and-suspenders: setting constraints: null on the request
-      // body is the documented Metabase escape hatch for the default
-      // 2000-row max-results cap. Some Metabase versions ignore the
-      // middleware flag above but honor this — production evidence
-      // showed the sync's deliverability snapshot still landing at
-      // exactly 2000 rows on 2026-07-10 despite the middleware bypass
-      // having been in place since PR #109. Setting both makes the
-      // bypass robust across versions.
       constraints: null,
     }),
   });
@@ -169,6 +170,103 @@ export async function runNativeQuery(
     });
     return obj;
   });
+}
+
+/**
+ * Like `runNativeQuery`, but genuinely uncapped.
+ *
+ * ## Why this exists
+ *
+ * `runNativeQuery` above sets BOTH documented escape hatches for
+ * Metabase's 2000-row cap — the `add-default-userland-constraints?`
+ * middleware flag and `constraints: null`. Measured on 2026-10-28,
+ * against this Metabase, neither works:
+ *
+ *     SELECT number FROM numbers(2500)  ->  2000 rows
+ *     SELECT number FROM numbers(20000) ->  2000 rows
+ *
+ * No error, no warning — the response just stops. Every engine that
+ * expects more than 2000 rows has been silently reading a truncated
+ * result for as long as those flags have been in place. The
+ * deliverability snapshot is the case that surfaced it: 68% of
+ * enterprise sends and 249 of 529 workspaces were missing, because
+ * each per-day query returned its 2000 newest rows and dropped the
+ * rest of the day.
+ *
+ * The export endpoint (`/api/dataset/:format`) is a different code
+ * path that the userland cap doesn't apply to. It wants the query
+ * form-encoded rather than as a JSON body.
+ *
+ * ## Two traps, both load-bearing
+ *
+ * 1. `format_rows` defaults to TRUE on this endpoint, which returns
+ *    display-formatted strings instead of values:
+ *
+ *        0.8153   -> "0.82"       (precision destroyed)
+ *        1234567  -> "1,234,567"  (arithmetic breaks)
+ *        null     -> ""           (null checks break)
+ *
+ *    Passing `false` is what keeps the values raw. Do not drop it.
+ *
+ * 2. Even with `format_rows=false`, two column types still serialize
+ *    differently from `/api/dataset`:
+ *
+ *        DATE               "2026-10-28T00:00:00Z" -> "2026-10-28"
+ *        Postgres TIMESTAMP "...T21:11:03.4Z"      -> "...T21:11:03.4"
+ *
+ *    The missing `Z` matters: `new Date()` reads the stripped form as
+ *    LOCAL time, so a caller that parses one would shift by the host's
+ *    UTC offset. Normalizing by value pattern was considered and
+ *    rejected — it can't distinguish a real DATE column from a text
+ *    column that happens to hold "2026-10-28", and rewriting the
+ *    latter would corrupt callers that compare date strings directly
+ *    (the deliverability engine's `sent_date` is exactly that).
+ *
+ * So this is NOT a drop-in replacement. Use it when a query can
+ * exceed 2000 rows AND its SELECT list has no raw DATE / Postgres
+ * TIMESTAMP columns — cast those with `toString(...)` / `::text` in
+ * SQL first, which makes the two endpoints agree.
+ */
+export async function runNativeQueryUnlimited(
+  databaseId: number,
+  query: string
+): Promise<Record<string, unknown>[]> {
+  const body = new URLSearchParams({
+    query: JSON.stringify({
+      database: databaseId,
+      type: "native",
+      native: { query },
+    }),
+    // See trap 1 above — without this every number comes back as a
+    // formatted string and every rate is rounded to 2dp.
+    format_rows: "false",
+  });
+  const res = await metabaseFetch("/api/dataset/json", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: body.toString(),
+  });
+  // Read as text first. A truncated or empty body from the export
+  // endpoint otherwise surfaces as a bare "Unexpected end of JSON
+  // input", which says nothing about which query or how much came
+  // back — observed in the wild on a chunked unsubs fetch.
+  const raw = await res.text();
+  let data: unknown;
+  try {
+    data = JSON.parse(raw);
+  } catch {
+    throw new Error(
+      `Metabase export returned a body that isn't JSON (${raw.length} bytes, status ${res.status}): ${raw.slice(0, 200)}`
+    );
+  }
+  // The export endpoint reports a failed query as an object carrying
+  // `error` rather than the array of rows we expect.
+  if (!Array.isArray(data)) {
+    const msg =
+      (data as { error?: string })?.error ?? JSON.stringify(data).slice(0, 300);
+    throw new Error(`Metabase query failed: ${msg}`);
+  }
+  return data as Record<string, unknown>[];
 }
 
 // ─── Database IDs ─────────────────────────────────────────────────────────
