@@ -62,6 +62,24 @@ export const TREND_METRIC_LABELS: Record<TrendMetric, string> = {
   spam_rate: "Spam rate",
 };
 
+/**
+ * Decimal places each metric needs before it says anything.
+ *
+ * Spam and bounce rates live near zero: a spam rate going 0.012% to
+ * 0.058% is a fivefold rise and a real conversation, and at one
+ * decimal both ends render as "0.0%" and the move as "+0.0pt". A
+ * number rounded to nothing is worse than no number, because it looks
+ * like it was checked.
+ */
+export const TREND_METRIC_DECIMALS: Record<TrendMetric, number> = {
+  delivery_rate: 1,
+  open_rate: 1,
+  click_rate: 2,
+  hard_bounce_rate: 2,
+  soft_bounce_rate: 2,
+  spam_rate: 3,
+};
+
 /** Which way is bad. Drives sign handling everywhere downstream, so
  *  it lives with the metric list rather than being re-derived. */
 export const TREND_METRIC_DIRECTION: Record<
@@ -75,6 +93,101 @@ export const TREND_METRIC_DIRECTION: Record<
   soft_bounce_rate: "higher_is_worse",
   spam_rate: "higher_is_worse",
 };
+
+// ─── Dates ────────────────────────────────────────────────────────
+
+/**
+ * An inclusive date range, as plain YYYY-MM-DD strings.
+ *
+ * Why this is on the report at all: every window in this engine is
+ * expressed to ClickHouse as `today() - N`, so the dates it actually
+ * measured are a property of WHEN THE SWEEP RAN, not of when someone
+ * opens the dashboard. The sweep is weekly, so by Friday "the last 28
+ * days" on screen is a window that ended the previous Monday. Reading
+ * a rate without knowing which days produced it is how a CSM ends up
+ * telling a customer their open rate dropped last week when the data
+ * stops eight days ago.
+ *
+ * Derived from the same offset arithmetic the SQL uses rather than
+ * from RECENT_DAYS / BASELINE_DAYS, so what is displayed is what was
+ * measured. Those two disagree slightly on purpose — see
+ * describeWindows() in the engine.
+ */
+export interface TrendWindow {
+  /** First day included, inclusive. */
+  start: string;
+  /** Last day included, inclusive. */
+  end: string;
+  /** end - start + 1. Spelled out so the UI never has to parse dates
+   *  to say "63 days". */
+  days: number;
+}
+
+/**
+ * One week of the series, with the dates that produced it.
+ *
+ * The engine already computed this series to get a slope and a MAD and
+ * then threw it away, which left the panel showing two numbers with an
+ * arrow between them and no way to tell whether the fall was a cliff
+ * in one week or a steady slide over three months. Keeping the points
+ * costs a few KB in the snapshot and is what makes the peak and the
+ * trough quotable.
+ */
+export interface TrendPoint {
+  /** First day of the week bucket, inclusive. */
+  week_start: string;
+  /** Last day of the week bucket, inclusive. */
+  week_end: string;
+  value: number;
+}
+
+// ─── Newsletter lists ─────────────────────────────────────────────
+
+/**
+ * One newsletter list's slice of a publication's sends.
+ *
+ * `posts.newsletter_list_id` is the only place the send target is
+ * recorded; the fact table is aggregated per post and carries no list
+ * dimension at all, so this has to be reconstructed by joining posts
+ * back to their rows.
+ *
+ * This matters because a beehiiv "publication" is frequently not one
+ * newsletter. One publisher in the book fans a single publication out
+ * across 19 lists whose open rates run from 20.8% to 69.4%, and
+ * another across 20+ lists from 23.9% to 69.8%. Averaging those into a
+ * single publication-level open rate and then watching it move is how
+ * you mistake a change in WHAT THEY SENT for a change in how their
+ * email is performing.
+ */
+export interface ListSplit {
+  list_id: string;
+  /** Null for sends with no list attached — rendered as
+   *  NO_LIST_LABEL, not as an empty name. 44% of Enterprise posts in
+   *  the last 90 days have no list, so this bucket is normal and
+   *  often the largest one. */
+  list_name: string | null;
+  recipients_recent: number;
+  recipients_baseline: number;
+  /** Open rate in each window, null when that window had no delivered
+   *  mail for this list. */
+  open_rate_recent: number | null;
+  open_rate_baseline: number | null;
+  /** Sent in the recent window only. */
+  is_new: boolean;
+  /**
+   * Sent in the baseline window only.
+   *
+   * Read this as "did not send recently", NOT as "deleted". A list on
+   * a six-week cadence legitimately misses a 27-day recent window, and
+   * 30% of publications have at least one such list. It is a flag for
+   * interpreting the mix number, never a claim about the customer's
+   * configuration.
+   */
+  is_dropped: boolean;
+}
+
+/** What to call the no-list bucket in the UI. */
+export const NO_LIST_LABEL = "Untargeted sends";
 
 // ─── Per-metric trend ─────────────────────────────────────────────
 
@@ -137,6 +250,51 @@ export interface MetricTrend {
   weeks_to_threshold: number | null;
   /** 0-100. See scoreMetric() in the engine for the weighting. */
   severity: number;
+
+  /**
+   * The weekly series behind `delta`, oldest first, with the dates
+   * each week covers. Weeks with no send are simply absent, so this
+   * is not always WEEK_COUNT long and the gaps are real.
+   */
+  points: TrendPoint[];
+  /**
+   * The highest and lowest weeks in `points`, by VALUE — not by
+   * health.
+   *
+   * An earlier cut resolved these for direction, so `best` meant the
+   * lowest spam rate. Printed, that produced "peak 0.000% - low
+   * 0.100%", which inverts what those two words mean to anyone
+   * reading quickly. Plain magnitude is unambiguous, and the metric
+   * name plus the signed delta already say which end is the good one.
+   *
+   * Null only when the series is empty.
+   */
+  high: TrendPoint | null;
+  low: TrendPoint | null;
+
+  /**
+   * `delta` with the publication's newsletter-list mix held at its
+   * baseline weights — i.e. what the move would have been if they had
+   * sent the same proportion to each list as before.
+   *
+   * This is the honest degradation number. The raw `delta` moves when
+   * a publisher drops a high-opening list or launches a low-opening
+   * one, neither of which is a deliverability problem.
+   *
+   * Null when the publication has only one send target, or the list
+   * sweep returned nothing for it — in which case there is no mix to
+   * hold constant and `delta` is already the within-list number.
+   */
+  mix_adjusted_delta: number | null;
+  /**
+   * `delta - mix_adjusted_delta`: the part of the move attributable to
+   * the mix changing rather than to any list getting worse.
+   *
+   * Kept next to the adjusted figure rather than inferred, so the UI
+   * can say "of the -11.4pt, -8.9pt is them mailing different lists"
+   * without redoing the subtraction and rounding differently.
+   */
+  mix_delta: number | null;
 }
 
 // ─── Publication + workspace rollups ──────────────────────────────
@@ -179,6 +337,32 @@ export interface PublicationTrend {
    * more alarming, not less, and is never damped.
    */
   volume_confounded: boolean;
+  /**
+   * Per-newsletter-list breakdown over the two windows, biggest
+   * recent volume first. Empty when the list sweep found nothing for
+   * this publication.
+   */
+  lists: ListSplit[];
+  /**
+   * True when most of the headline move is the list mix changing
+   * rather than any list degrading (see MIX_CONFOUND_SHARE).
+   *
+   * Measured rather than assumed, because the obvious worry turns out
+   * to be the wrong one. Across 1,408 multi-list publications, mix
+   * shift between lists that sent in BOTH windows moves the
+   * publication open rate by a median of 0.01pt — it is nothing.
+   * Where it bites is list CHURN: of 771 publications down 3pt or
+   * more, 159 had lost a fifth of their baseline volume to a list
+   * that stopped sending and 36 had gained a fifth from a new one.
+   * That is a quarter of the declining set, which is far too many to
+   * leave unlabelled.
+   *
+   * Damped like `volume_confounded` rather than dropped: a publisher
+   * who quietly stopped mailing their best-performing list is still
+   * something a CSM wants to know, it just is not a deliverability
+   * fire.
+   */
+  mix_confounded: boolean;
   /** Only the metrics that cleared the surfacing bar, worst first. */
   metrics: MetricTrend[];
   severity: number;
@@ -210,6 +394,19 @@ export interface EngagementTrendReport {
   generated_at: string;
   recent_days: number;
   baseline_days: number;
+  /**
+   * The dates actually measured, resolved against the database clock
+   * at sweep time. Prefer these over recent_days/baseline_days for
+   * anything shown to a human: those two are the nominal window
+   * lengths and the real windows are quantised to whole weeks, so
+   * they differ by a day either way.
+   */
+  recent_window: TrendWindow;
+  baseline_window: TrendWindow;
+  /** Last day with data in it. Everything on the report stops here,
+   *  which is NOT the same day the snapshot was generated and is
+   *  several days before anyone reads it. */
+  data_through: string;
   /** Publications examined, before the surfacing bar. Lets the UI say
    *  "12 of 4,088 declining" instead of an unanchored count. */
   publications_examined: number;
@@ -238,6 +435,27 @@ export interface TrendClear {
 export type TrendClearMap = Record<string, TrendClear>;
 
 /**
+ * A week must carry at least this share of the publication's own
+ * median weekly volume to be quotable as a high or a low.
+ *
+ * Without it the extremes are drawn from test sends. One publication
+ * in the book reported "peak 100.00% open rate" for a week in which a
+ * handful of addresses got a send and every one of them opened it —
+ * arithmetically true, useless to quote at a customer, and corrosive
+ * to trust in every other number on the panel.
+ *
+ * Scale-relative rather than an absolute floor, because the book runs
+ * from publications barely clearing MIN_RECIPIENTS_PER_WINDOW to ones
+ * sending millions a week, and no single recipient count reads as
+ * "trivial" for both.
+ *
+ * Applied ONLY to the displayed series. The slope and the MAD still
+ * see every week, deliberately: those decide which publications get
+ * flagged at all, and this change is not meant to move that line.
+ */
+export const MIN_WEEK_VOLUME_SHARE = 0.1;
+
+/**
  * Volume growth past which engagement declines are treated as partly
  * mechanical. 1.4x is deliberately generous — normal week-to-week
  * send variation sits well inside it, so this only trips on real list
@@ -256,6 +474,37 @@ export const VOLUME_CONFOUND_RATIO = 1.4;
  * them the report cries wolf.
  */
 export const VOLUME_CONFOUND_DAMPING = 0.5;
+
+/**
+ * Share of the headline move that has to come from the list mix
+ * before the row is labelled mix-confounded.
+ *
+ * Half, because that is the point where "this publication is getting
+ * worse" stops being the better description of the data than "this
+ * publication is mailing different people". Below it the mix is a
+ * footnote; above it, it is the story.
+ */
+export const MIX_CONFOUND_SHARE = 0.5;
+
+/**
+ * Severity multiplier for a mix-confounded row.
+ *
+ * Same value and same reasoning as VOLUME_CONFOUND_DAMPING, and the
+ * two stack: a publication that both grew its list and changed which
+ * lists it mails ends up at a quarter severity, which is right. Those
+ * are the two ways the number can move without anything being wrong.
+ */
+export const MIX_CONFOUND_DAMPING = 0.5;
+
+/**
+ * Minimum distinct send targets before "mix" means anything.
+ *
+ * Two, counting the no-list bucket as one of them. A publication that
+ * only ever sends to one place has no mix to shift, and running the
+ * decomposition on it would produce a confident zero that implies we
+ * checked something we did not.
+ */
+export const MIN_LISTS_FOR_MIX = 2;
 
 /** How much worse a cleared workspace has to get before it comes
  *  back. Points of severity, not a ratio — a jump from 20 to 40

@@ -1,7 +1,12 @@
 import { NextResponse } from "next/server";
 import { readEngagementTrendsSnapshot } from "@/lib/data/engagement-trends-snapshot";
 import { loadTrendClears, isTrendCleared } from "@/lib/data/trend-clears";
-import type { TrendClear } from "@/lib/engines/engagement-trends-types";
+import type {
+  ListSplit,
+  TrendClear,
+  TrendPoint,
+  TrendWindow,
+} from "@/lib/engines/engagement-trends-types";
 
 export const dynamic = "force-dynamic";
 
@@ -18,6 +23,12 @@ export const dynamic = "force-dynamic";
  * a row in O(1) while rendering, plus the ordered list for any surface
  * that wants a ranked queue.
  */
+export interface TrendApiWindows {
+  recent_window: TrendWindow | null;
+  baseline_window: TrendWindow | null;
+  data_through: string | null;
+}
+
 export interface TrendApiRow {
   workspace_id: string;
   workspace_name: string | null;
@@ -33,6 +44,8 @@ export interface TrendApiRow {
     severity: number;
     volume_ratio: number;
     volume_confounded: boolean;
+    mix_confounded: boolean;
+    lists: ListSplit[];
     metrics: Array<{
       metric: string;
       recent: number;
@@ -41,9 +54,24 @@ export interface TrendApiRow {
       cohort_delta: number;
       weeks_to_threshold: number | null;
       severity: number;
+      /** Highest and lowest week by value, with the dates. */
+      high: TrendPoint | null;
+      low: TrendPoint | null;
+      mix_adjusted_delta: number | null;
+      mix_delta: number | null;
     }>;
   }>;
 }
+
+/**
+ * The full weekly series (`points`) is deliberately NOT forwarded.
+ *
+ * It stays in the snapshot, where the CLI and any future sparkline
+ * can reach it, but the panel only ever quotes the peak and the
+ * trough — and sending ~370 series of 13 points to every browser that
+ * opens the table would be a few hundred KB nobody reads. Add it back
+ * the day something actually plots it.
+ */
 
 export async function GET() {
   try {
@@ -51,6 +79,9 @@ export async function GET() {
     if (!snapshot) {
       return NextResponse.json({
         generated_at: null,
+        recent_window: null,
+        baseline_window: null,
+        data_through: null,
         publications_examined: 0,
         rows: {},
         order: [],
@@ -77,6 +108,8 @@ export async function GET() {
           severity: p.severity,
           volume_ratio: p.volume_ratio,
           volume_confounded: p.volume_confounded,
+          mix_confounded: p.mix_confounded ?? false,
+          lists: p.lists ?? [],
           metrics: p.metrics.map((m) => ({
             metric: m.metric,
             recent: m.recent,
@@ -85,6 +118,10 @@ export async function GET() {
             cohort_delta: m.cohort_delta,
             weeks_to_threshold: m.weeks_to_threshold,
             severity: m.severity,
+            high: m.high ?? null,
+            low: m.low ?? null,
+            mix_adjusted_delta: m.mix_adjusted_delta ?? null,
+            mix_delta: m.mix_delta ?? null,
           })),
         })),
       };
@@ -95,6 +132,12 @@ export async function GET() {
       generated_at: snapshot.generated_at,
       recent_days: snapshot.recent_days,
       baseline_days: snapshot.baseline_days,
+      // Null on a snapshot written before these existed. The UI falls
+      // back to the day counts rather than inventing dates, because a
+      // wrong date is worse than no date here.
+      recent_window: snapshot.recent_window ?? null,
+      baseline_window: snapshot.baseline_window ?? null,
+      data_through: snapshot.data_through ?? null,
       publications_examined: snapshot.publications_examined,
       rows,
       order,

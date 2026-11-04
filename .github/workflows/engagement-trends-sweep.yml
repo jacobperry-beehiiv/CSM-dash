@@ -7,10 +7,10 @@ name: engagement-trends-sweep
 # back to the repo; Vercel's GitHub integration redeploys.
 #
 # Weekly, not twice-daily like sync-data.yml. Two reasons:
-#   • The sweep is the slowest block in the repo — 39 ClickHouse
-#     queries, ~2.5 min — because the fact table has to be hit once
-#     per (week x publication-shard) to stay under Metabase's 2000-row
-#     response cap.
+#   • The sweep is the slowest block in the repo — ~60 ClickHouse
+#     queries, several minutes — because the fact table has to be hit
+#     once per (week x publication-shard), and again per (window x
+#     list-shard), to stay under Metabase's 2000-row response cap.
 #   • A trend measured over 90 days does not move meaningfully between
 #     a Monday and a Tuesday. Running it daily would burn the query
 #     budget to re-render the same answer.
