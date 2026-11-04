@@ -12,7 +12,10 @@ import {
 import { normalizeSlackText } from "@/lib/personal-todos/normalize-text";
 import { CHECKLIST_GROUP_OPTIONS } from "@/lib/lifecycle/checklist-groups";
 import { stageDisplayLabel } from "@/lib/lifecycle/stage-labels";
-import { isCompanyGroupedTodo } from "@/lib/lifecycle/todos";
+import {
+  isShownOnLifecycleCard,
+  type CardStagesByCompany,
+} from "@/lib/lifecycle/card-stages";
 import Link from "next/link";
 import { CompanySearchSelect } from "./company-search-select";
 import { DoneCheckbox } from "./done-checkbox";
@@ -143,12 +146,22 @@ interface PersonalTodosPanelProps {
    *  same rule for any future addition to this panel (or any other
    *  page outside the Lifecycle tab) that assumes the board exists. */
   lifecycleBoardEnabled?: boolean;
+  /** Which checklist groups each company's Lifecycle card renders (see
+   *  card-stages.ts) — what lets "Hide company to-dos" hide only the
+   *  to-dos that really are on a card. Empty = nothing counts as on a
+   *  card, so the toggle hides nothing (the safe failure mode). */
+  cardStagesByCompany?: CardStagesByCompany;
+  /** Admin-configured playbook-step → group map, needed to work out
+   *  which group a given to-do resolves to (same map the board uses). */
+  stepStages?: Record<string, string | null>;
 }
 
 export function PersonalTodosPanel({
   sybillIngestEnabled = false,
   playbookCompanies = [],
   lifecycleBoardEnabled = false,
+  cardStagesByCompany = {},
+  stepStages = {},
 }: PersonalTodosPanelProps = {}) {
   const [todos, setTodos] = useState<PersonalTodo[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -158,7 +171,10 @@ export function PersonalTodosPanel({
   const [showScheduled, setShowScheduled] = useState(false);
   // "Hide company to-dos" — lets a CSM treat this panel as their
   // go-to place for everything NOT tracked on a Lifecycle board card
-  // (the board is where company-grouped to-dos live instead). Only
+  // (the board is where those to-dos live instead). Hides a to-do only
+  // if it truly renders on a card (isShownOnLifecycleCard) — a
+  // company-linked to-do with no card to land on stays visible here,
+  // so the toggle can never make a to-do invisible everywhere. Only
   // ever exposed when lifecycleBoardEnabled is true; harmless default
   // (false = show everything) otherwise. Starts false (not read from
   // localStorage synchronously) so the server-rendered HTML and the
@@ -495,7 +511,9 @@ export function PersonalTodosPanel({
     const scheduled: PersonalTodo[] = [];
     const completed: PersonalTodo[] = [];
     const visible = hideCompanyTodos
-      ? todos.filter((t) => !isCompanyGroupedTodo(t))
+      ? todos.filter(
+          (t) => !isShownOnLifecycleCard(t, cardStagesByCompany, stepStages)
+        )
       : todos;
     for (const t of visible) {
       if (t.completed_at) {
@@ -529,7 +547,7 @@ export function PersonalTodosPanel({
       (b.completed_at ?? "").localeCompare(a.completed_at ?? "")
     );
     return { activeTodos: active, scheduledTodos: scheduled, completedTodos: completed };
-  }, [todos, today, hideCompanyTodos]);
+  }, [todos, today, hideCompanyTodos, cardStagesByCompany, stepStages]);
 
   return (
     <section className="bg-surface rounded-xl border border-border shadow-card overflow-hidden mt-6">

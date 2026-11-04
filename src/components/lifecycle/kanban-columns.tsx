@@ -84,10 +84,9 @@ interface Props {
   renderEmptyChecklist?: (card: LifecycleCard) => React.ReactNode;
   /** Colors each checklist group's header by how soon its earliest
    *  actionable to-do is due (urgencyHeaderClass in
-   *  @/lib/lifecycle/card) — only the Live board passes this today.
-   *  Onboarding's cards are manually placed by stage already, so a
-   *  date-urgency signal is less useful there; left off rather than
-   *  risk two competing visual cues. */
+   *  @/lib/lifecycle/card). Both boards turn it on — cards in a
+   *  column are ordered by to-do due date (compareByUrgency), and the
+   *  color is what explains why one sits above another. */
   showUrgencyColors?: boolean;
   /** Opens the outreach template-picker modal for this card's customer
    *  — the caller owns the modal itself (renders <OutreachModal> once
