@@ -82,7 +82,7 @@ async function main() {
   const onlyDeliverability = process.argv.includes("--only=deliverability");
   // `--only=trends` runs just the engagement-trend sweep. Separate
   // from the full sync because it is the slowest single block we have
-  // (39 ClickHouse queries, minutes) and only needs to run weekly,
+  // (~60 ClickHouse queries, minutes) and only needs to run weekly,
   // whereas the book data refreshes twice a day.
   const onlyTrends = process.argv.includes("--only=trends");
 
@@ -559,7 +559,7 @@ async function syncDeliverability(usePlaintext: boolean) {
 async function syncEngagementTrends(usePlaintext: boolean) {
   const started = Date.now();
   try {
-    console.error("[sync] running engagement-trend sweep (39 ClickHouse queries, ~2-4 min)…");
+    console.error("[sync] running engagement-trend sweep (~60 ClickHouse queries, ~3-5 min)…");
     const report = await runEngagementTrends();
     // Guard the empty case the same way deliverability-data-sync.yml
     // greps for "(0 posts, ": every per-slice query failing (expired

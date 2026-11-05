@@ -366,6 +366,22 @@ export function CustomerTable({
     });
   }, []);
 
+  /**
+   * The dates the trend sweep measured. Report-level, so it is built
+   * once and handed to every panel rather than re-derived per row.
+   */
+  const trendWindows = useMemo(
+    () =>
+      trends
+        ? {
+            recent: trends.recent_window ?? null,
+            baseline: trends.baseline_window ?? null,
+            dataThrough: trends.data_through ?? null,
+          }
+        : null,
+    [trends]
+  );
+
   /** The active (uncleared) warning for a row, or null. */
   const trendFor = useCallback(
     (workspaceId: string | null | undefined) => {
@@ -1491,6 +1507,7 @@ export function CustomerTable({
                           <TrendWarningPanel
                             row={trend}
                             onChange={onTrendChange}
+                            windows={trendWindows}
                           />
                         ) : null}
                         <CustomerDetailPanel

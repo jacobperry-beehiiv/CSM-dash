@@ -170,6 +170,16 @@ email, wrap in try/catch returning `{ error }` + 500, and append an
   (subquery)` instead; that's the only shape that returns in seconds.
   `swarm_clickpipes` dimension tables also need `FINAL`, or one row
   comes back once per ingested version under stale names.
+- **A send's audience lives on the post, not the fact table.**
+  `fact_sendables_by_type_v1` has no list or segment dimension at all —
+  the only record of who a send went to is `posts.newsletter_list_id`.
+  That matters because a beehiiv "publication" is often many
+  newsletters: one in the book fans out across 19 lists whose open
+  rates run 20.8% to 69.4%, so a publication-level rate can move
+  purely because they mailed a different list. `engagement-trends.ts`
+  reconstructs the split and reports a mix-adjusted delta next to the
+  raw one. Dedupe posts with `argMax(..., _peerdb_version)` before
+  joining, or ReplacingMergeTree duplicates double-count the send.
 - **CSM assignment is snapshot-only** — `applyOverride` intentionally
   ignores CSM overrides; don't "fix" it.
 - **KV blobs are read-modify-write with no locking** — two concurrent
