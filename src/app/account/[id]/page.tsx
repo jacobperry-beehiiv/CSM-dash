@@ -4,11 +4,11 @@ import { isFeatureEnabledFor } from "@/lib/auth/feature-flags";
 import { loadCustomers } from "@/lib/data/load-customers";
 import { lastContacted } from "@/lib/customer-helpers";
 import { listSignals } from "@/lib/data/customer-signals";
-import { hubspotCompanyUrl } from "@/lib/links";
 import { fmtCurrency, fmtDate, fmtNumber, fmtPct } from "@/components/format";
 import { RiskLevelChip } from "@/components/risk-level-chip";
 import { AccountOutreach } from "@/components/account-outreach";
 import { HubSpotContactsSection } from "@/components/hubspot-contacts-section";
+import { CustomerIdentifiers } from "@/components/customer-identifiers";
 import { CustomerSignalsSection } from "@/components/customer-signals-section";
 import { CustomerPublicationsList } from "@/components/customer-publications-list";
 import { ProfileFieldsSection } from "@/components/profile-fields-section";
@@ -57,42 +57,25 @@ export default async function AccountPage({
         ? (c.active_subs / c.max_subscriptions) * 100
         : null;
 
-  // HubSpot company-page deep link — set when the row has a
-  // hubspot_company_id from the sync-time enrichment.
-  const hubspotUrl = hubspotCompanyUrl(c.hubspot_company_id);
-
   return (
     <>
       <div className="mb-6">
-        <h1 className="text-3xl font-semibold text-fg tracking-tight flex items-baseline gap-3 flex-wrap">
-          <span>{c.company_name ?? c.workspace_name}</span>
-          {hubspotUrl ? (
-            <a
-              href={hubspotUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-xs font-normal text-muted hover:text-fg underline decoration-dotted"
-              title="Open this company in HubSpot"
-            >
-              HubSpot ↗
-            </a>
-          ) : null}
+        <h1 className="text-3xl font-semibold text-fg tracking-tight">
+          {c.company_name ?? c.workspace_name}
         </h1>
-        <p className="text-sm text-muted mt-1">
+        <p className="text-sm text-muted mt-1 mb-3">
           {c.workspace_name} · {c.stripe_plan ?? "—"} · CSM:{" "}
           {c.customer_success_manager?.replace(/_/g, " ") ?? "unassigned"}
-          {c.owner_email ? (
-            <>
-              {" · "}
-              <a
-                href={`mailto:${c.owner_email}`}
-                className="hover:text-fg underline decoration-dotted"
-              >
-                {c.owner_email}
-              </a>
-            </>
-          ) : null}
         </p>
+        {/* Masquerade / Stripe / HubSpot / admin / Zendesk / Metabase,
+         *  then the copyable workspace + Stripe IDs. The same component
+         *  the /csm detail panel renders — this page is the one Slack
+         *  deep-links into, so it's the last place that should be
+         *  missing the links a CSM opens it for. The lone "HubSpot ↗"
+         *  that used to hang off the title and the owner email that
+         *  used to trail the subtitle both live in here now; they were
+         *  showing twice within 40px once the strip landed. */}
+        <CustomerIdentifiers customer={c} />
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
