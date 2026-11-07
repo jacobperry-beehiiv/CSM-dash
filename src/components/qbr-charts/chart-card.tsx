@@ -37,13 +37,27 @@ export const ChartCard = forwardRef<
      *  X-domain, bars still climbing). Off by default so the
      *  live UI keeps its animation. */
     disableAnimation?: boolean;
+    /** Card width in px. Defaults to the on-screen 960 cap. The
+     *  export path passes a wider value — see EXPORT_WIDTH. */
+    width?: number;
+    /** Plot height in px, forwarded to ChartCanvas. */
+    chartHeight?: number;
   }
->(function ChartCard({ spec, headerActions, disableAnimation = false }, ref) {
+>(function ChartCard(
+  {
+    spec,
+    headerActions,
+    disableAnimation = false,
+    width = 960,
+    chartHeight,
+  },
+  ref
+) {
   return (
     <div
       ref={ref}
       className="bg-surface border border-border rounded-xl shadow-card p-6 mx-auto"
-      style={{ maxWidth: 960 }}
+      style={{ maxWidth: width }}
     >
       <header className="flex items-start justify-between gap-4 mb-4">
         <div className="min-w-0">
@@ -70,7 +84,11 @@ export const ChartCard = forwardRef<
         </div>
       </header>
 
-      <ChartCanvas spec={spec} disableAnimation={disableAnimation} />
+      <ChartCanvas
+        spec={spec}
+        disableAnimation={disableAnimation}
+        {...(chartHeight ? { height: chartHeight } : {})}
+      />
 
       {spec.takeaway ? (
         <p className="mt-4 text-sm text-fg italic">{spec.takeaway}</p>

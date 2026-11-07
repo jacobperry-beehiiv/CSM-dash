@@ -60,31 +60,51 @@ import { ChartTooltip } from "./chart-tooltip";
  * up from zero, etc.). Live UI keeps animation on — it's just the
  * offscreen capture path that goes static.
  */
+/** Chart plot height on screen. The export path overrides it — see
+ *  EXPORT_CHART_HEIGHT in qbr-charts-tab.tsx for why. */
+export const DEFAULT_CHART_HEIGHT = 460;
+
 export function ChartCanvas({
   spec,
   disableAnimation = false,
+  height = DEFAULT_CHART_HEIGHT,
 }: {
   spec: ChartSpec;
   disableAnimation?: boolean;
+  /** Plot height in px. Defaults to the on-screen 460. */
+  height?: number;
 }) {
   if (spec.data.length === 0) {
     return (
-      <div className="h-[460px] flex items-center justify-center text-sm text-muted">
+      <div style={{ height }}
+      className=" flex items-center justify-center text-sm text-muted">
         No data for this period.
       </div>
     );
   }
 
-  if (spec.chartType === "scalar") return <ScalarCard spec={spec} />;
-  if (spec.chartType === "table") return <TableCard spec={spec} />;
+  if (spec.chartType === "scalar") return <ScalarCard spec={spec} height={height} />;
+  if (spec.chartType === "table") return <TableCard spec={spec} height={height} />;
   if (spec.chartType === "pie" || spec.chartType === "donut") {
-    return <PieCard spec={spec} disableAnimation={disableAnimation} />;
+    return <PieCard
+        spec={spec}
+        disableAnimation={disableAnimation}
+        height={height}
+      />;
   }
   if (spec.chartType === "scatter") {
-    return <ScatterCard spec={spec} disableAnimation={disableAnimation} />;
+    return <ScatterCard
+        spec={spec}
+        disableAnimation={disableAnimation}
+        height={height}
+      />;
   }
 
-  return <CartesianCard spec={spec} disableAnimation={disableAnimation} />;
+  return <CartesianCard
+        spec={spec}
+        disableAnimation={disableAnimation}
+        height={height}
+      />;
 }
 
 // ─── Axis + grid theme ────────────────────────────────────────────────
@@ -107,14 +127,17 @@ const gridProps = {
 function CartesianCard({
   spec,
   disableAnimation,
+  height,
 }: {
   spec: ChartSpec;
   disableAnimation: boolean;
+  height: number;
 }) {
   const { chartType, xKey, series, data } = spec;
   if (!xKey || series.length === 0) {
     return (
-      <div className="h-[460px] flex items-center justify-center text-sm text-muted">
+      <div style={{ height }}
+      className=" flex items-center justify-center text-sm text-muted">
         Chart spec missing X axis or series.
       </div>
     );
@@ -129,7 +152,7 @@ function CartesianCard({
   // can mix bar + line in one render pass.
   if (chartType === "combo") {
     return (
-      <ResponsiveContainer width="100%" height={460}>
+      <ResponsiveContainer width="100%" height={height}>
         <ComposedChart
           data={data}
           margin={{ top: 16, right: 16, bottom: 8, left: 8 }}
@@ -186,7 +209,7 @@ function CartesianCard({
 
   if (chartType === "bar" || chartType === "stacked-bar") {
     return (
-      <ResponsiveContainer width="100%" height={460}>
+      <ResponsiveContainer width="100%" height={height}>
         <BarChart data={data} margin={{ top: 16, right: 16, bottom: 8, left: 8 }}>
           <CartesianGrid {...gridProps} />
           <XAxis dataKey={xKey} {...axisProps} tickFormatter={formatXAxis} />
@@ -216,7 +239,7 @@ function CartesianCard({
 
   if (chartType === "area" || chartType === "stacked-area") {
     return (
-      <ResponsiveContainer width="100%" height={460}>
+      <ResponsiveContainer width="100%" height={height}>
         <AreaChart data={data} margin={{ top: 16, right: 16, bottom: 8, left: 8 }}>
           <CartesianGrid {...gridProps} />
           <XAxis dataKey={xKey} {...axisProps} tickFormatter={formatXAxis} />
@@ -251,7 +274,7 @@ function CartesianCard({
 
   // line (default).
   return (
-    <ResponsiveContainer width="100%" height={460}>
+    <ResponsiveContainer width="100%" height={height}>
       <LineChart data={data} margin={{ top: 16, right: 16, bottom: 8, left: 8 }}>
         <CartesianGrid {...gridProps} />
         <XAxis dataKey={xKey} {...axisProps} tickFormatter={formatXAxis} />
@@ -286,12 +309,13 @@ function CartesianCard({
 
 // ─── Scalar (single-number) card ──────────────────────────────────────
 
-function ScalarCard({ spec }: { spec: ChartSpec }) {
+function ScalarCard({ spec, height }: { spec: ChartSpec; height: number }) {
   const series = spec.series[0];
   const row = spec.data[0];
   const raw = series && row ? row[series.key] : null;
   return (
-    <div className="h-[460px] flex flex-col items-center justify-center gap-3">
+    <div style={{ height }}
+      className=" flex flex-col items-center justify-center gap-3">
       <div
         className="text-7xl font-semibold tracking-tight"
         style={{ color: beehiiv.purple }}
@@ -310,9 +334,11 @@ function ScalarCard({ spec }: { spec: ChartSpec }) {
 function PieCard({
   spec,
   disableAnimation,
+  height,
 }: {
   spec: ChartSpec;
   disableAnimation: boolean;
+  height: number;
 }) {
   // For pie: x-key = slice label, first numeric series = slice
   // value. Heuristic spec passes the rows verbatim.
@@ -320,7 +346,7 @@ function PieCard({
   const valueSeries = spec.series[0];
   if (!labelKey || !valueSeries) return null;
   return (
-    <ResponsiveContainer width="100%" height={460}>
+    <ResponsiveContainer width="100%" height={height}>
       <PieChart>
         <Tooltip content={<ChartTooltip series={spec.series} />} />
         <Legend wrapperStyle={{ fontSize: 11 }} />
@@ -353,15 +379,17 @@ function PieCard({
 function ScatterCard({
   spec,
   disableAnimation,
+  height,
 }: {
   spec: ChartSpec;
   disableAnimation: boolean;
+  height: number;
 }) {
   const xKey = spec.xKey;
   const yKey = spec.series[0]?.key;
   if (!xKey || !yKey) return null;
   return (
-    <ResponsiveContainer width="100%" height={460}>
+    <ResponsiveContainer width="100%" height={height}>
       <ScatterChart margin={{ top: 16, right: 16, bottom: 8, left: 8 }}>
         <CartesianGrid {...gridProps} />
         <XAxis dataKey={xKey} {...axisProps} />
@@ -379,12 +407,13 @@ function ScatterCard({
 
 // ─── Table ────────────────────────────────────────────────────────────
 
-function TableCard({ spec }: { spec: ChartSpec }) {
+function TableCard({ spec, height }: { spec: ChartSpec; height: number }) {
   const headers: string[] = [];
   if (spec.xKey) headers.push(spec.xLabel ?? spec.xKey);
   for (const s of spec.series) headers.push(s.label);
   return (
-    <div className="h-[460px] overflow-auto">
+    <div style={{ height }}
+      className=" overflow-auto">
       <table className="w-full text-sm">
         <thead>
           <tr className="text-left text-muted border-b border-border">

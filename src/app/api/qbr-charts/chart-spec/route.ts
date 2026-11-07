@@ -4,6 +4,7 @@ import {
   runCard,
   MissingParamsError,
   type RunCardOutput,
+  MetabaseTimeoutError,
 } from "@/lib/metabase";
 import { heuristicSpec, tagMatch } from "@/lib/qbr-charts/heuristic";
 import { getPreset } from "@/lib/qbr-charts/qbr-presets";
@@ -145,6 +146,25 @@ export async function POST(req: Request) {
           missingParams: e.missingParams,
         },
         { status: 422 }
+      );
+    }
+    // A query Metabase can't finish is a 504 with something the CSM
+    // can act on, not a 500 and not Vercel's blank timeout page. It
+    // names the chart, because the fix is usually "this chart, on this
+    // account" rather than anything global.
+    if (e instanceof MetabaseTimeoutError) {
+      const preset = getPreset(questionId);
+      console.error("[qbr-charts] Metabase timed out", {
+        questionId,
+        organizationId: body.organizationId,
+      });
+      return NextResponse.json(
+        {
+          error: "METABASE_TIMEOUT",
+          message: `"${preset?.name ?? `Question ${questionId}`}" took too long to run for this account and was cancelled. It scans every subscription row before narrowing to the period, which the largest books can't finish. Try a single publication instead of the whole workspace, or pick a different chart.`,
+          questionId,
+        },
+        { status: 504 }
       );
     }
     const msg = e instanceof Error ? e.message : String(e);
